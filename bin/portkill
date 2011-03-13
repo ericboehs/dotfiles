@@ -1,0 +1,22 @@
+#!/bin/bash
+if [ $# -ne 1 ]; then
+	echo "portkill -- Kills a process using the specified port.";
+	echo "usage: portkill port";
+	exit;
+fi
+export process=$(lsof -nP | grep ":${@:(-1)}" | head -1 | awk '{print $2}');
+if [ -n "$process" ]; then
+	echo -n "Killing process with PID of $process: ";
+	kill "${@:1:$#-1}" $process;
+else
+	echo "No process found on port ${@:(-1)}";
+	exit;
+fi
+sleep 5
+export checkProcess=$(lsof -nP | grep ":${@:(-1)} " | head -1 | awk '{print $2}');
+if [ -n "$checkProcess" ]; then
+	echo "Failed";
+	echo $checkProcess;
+else
+	echo "Succeeded";
+fi
