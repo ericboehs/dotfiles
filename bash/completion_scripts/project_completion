@@ -16,7 +16,7 @@ class ProjectCompletion
   end
   
   def projects
-    `ls ~/code/`.split
+    `ls ~/Code/`.split
   end
 end
 
