@@ -1,11 +1,11 @@
-= Ryan Bates Dot Files
+= Eric Boehs Dot Files
 
 These are config files to set up a system the way I like it.
 
 
 == Installation
 
-  git clone git://github.com/ryanb/dotfiles ~/.dotfiles
+  git clone git://github.com/ericboehs/dotfiles ~/.dotfiles
   cd ~/.dotfiles
   rake install
 
@@ -25,7 +25,7 @@ the following command.
 I normally place all of my coding projects in ~/Code, so this directory 
 can easily be accessed (and tab completed) with the "c" command.
 
-  c railsca<tab>
+  c dotfiles<tab>
 
 There is also an "h" command which behaves similar, but acts on the 
 home path.
