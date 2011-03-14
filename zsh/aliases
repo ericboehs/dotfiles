@@ -28,7 +28,6 @@ alias tlog='tail -f log/development.log'
 
 # commands starting with % for pasting from web
 alias %=' '
-alias $=' '
 
 # Xcode
 alias xc='open /Developer/Applications/Xcode.app'
