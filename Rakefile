@@ -12,6 +12,7 @@ task :install do
   diff_dest = { 
     "vim/vimrc"  => "vimrc",
     "vim/gvimrc" => "gvimrc",
+    "dieter_mod.zsh-theme" => "oh-my-zsh/themes/dieter_mod.zsh-theme",
   }
   
   files.each do |file|
