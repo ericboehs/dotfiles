@@ -10,8 +10,8 @@ task :install do
 
   # Files that should have a different destination symlink
   diff_dest = { 
-    'vim/vimrc'  => "vimrc",
-    "vim/gvimrc" => "gvimrc"
+    "vim/vimrc"  => "vimrc",
+    "vim/gvimrc" => "gvimrc",
   }
   
   files.each do |file|
