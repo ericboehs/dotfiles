@@ -40,7 +40,7 @@ return_code_enabled="%(?..%{$fg[red]%}%? ↵%{$reset_color%})"
 return_code_disabled=
 return_code=$return_code_enabled
 
-RPS1='] $(vi_mode_prompt_info) ${return_code} $(~/.rvm/bin/rvm-prompt)'
+RPS1='] $(vi_mode_prompt_info) ${return_code} $(rvm-prompt)'
 
 function accept-line-or-clear-warning () {
 	if [[ -z $BUFFER ]]; then
