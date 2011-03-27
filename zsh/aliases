@@ -21,7 +21,11 @@ alias gba='git branch -a'
 alias gs='git status'
 alias grm="git status | grep deleted | awk '{print \$3}' | xargs git rm"
 alias gsu="git submodule update --init --recursive"
-alias changelog='git log `git log -1 --format=%H -- CHANGELOG*`..; cat CHANGELOG*'
+alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELOG*'
+
+alias gdp='PROD_SHA=`curl -Is http://www.jerky.com | grep X-GitSHA | cut -d " " -f2`; git diff $PROD_SHA...master'
+alias gsbp='PROD_SHA=`curl -Is http://www.jerky.com | grep X-GitSHA | cut -d " " -f2`; git show-branch $PROD_SHA master'
+alias watup="watch -t 'echo \"app1: \`curl -Is www.jerky.com.app1.shops.com | grep Git | cut -d\  -f2\`\" && echo \"app2: \`curl -Is www.jerky.com.app2.shops.com | grep Git | cut -d\  -f2\`\" && echo \"head: \`git ls-remote git@github.comigimedia/digistore_new.git | head -1 |  tr -d \"\011HEAD\"\`\"'"
 
 # Rails
 alias tlog='tail -f log/development.log'
@@ -66,7 +70,7 @@ alias redstart='redis-server /usr/local/etc/redis.conf'
 
 # Misc
 alias topmem='ps ax -eo pmem,pcpu,rss,vsize,args | sort -k 1 -r | head'
-alias matemod='mate `gst | grep modified | cut -d ':' -f 2`' #Edit git modified files in a textmate project
+alias matemod='mate $(gst | grep modified | cut -d ":" -f 2)' #Edit git modified files in a textmate project
 alias lb='open -a LaunchBar'
 
 alias ejh='export JAVA_HOME="/System/Library/Frameworks/JavaVM.framework/Home"'
