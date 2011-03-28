@@ -4,7 +4,7 @@ colors
 # get the name of the branch we are on
 function git_prompt_info() {
   ref=$(git symbolic-ref HEAD 2> /dev/null) || return
-  echo "$ZSH_THEME_GIT_PROMPT_PREFIX${ref#refs/heads/}$(parse_git_dirty)$ZSH_THEME_GIT_PROMPT_SUFFIX"
+  echo "$ZSH_THEME_GIT_PROMPT_PREFIX:${ref#refs/heads/}$(parse_git_dirty)$ZSH_THEME_GIT_PROMPT_SUFFIX"
 }
 
 parse_git_dirty () {
@@ -87,7 +87,7 @@ time=$time_enabled
 
 # user part, color coded by privileges
 local user="%(!.%{$fg[blue]%}.%{$fg[blue]%})%n%{$reset_color%}"
-
+[[ $USER = 'ericboehs' ]] && local user="%{$fg[blue]%}eb%{$reset_color%}"
 # Hostname part.  compressed and colorcoded per host_repr array
 # if not found, regular hostname in default color
 local host="@${host_repr[$(hostname)]:-$(hostname)}%{$reset_color%}"
@@ -95,7 +95,7 @@ local host="@${host_repr[$(hostname)]:-$(hostname)}%{$reset_color%}"
 # Compacted $PWD
 local pwd="%{$fg[blue]%}%c%{$reset_color%}"
 
-PROMPT='${time} ${user}${host} %(!.%1~.%~) $(git_prompt_info) [ '
+PROMPT='${time} ${user}${host} %(!.%1~.%~)$(git_prompt_info) [ '
 
 # i would prefer 1 icon that shows the "most drastic" deviation from HEAD,
 # but lets see how this works out
