@@ -11,8 +11,6 @@ function precmd() {
   max=${PREEXEC_MAX:-10}
 
   if [ $elapsed -gt $max ]; then
-    curl -k -s -u $NOTIFO_USER:$NOTIFO_KEY -d "msg=hi&title=bye" https://api.notifo.com/v1/send_notification > /dev/null
-    #curl -k -s -u $NOTIFO_USER:$NOTIFO_KEY -d "msg=+took+$elapsed+secs&ttitle=${PREEXEC_CMD:-Some Command}" https://api.notifo.com/v1/send_notification > /dev/null
-    #$1 | growlnotify -n "iTerm" -m "took $elapsed secs" ${PREEXEC_CMD:-Some Command}
-  fi  
+    curl -k -s -u $NOTIFO_USER:$NOTIFO_KEY -d "msg=took $elapsed secs&title=${PREEXEC_CMD:-Some Command}" https://api.notifo.com/v1/send_notification > /dev/null
+  fi
 }
