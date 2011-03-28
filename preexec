@@ -10,10 +10,6 @@ function precmd() {
   let elapsed=$stop-$start
   max=${PREEXEC_MAX:-10}
 
-  echo $elapsed
-  echo $PREEXEC_CMD
-  echo $1
-  echo $BASH_COMMAND
   if [ $elapsed -gt $max ]; then
     $1 | growlnotify -n "iTerm" -m "took $elapsed secs" ${PREEXEC_CMD:-Some Command}
   fi  
