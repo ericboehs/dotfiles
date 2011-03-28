@@ -15,10 +15,12 @@ alias gc='git commit'
 alias gcv='git commit -v'
 alias gca='git commit -a'
 alias gcav='git commit -av'
+alias gcp='git commit -av && git push'
 alias gco='git checkout'
 alias gb='git branch'
 alias gba='git branch -a'
 alias gs='git status'
+alias gst='git status'
 alias grm="git status | grep deleted | awk '{print \$3}' | xargs git rm"
 alias gsu="git submodule update --init --recursive"
 alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELOG*'
