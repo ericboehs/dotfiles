@@ -6,6 +6,7 @@ export CLICOLOR=1
 
 
 [[ -s ~/.rvm/scripts/rvm ]] && source ~/.rvm/scripts/rvm
+[[ -s /usr/local/lib/rvm ]] && source /usr/local/lib/rvm
 
 fpath=(~/.zsh/functions $fpath)
 
