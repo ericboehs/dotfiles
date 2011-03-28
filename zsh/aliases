@@ -2,7 +2,8 @@
 alias ..='cd ..'
 
 # ls
-alias ls="ls -F"
+# Find the option for using colir in ls
+ls --color -d . &>/dev/null 2>&1 && alias ls='ls --color=tty' || alias ls='ls -G'
 alias l="ls -lahF"
 alias ll="ls -l"
 alias la='ls -A'
