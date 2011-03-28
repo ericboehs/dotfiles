@@ -26,3 +26,7 @@ source $ZSH/oh-my-zsh.sh
 
 # use .localrc for settings specific to one system
 [[ -f ~/.localrc ]] && . ~/.localrc
+
+# load preexec to time commands
+[[ -f ~/.preexec ]] && . ~/.preexec
+
