@@ -7,5 +7,6 @@ ec2
 gitconfig
 ssh
 heroku
-gem/credentials
+gem
+vim/backup
 
