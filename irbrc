@@ -1,11 +1,21 @@
 #!/usr/bin/ruby
 require 'irb/completion'
 require 'irb/ext/save-history'
+require 'rubygems'
+require 'ap'
 
 IRB.conf[:SAVE_HISTORY] = 1000
 IRB.conf[:HISTORY_FILE] = "#{ENV['HOME']}/.irb_history"
 
 IRB.conf[:PROMPT_MODE] = :SIMPLE
+
+module IRB
+  class Irb
+    def output_value
+      ap @context.last_value
+    end
+  end
+end
 
 %w[rubygems looksee/shortcuts wirble].each do |gem|
   begin
