@@ -1,5 +1,5 @@
 # vim
-alias vim='/Applications/MacVim.app/Contents/MacOS/Vim'
+[[ $OSTYPE = 'darwin11.0' ]] && alias vim='/Applications/MacVim.app/Contents/MacOS/Vim'
 
 # cd
 alias ..='cd ..'
