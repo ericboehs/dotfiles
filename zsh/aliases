@@ -74,6 +74,9 @@ alias mem='memcached -d'
 # Redis
 alias redstart='redis-server /usr/local/etc/redis.conf'
 
+# MongoDB
+alias monstart='mongod run --config /usr/local/Cellar/mongodb/2.0.1-x86_64/mongod.conf'
+
 # Misc
 alias topmem='ps ax -eo pmem,pcpu,rss,vsize,args | sort -k 1 -r | head'
 alias matemod='mate $(gst | grep modified | cut -d ":" -f 2)' #Edit git modified files in a textmate project

@@ -1,12 +1,12 @@
 export EDITOR='vim'
-export VIM_APP_DIR=/usr/local/Cellar/macvim/7.3-57
+export VIM_APP_DIR=/Applications
 export PATH="$HOME/bin:$HOME/.bin:$VIM_APP_DIR/bin:$VIM_APP_DIR/MacVim.app/Contents/MacOS:/usr/local/homebrew/bin:/usr/local/bin:/usr/local/sbin:/usr/local/mysql/bin:/usr/local/git/bin:$PATH"
 export MANPATH="/usr/local/man:/usr/local/mysql/man:/usr/local/git/man:$MANPATH"
 export CLICOLOR=1
-
+export TERM=xterm-256color
 
 [[ -s ~/.rvm/scripts/rvm ]] && source ~/.rvm/scripts/rvm
-[[ -s /usr/local/lib/rvm ]] && source /usr/local/lib/rvm
+[[ -s /etc/profile ]] && source /etc/profile
 
 fpath=(~/.zsh/functions $fpath)
 
