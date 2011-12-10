@@ -1,10 +1,7 @@
-vim/.netrwhist
-vim/.VimballRecord
 zsh/config.private
 gem/credentials
 bash_history
 ec2
-gitconfig
 ssh
 heroku
 gem
