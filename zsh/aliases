@@ -3,6 +3,7 @@
 
 # bundle exec
 alias be='bundle exec'
+alias bip='bundle install --path .bundle'
 
 # cd
 alias ..='cd ..'
