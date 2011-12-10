@@ -18,7 +18,7 @@ function precmd() {
       -d "email=$BOXCAR_EMAIL" \
       -d "&notification[from_screen_name]=took $elapsed secs" \
       -d "&notification[message]=${PREEXEC_CMD:-Some Command}" \
-      "http://boxcar.io/devices/providers/$BOXCAR_PROVIDER/notifications"
+      "http://boxcar.io/devices/providers/$BOXCAR_PROVIDER/notifications" > /dev/null 2>&1 &> /dev/null
     fi
   fi
 }
