@@ -1,6 +1,9 @@
 # vim
 [[ $OSTYPE = 'darwin11.0' ]] && alias vim='/Applications/MacVim.app/Contents/MacOS/Vim'
 
+# bundle exec
+alias be='bundle exec'
+
 # cd
 alias ..='cd ..'
 
