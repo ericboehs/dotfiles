@@ -36,9 +36,6 @@ alias watup="watch -t 'echo \"app1: \`curl -Is www.jerky.com.app1.shops.com | gr
 # Rails
 alias tlog='tail -f log/development.log'
 
-# commands starting with % for pasting from web
-alias %=' '
-
 # Xcode
 alias xc='open /Developer/Applications/Xcode.app'
 alias xc.='open *.xcodeproj'

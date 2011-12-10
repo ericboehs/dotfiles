@@ -54,4 +54,4 @@ nnoremap <C-j> o<Esc>k
 nnoremap <C-k> O<Esc>j
 
 " Clear search highlight when you hit esc
-nnoremap <esc> :noh<return><esc>
+noremap <silent> <c-l> :nohls<cr><c-l>
