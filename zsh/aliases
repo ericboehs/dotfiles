@@ -79,6 +79,8 @@ alias redstart='redis-server /usr/local/etc/redis.conf'
 alias monstart='mongod run --config /usr/local/Cellar/mongodb/2.0.1-x86_64/mongod.conf'
 
 # Misc
+alias json="python -mjson.tool"
+alias xml="xmllint --format -"
 alias topmem='ps ax -eo pmem,pcpu,rss,vsize,args | sort -k 1 -r | head'
 alias matemod='mate $(gst | grep modified | cut -d ":" -f 2)' #Edit git modified files in a textmate project
 alias lb='open -a LaunchBar'
