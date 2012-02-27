@@ -44,6 +44,9 @@ function! GetVisual() range
   return escaped_selection
 endfunction
 
+" Remap jj to Esc in insert mode
+inoremap jj <Esc>
+
 " Start the find and replace command across the entire file
 vnoremap <C-r> <Esc>:%s/<c-r>=GetVisual()<cr>//gc<left><left><left>
 
@@ -55,3 +58,4 @@ nnoremap <C-k> O<Esc>j
 
 " Clear search highlight when you hit esc
 noremap <silent> <c-l> :nohls<cr><c-l>
+
