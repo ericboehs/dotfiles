@@ -1,0 +1,10 @@
+# ~/.tmuxinator/yv.yml
+
+project_name: yv
+project_root: ~/Code/youversion.com
+tabs:
+  - editor: vim
+  - shell: git pull --rebase
+  - database: ssh -NL 15432:localhost:5432 root@yv.dev & sleep 3 && psql -h localhost -p 15432 youversiondev eboehs ; kill $!
+  - capistrano:
+  - server: ssh root@173.203.203.253

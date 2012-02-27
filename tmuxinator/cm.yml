@@ -1,0 +1,11 @@
+# ~/.tmuxinator/cm.yml
+project_name: cm
+project_root: ~/Code/churchmint
+rvm: 1.9.3
+tabs:
+  - editor: vim
+  - shell: git pull --rebase
+  - console: be rails c
+  - database: be rails db
+  - server: be rails s
+  - deploy:

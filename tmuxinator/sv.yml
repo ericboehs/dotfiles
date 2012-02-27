@@ -1,0 +1,14 @@
+# ~/.tmuxinator/sv.yml
+
+project_name: sv
+project_root: ~/Code/sportsvault
+rvm: 1.9.3
+tabs:
+  - editor: vim
+  - shell: git pull --rebase
+  - database: be rails db
+  - server: be rails s
+  - log: tail -f log/development.log
+  - console: be rails c
+  - capistrano:
+  - server: ssh staging.sportsvault.net
