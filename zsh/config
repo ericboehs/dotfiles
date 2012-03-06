@@ -5,6 +5,11 @@ export MANPATH="/usr/local/man:/usr/local/mysql/man:/usr/local/git/man:$MANPATH"
 export CLICOLOR=1
 export TERM=xterm-256color
 
+# Grab the current running SSH agent if there is one
+[[ -n $(pgrep -U$UID ssh-agent) ]] && export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\* 2>/dev/null |tail -1)
+# Add ssh keys (and start an agent if there isn't one already running)
+ssh-add 2>/dev/null; [[ $? -eq 2 ]] && eval $(ssh-agent) 1>/dev/null && ssh-add 2>/dev/null
+
 [[ -s ~/.rvm/scripts/rvm ]] && source ~/.rvm/scripts/rvm
 [[ -s /etc/profile ]] && source /etc/profile
 

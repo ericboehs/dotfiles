@@ -44,6 +44,17 @@ function! GetVisual() range
   return escaped_selection
 endfunction
 
+" Set Gist to detect filetype from file
+let g:gist_detect_filetype = 1
+
+" Set Gist to set clipboard of remote Mac
+let uname = substitute(system("uname"),"\n","","g")
+if uname == "Linux"
+  let g:gist_open_browser_after_post = 1
+  let g:gist_browser_command = 'ssh -p 2222 localhost open %URL%'
+  let g:gist_clip_command = 'tmux set-buffer' " Doesn't seem to work
+endif
+
 " Remap jj to Esc in insert mode
 inoremap jj <Esc>
 
