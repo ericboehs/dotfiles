@@ -44,6 +44,10 @@ function! GetVisual() range
   return escaped_selection
 endfunction
 
+" Set Github username/token for Gist.vim
+let g:github_user = $GITHUB_USER
+let g:github_token = $GITHUB_TOKEN
+
 " Set Gist to detect filetype from file
 let g:gist_detect_filetype = 1
 
