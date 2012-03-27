@@ -3,7 +3,8 @@ export VIM_APP_DIR=/Applications
 export PATH="$HOME/bin:$HOME/.bin:$VIM_APP_DIR/bin:$VIM_APP_DIR/MacVim.app/Contents/MacOS:/usr/local/homebrew/bin:/usr/local/bin:/usr/local/sbin:/usr/local/mysql/bin:/usr/local/git/bin:$PATH"
 export MANPATH="/usr/local/man:/usr/local/mysql/man:/usr/local/git/man:$MANPATH"
 export CLICOLOR=1
-export TERM=xterm-256color
+export TERM=screen-256color
+export PAGER=less
 
 # Grab the current SSH agent if there is one
 export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\* 2>/dev/null |tail -1)
@@ -14,6 +15,21 @@ export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\* 2>/dev/null
 
 [[ -s ~/.rvm/scripts/rvm ]] && source ~/.rvm/scripts/rvm
 [[ -s /etc/profile ]] && source /etc/profile
+
+# Map jj to vim-cmd-mode
+bindkey "jj" vi-cmd-mode
+
+# Allow editing of the text on the current command line with v (cmd mode)
+autoload -U edit-command-line
+zle -N edit-command-line
+bindkey -M vicmd v edit-command-line
+
+# We like the calculator built into the shell
+autoload -U zcalc
+
+# Auto pushd
+setopt autocd autopushd pushdignoredups
+bindkey -v
 
 # Remap Ctrl-S to Ctrl-- for stopping termianl output
 stty stop 
@@ -58,3 +74,19 @@ bindkey '^[[5C' end-of-line
 bindkey '^[[3~' delete-char
 bindkey '^[^N' newtab
 bindkey '^?' backward-delete-char 
+
+# use incremental search
+bindkey "^R" history-incremental-search-backward
+
+# add some readline keys back
+bindkey "^A" beginning-of-line
+bindkey "^E" end-of-line
+
+# handy keybindings
+bindkey "^P" history-search-backward
+bindkey "^Y" accept-and-hold
+bindkey "^N" insert-last-word
+bindkey -s "^T" "^[Isudo ^[A" # "t" for "toughguy"
+
+# Enable extended globbing
+setopt EXTENDED_GLOB
