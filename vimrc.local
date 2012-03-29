@@ -44,6 +44,20 @@ function! GetVisual() range
   return escaped_selection
 endfunction
 
+" Add toggling of relative line numbers
+function! NumberToggle()
+  if(&relativenumber == 1)
+    set number
+  else
+    set relativenumber
+  endif
+endfunc
+
+nnoremap <C-n> :call NumberToggle()<cr>
+
+" Enable scrolling with the mouse
+set mouse=nicr
+
 " Set Github username/token for Gist.vim
 let g:github_user = $GITHUB_USER
 let g:github_token = $GITHUB_TOKEN
