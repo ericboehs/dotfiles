@@ -56,7 +56,7 @@ endfunc
 nnoremap <C-n> :call NumberToggle()<cr>
 
 " Enable scrolling with the mouse
-set mouse=nicr
+" set mouse=nicr
 
 " Set Github username/token for Gist.vim
 let g:github_user = $GITHUB_USER
@@ -87,4 +87,10 @@ nnoremap <C-k> O<Esc>j
 
 " Clear search highlight when you hit esc
 noremap <silent> <c-l> :nohls<cr><c-l>
+
+" Get off my lawn
+nnoremap <Left> :echoe "Use h"<CR>
+nnoremap <Right> :echoe "Use l"<CR>
+nnoremap <Up> :echoe "Use k"<CR>
+nnoremap <Down> :echoe "Use j"<CR>
 
