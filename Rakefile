@@ -6,12 +6,12 @@ task :install do
   replace_all = false
 
   # Additional files that aren't caught with Dir['*']
-  files =  Dir['*'] << "vim/vimrc" << "vim/gvimrc" 
+  files =  Dir['*'] << "vim/janus/vim/vimrc" << "vim/janus/vim/gvimrc" 
 
   # Files that should have a different destination symlink
   diff_dest = { 
-    "vim/vimrc"  => "vimrc",
-    "vim/gvimrc" => "gvimrc",
+    "vim/janus/vim/vimrc"  => "vimrc",
+    "vim/janus/vim/gvimrc" => "gvimrc",
     "dieter_mod.zsh-theme" => "oh-my-zsh/themes/dieter_mod.zsh-theme",
   }
   

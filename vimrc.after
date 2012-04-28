@@ -1,13 +1,6 @@
 set t_Co=256
 color xoria256
 
-
-set backup
-set backupdir=~/.vim/tmp
-set directory=~/.vim/tmp
-" set clipboard=unnamed
-
-
 " Escape special characters in a string for exact matching.
 " This is useful to copying strings from the file to the search tool
 " Based on this - http://peterodding.com/code/vim/profile/autoload/xolox/escape.vim
@@ -93,6 +86,3 @@ nnoremap <Left> :echoe "Use h"<CR>
 nnoremap <Right> :echoe "Use l"<CR>
 nnoremap <Up> :echoe "Use k"<CR>
 nnoremap <Down> :echoe "Use j"<CR>
-
-" Clear Janus' tabedit key
-unmap <Leader>te
