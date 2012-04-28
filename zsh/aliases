@@ -1,5 +1,5 @@
 # vim
-[[ $OSTYPE = 'darwin11.0' ]] && alias vim='/Applications/MacVim.app/Contents/MacOS/Vim'
+[[ $OSTYPE = 'darwin'* ]] && alias vim='/Applications/MacVim.app/Contents/MacOS/Vim'
 
 # bundle exec
 alias b='bundle'
@@ -151,3 +151,4 @@ for cmd in $bundled_commands; do
         compdef _$cmd bundled_$cmd=$cmd
   fi
 done
+
