@@ -47,6 +47,10 @@ alias watup="watch -t 'echo \"app1: \`curl -Is www.jerky.com.app1.shops.com | gr
 # Rails
 alias tlog='tail -f log/development.log'
 
+# Ruby
+# Get latest stable gem version for a gem
+gemv() { curl -s https://rubygems.org/api/v1/versions/$1.json | python -mjson.tool | grep number | head -1 | cut -d '"' -f4 }
+
 # Xcode
 alias xc='open /Developer/Applications/Xcode.app'
 alias xc.='open *.xcodeproj'

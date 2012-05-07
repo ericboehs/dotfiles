@@ -1,3 +1,6 @@
 [submodule "vim"]
 	path = vim
 	url = git://github.com/carlhuda/janus.git
+[submodule "janus/tabular"]
+	path = janus/tabular
+	url = https://github.com/ihacklog/tabular.git
