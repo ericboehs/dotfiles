@@ -117,6 +117,13 @@ alias -g S='|sort'
 # use like: ls ~src OR ~src OR du -h ~src
 c=~/Code
 
+# Hitch
+hitch() {
+  command hitch "$@"
+  if [[ -s "$HOME/.hitch_export_authors" ]] ; then source "$HOME/.hitch_export_authors" ; fi
+}
+alias unhitch='hitch -u'
+
 
 #######################
 # BUNDLE EXEC ALIASES
@@ -124,7 +131,7 @@ c=~/Code
 
 # The following is based on https://github.com/robbyrussell/oh-my-zsh/blob/master/plugins/bundler/bundler.plugin.zsh
 
-bundled_commands=(annotate cap capify cucumber ey foreman guard heroku middleman nanoc rackup rainbows rails rake rspec ruby shotgun spec spork thin thor unicorn unicorn_rails)
+bundled_commands=(annotate cap capify cucumber ey foreman guard heroku hitch middleman nanoc rackup rainbows rails rake rspec ruby shotgun spec spork thin thor unicorn unicorn_rails)
 
 _bundler-installed() {
   which bundle > /dev/null 2>&1
