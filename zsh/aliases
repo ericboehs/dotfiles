@@ -23,6 +23,7 @@ alias ll="ls -l"
 alias la='ls -A'
 
 # Git
+which -s hub >/dev/null 2>&1 && alias git='hub'
 alias gl='git pull'
 alias gp='git push'
 alias gd='git diff'
@@ -32,6 +33,7 @@ alias gca='git commit -a'
 alias gcav='git commit -av'
 alias gcp='git commit -av && git push'
 alias gco='git checkout'
+alias gcl='git clone'
 alias gb='git branch'
 alias gba='git branch -a'
 alias gs='git status'
