@@ -31,6 +31,8 @@ alias gc='git commit'
 alias gcv='git commit -v'
 alias gca='git commit -a'
 alias gcav='git commit -av'
+alias gcane='git commit --amend --no-edit'
+alias gcaane='git commit -a --amend --no-edit'
 alias gcp='git commit -av && git push'
 alias gco='git checkout'
 alias gcl='git clone'
@@ -38,13 +40,23 @@ alias gb='git branch'
 alias gba='git branch -a'
 alias gs='git status'
 alias gst='git status'
-alias grm="git status | grep deleted | awk '{print \$3}' | xargs git rm"
+alias gst='git status'
+gra() { git remote add ${2:-"origin"} $1 }
+grah() { git remote add $2 git@heroku.personal:$1.git }
+alias grv='git remote -v'
+alias grrm='git remote rm'
+glrm() { git pull-request -b ${1}:master }
 alias gsu="git submodule update --init --recursive"
 alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELOG*'
 
 alias gdp='PROD_SHA=`curl -Is http://www.jerky.com | grep X-GitSHA | cut -d " " -f2`; git diff $PROD_SHA...master'
 alias gsbp='PROD_SHA=`curl -Is http://www.jerky.com | grep X-GitSHA | cut -d " " -f2`; git show-branch $PROD_SHA master'
 alias watup="watch -t 'echo \"app1: \`curl -Is www.jerky.com.app1.shops.com | grep Git | cut -d\  -f2\`\" && echo \"app2: \`curl -Is www.jerky.com.app2.shops.com | grep Git | cut -d\  -f2\`\" && echo \"head: \`git ls-remote git@github.comigimedia/digistore_new.git | head -1 |  tr -d \"\011HEAD\"\`\"'"
+
+# Heroku
+alias h='heroku'
+hs() { heroku $@ -r staging }
+hp() { heroku $@ -r production }
 
 # Rails
 alias tlog='tail -f log/development.log'
@@ -92,6 +104,7 @@ alias redstart='redis-server /usr/local/etc/redis.conf'
 alias monstart='mongod run --config /usr/local/Cellar/mongodb/2.0.1-x86_64/mongod.conf'
 
 # Misc
+alias ee='eval $(cat .env)'
 alias json="python -mjson.tool"
 alias xml="xmllint --format -"
 alias topmem='ps ax -eo pmem,pcpu,rss,vsize,args | sort -k 1 -r | head'

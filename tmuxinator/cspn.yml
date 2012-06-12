@@ -1,0 +1,10 @@
+# ~/.tmuxinator/cspn.yml
+
+project_name: cspn
+project_root: ~/Code/caspian
+tabs:
+  - editor: vim
+  - shell: git pull --rebase
+  - console: rails c
+  - database: rails db
+  - server: rails s
