@@ -8,17 +8,25 @@ export TERM=screen-256color
 export PAGER=less
 
 # Grab the current SSH agent if there is one
-export SSH_AUTH_SOCK=$(find '/tmp/ssh-*' -user $(whoami) -name agent\* 2>/dev/null |tail -1)
+#export SSH_AUTH_SOCK=$(find '/tmp/ssh-*' -user $(whoami) -name agent\* 2>/dev/null |tail -1)
 # The below needs to be adapted to compensate for forward agents
 #[[ -n $(pgrep -U$UID ssh-agent) ]] && export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\* 2>/dev/null |tail -1)
 # Add ssh keys (and start an agent if there isn't one already running)
 #ssh-add 2>/dev/null; [[ $? -eq 2 ]] && eval $(ssh-agent) 1>/dev/null && ssh-add 2>/dev/null
 
+# Fix SSH_AUTH_SOCK to a predicatable locaiton
+SOCK="/tmp/ssh-agent-$USER-screen"
+if test $SSH_AUTH_SOCK && [ $SSH_AUTH_SOCK != $SOCK ]
+then
+    ln -sf $SSH_AUTH_SOCK $SOCK
+    export SSH_AUTH_SOCK=$SOCK
+fi
+
 [[ -s ~/.rvm/scripts/rvm ]] && source ~/.rvm/scripts/rvm
 [[ -s /etc/profile ]] && source /etc/profile
 
 # Map jj to vim-cmd-mode
-bindkey "jj" vi-cmd-mode
+bindkey -M viins 'jj' vi-cmd-mode
 
 # Allow editing of the text on the current command line with v (cmd mode)
 autoload -U edit-command-line

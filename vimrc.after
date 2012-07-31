@@ -1,6 +1,13 @@
 set t_Co=256
 color xoria256
 
+" Chagned the folding background color to black
+hi Folded term=standout ctermfg=255 ctermbg=darkgray guifg=#eeeeee guibg=#323247
+
+" Macros
+let @f="mu?it.*do$? i,focus:true'u"
+let @u="mu?it.*,focus:true/,focusdt 'u"
+
 " Escape special characters in a string for exact matching.
 " This is useful to copying strings from the file to the search tool
 " Based on this - http://peterodding.com/code/vim/profile/autoload/xolox/escape.vim

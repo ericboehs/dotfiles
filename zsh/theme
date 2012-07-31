@@ -78,7 +78,7 @@ fi
 typeset -A host_repr
 
 # translate hostnames into shortened, colorcoded strings
-host_repr=('Eric-Boehs-MacBook-Air.local' "%{$fg_bold[green]%}eb-mba" 'ericboehs.com' "%{$fg_bold[green]%}eb.c")
+host_repr=('Eric-Boehs-MacBook-Air.local' "%{$fg_bold[green]%}eb-mba" 'Brightbox.local' "%{$fg_bold[green]%}bbox" 'ericboehs.com' "%{$fg_bold[green]%}eb.c")
 
 # local time, color coded by last return code
 time_enabled="%(?.%{$fg[green]%}.%{$fg[red]%})%*%{$reset_color%}"
