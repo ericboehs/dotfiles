@@ -8,6 +8,8 @@ alias bip='bundle install --path .bundle'
 
 # tmux ssh agent forwarding hack
 alias safix='export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\* 2>/dev/null |tail -1)'
+sasw()  { export SSH_AUTH_SOCK=/tmp/ssh-agent-$1-screen }
+saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 
 # tmuxme pair function
 tmuxme() { tmux -S /var/tmux/pairing attach -t $1 || tmux -S /var/tmux/pairing new-session -s $1 -t $2 || (tmux -S /var/tmux/pairing new-session -s $2 -d && tmux -S /var/tmux/pairing new-session -s $1 -t $2) }
