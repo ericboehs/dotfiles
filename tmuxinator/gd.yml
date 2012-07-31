@@ -1,11 +1,10 @@
 # ~/.tmuxinator/gd.yml
-# you can make as many tabs as you wish...
 
 project_name: gd
 project_root: ~/Code/guestdoor
 tabs:
   - editor: vim
   - shell: git pull --rebase
-  - database: be rails db
-  - server: be rails s
-  - console: be rails c
+  - database: rails db
+  - server: rails s
+  - console: rails c
