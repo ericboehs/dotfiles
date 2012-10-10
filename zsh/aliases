@@ -47,7 +47,7 @@ alias gs='git status'
 alias gst='git status'
 alias gst='git status'
 gra() { git remote add ${2:-"origin"} $1 }
-grah() { git remote add $2 git@heroku.personal:$1.git }
+grah() { git remote add $2 git@heroku.com:$1.git }
 alias grv='git remote -v'
 alias grrm='git remote rm'
 glrm() { git pull-request -b ${1}:master }
@@ -65,6 +65,7 @@ hp() { heroku $@ -r production }
 
 # Rails
 alias tlog='tail -f log/development.log'
+alias ttr='touch tmp/restart.txt'
 
 # Ruby
 # Get latest stable gem version for a gem
@@ -110,6 +111,7 @@ alias monstart='mongod run --config /usr/local/Cellar/mongodb/2.0.1-x86_64/mongo
 
 # Misc
 alias ee='eval $(cat .env)'
+alias ees='eval $(cat .env.staging)'
 alias json="python -mjson.tool"
 alias xml="xmllint --format -"
 alias topmem='ps ax -eo pmem,pcpu,rss,vsize,args | sort -k 1 -r | head'
@@ -157,7 +159,7 @@ alias unhitch='hitch -u'
 
 # The following is based on https://github.com/robbyrussell/oh-my-zsh/blob/master/plugins/bundler/bundler.plugin.zsh
 
-bundled_commands=(annotate cap capify cucumber ey foreman guard heroku middleman nanoc rackup rainbows rails rake rspec ruby shotgun spec spork thin thor unicorn unicorn_rails)
+bundled_commands=(annotate brakeman cap capify cucumber ey foreman guard heroku middleman nanoc powder rackup rainbows rails rake rspec ruby shotgun spec spork thin thor unicorn unicorn_rails)
 
 _bundler-installed() {
   which bundle > /dev/null 2>&1

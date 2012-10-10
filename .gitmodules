@@ -4,3 +4,12 @@
 [submodule "janus/tabular"]
 	path = janus/tabular
 	url = https://github.com/ihacklog/tabular.git
+[submodule "janus/YankRing"]
+	path = janus/YankRing
+	url = https://github.com/vim-scripts/YankRing.vim.git
+[submodule "janus/yankstack"]
+	path = janus/yankstack
+	url = https://github.com/maxbrunsfeld/vim-yankstack.git
+[submodule "janus/Align"]
+	path = janus/Align
+	url = git://github.com/vim-scripts/Align.git
