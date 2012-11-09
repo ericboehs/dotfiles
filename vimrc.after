@@ -2,6 +2,7 @@ set t_Co=256
 "color xoria256
 color solarized
 set background=dark
+"set background=light
 
 " Chagned the folding background color to black
 hi Folded term=standout ctermfg=255 ctermbg=darkgray guifg=#eeeeee guibg=#323247
@@ -9,6 +10,12 @@ hi Folded term=standout ctermfg=255 ctermbg=darkgray guifg=#eeeeee guibg=#323247
 " Macros
 let @f="mu?it.*do$? i,focus:true'u"
 let @u="mu?it.*,focus:true/,focusdt 'u"
+let @v="f'vi'yA, '~> :r !gem sea -r \"^\"$\"|tail -1|cut -f2 -d' '|tr -d '()'kJA'0j"
+
+" Commands
+
+" Converts Ruby 1.8 hashes to 1.9
+command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')
 
 " Escape special characters in a string for exact matching.
 " This is useful to copying strings from the file to the search tool
@@ -59,6 +66,12 @@ nnoremap <C-n> :call NumberToggle()<cr>
 
 " Enable scrolling with the mouse
 " set mouse=nicr
+
+" Set vim-slime's session multiplexer to tmux
+let g:slime_target = "tmux"
+
+" Ignore tmp directory and other Rails directories in CtrlP
+set wildignore+=*/tmp/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
 " Set Github username/token for Gist.vim
 let g:github_user = $GITHUB_USER

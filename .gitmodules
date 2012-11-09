@@ -13,3 +13,6 @@
 [submodule "janus/Align"]
 	path = janus/Align
 	url = git://github.com/vim-scripts/Align.git
+[submodule "janus/vim-slim"]
+	path = janus/vim-slim
+	url = git://github.com/bbommarito/vim-slim.git

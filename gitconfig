@@ -9,6 +9,7 @@
   hist = log --pretty=format:\"%h %ad | %s%d [%an]\" --graph --date=short
   type = cat-file -t
   dump = cat-file -p
+  d = difftool
 [merge]
   tool = opendiff
 [color]
@@ -22,10 +23,14 @@
 [apply]
   whitespace = nowarn
 [difftool]
-  prompt = false
+	prompt = false
 [push]
   default = current
-[heroku]
-	account = personal
 [github]
 	user = ericboehs
+[credential]
+	helper = store
+[diff]
+	tool = vimdiff
+[heroku]
+	account = personal

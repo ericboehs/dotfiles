@@ -60,8 +60,8 @@ alias watup="watch -t 'echo \"app1: \`curl -Is www.jerky.com.app1.shops.com | gr
 
 # Heroku
 alias h='heroku'
-hs() { heroku $@ -r staging }
-hp() { heroku $@ -r production }
+hs() { bundle exec heroku $@ -r staging }
+hp() { bundle exec heroku $@ -r production }
 
 # Rails
 alias tlog='tail -f log/development.log'
@@ -69,7 +69,9 @@ alias ttr='touch tmp/restart.txt'
 
 # Ruby
 # Get latest stable gem version for a gem
-gemv() { curl -s https://rubygems.org/api/v1/versions/$1.json | python -mjson.tool | grep number | head -1 | cut -d '"' -f4 }
+#gemv() { curl -s https://rubygems.org/api/v1/versions/$1.json | python -mjson.tool | grep number | head -1 | cut -d '"' -f4 }
+gemv() { gem sea -r "^$1$"|tail -1|cut -f2 -d' '|tr -d '()' }
+
 
 # Xcode
 alias xc='open /Developer/Applications/Xcode.app'
@@ -85,6 +87,7 @@ alias o.='open .'
 # Misc
 alias utime="ruby -e 'puts Time.now.to_i'"
 alias sha1="/usr/bin/openssl sha1"
+playing() { ssh 127.0.0.1 -p 2222 "osascript -e 'tell application \"Spotify\" to Artist of current track as string' | tr \"\n\" \"~\" | sed \"s/~/ - /g\" | tr -d \"\n\" && osascript -e 'tell application \"Spotify\" to name of current track as string'" }
 
 # PostgreSQL
 alias pg_start="pg_ctl -D /usr/local/var/postgres -l /usr/local/var/postgres/server.log start"
