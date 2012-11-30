@@ -60,8 +60,10 @@ alias watup="watch -t 'echo \"app1: \`curl -Is www.jerky.com.app1.shops.com | gr
 
 # Heroku
 alias h='heroku'
-hs() { bundle exec heroku $@ -r staging }
-hp() { bundle exec heroku $@ -r production }
+hs()  { heroku $@ -r staging }
+hsr() { heroku run $@ -r staging }
+hp()  { heroku $@ -r production }
+hpr() { heroku run $@ -r production }
 
 # Rails
 alias tlog='tail -f log/development.log'

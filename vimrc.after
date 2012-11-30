@@ -4,6 +4,10 @@ color solarized
 set background=dark
 "set background=light
 
+" Crosshair cursor
+set cursorline
+set cursorcolumn
+
 " Chagned the folding background color to black
 hi Folded term=standout ctermfg=255 ctermbg=darkgray guifg=#eeeeee guibg=#323247
 
