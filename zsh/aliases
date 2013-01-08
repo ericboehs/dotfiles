@@ -45,7 +45,6 @@ alias gb='git branch'
 alias gba='git branch -a'
 alias gs='git status'
 alias gst='git status'
-alias gst='git status'
 gra() { git remote add ${2:-"origin"} $1 }
 grah() { git remote add $2 git@heroku.com:$1.git }
 alias grv='git remote -v'
