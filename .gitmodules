@@ -16,3 +16,6 @@
 [submodule "janus/vim-slime"]
 	path = janus/vim-slime
 	url = https://github.com/jpalardy/vim-slime.git
+[submodule "janus/vimchat"]
+	path = janus/vimchat
+	url = git://github.com/ironcamel/vimchat.git

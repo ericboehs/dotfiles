@@ -163,7 +163,7 @@ alias unhitch='hitch -u'
 
 # The following is based on https://github.com/robbyrussell/oh-my-zsh/blob/master/plugins/bundler/bundler.plugin.zsh
 
-bundled_commands=(annotate brakeman cap capify cucumber ey foreman guard heroku middleman nanoc powder rackup rainbows rails rake rspec ruby shotgun spec spork thin thor unicorn unicorn_rails)
+bundled_commands=(annotate brakeman cap capify cucumber ey foreman guard middleman nanoc powder rackup rainbows rails rake rspec ruby shotgun spec spork thin thor unicorn unicorn_rails)
 
 _bundler-installed() {
   which bundle > /dev/null 2>&1
