@@ -1,10 +1,10 @@
-# ~/.tmuxinator/gd.yml
+# ~/.tmuxinator/bs.yml
 
-project_name: gd
-project_root: ~/Code/guestdoor
+project_name: bs
+project_root: ~/Code/bibleseriesstore
 tabs:
   - comm: weechat-curses
-  - editor: vim
+  - editor: sleep 6 && vim
   - shell: git remote update; git pull --rebase origin master
   - console/server:
       layout: even-vertical

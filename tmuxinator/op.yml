@@ -1,7 +1,7 @@
-# ~/.tmuxinator/gd.yml
+# ~/.tmuxinator/op.yml
 
-project_name: gd
-project_root: ~/Code/guestdoor
+project_name: open
+project_root: ~/Code/open
 tabs:
   - comm: weechat-curses
   - editor: vim
@@ -12,3 +12,4 @@ tabs:
         - sleep 3 && zeus c
         - sleep 3 && zeus s
   - zeus: zeus start
+  - solr: ssh -NL 8382:localhost:8383 box.erc.bz

@@ -1,8 +1,8 @@
 set t_Co=256
 "color xoria256
 color solarized
-set background=dark
-"set background=light
+"set background=dark
+set background=light
 
 " Crosshair cursor
 "set cursorline
