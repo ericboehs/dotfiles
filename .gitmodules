@@ -19,3 +19,6 @@
 [submodule "janus/vimchat"]
 	path = janus/vimchat
 	url = git://github.com/ironcamel/vimchat.git
+[submodule "janus/vim-slim"]
+	path = janus/vim-slim
+	url = git@github.com:slim-template/vim-slim

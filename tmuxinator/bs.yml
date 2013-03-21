@@ -2,9 +2,10 @@
 
 project_name: bs
 project_root: ~/Code/bibleseriesstore
+pre: tmux set-window-option -g monitor-activity off
 tabs:
   - comm: weechat-curses
-  - editor: sleep 6 && vim
+  - editor: sleep 8 && vim
   - shell: git remote update; git pull --rebase origin master
   - console/server:
       layout: even-vertical
@@ -12,3 +13,4 @@ tabs:
         - sleep 3 && zeus c
         - sleep 3 && zeus s
   - zeus: zeus start
+  - starting: sleep 2; tmux rename-window -t $SESSION:1 comm; tmux set-window-option -t $SESSION:5 monitor-activity off; exit

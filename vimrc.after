@@ -74,8 +74,11 @@ nnoremap <C-n> :call NumberToggle()<cr>
 " Set vim-slime's session multiplexer to tmux
 let g:slime_target = "tmux"
 
+" Use Silver Searcher instead of ack
+let g:ackprg = 'ag --nogroup --nocolor --column'
+
 " Ignore tmp directory and other Rails directories in CtrlP
-set wildignore+=*/tmp/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
+set wildignore+=*/tmp/*,*/vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
 " Set Github username/token for Gist.vim
 let g:github_user = $GITHUB_USER
