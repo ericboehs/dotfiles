@@ -4,7 +4,7 @@
 # bundle exec
 alias b='bundle'
 alias be='bundle exec'
-alias bip='bundle install --path vendor/bundle'
+alias bi='bundle install --path vendor/bundle --binstubs vendor/bundle/bin'
 
 # tmux ssh agent forwarding hack
 alias safix='export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\* 2>/dev/null |tail -1)'
