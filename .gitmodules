@@ -22,3 +22,9 @@
 [submodule "janus/vim-slim"]
 	path = janus/vim-slim
 	url = git@github.com:slim-template/vim-slim
+[submodule "janus/vimux"]
+	path = janus/vimux
+	url = git@github.com:benmills/vimux
+[submodule "janus/vimux-zeus"]
+	path = janus/vimux-zeus
+	url = git@github.com:jingweno/vimux-zeus

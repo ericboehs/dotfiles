@@ -26,8 +26,14 @@ fi
 [[ -s ~/.rvm/scripts/rvm ]] && source ~/.rvm/scripts/rvm
 [[ -s /etc/profile ]] && source /etc/profile
 
+# Map hh to vim-cmd-mode
+bindkey -M viins 'hhh' vi-cmd-mode
 # Map jj to vim-cmd-mode
 bindkey -M viins 'jj' vi-cmd-mode
+# Map kk to vim-cmd-mode
+bindkey -M viins 'kkk' vi-cmd-mode
+# Map ll to vim-cmd-mode
+bindkey -M viins 'lll' vi-cmd-mode
 
 # Allow editing of the text on the current command line with v (cmd mode)
 autoload -U edit-command-line

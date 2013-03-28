@@ -5,5 +5,8 @@ $if mode=vi
     "gg": beginning-of-history
     "G": end-of-history
     set keymap vi-insert
+    "hhh": vi-movement-mode
     "jj": vi-movement-mode
+    "kkk": vi-movement-mode
+    "lll": vi-movement-mode
 $endif

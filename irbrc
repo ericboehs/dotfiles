@@ -6,14 +6,13 @@ IRB.conf[:AUTO_INDENT]  = true
 IRB.conf[:EVAL_HISTORY] = 1000000
 IRB.conf[:SAVE_HISTORY] = 1000000
 IRB.conf[:HISTORY_FILE] = "#{ENV['HOME']}/.irb_history"
-
-IRB.conf[:PROMPT_MODE] = :SIMPLE
+IRB.conf[:PROMPT_MODE]  = :SIMPLE
 
 %w[irb/completion irb/ext/save-history awesome_print interactive_editor].each do |gem|
   begin
     require gem
   rescue LoadError
-    warn "Could not load #{gem}"
+    #warn "Could not load #{gem}"
   end
 end
 
