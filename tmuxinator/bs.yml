@@ -10,7 +10,6 @@ tabs:
   - console/server:
       layout: even-vertical
       panes:
-        - sleep 3 && zeus c
-        - sleep 3 && zeus s
-  - zeus: zeus start
-  - starting: sleep 2; tmux rename-window -t $SESSION:1 comm; tmux set-window-option -t $SESSION:5 monitor-activity off; exit
+        - rails c
+        - rails s
+  - starting: sleep 2; tmux rename-window -t $SESSION:1 comm; exit

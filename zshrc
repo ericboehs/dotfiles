@@ -10,3 +10,5 @@
 # load preexec to time commands
 [[ -f ~/.preexec ]] && . ~/.preexec
 
+# Initialize direnv
+eval `direnv hook $0`
