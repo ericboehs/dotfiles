@@ -1,10 +1,10 @@
 export EDITOR='vim'
-export VIM_APP_DIR=/Applications
-export PATH="/usr/local/heroku/bin:$HOME/bin:$HOME/.bin:$VIM_APP_DIR/bin:$VIM_APP_DIR/MacVim.app/Contents/MacOS:$(cd $(which gem)/..;pwd):/usr/local/homebrew/bin:/usr/local/bin:/usr/local/sbin:$PATH"
+export PATH="/usr/local/heroku/bin:$HOME/bin:$HOME/.bin:$(cd $(which gem)/..;pwd):/usr/local/homebrew/bin:/usr/local/bin:/usr/local/sbin:$PATH"
 export NODE_PATH="/usr/local/lib/node_modules"
 export CLICOLOR=1
 export TERM=screen-256color
 export PAGER=less
+export PS1="$PS1"'$([ -n "$TMUX" ] && tmux setenv TMUXPWD_$(tmux display -p "#D" | tr -d %) "$PWD")'
 
 # Grab the current SSH agent if there is one
 #export SSH_AUTH_SOCK=$(find '/tmp/ssh-*' -user $(whoami) -name agent\* 2>/dev/null |tail -1)

@@ -1,7 +1,10 @@
 set t_Co=256
 color solarized
-"set background=dark
-set background=light
+set background=dark
+"set background=light
+
+" Setup powerline
+source /usr/local/lib/python2.7/site-packages/powerline/bindings/vim/plugin/powerline.vim
 
 " Crosshair cursor
 "set cursorline
