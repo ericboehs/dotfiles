@@ -1,0 +1,15 @@
+# ~/.tmuxinator/gd.yml
+
+project_name: gd
+project_root: ~/Code/guestdoor
+tabs:
+  - chat: weechat-curses
+  - editor: sleep 8 && vim
+  - shell: git remote update; git pull --rebase origin master
+  - console/server:
+      layout: even-vertical
+      panes:
+        - sleep 3 && zeus c
+        - sleep 3 && zeus s
+  - zeus: zeus start
+  - starting: sleep 2; tmux rename-window -t $SESSION:1 chat; tmux set-window-option -t $SESSION:5 monitor-activity off; exit

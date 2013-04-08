@@ -1,0 +1,27 @@
+[include]
+  path = .gitconfig.local
+[user]
+  name = Eric Boehs
+  email = ericboehs@gmail.com
+[github]
+  user = ericboehs
+
+[color]
+  ui = auto
+  diff = auto
+  status = auto
+  branch = auto
+[core]
+  excludesfile = ~/.gitignore
+[git-up "bundler"]
+  check = true
+[rebase]
+  autosquash = true
+[push]
+  default = current
+[credential]
+  helper = store
+[diff]
+  tool = vimdiff
+[difftool]
+  prompt = false

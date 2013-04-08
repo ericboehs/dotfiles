@@ -1,0 +1,15 @@
+# ~/.tmuxinator/op.yml
+
+project_name: open
+project_root: ~/Code/open
+tabs:
+  - comm: weechat-curses
+  - editor: vim
+  - shell: git remote update; git pull --rebase origin master
+  - console/server:
+      layout: even-vertical
+      panes:
+        - sleep 3 && zeus c
+        - sleep 3 && zeus s
+  - zeus: zeus start
+  - solr: ssh -NL 8382:localhost:8383 box.erc.bz
