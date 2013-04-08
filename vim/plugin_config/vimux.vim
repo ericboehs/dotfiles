@@ -1,3 +1,3 @@
 " Vimux
-map <Leader>vc :VimuxRunCommand<CR>
+map <Leader>vc :VimuxPromptCommand<CR>
 map <Leader>vl :VimuxRunLastCommand<CR>
