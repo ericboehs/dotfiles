@@ -2,4 +2,4 @@
 .svn
 *~
 .*.swp
-./vendor/bundle
+vendor/bundle
