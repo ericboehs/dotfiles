@@ -1,6 +1,6 @@
 " Misc.
 Bundle 'Soares/butane.vim'
-Bundle 'tpope/vim-fugitive'
+" Bundle 'tpope/vim-fugitive'
 Bundle 'sickill/vim-pasta'
 Bundle 'bufkill.vim'
 Bundle 'kana/vim-textobj-user'
@@ -15,7 +15,7 @@ Bundle 'jingweno/vimux-zeus'
 " Visual
 Bundle 'dterei/VimBookmarking'
 " Bundle 'Lokaltog/vim-powerline'
-Bundle 'nathanaelkane/vim-indent-guides'
+Bundle 'Yggdroot/indentLine'
 Bundle 'tomtom/quickfixsigns_vim'
 Bundle 'Lokaltog/powerline', {'rtp': 'powerline/bindings/vim/'}
 
