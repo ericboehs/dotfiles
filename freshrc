@@ -66,7 +66,6 @@ fresh-options --file=~/.vimrc --marker=\"
   fresh jasoncodes/dotfiles vim/mappings/pasteboard.vim
   fresh jasoncodes/dotfiles vim/config/undo.vim
 fresh-options
-fresh vim/colors --file=~/.vim/colors/
 
 # Tmux
 fresh config/tmuxinator  --file=~/.tmuxinator/
