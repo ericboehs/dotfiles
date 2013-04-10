@@ -10,6 +10,15 @@ inoremap lll <Esc>
 " Quick access to source .vimrc
 nmap <leader>ss :source $HOME/.vimrc<CR>
 
+" Quick open of localhost
+nmap <silent> <leader>oo :!open http://
+nmap <silent> <leader>ol :!open http://localhost:3000<CR><CR>
+
+" Kill zeus and restart
+nmap <silent> <leader>kzz :!tmux kill-window -t 5 && tmux new-window -n zeus "zeus start" && tmux send-keys -t 4.1 C-c; sleep 0.5; tmux send-keys -t 4.1 C-l; sleep 0.5; tmux send-keys -t 4.1 zeus\ s C-m && tmux new-window -n zeus "zeus start" && tmux select-window -t 2<CR><CR>
+nmap <silent> <leader>kzt :!tmux kill-window -t 5 && tmux new-window -n zeus "zeus start" && tmux select-window -t 2<CR><CR>
+nmap <silent> <leader>kzc :!tmux send-keys -t 4.0 C-c; sleep 0.5; tmux send-keys -t 4.0 C-d; sleep 0.5; tmux send-keys -t 4.0 C-l; sleep 0.5; tmux send-keys -t 4.0 zeus\ c C-m && tmux select-window -t 2<CR><CR>
+nmap <silent> <leader>kzs :!tmux send-keys -t 4.1 C-c; sleep 0.5; tmux send-keys -t 4.1 C-l; sleep 0.5; tmux send-keys -t 4.1 zeus\ s C-m && tmux select-window -t 2<CR><CR>
 " Window Navigation
 " Use ctrl+(h|j|k|j) to move through open windows.
 map <C-h> <C-w>h
