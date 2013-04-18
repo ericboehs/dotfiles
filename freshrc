@@ -4,7 +4,7 @@
 
 # Initiate fresh so you can use this file
 fresh freshshell/fresh bin/fresh --bin
-fresh freshshell/fresh contrib/source-build.sh --file=~/.zshrc
+#fresh freshshell/fresh contrib/source-build.sh --file=~/.zshrc
 
 ## Bins
 
@@ -12,7 +12,7 @@ fresh freshshell/fresh contrib/source-build.sh --file=~/.zshrc
 fresh bin/\* --bin
 
 # Setup catacomb which lets you encrypt files using user's github key
-fresh twe4ked/catacomb bin/catacomb --bin
+# fresh twe4ked/catacomb bin/catacomb --bin
 
 ## Config
 fresh-options --file
