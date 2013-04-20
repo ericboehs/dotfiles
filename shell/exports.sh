@@ -7,14 +7,6 @@ export TERM=screen-256color
 # Turn on colors for commands like `ls`
 export CLICOLOR=1
 
-## Set PATH
-# Add Homebrew to path
-export PATH="/usr/local/bin:$PATH"
-# Add Heroku to the path
-export PATH="/usr/local/heroku/bin:$PATH"
-# Add current gem path to path; See: https://gist.github.com/ericboehs/5329013
-export PATH="$(cd $(which gem)/..;pwd):$PATH"
-
 # Set Python Path
 export PYTHONPATH="$HOME/.local/lib/python"
 

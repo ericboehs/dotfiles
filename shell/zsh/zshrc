@@ -36,5 +36,17 @@ export TIMEFMT="%*Es total, %U user, %S system, %P cpu"
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
 
+# Make path unique
+typeset -U path
+
+# Add Homebrew to path
+path=(/usr/local/bin "$path[@]")
+
+# Add Heroku to the path
+path=(/usr/local/heroku/bin "$path[@]")
+
+# Add current gem path to path; See: https://gist.github.com/ericboehs/5329013
+path=($(cd $(which gem)/..;pwd) "$path[@]")
+
 # Source direnv
 eval "$(direnv hook $0)"

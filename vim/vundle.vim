@@ -1,12 +1,11 @@
 " Misc.
 Bundle 'Soares/butane.vim'
-" Bundle 'tpope/vim-fugitive'
+Bundle 'tpope/vim-fugitive'
 Bundle 'sickill/vim-pasta'
 Bundle 'bufkill.vim'
 Bundle 'kana/vim-textobj-user'
 Bundle 'nelstrom/vim-textobj-rubyblock'
 Bundle 'tpope/vim-eunuch'
-Bundle 'altercation/vim-colors-solarized'
 
 " Tmux
 Bundle 'benmills/vimux'
@@ -14,18 +13,17 @@ Bundle 'jingweno/vimux-zeus'
 
 " Visual
 Bundle 'dterei/VimBookmarking'
-" Bundle 'Lokaltog/vim-powerline'
 Bundle 'Yggdroot/indentLine'
-Bundle 'tomtom/quickfixsigns_vim'
+" Bundle 'tomtom/quickfixsigns_vim'
 Bundle 'Lokaltog/powerline', {'rtp': 'powerline/bindings/vim/'}
 
 " Editing
 Bundle 'godlygeek/tabular'
-Bundle 'twe4ked/vim-diff-toggle'
+" Bundle 'twe4ked/vim-diff-toggle'
 Bundle 'tomtom/tcomment_vim'
 Bundle 'tpope/vim-surround'
 Bundle 'bronson/vim-trailing-whitespace'
-Bundle 'vim-scripts/upAndDown'
+" Bundle 'vim-scripts/upAndDown'
 Bundle 'tpope/vim-unimpaired'
 Bundle 'Shougo/neocomplcache'
 Bundle 'Align'
