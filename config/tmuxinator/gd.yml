@@ -5,7 +5,7 @@ project_root: ~/Code/guestdoor
 tabs:
   - chat:
   - editor: sleep 8 && vim
-  - shell: git remote update; git pull --rebase origin master
+  - shell: git remote update origin; git pull --rebase origin master
   - console/server:
       layout: even-vertical
       panes:

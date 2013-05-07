@@ -2,9 +2,8 @@
 
 project_name: bt
 project_root: ~/Code/baton
-pre: tmux set-window-option -g monitor-activity off
 tabs:
-  - chat: weechat-curses
+  - chat:
   - editor: sleep 8 && vim
   - shell: git remote update; git pull --rebase origin master
   - console/server:
@@ -13,4 +12,4 @@ tabs:
         - sleep 3 && zeus c
         - sleep 3 && zeus s
   - zeus: zeus start
-  - starting: sleep 2; tmux rename-window -t $SESSION:1 chat; tmux set-window-option -t $SESSION:5 monitor-activity off; exit
+  - starting: tmux kill-window -t $SESSION:1; tmux link-window -s 0:1 -t $SESSION:1; sleep 2; tmux set-window-option -t $SESSION:5 monitor-activity off; exit

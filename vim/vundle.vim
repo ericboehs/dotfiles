@@ -16,10 +16,11 @@ Bundle 'dterei/VimBookmarking'
 Bundle 'Yggdroot/indentLine'
 " Bundle 'tomtom/quickfixsigns_vim'
 Bundle 'Lokaltog/powerline', {'rtp': 'powerline/bindings/vim/'}
+Bundle 'airblade/vim-gitgutter'
 
 " Editing
 Bundle 'godlygeek/tabular'
-" Bundle 'twe4ked/vim-diff-toggle'
+Bundle 'twe4ked/vim-diff-toggle'
 Bundle 'tomtom/tcomment_vim'
 Bundle 'tpope/vim-surround'
 Bundle 'bronson/vim-trailing-whitespace'
