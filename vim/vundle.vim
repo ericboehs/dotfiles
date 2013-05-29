@@ -15,7 +15,7 @@ Bundle 'jingweno/vimux-zeus'
 Bundle 'dterei/VimBookmarking'
 Bundle 'Yggdroot/indentLine'
 " Bundle 'tomtom/quickfixsigns_vim'
-Bundle 'Lokaltog/powerline', {'rtp': 'powerline/bindings/vim/'}
+Bundle 'Lokaltog/powerline:master', {'rtp': 'powerline/bindings/vim/'}
 Bundle 'airblade/vim-gitgutter'
 
 " Editing

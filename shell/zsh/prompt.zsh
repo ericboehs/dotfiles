@@ -80,7 +80,7 @@ fi
 typeset -A host_repr
 
 # translate hostnames into shortened, colorcoded strings
-host_repr=('Erics-MacBook-Pro.local' "%{$fg_bold[green]%}embp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" 'ericboehs.com' "%{$fg_bold[green]%}eb.c")
+host_repr=('Erics-MacBook-Pro.local' "%{$fg_bold[green]%}ebmbp" 'Jeffrey-Richardsons-MacBook-Pro.local' "%{$fg_bold[green]%}jrmbp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
 
 # local time, color coded by last return code
 time_enabled="%(?.%{$fg[green]%}.%{$fg[red]%})%*%{$reset_color%}"
@@ -90,6 +90,7 @@ time=$time_enabled
 # user part, color coded by privileges
 local user="%(!.%{$fg[blue]%}.%{$fg[blue]%})%n%{$reset_color%}"
 [[ $USER = 'ericboehs' ]] && local user="%{$fg[blue]%}eb%{$reset_color%}"
+[[ $USER = 'jeffreyrichardson' ]] && local user="%{$fg[blue]%}jr%{$reset_color%}"
 [[ $USER = 'brightbit' ]] && local user="%{$fg[blue]%}bb%{$reset_color%}"
 # Hostname part.  compressed and colorcoded per host_repr array
 # if not found, regular hostname in default color

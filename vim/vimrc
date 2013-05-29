@@ -51,3 +51,6 @@ runtime macros/matchit.vim
 
 " Set wildcard ignore for ctrlp and ack/ag
 set wildignore+=*/tmp/*,*/vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
+
+" Fix for powerline borkage
+python import vim
