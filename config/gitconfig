@@ -15,7 +15,7 @@
 [push]
   default = current
 [credential]
-  helper = store
+  helper = osxkeychain
 [diff]
   tool = vimdiff
 [difftool]
