@@ -1,10 +1,5 @@
 [include]
-  path = .gitconfig.local
-[user]
-  name = Eric Boehs
-  email = ericboehs@gmail.com
-[github]
-  user = ericboehs
+  path = ~/.gitconfig.private
 
 [color]
   ui = auto
