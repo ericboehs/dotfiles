@@ -53,4 +53,4 @@ runtime macros/matchit.vim
 set wildignore+=*/tmp/*,*/vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
 " Fix for powerline borkage
-python import vim
+" python import vim
