@@ -1,1 +1,1 @@
-:editor: "/usr/local/bin/tmux split-window -t 2 'vim --servername VIM --remote $file' || /usr/local/bin/tmux new-window 'vim --servername VIM --remote $file' && exit"
+:editor: "/usr/local/bin/tmux send-keys -t $(tmux list-panes -s -F '#{window_index}.#{pane_index} #{pane_current_command}' | grep Vim | head -1 | cut -f 1 -d ' ') :e ' ' '$file' C-j"
