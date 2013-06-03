@@ -20,6 +20,8 @@ alias gcav='git commit -av'
 alias gcane='git commit --amend --no-edit'
 alias gcaane='git commit -a --amend --no-edit'
 alias gcp='git commit -av && git push -u'
+alias gcpr='git commit -av && git push -u && hub pull-request'
+alias gacpr='git add . && git commit -av && git push -u && hub pull-request'
 
 alias gco='git checkout'
 alias gcl='git clone'
