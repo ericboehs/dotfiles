@@ -1,5 +1,6 @@
 # Git
-which -s hub >/dev/null 2>&1 && alias git='hub'
+type compdef >/dev/null 2>&1 && compdef hub=git
+type hub >/dev/null 2>&1 && alias git='hub'
 alias ga='git add'
 
 alias gl='git pull'
