@@ -30,5 +30,5 @@ sasw()  { export SSH_AUTH_SOCK=/tmp/ssh-agent-$1-screen }
 saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 
 # Tmux pairing
-alias tpnew='tmux -S /tmp/tmux-pair-session new -s pair -d && chmod 777 /tmp/tmux-pair-session && tmux -S /tmp/tmux-pair-session attach -t pair && rm -rf /tmp/tmux-pair-session'
+alias tpnew='tmux -S /tmp/tmux-pair-session new -s pair -d && chmod 777 /tmp/tmux-pair-session && tmux -S /tmp/tmux-pair-session attach -t pair'
 alias tpattach='tmux -S /tmp/tmux-pair-session attach -t pair'
