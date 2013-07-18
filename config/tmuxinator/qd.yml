@@ -2,14 +2,18 @@
 
 project_name: qd
 project_root: ~/Code/quadrantmetrics
+socket_path: /tmp/tmux-pair-session
 tabs:
-  - chat:
   - editor: sleep 8 && vim
   - shell: git remote update origin; git pull --rebase origin
   - console/server:
       layout: even-vertical
       panes:
-        - sleep 3 && zeus c
-        - sleep 3 && zeus s
-  - zeus: zeus start
-  - starting: tmux kill-window -t $SESSION:1; tmux link-window -s 0:1 -t $SESSION:1; sleep 2; tmux set-window-option -t $SESSION:5 monitor-activity off; exit
+        - rails c
+        - rails s
+  - guard/faye:
+      layout: even-vertical
+      panes:
+        - guard
+        - rackup sync.ru -E production
+  - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; exit
