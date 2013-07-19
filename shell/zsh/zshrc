@@ -36,6 +36,11 @@ export TIMEFMT="%*Es total, %U user, %S system, %P cpu"
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
 
+# Show contents of directory after cd-ing into it
+chpwd() {
+  ls -lrthG
+}
+
 # Make path unique
 typeset -U path
 
