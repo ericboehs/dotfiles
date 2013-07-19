@@ -2,6 +2,8 @@
 type compdef >/dev/null 2>&1 && compdef hub=git
 type hub >/dev/null 2>&1 && alias git='hub'
 alias ga='git add'
+alias gad='git add .'
+alias gadu='git add -u .'
 
 alias gl='git pull'
 alias glr='git pull --rebase'
@@ -18,6 +20,7 @@ alias gc='git commit'
 alias gcv='git commit -v'
 alias gca='git commit -a'
 alias gcav='git commit -av'
+alias gcaa='git commit --amend'
 alias gcane='git commit --amend --no-edit'
 alias gcaane='git commit -a --amend --no-edit'
 alias gcp='git commit -av && git push -u'
@@ -32,6 +35,9 @@ alias gbmd='git branch --merged | grep -v "\*" | xargs -n 1 git branch -d'
 alias prune='git remote prune origin'
 
 alias gs='git status'
+alias g='git status'
+alias gg='git lg'
+alias ggg='git ll'
 
 gra() { git remote add ${2:-"origin"} $1 }
 grah() { git remote add $2 git@heroku.com:$1.git }
