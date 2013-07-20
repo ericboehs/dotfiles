@@ -34,7 +34,7 @@ alias ghiaw='ghi assign -w'
 alias ghim='ghi milestone'
 alias ghimw='ghi milestone -w'
 
-function istart() { ghi label $1 | grep "In Progress" && echo "Aborted. \nAlready in progress!" || ghi assign $1 && ghi label $1 "In Progress" }
+function istart() { ghi label $1 | grep "In Progress" && echo "Aborted. \nAlready in progress!" || (ghi assign $1 && ghi label $1 "In Progress") }
 function ifinish() { [[ ! -z $GHI_PM ]] && (ghi assign $1 $GHI_PM && ghi label $1 "Awaiting Approval") || (echo 'GHI_PM not set to a GitHub user! Issue not checked in!' && false ) }
 
 # Labels
