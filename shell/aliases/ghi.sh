@@ -8,7 +8,7 @@ function myissues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ }
 
 function notmyissues() { issues $@ COL | grep -vE "^\s*($(myissues COL |awk '{print $1}' | tr -d ' \t'|paste -s -d'|' -))" }
 
-alias teampoints='for i in $(echo ${GHI_TEAM:=$USER}); do echo -n "$i: "; issues -u $i COL POINTS; done |sort -nrk2'
+alias teampoints='for i in $(echo ${GHI_TEAM:=$USER}); do echo -n "$i: "; issues -u $i COL POINTS; done | grep -Ev " 0$"|sort -nrk2'
 
 alias ghiw='ghi list -w'
 
