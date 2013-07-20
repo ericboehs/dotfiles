@@ -8,6 +8,8 @@ function issuescol() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ | tail +2 |
 function myissues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ }
 function myissuescol() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t }
 
+function notmyissues() { issuescol $@ | grep -vE "^\s*($(myissuescol |awk '{print $1}' | tr -d ' \t'|paste -s -d'|' -))" }
+
 alias ghiw='ghi list -w'
 
 alias ghil='ghi list'
