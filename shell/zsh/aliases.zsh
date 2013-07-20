@@ -12,3 +12,6 @@ alias -g V='|view -'
 alias -g POINTS="|ruby -e 's=STDIN.to_a;i=s.grep(/[^0] point/)[0]; i=i.index /[0-9]+ point/ if i;p !i ? 0 : s.map{|l|l[i].to_i}.reduce(&:+)'"
 alias -g P=POINTS
 
+# Columnize ghi list output
+alias -g COL='| tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t'
+
