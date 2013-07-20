@@ -4,6 +4,10 @@ c=~/Code
 
 alias fu='fresh update'
 
+# Edit dotfiles
+alias d='(cd ~/.dotfiles && vim && gad && gcav && glr && gpu) && fresh && . ~/.zshrc'
+alias so='. ~/.zshrc'
+
 # Use color in grep
 alias grep='grep --color=auto'
 
