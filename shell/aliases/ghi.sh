@@ -46,6 +46,7 @@ alias iblocking='ghi label -a blocking'
 
 alias ienh='ghi label -a enhancement'
 alias ibug='ghi label -a bug'
+function ims() { setcms; ghi edit ${1:=9999999} -M ${2:=$GHI_CURRENT_MILESTONE} } # Usage: ims <issueno> [milestoneno] (defaults to earliest milestone)
 
 function iest0() { [[ -n $1 ]] &&
   ghi label -d "1%20point"  $1 > /dev/null &&
