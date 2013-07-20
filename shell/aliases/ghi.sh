@@ -3,14 +3,12 @@
 alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$( ghi milestone -S due_date -v | grep -E "Past due|^Due" -B5| grep -E "^\#" | tail -1 | cut -f1 -d:|tr -d "# \t\n") || true'
 
 function issues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ }
-function issuescol() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t }
 
 function myissues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ }
-function myissuescol() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t }
 
-function notmyissues() { issuescol $@ | grep -vE "^\s*($(myissuescol |awk '{print $1}' | tr -d ' \t'|paste -s -d'|' -))" }
+function notmyissues() { issues $@ COL | grep -vE "^\s*($(myissues COL |awk '{print $1}' | tr -d ' \t'|paste -s -d'|' -))" }
 
-alias teampoints='for i in ericboehs vlucas joshuaogle jcamenisch jeffawesome jefflowe; do echo -n "$i: "; issuescol -u $i POINTS; done |sort -nrk2'
+alias teampoints='for i in ericboehs vlucas joshuaogle jcamenisch jeffawesome jefflowe; do echo -n "$i: "; issues -u $i COL POINTS; done |sort -nrk2'
 
 alias ghiw='ghi list -w'
 
