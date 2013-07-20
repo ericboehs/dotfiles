@@ -3,10 +3,10 @@
 alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$(ghi milestone -S due_date --reverse | tail -1 | cut -f1 -d: | tr -d " \t\n") || true'
 
 alias issues='setcms; ghi list -M $GHI_CURRENT_MILESTONE'
-alias issuescol='setcms; ghi list -M $GHI_CURRENT_MILESTONE | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | column -s "[]" -t'
+alias issuescol='setcms; ghi list -M $GHI_CURRENT_MILESTONE | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t'
 
 alias myissues='setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine'
-alias myissuescol='setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | column -s "[]" -t'
+alias myissuescol='setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t'
 
 alias ghiw='ghi list -w'
 alias ghil='ghi list'
