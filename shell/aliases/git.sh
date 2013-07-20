@@ -31,7 +31,7 @@ alias gco='git checkout'
 alias gcl='git clone'
 alias gb='git branch'
 alias gba='git branch -a'
-alias gbwho='git branch --remote | grep -v master | grep origin | xargs -n1 -J {} sh -c 'git log $0 | head -2 | tail -1|cut -f2 -d\  && echo  $0'|paste -d" " - - | sort'
+alias gbwho="git branch --remote | grep -v master | grep origin | xargs -n1 -J {} sh -c 'git log $0 | head -2 | tail -1|cut -f2 -d\  && echo  $0'|paste -d\" \" - - | sort"
 alias gbmd='git branch --merged | grep -v "\*" | xargs -n 1 git branch -d'
 alias prune='git remote prune origin'
 
