@@ -1,6 +1,6 @@
 # ghi See: https://github.com/stephencelis/ghi
 
-alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$(ghi milestone -S due_date --reverse | tail -1 | cut -f1 -d: | tr -d " \t\n") || true'
+alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$( ghi milestone -S due_date -v | grep -E "Past due|^Due" -B5| grep -E "^\#" | tail -1 | cut -f1 -d:|tr -d "# \t\n") || true'
 
 function issues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ }
 function issuescol() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t }
