@@ -9,26 +9,43 @@ function myissues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ }
 function myissuescol() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ | tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t }
 
 alias ghiw='ghi list -w'
+
 alias ghil='ghi list'
 alias ghilw='ghi list -w'
 
 alias ghis='ghi show'
-alias ghiws='ghi show -w'
+alias ghisw='ghi show -w'
 
-alias ghic='ghi comment'
-alias ghicw='ghi comment -w'
+alias ghio='ghi open'
+alias ghiow='ghi open -w'
 
-function ghico() { ghi assign $1 && ghi label $1 "In Progress" }
-function ghici() { [[ ! -z $GHI_PM ]] && (ghi assign $1 $GHI_PM && ghi label $1 "Awaiting Approval") || (echo 'GHI_PM not set to a GitHub user! Issue not checked in!' && false ) }
+alias ghicl='ghi close'
+alias ghiclw='ghi close -w'
+
+alias ghie='ghi edit'
+alias ghiew='ghi edit -w'
+
+alias ghico='ghi comment'
+alias ghicow='ghi comment -w'
+
+alias ghia='ghi assign'
+alias ghiaw='ghi assign -w'
+
+alias ghim='ghi milestone'
+alias ghimw='ghi milestone -w'
+
+function istart() { ghi label $1 | grep "In Progress" && echo "Aborted. \nAlready in progress!" || ghi assign $1 && ghi label $1 "In Progress" }
+function ifinish() { [[ ! -z $GHI_PM ]] && (ghi assign $1 $GHI_PM && ghi label $1 "Awaiting Approval") || (echo 'GHI_PM not set to a GitHub user! Issue not checked in!' && false ) }
 
 # Labels
-alias iblocked='ghi label -a blocked'
-alias iblocking='ghi label -a blocking'
-alias ienh='ghi label -a enhancement'
-alias ibug='ghi label -a bug'
-
 function ilab() { ghi label $1 -a $2 }
 function ilabel() { ghi label $1 -a $2 }
+
+alias iblocked='ghi label -a blocked'
+alias iblocking='ghi label -a blocking'
+
+alias ienh='ghi label -a enhancement'
+alias ibug='ghi label -a bug'
 
 function iest0() { [[ -n $1 ]] &&
   ghi label -d "1%20point"  $1 > /dev/null &&
