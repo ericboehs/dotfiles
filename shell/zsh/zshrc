@@ -54,4 +54,4 @@ path=(/usr/local/heroku/bin "$path[@]")
 path=($(cd $(which gem)/..;pwd) "$path[@]")
 
 # Source direnv
-eval "$(direnv hook $0)"
+eval "$(direnv hook $SHELL)"
