@@ -13,6 +13,15 @@ gemv() { gem sea -r "^$1$"|tail -1|cut -f2 -d' '|tr -d '()' }
 alias tlog='tail -f log/development.log'
 alias ttr='touch tmp/restart.txt'
 
-# Zeus needs to be in the :test bundler group but zeus binstubs are broken for some reason
-# This will take bundler's binstub dir out of the path when you run zeus
-alias zeus='$(which -a zeus|grep -m1 -v bundle)'
+# Zeus
+alias ze='zeus'
+alias zs='zeus start'
+alias zdb='zeus dbconsole'
+alias zrr='zeus runner'
+alias zg='zeus generate'
+alias zrc='zeus console'
+alias zd='zeus destroy'
+alias zrs='zeus server'
+alias zr='zeus rake'
+alias zt='zeus test'
+alias ztt='zeus test test'
