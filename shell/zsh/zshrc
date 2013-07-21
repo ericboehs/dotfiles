@@ -1,5 +1,5 @@
 setopt no_beep                      # i hate beeps
-setopt interactive_comments         # escape commands so i can use them later (allow comments after commands)
+setopt interactivecomments          # escape commands so i can use them later (allow comments after commands)
 setopt rm_star_wait                 # if `rm *` wait 10 seconds before performing it!
 setopt list_types                   # show types in completion
 setopt auto_cd                      # if a command is not in the hash table, and there exists an executable directory by that name, perform the cd command to that directory.
