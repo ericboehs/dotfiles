@@ -17,5 +17,5 @@ tabs:
       panes:
         - guard
         - rackup sync.ru -E production
-        - zs
+        - wtzs
   - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; exit
