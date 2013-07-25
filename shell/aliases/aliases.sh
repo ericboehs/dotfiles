@@ -8,6 +8,9 @@ alias fu='fresh update'
 alias d='(cd ~/.dotfiles && vim && gad && gcav && glr && gp) && fresh && . ~/.zshrc'
 alias so='. ~/.zshrc'
 
+# Edit brightbit/guides #TODO: Find a better place for this as the git aliases aren't available yet
+function bg(){ (cd ~/Code/guides && vim && git checkout -b ${1:=$USER-$(date|md5)} && git add . && git commit -av && git pull --rebase origin && git push -u && git pull-request) }
+
 # Use color in grep
 alias grep='grep --color=auto'
 

@@ -14,6 +14,8 @@ alias tlog='tail -f log/development.log'
 alias ttr='touch tmp/restart.txt'
 
 # Zeus
+alias kz='killall zeus-darwin-amd64'
+alias wtzs='while; do zeus start; sleep 1; done'
 alias ze='zeus'
 alias zs='zeus start'
 alias zdb='zeus dbconsole'
