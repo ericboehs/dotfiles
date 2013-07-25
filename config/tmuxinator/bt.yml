@@ -10,8 +10,8 @@ tabs:
   - console/server:
       layout: even-vertical
       panes:
-        - zrc
-        - zrs
+        - wtzrc
+        - wtzrs
   - guard/faye/zeus:
       layout: even-vertical
       panes:
