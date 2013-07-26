@@ -16,7 +16,7 @@ alias ttr='touch tmp/restart.txt'
 # Zeus
 alias kr='killall ruby'
 alias kz='killall zeus-darwin-amd64'
-alias wtzs='while; do zeus start; sleep 1; done'
+alias wtzs='while; do zeus start||rm .zeus.sock; sleep 1; done'
 alias wtzrs='while; do zeus server; sleep 1; done'
 alias wtzrc='while; do zeus console; sleep 1; done'
 alias ze='zeus'
