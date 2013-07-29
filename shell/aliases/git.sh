@@ -46,6 +46,8 @@ gra() { git remote add ${2:-"origin"} $1 }
 grah() { git remote add $2 git@heroku.com:$1.git }
 alias grv='git remote -v'
 alias grrm='git remote rm'
+alias gru='git remote update'
+alias gruo='git remote update origin'
 
 alias gsu="git submodule update --init --recursive"
 
