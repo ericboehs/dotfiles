@@ -45,8 +45,7 @@ path=(/usr/local/bin "$path[@]")
 # Add Heroku to the path
 path=(/usr/local/heroku/bin "$path[@]")
 
-# Add current gem path to path; See: https://gist.github.com/ericboehs/5329013
-path=($(cd $(which gem)/..;pwd) "$path[@]")
+path=(/usr/local/opt/ruby/bin "$path[@]")
 
 # Source direnv
 eval "$(direnv hook $SHELL)"
