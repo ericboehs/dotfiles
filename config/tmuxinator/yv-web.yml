@@ -1,9 +1,0 @@
-# ~/.tmuxinator/yv-web.yml
-
-project_name: yv-web
-project_root: ~/Code/youversion-web
-tabs:
-  - editor: vim
-  - shell: git pull --rebase
-  - console: rails c
-  - server: rails s
