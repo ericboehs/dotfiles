@@ -15,3 +15,5 @@ alias -g P=POINTS
 # Columnize ghi list output
 alias -g COL='| tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" | column -s "[]" -t'
 
+# While true due command, clear, sleep
+function wt() { while; do $*; sleep 1; clear; done }
