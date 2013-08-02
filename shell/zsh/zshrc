@@ -49,8 +49,3 @@ path=(/usr/local/opt/ruby/bin "$path[@]")
 
 # Source direnv
 eval "$(direnv hook $SHELL)"
-
-# Show contents of directory after cd-ing into it
-chpwd() {
-  ls -lrthG
-}
