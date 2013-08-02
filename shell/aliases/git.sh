@@ -38,7 +38,6 @@ alias gbwhov="git for-each-ref --sort=-committerdate --format='%(committerdate) 
 alias gbmd='git branch --merged | grep -v "\*" | xargs -n 1 git branch -d'
 alias prune='git remote prune origin'
 
-alias gs='echo "USE g"; sleep 1; git status'
 alias g='git status'
 alias gg='git lg'
 alias ggg='git ll'
