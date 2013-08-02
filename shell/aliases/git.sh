@@ -15,6 +15,7 @@ alias gpr='hub pull-request'
 
 alias gd='git diff'
 alias gdh='git diff HEAD'
+alias gdc='git diff --cached'
 
 alias gc='git commit'
 alias gcv='git commit -v'
