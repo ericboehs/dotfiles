@@ -11,11 +11,17 @@ alias glr='git pull --rebase'
 alias gp='git push'
 alias gpu='git push -u'
 
+alias grb='git rebase'
+alias grbm='git rebase master'
+alias grba='git rebase --abort'
+alias grbc='git rebase --continue'
+
 alias gpr='hub pull-request'
 
 alias gd='git diff'
 alias gdh='git diff HEAD'
 alias gdc='git diff --cached'
+alias gdt='git difftool'
 
 alias gc='git commit'
 alias gcv='git commit -v'
