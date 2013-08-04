@@ -12,6 +12,7 @@ gemv() { gem sea -r "^$1$"|tail -1|cut -f2 -d' '|tr -d '()' }
 # Rails
 alias tlog='tail -f log/development.log'
 alias ttr='touch tmp/restart.txt'
+alias bs='bin/setup'
 
 # Zeus
 alias kr='killall ruby'
