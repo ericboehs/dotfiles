@@ -50,7 +50,6 @@ highlight SignColumn ctermbg=8
 runtime macros/matchit.vim
 
 " Set wildcard ignore for ctrlp and ack/ag
-set wildignore+=*/tmp/*,*/vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
+set wildignore+=*/tmp/*,vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
-" Fix for powerline borkage
-" python import vim
+let g:ctrlp_custom_ignore = {'dir': '\v[\/]vendor\/bundle$' }
