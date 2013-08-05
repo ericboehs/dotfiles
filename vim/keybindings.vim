@@ -68,11 +68,11 @@ vmap <Right> <Esc><Esc>gv
 " Yank from the cursor to the end of the line, to be consistent with C and D
 nnoremap Y y$
 
+" Insert a single character w/o going to insert mode using <space><char>
+noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
+
 " I never intentionally lookup keywords (with `man`)
 nmap K <Esc>
-
-" I don't like <c-r>
-map U :redo<CR>
 
 " Jump to start and end of line using the home row keys
 noremap H ^

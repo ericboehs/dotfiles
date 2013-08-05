@@ -6,6 +6,8 @@ Bundle 'bufkill.vim'
 Bundle 'kana/vim-textobj-user'
 Bundle 'nelstrom/vim-textobj-rubyblock'
 Bundle 'tpope/vim-eunuch'
+Bundle 'tpope/vim-repeat'
+Bundle 'tpope/vim-speeddating'
 
 " Tmux
 Bundle 'benmills/vimux'
