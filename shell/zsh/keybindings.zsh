@@ -31,3 +31,6 @@ bindkey "^R" history-incremental-search-backward
 
 # Remap Ctrl-S to Ctrl-- for stopping termianl output
 stty stop 
+
+# Remap Esc-h to vi-cmd-mode; No thanks run-help, I'm okay
+bindkey -M viins "^[h" vi-cmd-mode
