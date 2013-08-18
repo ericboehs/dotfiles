@@ -47,5 +47,8 @@ path=(/usr/local/heroku/bin "$path[@]")
 
 path=(/usr/local/opt/ruby/bin "$path[@]")
 
-# Source direnv
-eval "$(direnv hook $SHELL)"
+# Source direnv and make him quiet
+direnv_hook() { eval "$(direnv export zsh 2>/dev/null)"; };
+[[ -z $precmd_functions ]] && precmd_functions=();
+precmd_functions=($precmd_functions direnv_hook)
+# eval "$(direnv hook $SHELL)" # Old way to source direnv
