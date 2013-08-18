@@ -3,7 +3,7 @@
 project_name: bt
 project_root: ~/Code/baton
 socket_path: /tmp/tmux-pair-session
-tabs:
+windows:
   - editor: sleep 8 && vim
   - editor: sleep 8 && vim
   - shell: git remote update origin; git pull --rebase origin
