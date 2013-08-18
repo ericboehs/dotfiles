@@ -3,8 +3,7 @@
 project_name: qd
 project_root: ~/Code/quadrantmetrics
 socket_path: /tmp/tmux-pair-session
-tabs:
-  - editor: sleep 8 && vim
+windows:
   - editor: sleep 8 && vim
   - shell: git remote update origin; git pull --rebase origin
   - console/server:
