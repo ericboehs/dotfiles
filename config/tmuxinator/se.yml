@@ -1,0 +1,24 @@
+# ~/.tmuxinator/se.yml
+
+project_name: se
+project_root: ~/Code/swagexpert
+socket_path: /tmp/tmux-pair-session
+windows:
+  - editor:
+      layout: 8087,238x60,0,0[238x44,0,0,0,238x15,0,45,5]
+      panes:
+        - vim
+        -
+  - shell: git remote update origin; git pull --rebase origin
+  - console/server:
+      layout: even-vertical
+      panes:
+        - wt zeus c
+        - wt zeus s
+  - guard/faye/zeus:
+      layout: even-vertical
+      panes:
+        - wt guard
+        - wt rackup sync.ru -E production
+        - wtzs
+  - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; sleep 2; kr; kz; exit; exit; exit
