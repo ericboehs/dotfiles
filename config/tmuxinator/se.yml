@@ -18,7 +18,6 @@ windows:
   - guard/faye/zeus:
       layout: even-vertical
       panes:
-        - wt guard
-        - wt rackup sync.ru -E production
+        - #wt guard
         - wtzs
   - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; sleep 2; kr; kz; exit; exit; exit
