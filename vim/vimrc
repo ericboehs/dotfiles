@@ -2,7 +2,7 @@
 set nowrap                                  " I don't always wrap lines...
 set linebreak                               " ...but when I do, I wrap whole words.
 set t_Co=256                                " Support for xterm with 256 colors (gets overriden in .gvimrc)
-set number                                  " Show line numbers
+set relativenumber                          " Show line numbers relative to each other
 set ruler                                   " Show ruler
 set listchars=trail:.,tab:>-,eol:¬          " Change the invisible characters
 set noswapfile                              " Don't create annoying *.swp files
