@@ -50,6 +50,7 @@ Bundle 'slim-template/vim-slim'
 Bundle 'itspriddle/vim-jquery'
 Bundle 'ap/vim-css-color'
 Bundle 't9md/vim-ruby-xmpfilter'
+Bundle 'vim-scripts/ruby-matchit'
 
 " Colors
 Bundle 'altercation/vim-colors-solarized'
