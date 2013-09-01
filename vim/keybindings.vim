@@ -117,3 +117,6 @@ map <F11> :set nopaste<CR>
 imap <F10> <C-O>:set paste<CR>
 imap <F11> <nop>
 set pastetoggle=<F11>
+
+" Gundo
+nnoremap <F5> :GundoToggle<CR>
