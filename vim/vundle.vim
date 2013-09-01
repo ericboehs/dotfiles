@@ -34,6 +34,7 @@ Bundle 'kien/ctrlp.vim'
 Bundle 'jasoncodes/ctrlp-modified.vim'
 Bundle 'bufexplorer.zip'
 Bundle 'mileszs/ack.vim'
+Bundle 'majutsushi/tagbar'
 
 " Language
 Bundle 'tpope/vim-rails'

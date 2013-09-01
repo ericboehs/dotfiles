@@ -120,3 +120,6 @@ set pastetoggle=<F11>
 
 " Gundo
 nnoremap <F5> :GundoToggle<CR>
+
+" Tagbar
+nnoremap <F8> :TagbarToggle<CR>
