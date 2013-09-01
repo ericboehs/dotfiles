@@ -56,3 +56,6 @@ let g:ctrlp_custom_ignore = {'dir': '\v[\/]vendor\/bundle$' }
 
 " Always hardmode
 autocmd VimEnter,BufNewFile,BufReadPost * silent! call HardMode()
+
+" User powerline font in airline
+let g:airline_powerline_fonts = 1
