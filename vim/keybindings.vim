@@ -139,3 +139,12 @@ nnoremap <F5> :GundoToggle<CR>
 
 " Tagbar
 nnoremap <F8> :TagbarToggle<CR>
+
+" Run current buffer/line and output contents into file
+nmap <buffer> <Leader>r <Plug>(xmpfilter-run)
+xmap <buffer> <Leader>r <Plug>(xmpfilter-run)
+imap <buffer> <Leader>r <Plug>(xmpfilter-run)
+
+nmap <buffer> <Leader>R <Plug>(xmpfilter-mark)
+xmap <buffer> <Leader>R <Plug>(xmpfilter-mark)
+imap <buffer> <Leader>R <Plug>(xmpfilter-mark)
