@@ -35,13 +35,13 @@ fresh-options --file=~/.zshrc --marker
   fresh shell/zsh/aliases.zsh
   fresh shell/zsh/zshrc
   fresh shell/zsh/keybindings.zsh
+  fresh shell/zsh/vi-cursor.zsh
 
   ## this loads the shell files and needs to be at the bottom of the zshrc for compdef be availiable
   fresh freshshell/fresh contrib/source-build.sh
 
   fresh rupa/z z.sh
   fresh zsh-users/zsh-history-substring-search zsh-history-substring-search.zsh
-  fresh sharat87/zsh-vim-mode zsh-vim-mode.plugin.zsh
 fresh-options
 
 # completions: common completions
@@ -60,6 +60,8 @@ fresh-options --file=~/.vimrc --marker=\"
   fresh vim/functions.vim
   fresh vim/keybindings.vim
   fresh vim/macros.vim
+  fresh vim/iterm-cursor.vim
+  fresh vim/mac-paste.vim
   fresh vim/plugin_config/\*
   fresh vim/vimrc
   fresh jasoncodes/dotfiles vim/mappings/indent.vim

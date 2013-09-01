@@ -1,5 +1,4 @@
 " Misc.
-Bundle 'sickill/vim-pasta'
 Bundle 'kana/vim-textobj-user'
 Bundle 'rhysd/vim-textobj-rubyblock'
 Bundle 'tpope/vim-fugitive'
