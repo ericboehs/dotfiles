@@ -8,6 +8,7 @@ Bundle 'nelstrom/vim-textobj-rubyblock'
 Bundle 'tpope/vim-eunuch'
 Bundle 'tpope/vim-repeat'
 Bundle 'tpope/vim-speeddating'
+Bundle 'wikitopian/hardmode'
 
 " Tmux
 Bundle 'benmills/vimux'
