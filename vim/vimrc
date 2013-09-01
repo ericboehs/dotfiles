@@ -53,3 +53,6 @@ runtime macros/matchit.vim
 set wildignore+=*/tmp/*,vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
 let g:ctrlp_custom_ignore = {'dir': '\v[\/]vendor\/bundle$' }
+
+" Always hardmode
+autocmd VimEnter,BufNewFile,BufReadPost * silent! call HardMode()
