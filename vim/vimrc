@@ -54,9 +54,6 @@ set wildignore+=*/tmp/*,vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gi
 
 let g:ctrlp_custom_ignore = {'dir': '\v[\/]vendor\/bundle$' }
 
-" Always hardmode
-autocmd VimEnter,BufNewFile,BufReadPost * silent! call HardMode()
-
 " Use powerline font in airline
 let g:airline_powerline_fonts = 1
 
