@@ -16,6 +16,7 @@ set showmode                                " Show current mode down the bottom
 set laststatus=2                            " Always show the status line
 set history=10000
 set autoread
+set noerrorbells
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
 
@@ -59,3 +60,7 @@ let g:airline_powerline_fonts = 1
 
 " More textobj-ruby bindings
 let g:textobj_ruby_more_mappings = 1
+
+if filereadable(expand("~/.vimrc.local"))
+  source ~/.vimrc.local
+endif
