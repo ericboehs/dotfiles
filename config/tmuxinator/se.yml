@@ -15,7 +15,7 @@ windows:
       panes:
         - wt zeus c
         - wt zeus s
-  - guard/faye/zeus:
+  - guard/zeus:
       layout: even-vertical
       panes:
         - wt guard
