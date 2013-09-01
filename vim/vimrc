@@ -41,6 +41,9 @@ set smarttab                                " Use shiftwidth and softtabstop to 
 set cindent                                 " Recommended seting for automatic C-style indentation
 set autoindent                              " Automatic indentation in non-C files
 
+" Don't add the comment prefix when I hit enter or o/O on a comment line.
+set formatoptions-=or
+
 " Colorscheme
 syntax enable
 set background=dark
