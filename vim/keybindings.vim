@@ -68,7 +68,7 @@ inoremap <Up> <Nop>
 inoremap <Down> <Nop>
 inoremap <Left> <Nop>
 inoremap <Right> <Nop>
-inoremap <Up> <Nop>
+inoremap <M-Up> <Nop>
 inoremap <M-Down> <Nop>
 inoremap <M-Left> <Nop>
 inoremap <M-Right> <Nop>
