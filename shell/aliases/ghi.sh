@@ -73,38 +73,10 @@ function ihigh() { [[ -n $1 ]] &&
   ghi label -a "High Priority" $1
 }
 
-function iest0() { [[ -n $1 ]] &&
-  ghi label -d "1%20point"  $1 > /dev/null &&
-  ghi label -d "2%20points" $1 > /dev/null &&
-  ghi label -d "4%20points" $1 > /dev/null &&
-  ghi label -d "8%20points" $1 > /dev/null &&
-  ghi label -a "0 points" $1
-}
-function iest1() { [[ -n $1 ]] &&
-  ghi label -d "0%20points" $1 > /dev/null &&
-  ghi label -d "2%20points" $1 > /dev/null &&
-  ghi label -d "4%20points" $1 > /dev/null &&
-  ghi label -d "8%20points" $1 > /dev/null &&
-  ghi label -a "1 point" $1
-}
-function iest2() { [[ -n $1 ]] &&
-  ghi label -d "0%20points" $1 > /dev/null &&
-  ghi label -d "1%20point"  $1 > /dev/null &&
-  ghi label -d "4%20points" $1 > /dev/null &&
-  ghi label -d "8%20points" $1 > /dev/null &&
-  ghi label -a "2 points" $1
-}
-function iest4() { [[ -n $1 ]] &&
-  ghi label -d "0%20points" $1 > /dev/null &&
-  ghi label -d "1%20point"  $1 > /dev/null &&
-  ghi label -d "2%20points" $1 > /dev/null &&
-  ghi label -d "8%20points" $1 > /dev/null &&
-  ghi label -a "4 points" $1
-}
-function iest8() { [[ -n $1 ]] &&
-  ghi label -d "0%20points" $1 > /dev/null &&
-  ghi label -d "1%20point"  $1 > /dev/null &&
-  ghi label -d "2%20points" $1 > /dev/null &&
-  ghi label -d "4%20points" $1 > /dev/null &&
-  ghi label -a "8 points" $1
+function iest() { [[ $# -eq 2 ]] &&
+  for i in 0 1 2 4 8; do
+    [[ "$i" -ne "$1" ]] && ghi label -d "$i%20points" $2 > /dev/null
+  done
+
+  ghi label -a "$1 points" $2
 }
