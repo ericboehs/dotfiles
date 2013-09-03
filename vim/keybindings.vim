@@ -81,11 +81,6 @@ vmap <Down> <Esc><Esc>gv
 vmap <Left> <Esc><Esc>gv
 vmap <Right> <Esc><Esc>gv
 
-" Use jj!
-inoremap <Esc> <Nop>
-noremap <Esc> <Nop>
-vmap <Esc> <Nop>
-
 " Yank from the cursor to the end of the line, to be consistent with C and D
 nnoremap Y y$
 
