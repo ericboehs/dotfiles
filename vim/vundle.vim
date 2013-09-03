@@ -1,7 +1,7 @@
 " Misc.
 Bundle 'kana/vim-textobj-user'
 Bundle 'kana/vim-textobj-indent'
-Bundle 'rhysd/vim-textobj-rubyblock'
+Bundle 'rhysd/vim-textobj-ruby'
 Bundle 'tpope/vim-fugitive'
 Bundle 'tpope/vim-eunuch'
 Bundle 'tpope/vim-repeat'
