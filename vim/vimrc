@@ -2,7 +2,7 @@
 set nowrap                                  " I don't always wrap lines...
 set linebreak                               " ...but when I do, I wrap whole words.
 set t_Co=256                                " Support for xterm with 256 colors (gets overriden in .gvimrc)
-set number                                  " Show line numbers
+set relativenumber                          " Show line numbers relative to each other
 set ruler                                   " Show ruler
 set listchars=trail:.,tab:>-,eol:¬          " Change the invisible characters
 set noswapfile                              " Don't create annoying *.swp files
@@ -16,6 +16,7 @@ set showmode                                " Show current mode down the bottom
 set laststatus=2                            " Always show the status line
 set history=10000
 set autoread
+set noerrorbells
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
 
@@ -40,6 +41,9 @@ set smarttab                                " Use shiftwidth and softtabstop to 
 set cindent                                 " Recommended seting for automatic C-style indentation
 set autoindent                              " Automatic indentation in non-C files
 
+" Don't add the comment prefix when I hit enter or o/O on a comment line.
+set formatoptions-=or
+
 " Colorscheme
 syntax enable
 set background=dark
@@ -50,7 +54,16 @@ highlight SignColumn ctermbg=8
 runtime macros/matchit.vim
 
 " Set wildcard ignore for ctrlp and ack/ag
-set wildignore+=*/tmp/*,*/vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
+set wildignore+=*/tmp/*,vendor/bundle/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
-" Fix for powerline borkage
-" python import vim
+let g:ctrlp_custom_ignore = {'dir': '\v[\/]vendor\/bundle$' }
+
+" Use powerline font in airline
+let g:airline_powerline_fonts = 1
+
+" More textobj-ruby bindings
+let g:textobj_ruby_more_mappings = 1
+
+if filereadable(expand("~/.vimrc.local"))
+  source ~/.vimrc.local
+endif

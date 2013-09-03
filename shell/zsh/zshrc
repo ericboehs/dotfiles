@@ -1,5 +1,5 @@
 setopt no_beep                      # i hate beeps
-setopt interactive_comments         # escape commands so i can use them later (allow comments after commands)
+setopt interactivecomments          # escape commands so i can use them later (allow comments after commands)
 setopt rm_star_wait                 # if `rm *` wait 10 seconds before performing it!
 setopt list_types                   # show types in completion
 setopt auto_cd                      # if a command is not in the hash table, and there exists an executable directory by that name, perform the cd command to that directory.
@@ -45,8 +45,10 @@ path=(/usr/local/bin "$path[@]")
 # Add Heroku to the path
 path=(/usr/local/heroku/bin "$path[@]")
 
-# Add current gem path to path; See: https://gist.github.com/ericboehs/5329013
-path=($(cd $(which gem)/..;pwd) "$path[@]")
+path=(/usr/local/opt/ruby/bin "$path[@]")
 
-# Source direnv
-eval "$(direnv hook $0)"
+# Source direnv and make him quiet
+direnv_hook() { eval "$(direnv export zsh 2>/dev/null)"; };
+[[ -z $precmd_functions ]] && precmd_functions=();
+precmd_functions=($precmd_functions direnv_hook)
+# eval "$(direnv hook $SHELL)" # Old way to source direnv

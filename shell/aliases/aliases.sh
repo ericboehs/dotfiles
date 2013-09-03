@@ -4,6 +4,13 @@ c=~/Code
 
 alias fu='fresh update'
 
+# Edit dotfiles
+alias d='(cd ~/.dotfiles && vim && gad && gcav && glr && gp) && fresh && . ~/.zshrc'
+alias so='. ~/.zshrc'
+
+# Edit brightbit/guides #TODO: Find a better place for this as the git aliases aren't available yet
+function bg(){ (cd ~/Code/guides && vim && git checkout -b ${1:=$USER-$(date|md5)} && git add . && git commit -av && git pull --rebase origin && git push -u && git pull-request) }
+
 # Use color in grep
 alias grep='grep --color=auto'
 
@@ -17,6 +24,7 @@ alias pg_start="pg_ctl -D /usr/local/var/postgres -l /usr/local/var/postgres/ser
 alias pg_stop="pg_ctl -D /usr/local/var/postgres stop -s -m fast"
 
 # Misc
+alias v='vim'
 alias x=exit
 alias cl=clear
 alias ee='eval $(cat .env)'
@@ -30,5 +38,5 @@ sasw()  { export SSH_AUTH_SOCK=/tmp/ssh-agent-$1-screen }
 saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 
 # Tmux pairing
-alias tpnew='tmux -S /tmp/tmux-pair-session new -s pair -d && chmod 777 /tmp/tmux-pair-session && tmux -S /tmp/tmux-pair-session attach -t pair && rm -rf /tmp/tmux-pair-session'
+alias tpnew='tmux -S /tmp/tmux-pair-session new -s pair -d && chmod 777 /tmp/tmux-pair-session && tmux -S /tmp/tmux-pair-session attach -t pair'
 alias tpattach='tmux -S /tmp/tmux-pair-session attach -t pair'

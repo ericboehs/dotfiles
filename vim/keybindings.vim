@@ -1,3 +1,19 @@
+" Add Function key mappings for Mac
+if has('mac') && ($TERM == 'xterm-256color' || $TERM == 'screen-256color')
+  map <Esc>OP <F1>
+  map <Esc>OQ <F2>
+  map <Esc>OR <F3>
+  map <Esc>OS <F4>
+  map <Esc>[16~ <F5>
+  map <Esc>[17~ <F6>
+  map <Esc>[18~ <F7>
+  map <Esc>[19~ <F8>
+  map <Esc>[20~ <F9>
+  map <Esc>[21~ <F10>
+  map <Esc>[23~ <F11>
+  map <Esc>[24~ <F12>
+endif
+
 " Remap hhh to Esc in insert mode
 inoremap hhh <Esc>
 " Remap jj to Esc in insert mode
@@ -52,7 +68,7 @@ inoremap <Up> <Nop>
 inoremap <Down> <Nop>
 inoremap <Left> <Nop>
 inoremap <Right> <Nop>
-inoremap <Up> <Nop>
+inoremap <M-Up> <Nop>
 inoremap <M-Down> <Nop>
 inoremap <M-Left> <Nop>
 inoremap <M-Right> <Nop>
@@ -68,11 +84,11 @@ vmap <Right> <Esc><Esc>gv
 " Yank from the cursor to the end of the line, to be consistent with C and D
 nnoremap Y y$
 
+" Insert a single character w/o going to insert mode using <space><char>
+noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
+
 " I never intentionally lookup keywords (with `man`)
 nmap K <Esc>
-
-" I don't like <c-r>
-map U :redo<CR>
 
 " Jump to start and end of line using the home row keys
 noremap H ^
@@ -112,3 +128,18 @@ map <F11> :set nopaste<CR>
 imap <F10> <C-O>:set paste<CR>
 imap <F11> <nop>
 set pastetoggle=<F11>
+
+" Gundo
+nnoremap <F5> :GundoToggle<CR>
+
+" Tagbar
+nnoremap <F8> :TagbarToggle<CR>
+
+" Run current buffer/line and output contents into file
+nmap <buffer> <Leader>r <Plug>(xmpfilter-run)
+xmap <buffer> <Leader>r <Plug>(xmpfilter-run)
+imap <buffer> <Leader>r <Plug>(xmpfilter-run)
+
+nmap <buffer> <Leader>R <Plug>(xmpfilter-mark)
+xmap <buffer> <Leader>R <Plug>(xmpfilter-mark)
+imap <buffer> <Leader>R <Plug>(xmpfilter-mark)
