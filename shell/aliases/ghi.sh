@@ -73,10 +73,12 @@ function ihigh() { [[ -n $1 ]] &&
   ghi label -a "High Priority" $1
 }
 
-function iest() { [[ $# -eq 2 ]] &&
-  for i in 0 1 2 4 8; do
-    [[ "$i" -ne "$1" ]] && ghi label -d "$i%20points" $2 > /dev/null
-  done
+function iest() {
+  if [[ $# -eq 2 ]]; then
+    for i in 0 1 2 4 8; do
+      [[ "$i" -ne "$1" ]] && ghi label -d "$i%20points" $2 > /dev/null
+    done
 
-  ghi label -a "$1 points" $2
+    ghi label -a "$1 points" $2
+  fi
 }
