@@ -29,3 +29,6 @@ alias zrs='zeus server'
 alias zr='zeus rake'
 alias zt='zeus test'
 alias ztt='zeus test test'
+
+# Checkout a branch (given as first/only arg), run bin_setup, restart zeus processes, restart ruby (guard) proceses, run the test suite with zeus and then open localhost
+gto(){ tmux send -t 2.1 gco\ $1\;bs\;kr\;kz\;sleep\ 2\;ztt\;open\ http://localhost:3000 ENTER }
