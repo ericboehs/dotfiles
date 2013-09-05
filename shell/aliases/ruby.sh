@@ -31,4 +31,4 @@ alias zt='zeus test'
 alias ztt='zeus test test'
 
 # Checkout a PR by id (given as first/only arg), run bin_setup, restart zeus processes, restart ruby (guard) proceses, run the test suite with zeus and then open localhost
-prco(){ tmux -S /tmp/tmux-pair-session send -R -t $2:2.1 git\ fetch\ origin\ pull/$1/head:pull/$1/head\;gco\ -b pull/$1/head\;bs\;kr\;kz\;sleep\ 2\;ztt\;open\ http://localhost:3000 ENTER }
+prco(){ tmux -S /tmp/tmux-pair-session send -R -t $2:2.1 git\ fetch\ origin\ pull/$1/head:pull/$1/head\;gco\ -b pull/$1/head\|\|gco\ pull/$1/head\;bs\;kr\;kz\;sleep\ 2\;ztt\;open\ http://localhost:3000 ENTER }
