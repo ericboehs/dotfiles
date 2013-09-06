@@ -18,6 +18,7 @@ alias bs='bin/setup'
 alias kr='killall ruby'
 alias kz='killall zeus-darwin-amd64'
 alias wtzs='while; do zeus start||rm .zeus.sock; sleep 1; clear; done'
+utzt() { clear && until zeus test ${1:="test"}; do echo 'Test(s) failed. Trying again.'; done }
 alias ze='zeus'
 alias zs='zeus start'
 alias zdb='zeus dbconsole'
