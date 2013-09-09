@@ -56,3 +56,7 @@ Bundle 'vim-scripts/ruby-matchit'
 
 " Colors
 Bundle 'altercation/vim-colors-solarized'
+
+if filereadable(expand("~/.vimrc.bundles.local"))
+  source ~/.vimrc.bundles.local
+endif
