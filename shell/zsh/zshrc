@@ -47,6 +47,10 @@ path=(/usr/local/heroku/bin "$path[@]")
 
 path=(/usr/local/opt/ruby/bin "$path[@]")
 
+hi () {
+  history 1 | grep $1
+}
+
 # Source direnv and make him quiet
 direnv_hook() { eval "$(direnv export zsh 2>/dev/null)"; };
 [[ -z $precmd_functions ]] && precmd_functions=();
