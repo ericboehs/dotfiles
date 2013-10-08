@@ -1,0 +1,9 @@
+# ~/.tmuxinator/bb.yml
+
+project_name: bb
+project_root: ~/Code/brightbit.com
+windows:
+  - editor: vim
+  - shell: git remote update; git pull --rebase origin master
+  - server: be middleman
+  - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; sleep 2; kz; exit; exit; exit
