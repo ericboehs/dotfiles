@@ -18,6 +18,7 @@ alias bs='bin/setup'
 alias kr='killall ruby'
 alias kz='killall zeus-darwin-amd64'
 alias wtzs='while; do zeus start||rm .zeus.sock; sleep 1; clear; done'
+utzt() { clear && until zeus test ${1:="test"}; do echo 'Test(s) failed. Trying again.'; done }
 alias ze='zeus'
 alias zs='zeus start'
 alias zdb='zeus dbconsole'
@@ -29,3 +30,9 @@ alias zrs='zeus server'
 alias zr='zeus rake'
 alias zt='zeus test'
 alias ztt='zeus test test'
+
+# Checkout a PR by id (given as first/only arg), run bin_setup, restart zeus processes, restart ruby (guard) proceses, run the test suite with zeus and then open localhost
+prco(){ tmux -S /tmp/tmux-pair-session send -R -t $2:2.1 git\ fetch\ origin\ pull/$1/head:pull/$1/head\;gco\ -b pull/$1/head\|\|gco\ pull/$1/head\;bs\;kr\;kz\;sleep\ 2\;ztt\;open\ http://localhost:3000 ENTER }
+
+# Checkout a branch (given as first/only arg), run bin_setup, restart zeus processes, restart ruby (guard) proceses, run the test suite with zeus and then open localhost
+gto(){ tmux send -t 2.1 gco\ $1\;bs\;kr\;kz\;sleep\ 2\;ztt\;open\ http://localhost:3000 ENTER }

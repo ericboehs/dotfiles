@@ -17,7 +17,7 @@ Bundle 'benmills/vimux'
 Bundle 'jingweno/vimux-zeus'
 
 " Visual
-Bundle 'Yggdroot/indentLine'
+" Bundle 'Yggdroot/indentLine' "NOTE: Disabling due to poor performance. See: https://github.com/Yggdroot/indentLine/issues/48
 Bundle 'bling/vim-airline'
 Bundle 'airblade/vim-gitgutter'
 
@@ -56,3 +56,7 @@ Bundle 'vim-scripts/ruby-matchit'
 
 " Colors
 Bundle 'altercation/vim-colors-solarized'
+
+if filereadable(expand("~/.vimrc.bundles.local"))
+  source ~/.vimrc.bundles.local
+endif

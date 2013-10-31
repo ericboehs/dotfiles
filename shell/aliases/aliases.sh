@@ -30,6 +30,7 @@ alias cl=clear
 alias ee='eval $(cat .env)'
 alias json="python -mjson.tool"
 alias xml="xmllint --format -"
+kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') }
 
 ## Used in a blue moon
 # tmux ssh agent forwarding hack
