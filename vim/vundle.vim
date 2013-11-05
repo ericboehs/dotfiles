@@ -1,6 +1,6 @@
 " Misc.
 Bundle 'kana/vim-textobj-user'
-Bundle 'kana/vim-textobj-nden't'
+Bundle 'kana/vim-textobj-indent'
 Bundle 'rhysd/vim-textobj-ruby'
 Bundle 'tpope/vim-fugitive'
 Bundle 'tpope/vim-eunuch'
