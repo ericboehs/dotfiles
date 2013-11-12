@@ -45,7 +45,15 @@ path=(/usr/local/bin "$path[@]")
 # Add Heroku to the path
 path=(/usr/local/heroku/bin "$path[@]")
 
+# Add Ruby to the path
 path=(/usr/local/opt/ruby/bin "$path[@]")
+
+# Add NPM to the path
+path=(/usr/local/share/npm/bin "$path[@]")
+
+hi () {
+  history 1 | grep $1
+}
 
 # Source direnv and make him quiet
 direnv_hook() { eval "$(direnv export zsh 2>/dev/null)"; };
