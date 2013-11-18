@@ -3,6 +3,9 @@
 alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$( ghi milestone -S due_date -v | grep -E "Past due|^Due" -B5| grep -E "^\#" | tail -1 | cut -f1 -d:|tr -d "# \t\n") || true'
 
 
+function prs() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ | grep '↑' --color=none }
+function myprs() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ | grep '↑' --color=none }
+
 alias ic='issues COL'
 function issues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ }
 
