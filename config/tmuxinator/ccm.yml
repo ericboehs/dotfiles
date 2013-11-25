@@ -10,5 +10,5 @@ windows:
         - vim
         -
   - shell: git remote update origin; git pull --rebase origin
-  - build: titanium build -p ios
+  - build: wt titanium build -p ios
   - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; sleep 2; kr; kz; exit; exit; exit
