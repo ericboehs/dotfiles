@@ -14,7 +14,7 @@ export PYTHONPATH="$HOME/.local/lib/python"
 # Set current working directory for tmux prompt (powerline)
 #export PS1="$PS1"'$([ -n "$TMUX" ] && tmux setenv TMUXPWD_$(tmux display -p "#D" | tr -d %) "$PWD")'
 
-#export NODE_PATH="/usr/local/lib/node_modules"
+export NODE_PATH="/usr/local/lib/node_modules"
 #export PAGER=less
 
 # Shaves about ~1s off Rails boot time
