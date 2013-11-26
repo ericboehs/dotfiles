@@ -10,5 +10,9 @@ windows:
         - vim
         -
   - shell: git remote update origin; git pull --rebase origin
-  - build: wt titanium build -p ios
+  - build:
+      layout: even-vertical
+      panes:
+        - [[ -d ~/Code/tishadowapp ]] || (mkdir -p ~/Code/tishadowapp && echo -e "com.brightbit.tishadowapp\n" | tishadow app -d ~/Code/tishadowapp && cd ~/Code/tishadowapp && sed -i '' 's/3.1.2.GA/3.2.0.v20131126111643/g' tiapp.xml); cd ~/Code/tishadowapp; ti build -p iphone
+        - tishadow server
   - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; sleep 2; kr; kz; exit; exit; exit
