@@ -2,6 +2,8 @@
 type compdef >/dev/null 2>&1 && compdef hub=git
 type hub >/dev/null 2>&1 && alias git='hub'
 alias ga='git add'
+alias gaa='git add --all'
+alias gap='git add -p'
 alias gad='git add .'
 alias gadu='git add -u .'
 
