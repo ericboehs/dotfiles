@@ -8,11 +8,12 @@ windows:
       layout: 8087,238x60,0,0[238x44,0,0,0,238x15,0,45,5]
       panes:
         - vim
-        -
+        - alloy compile --config platform=ios && tishadow run -p 4444
   - shell: git remote update origin; git pull --rebase origin
-  - build:
+  - console/server/tiapp:
       layout: even-vertical
       panes:
-        - [[ -d ~/Code/tishadowapp ]] || (mkdir -p ~/Code/tishadowapp && echo -e "com.brightbit.tishadowapp\n" | tishadow app -d ~/Code/tishadowapp && cd ~/Code/tishadowapp && sed -i '' 's/3.1.2.GA/3.2.0.v20131126111643/g' tiapp.xml); cd ~/Code/tishadowapp; ti build -p iphone
-        - tishadow server
+        - wt tishadow repl -p 4444
+        - wt tishadow server -p 4444
+        - cd ~/Code/tishadowapp && ti build -p iphone
   - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; tmux set-window-option -t $SESSION:4 monitor-activity off; sleep 2; kr; kz; exit; exit; exit
