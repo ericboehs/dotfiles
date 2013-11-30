@@ -15,6 +15,10 @@ export PYTHONPATH="$HOME/.local/lib/python"
 #export PS1="$PS1"'$([ -n "$TMUX" ] && tmux setenv TMUXPWD_$(tmux display -p "#D" | tr -d %) "$PWD")'
 
 export NODE_PATH="/usr/local/lib/node_modules"
+
+# For Android emulator from homebrew
+export ANDROID_HOME=/usr/local/opt/android-sdk
+
 #export PAGER=less
 
 # Shaves about ~1s off Rails boot time
