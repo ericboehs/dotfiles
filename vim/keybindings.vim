@@ -129,6 +129,9 @@ imap <F10> <C-O>:set paste<CR>
 imap <F11> <nop>
 set pastetoggle=<F11>
 
+" PasteAsCoffee
+map <Leader>pc :PasteAsCoffee<CR>
+
 " Gundo
 nnoremap <F5> :GundoToggle<CR>
 
