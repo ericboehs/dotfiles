@@ -20,3 +20,6 @@ function wt() { while; do $*; sleep 1; clear; done }
 
 # Unti command returns 0, do command, clear, sleep
 function ut() { clear && until $*; do echo 'Command failed. Trying again.'; done }
+
+# Source custom .zshrc.local if present
+[[ -f ~/.zshrc.local ]] && source ~/.zshrc.local
