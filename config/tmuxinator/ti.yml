@@ -1,7 +1,7 @@
 # ~/.tmuxinator/ti.yml
 
 project_name: ti
-project_root: $WORKING_DIR
+project_root: .
 socket_path: /tmp/tmux-pair-session
 windows:
   - editor:
