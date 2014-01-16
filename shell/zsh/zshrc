@@ -36,20 +36,19 @@ export TIMEFMT="%*Es total, %U user, %S system, %P cpu"
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
 
-# Make path unique
-typeset -U path
+if [ $SHLVL -lt 2 ]; then
+  # Make path unique
+  typeset -U path
 
-# Add Homebrew to path
-path=(/usr/local/bin "$path[@]")
+  # Add Homebrew to path
+  path=(/usr/local/bin "$path[@]")
 
-# Add Heroku to the path
-path=(/usr/local/heroku/bin "$path[@]")
+  # Add Ruby to the path
+  path=(/usr/local/opt/ruby/bin "$path[@]")
 
-# Add Ruby to the path
-path=(/usr/local/opt/ruby/bin "$path[@]")
-
-# Add NPM to the path
-path=(/usr/local/share/npm/bin "$path[@]")
+  # Add NPM to the path
+  path=(/usr/local/share/npm/bin "$path[@]")
+fi
 
 hi () {
   history 1 | grep $1
