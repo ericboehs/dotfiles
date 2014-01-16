@@ -87,13 +87,6 @@ nnoremap Y y$
 " Insert a single character w/o going to insert mode using <space><char>
 noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
 
-" I never intentionally lookup keywords (with `man`)
-nmap K <Esc>
-
-" Jump to start and end of line using the home row keys
-noremap H ^
-noremap L $
-
 " Search for selected text, forwards or backwards.
 " http://vim.wikia.com/wiki/Search_for_visually_selected_text
 vnoremap <silent> * :<C-U>
