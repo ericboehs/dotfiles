@@ -3,9 +3,11 @@ type compdef >/dev/null 2>&1 && compdef hub=git
 type hub >/dev/null 2>&1 && alias git='hub'
 alias ga='git add'
 alias gaa='git add --all'
-alias gap='git add -p'
 alias gad='git add .'
 alias gadu='git add -u .'
+alias gap='git add -p'
+alias gapc='git add -p && git commit -v'
+alias gapcp='git add -p && git commit -v && git push -u'
 
 alias gl='git pull'
 alias glr='git pull --rebase'
