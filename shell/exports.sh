@@ -1,6 +1,10 @@
 # Set default editor (for git and many other binaries)
 export EDITOR='vim'
 
+# Set PAGER and MANPAGER to vim
+export MANPAGER="sh -c \"col -bx | vim -c 'set ft=man nolist' -MR -\""
+export PAGER='/usr/share/vim/vim*/macros/less.sh'
+
 # Add 256 color support for your TERM
 export TERM=screen-256color
 
