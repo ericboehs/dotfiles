@@ -3,7 +3,7 @@
 ## Fresh setup
 
 # Initiate fresh so you can use this file
-fresh freshshell/fresh bin/fresh --bin
+fresh ericboehs/fresh bin/fresh --bin
 #fresh freshshell/fresh contrib/source-build.sh --file=~/.zshrc
 
 ## Bins
