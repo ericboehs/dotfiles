@@ -2,7 +2,7 @@
 export EDITOR='vim'
 
 # Set PAGER and MANPAGER to vim
-export MANPAGER="sh -c \"col -bx | vim -c 'set ft=man nolist' -MR -\""
+export MANPAGER="sh -c \"col -bx | vim -c 'set ft=man nolist' -c \"map q :q!<CR>\" -MR -\""
 export PAGER='/usr/share/vim/vim*/macros/less.sh'
 
 # Add 256 color support for your TERM
