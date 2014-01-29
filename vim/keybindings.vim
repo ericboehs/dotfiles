@@ -41,7 +41,7 @@ map <C-s> <esc>:w<CR>
 imap <C-s> <esc>:w<CR>
 
 " Sudo save file
-cmap w!! w !sudo tee > /dev/null %
+cmap w!! command W :execute ':silent w !sudo tee % > /dev/null' | :edit!
 
 " Window Navigation
 " Use ctrl+(h|j|k|j) to move through open windows.
