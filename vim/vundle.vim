@@ -39,7 +39,7 @@ Bundle 'jasoncodes/ctrlp-modified.vim'
 Bundle 'bufexplorer.zip'
 Bundle 'mileszs/ack.vim'
 Bundle 'majutsushi/tagbar'
-Bundle 'goldfeld/vim-seek'
+Bundle 'justinmk/vim-sneak'
 
 " Language
 Bundle 'vim-ruby/vim-ruby'
