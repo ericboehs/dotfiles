@@ -47,28 +47,18 @@ git_prompt_status() {
   fi
   echo $STATUS
 }
-function zle-line-init zle-keymap-select {
+
+function zle-keymap-select zle-line-init zle-line-finish {
   zle reset-prompt
+  zle -R
 }
 
 zle -N zle-line-init
+zle -N zle-line-finish
 zle -N zle-keymap-select
 
 bindkey -v
 
-# if mode indicator wasn't setup by theme, define default
-if [[ "$MODE_INDICATOR" == "" ]]; then
-  MODE_INDICATOR="%{$fg_bold[red]%}<%{$fg[red]%}<<%{$reset_color%}"
-fi
-
-function vi_mode_prompt_info() {
-  echo "${${KEYMAP/vicmd/$MODE_INDICATOR}/(main|viins)/}"
-}
-
-# define right prompt, if it wasn't defined by a theme
-if [[ "$RPS1" == "" && "$RPROMPT" == "" ]]; then
-  RPS1='$(vi_mode_prompt_info)'
-fi
 # the idea of this theme is to contain a lot of info in a small string, by
 # compressing some parts and colorcoding, which bring useful visual cues,
 # while limiting the amount of colors and such to keep it easy on the eyes.
@@ -80,7 +70,7 @@ fi
 typeset -A host_repr
 
 # translate hostnames into shortened, colorcoded strings
-host_repr=('Erics-MacBook-Pro.local' "%{$fg_bold[green]%}ebmbp" 'Jeffrey-Richardsons-MacBook-Pro.local' "%{$fg_bold[green]%}jrmbp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
+host_repr=('Erics-MacBook-Pro.local' "%{$fg_bold[green]%}ebmbp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
 
 # local time, color coded by last return code
 time_enabled="%(?.%{$fg[green]%}.%{$fg[red]%})%*%{$reset_color%}"
@@ -90,7 +80,6 @@ time=$time_enabled
 # user part, color coded by privileges
 local user="%(!.%{$fg[blue]%}.%{$fg[blue]%})%n%{$reset_color%}"
 [[ $USER = 'ericboehs' ]] && local user="%{$fg[blue]%}eb%{$reset_color%}"
-[[ $USER = 'jeffreyrichardson' ]] && local user="%{$fg[blue]%}jr%{$reset_color%}"
 [[ $USER = 'brightbit' ]] && local user="%{$fg[blue]%}bb%{$reset_color%}"
 # Hostname part.  compressed and colorcoded per host_repr array
 # if not found, regular hostname in default color
@@ -99,12 +88,18 @@ local host="@${host_repr[$(hostname)]:-$(hostname)}%{$reset_color%}"
 # Compacted $PWD
 local pwd="%{$fg[blue]%}%c%{$reset_color%}"
 
-PROMPT='${time} ${user}${host} %(!.%1~.%~)$(git_prompt_info) [ '
+if [[ "$MODE_INDICATOR" == "" ]]; then
+  MODE_INDICATOR="%{$fg_bold[red]%}[%{$reset_color%}"
+fi
 
-# i would prefer 1 icon that shows the "most drastic" deviation from HEAD,
-# but lets see how this works out
+if [[ "$MODE_INDICATOR_RIGHT" == "" ]]; then
+  MODE_INDICATOR_RIGHT="%{$fg_bold[red]%}]%{$reset_color%}"
+fi
+
+PROMPT='${time} ${user}${host} %(!.%1~.%~)$(git_prompt_info) ${${KEYMAP/vicmd/$MODE_INDICATOR}/(main|viins)/[} '
+
 ZSH_THEME_GIT_PROMPT_PREFIX="%{$fg[yellow]%}"
-ZSH_THEME_GIT_PROMPT_SUFFIX="%{$reset_color%} "
+ZSH_THEME_GIT_PROMPT_SUFFIX="%{$reset_color%}"
 ZSH_THEME_GIT_PROMPT_DIRTY="%{$fg[green]%} %{$fg[yellow]%}?%{$fg[green]%}%{$reset_color%}"
 ZSH_THEME_GIT_PROMPT_CLEAN="%{$fg[green]%}"
 
@@ -112,8 +107,7 @@ ZSH_THEME_GIT_PROMPT_CLEAN="%{$fg[green]%}"
 return_code_enabled="%(?..%{$fg[red]%}%? ↵%{$reset_color%})"
 return_code_disabled=
 return_code=$return_code_enabled
-
-RPS1='] $(vi_mode_prompt_info) ${return_code} $(which -s rvm-prompt >/dev/null 2>&1 && rvm-prompt)'
+RPS1='${${KEYMAP/vicmd/$MODE_INDICATOR_RIGHT}/(main|viins)/]} ${return_code}'
 
 function accept-line-or-clear-warning () {
 	if [[ -z $BUFFER ]]; then
@@ -125,6 +119,6 @@ function accept-line-or-clear-warning () {
 	fi
 	zle accept-line
 }
+
 zle -N accept-line-or-clear-warning
 bindkey '^M' accept-line-or-clear-warning
-
