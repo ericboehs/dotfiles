@@ -59,6 +59,10 @@ nmap <silent> <leader>kzt :!tmux kill-window -t 5 && tmux new-window -n zeus "ze
 nmap <silent> <leader>kzc :!tmux send-keys -t 4.0 C-c; sleep 0.5; tmux send-keys -t 4.0 C-d; sleep 0.5; tmux send-keys -t 4.0 C-l; sleep 0.5; tmux send-keys -t 4.0 zeus\ c C-m && tmux select-window -t 2<CR><CR>
 nmap <silent> <leader>kzs :!tmux send-keys -t 4.1 C-c; sleep 0.5; tmux send-keys -t 4.1 C-l; sleep 0.5; tmux send-keys -t 4.1 zeus\ s C-m && tmux select-window -t 2<CR><CR>
 
+" Quit file
+map <C-q> <esc>:q<CR>
+imap <C-q> <esc>:q<CR>
+
 " Save file
 map <C-s> <esc>:w<CR>
 imap <C-s> <esc>:w<CR>
