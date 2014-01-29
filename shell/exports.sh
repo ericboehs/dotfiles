@@ -3,8 +3,8 @@ export EDITOR='vim'
 
 # Set PAGERs
 export PAGER='/usr/share/vim/vim*/macros/less.sh'
-export MANPAGER="sh -c \"col -bx | vim -c 'set ft=man nolist' -c 'map q :q\!<CR>' -MR -\""
-export GIT_PAGER="vim -c '%sm/\\e.\\{-}m//g' -c 'set ft=diff' -c 'normal gg' -c 'map q :q\!<CR>' -"
+export MANPAGER="sh -c \"col -bx | vim -c 'set ft=man nolist' -c 'map q :q!<CR>' -MR -\""
+export GIT_PAGER="vim -c '%sm/\\e.\\{-}m//g' -c 'set ft=diff' -c 'normal gg' -c 'map q :q!<CR>' -"
 export GHI_PAGER="less"
 
 # Add 256 color support for your TERM
