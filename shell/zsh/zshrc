@@ -38,26 +38,16 @@ export KEYTIMEOUT=20
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
 
-if [ $SHLVL -lt 2 ]; then
-  # Make path unique
-  typeset -U path
+# Reset $PATH due to a bug in OS X; See: https://github.com/sstephenson/rbenv/issues/369#issuecomment-33156619 and thread
+[[ -x /usr/libexec/path_helper ]] && PATH='' && eval $(/usr/libexec/path_helper -s)
 
-  # Add Homebrew to path
-  path=(/usr/local/bin "$path[@]")
+# Make path unique
+typeset -U path
 
-  # Add Ruby to the path
-  path=(/usr/local/opt/ruby/bin "$path[@]")
-
-  # Add NPM to the path
-  path=(/usr/local/share/npm/bin "$path[@]")
-fi
+# Add current directory's bin and vendor/bundle/bin directories to path safely
+path=(.git/safe/../../vendor/bundle/bin "$path[@]")
+path=(.git/safe/../../bin "$path[@]")
 
 hi () {
   history 1 | grep $1
 }
-
-# Source direnv and make him quiet
-direnv_hook() { eval "$(direnv export zsh 2>/dev/null)"; };
-[[ -z $precmd_functions ]] && precmd_functions=();
-precmd_functions=($precmd_functions direnv_hook)
-# eval "$(direnv hook $SHELL)" # Old way to source direnv
