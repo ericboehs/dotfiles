@@ -63,6 +63,9 @@ nmap <silent> <leader>kzs :!tmux send-keys -t 4.1 C-c; sleep 0.5; tmux send-keys
 map <C-q> <esc>:q<CR>
 imap <C-q> <esc>:q<CR>
 
+map <C-q><C-q> <esc>:q!<CR>
+imap <C-q><C-q> <esc>:q!<CR>
+
 " Save file
 map <C-s> <esc>:w<CR>
 imap <C-s> <esc>:w<CR>
