@@ -4,7 +4,6 @@ setopt rm_star_wait                 # if `rm *` wait 10 seconds before performin
 setopt list_types                   # show types in completion
 setopt auto_cd                      # if a command is not in the hash table, and there exists an executable directory by that name, perform the cd command to that directory.
 setopt cd_able_vars                 # if the argument to cd is the name of a parameter whose value is a valid directory, it will become the current directory.
-setopt no_auto_name_dirs            # see: http://www.neactar.com/shell/fix-for-wrong-prompt-dir-when-using-zsh-project-rvmrc-and-oh-my-zsh
 setopt hist_ignore_dups             # ignore duplication command history list
 setopt hist_verify                  # expand history onto the current line instead of executing it
 setopt hist_expire_dups_first       # remove oldest duplicate commands from the history first
@@ -32,6 +31,9 @@ SAVEHIST=1000000
 # Show time a command took if over 4 sec
 export REPORTTIME=4
 export TIMEFMT="%*Es total, %U user, %S system, %P cpu"
+
+# Speed up escape a little
+export KEYTIMEOUT=20
 
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
