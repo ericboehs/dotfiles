@@ -1,3 +1,26 @@
+" Yank and put system pasteboard with <Leader>y/p.
+noremap <Leader>y "*y
+noremap <Leader>Y "*y$
+nnoremap <Leader>yy "*yy
+noremap <Leader>p "*p
+noremap <Leader>P "*P
+
+" Copy relative path to the system pasteboard
+nnoremap <silent><Leader>cf :let @*=expand('%')<CR>
+
+" Copy relative path and line number to the system pasteboard
+nnoremap <silent><Leader>cl :let @*=expand('%').':'.line('.')<CR>
+
+" paste mode toggle (needed when using autoindent/smartindent)
+map <F10> :set paste<CR>
+map <F11> :set nopaste<CR>
+imap <F10> <C-O>:set paste<CR>
+imap <F11> <nop>
+set pastetoggle=<F11>
+
+" PasteAsCoffee
+map <Leader>pc :PasteAsCoffee<CR>
+
 " Add Function key mappings for Mac
 if has('mac') && ($TERM == 'xterm-256color' || $TERM == 'screen-256color')
   map <Esc>OP <F1>
@@ -122,16 +145,6 @@ nnoremap k gk
 
 " Converts Ruby 1.8 hashes to 1.9
 command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')
-
-" paste mode toggle (needed when using autoindent/smartindent)
-map <F10> :set paste<CR>
-map <F11> :set nopaste<CR>
-imap <F10> <C-O>:set paste<CR>
-imap <F11> <nop>
-set pastetoggle=<F11>
-
-" PasteAsCoffee
-map <Leader>pc :PasteAsCoffee<CR>
 
 " Gundo
 nnoremap <F5> :GundoToggle<CR>

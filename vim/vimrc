@@ -41,6 +41,15 @@ set smarttab                                " Use shiftwidth and softtabstop to 
 set cindent                                 " Recommended seting for automatic C-style indentation
 set autoindent                              " Automatic indentation in non-C files
 
+" Undo
+if !isdirectory(expand("~/.vim/.undo/"))
+  silent !mkdir -p ~/.vim/.undo/
+endif
+set undodir=$HOME/.vim/.undo
+set undofile
+set undolevels=1000
+set undoreload=10000
+
 " Don't add the comment prefix when I hit enter or o/O on a comment line.
 set formatoptions-=or
 
