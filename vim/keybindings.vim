@@ -40,6 +40,9 @@ nmap <silent> <leader>kzs :!tmux send-keys -t 4.1 C-c; sleep 0.5; tmux send-keys
 map <C-s> <esc>:w<CR>
 imap <C-s> <esc>:w<CR>
 
+" Sudo save file
+cmap w!! w !sudo tee > /dev/null %
+
 " Window Navigation
 " Use ctrl+(h|j|k|j) to move through open windows.
 map <C-h> <C-w>h
