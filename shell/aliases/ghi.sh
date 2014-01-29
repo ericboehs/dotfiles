@@ -112,4 +112,4 @@ function iest8() { [[ -n $1 ]] &&
 }
 
 # Edit https://github.com/ericboehs/dotfiles/issues/9 quickly
-alias dt='(cd ~/.dotfiles && ghi edit 9)'
+alias dt='(cd ~/.dotfiles && ghi edit $(git config --get ghi.todo-issue-number))'
