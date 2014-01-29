@@ -112,9 +112,9 @@ function iest8() { [[ -n $1 ]] &&
 }
 
 # Edit an issue quickly
-function ei(){ ghi edit ${1:=$(git config --get ghi.todo-issue-number)} }
-function eiw(){ ghi show -w ${1:=$(git config --get ghi.todo-issue-number)} }
-function si(){ git config ghi.todo-issue-number $1 }
+function ei(){ ghi edit ${1:=$(git config --get ghi.current-working-issue)} }
+function eiw(){ ghi show -w ${1:=$(git config --get ghi.current-working-issue)} }
+function si(){ git config ghi.current-working-issue $1 }
 
 # Edit https://github.com/ericboehs/dotfiles/issues/9 quickly
 alias dt='(cd ~/.dotfiles && ghi edit $(git config --get ghi.todo-issue-number))'
