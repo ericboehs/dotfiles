@@ -81,7 +81,7 @@ imap <C-s><C-s><C-s> <esc>:w!!<CR>
 " Sudo save file
 cmap w!! execute 'silent w !sudo tee > /dev/null %' \| edit!
 
-" Window Navigation
+" Windoj Navigation
 " Use ctrl+(h|j|k|j) to move through open windows.
 map <C-h> <C-w>h
 map <C-j> <C-w>j
@@ -94,6 +94,9 @@ noremap <silent> <c-l> :nohls<cr><c-l>
 " NERDTree
 map <leader>n :NERDTreeToggle<CR>
 map <leader>N :NERDTreeFind<CR>
+
+" Search
+map <Leader>r :%s///g<left><left>
 
 " Ag with <leader>f
 map <Leader>f :Ag!<Space>
@@ -166,12 +169,3 @@ nnoremap <F5> :GundoToggle<CR>
 
 " Tagbar
 nnoremap <F8> :TagbarToggle<CR>
-
-" Run current buffer/line and output contents into file
-nmap <buffer> <Leader>r <Plug>(xmpfilter-run)
-xmap <buffer> <Leader>r <Plug>(xmpfilter-run)
-imap <buffer> <Leader>r <Plug>(xmpfilter-run)
-
-nmap <buffer> <Leader>R <Plug>(xmpfilter-mark)
-xmap <buffer> <Leader>R <Plug>(xmpfilter-mark)
-imap <buffer> <Leader>R <Plug>(xmpfilter-mark)
