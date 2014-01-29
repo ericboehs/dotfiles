@@ -70,6 +70,14 @@ imap <C-q><C-q> <esc>:q!<CR>
 map <C-s> <esc>:w<CR>
 imap <C-s> <esc>:w<CR>
 
+" Force save file
+map <C-s><C-s> <esc>:w!<CR>
+imap <C-s><C-s> <esc>:w!<CR>
+
+" Sudo save file
+map <C-s><C-s><C-s> <esc>:w!!<CR>
+imap <C-s><C-s><C-s> <esc>:w!!<CR>
+
 " Sudo save file
 cmap w!! execute 'silent w !sudo tee > /dev/null %' \| edit!
 
