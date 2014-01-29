@@ -11,14 +11,10 @@ fresh ericboehs/fresh bin/fresh --bin
 # Add all bins in local bin/
 fresh bin/\* --bin
 
-# Setup catacomb which lets you encrypt files using user's github key
-# fresh twe4ked/catacomb bin/catacomb --bin
-
 ## Config
 fresh-options --file
   fresh config/\*
 fresh-options
-
 
 ## Shell
 
@@ -39,7 +35,6 @@ fresh-options --file=~/.zshrc --marker
   ## this loads the shell files and needs to be at the bottom of the zshrc for compdef be availiable
   fresh freshshell/fresh contrib/source-build.sh
 
-  fresh rupa/z z.sh
   fresh zsh-users/zsh-history-substring-search zsh-history-substring-search.zsh
 fresh-options
 
