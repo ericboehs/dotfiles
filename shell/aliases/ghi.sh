@@ -2,7 +2,6 @@
 
 alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$( ghi milestone -S due_date -v | grep -E "Past due|^Due" -B5| grep -E "^\#" | tail -1 | cut -f1 -d:|tr -d "# \t\n") || true'
 
-
 function prs() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ | grep '↑' --color=none }
 function myprs() { setcms; ghi list -M $GHI_CURRENT_MILESTONE --mine $@ | grep '↑' --color=none }
 
@@ -111,3 +110,6 @@ function iest8() { [[ -n $1 ]] &&
   ghi label -d "4%20points" $1 > /dev/null &&
   ghi label -a "8 points" $1
 }
+
+# Edit https://github.com/ericboehs/dotfiles/issues/9 quickly
+alias dt='(cd ~/.dotfiles && ghi edit 9)'
