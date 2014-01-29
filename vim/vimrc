@@ -20,6 +20,9 @@ set noerrorbells
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
 
+" Key delay timeout
+set timeout timeoutlen=250 ttimeoutlen=150
+
 " Treat dashed words as whole words in stylesheets
 autocmd Filetype css,scss,sass setlocal iskeyword+=-
 
