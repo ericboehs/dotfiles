@@ -8,7 +8,6 @@
   branch = auto
 [core]
   excludesfile = ~/.gitignore
-  pager = vim -c '%sm/\\e.\\{-}m//g' -c 'set ft=diff' -c 'normal gg' -c 'map q :q!<CR>' -
 [git-up "bundler"]
   check = true
 [rebase]
