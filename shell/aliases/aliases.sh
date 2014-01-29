@@ -38,5 +38,6 @@ alias safix='export SSH_AUTH_SOCK=$(find /tmp/ssh-* -user $(whoami) -name agent\
 sasw()  { export SSH_AUTH_SOCK=/tmp/ssh-agent-$1-screen }
 saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 
-# Resume tmux session
+# Tmux
+alias tnp='tmux -S /tmp/tmux-pair-session new'
 alias tap='tmux -S /tmp/tmux-pair-session attach'
