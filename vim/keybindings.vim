@@ -87,15 +87,15 @@ noremap <silent> <c-l> :nohls<cr><c-l>
 map <leader>n :NERDTreeToggle<CR>
 map <leader>N :NERDTreeFind<CR>
 
-" Ack with <leader>f
-map <Leader>f :Ack!<Space>
+" Ag with <leader>f
+map <Leader>f :Ag!<Space>
 
 " Highlight word at cursor without changing position
 nnoremap <leader>h *<C-O>
-" Highlight word at cursor and then Ack it.
-nnoremap <leader>H *<C-O>:AckFromSearch!<CR>
+" Highlight word at cursor and then Ag it.
+nnoremap <leader>H *<C-O>:AgFromSearch!<CR>
 
-map <Leader>F :AckFromSearch<CR>
+map <Leader>F :AgFromSearch<CR>
 
 " Use \d (or \dd or \dj or 20\dd) to delete a line without yanking
 nmap <silent> <leader>d "_d

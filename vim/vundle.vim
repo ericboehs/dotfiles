@@ -37,7 +37,7 @@ Bundle 'scrooloose/nerdtree'
 Bundle 'kien/ctrlp.vim'
 Bundle 'jasoncodes/ctrlp-modified.vim'
 Bundle 'bufexplorer.zip'
-Bundle 'mileszs/ack.vim'
+Bundle 'rking/ag.vim'
 Bundle 'majutsushi/tagbar'
 Bundle 'justinmk/vim-sneak'
 
