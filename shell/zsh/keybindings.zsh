@@ -31,6 +31,3 @@ bindkey "^R" history-incremental-search-backward
 
 # Remap Ctrl-S to Ctrl-- for stopping termianl output
 stty stop 
-
-# Remove all Esc prefixed bindings to increase vicmd speed
-bindkey -rpM viins '^['
