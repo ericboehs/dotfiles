@@ -5,12 +5,12 @@ autoload colors; colors
 
 # get the name of the branch we are on
 function git_prompt_info() {
-  ref=$(git symbolic-ref HEAD 2> /dev/null) || return
+  ref=$(/usr/local/bin/git symbolic-ref HEAD 2> /dev/null) || return
   echo "$ZSH_THEME_GIT_PROMPT_PREFIX:${ref#refs/heads/}$(parse_git_dirty)$ZSH_THEME_GIT_PROMPT_SUFFIX"
 }
 
 parse_git_dirty () {
-  if [[ -n $(git status -s 2> /dev/null) ]]; then
+  if [[ -n $(/usr/local/bin/git status -s 2> /dev/null) ]]; then
     echo "$ZSH_THEME_GIT_PROMPT_DIRTY"
   else
     echo "$ZSH_THEME_GIT_PROMPT_CLEAN"
@@ -19,7 +19,7 @@ parse_git_dirty () {
 
 # get the status of the working tree
 git_prompt_status() {
-  INDEX=$(git status --porcelain 2> /dev/null)
+  INDEX=$(/usr/local/bin/git status --porcelain 2> /dev/null)
   STATUS=""
   if $(echo "$INDEX" | grep '^?? ' &> /dev/null); then
     STATUS="$ZSH_THEME_GIT_PROMPT_UNTRACKED$STATUS"
