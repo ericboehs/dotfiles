@@ -9,7 +9,7 @@ windows:
       panes:
         - vim
         -
-  - shell: git remote update origin; git pull --rebase origin
+  - shell: ensure_keychain_unlocked_over_ssh; git remote update origin; git pull --rebase origin
   - console/server/jobs:
       layout: even-vertical
       panes:

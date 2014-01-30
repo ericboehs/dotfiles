@@ -41,3 +41,8 @@ saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 # Tmux
 alias tnp='tmux -S /tmp/tmux-pair-session new'
 alias tap='tmux -S /tmp/tmux-pair-session attach'
+
+# OS X
+# This only prompts for keychain access if you have an https credential configured in your .gitconfig as this is the only time I know of
+# that one would need to use this command. See: https://help.github.com/articles/which-remote-url-should-i-use
+ensure_keychain_unlocked_over_ssh() { [[ -n $SSH_CONNECTION ]] && [[ $OSTYPE == darwin* ]] && git config --get-regex 'credential.https*' 1&>- && (security unlock-keychain -u 1&>- || security unlock-keychain) || (exit 0) }
