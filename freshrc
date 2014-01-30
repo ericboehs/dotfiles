@@ -64,7 +64,9 @@ fresh config/tmuxinator  --file=~/.tmuxinator/
 
 # powerline: the ultimate statusline
 fresh Lokaltog/powerline scripts/powerline --bin
-fresh Lokaltog/powerline powerline --file=~/.local/lib/python/powerline/
+#NOTE: Using ericboehs's powerline for his spotify tweak. See: https://github.com/Lokaltog/powerline/pull/699
+# fresh Lokaltog/powerline powerline --file=~/.local/lib/python/powerline/
+fresh ericboehs/powerline powerline --file=~/.local/lib/python/powerline/ --ref=f59f169
 fresh config/powerline --file=~/.config/powerline/
 fresh Lokaltog/powerline font --file=~/.fonts/
 fresh Lokaltog/powerline-fonts SourceCodePro --file=~/.fonts/
