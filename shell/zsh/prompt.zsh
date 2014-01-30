@@ -70,7 +70,7 @@ bindkey -v
 typeset -A host_repr
 
 # translate hostnames into shortened, colorcoded strings
-host_repr=('ebmp.local' "%{$fg_bold[green]%}ebmp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
+host_repr=('ebmp.local' "%{$fg_bold[green]%}ebmp" 'vlucasmbp.local' "%{$fg_bold[green]%}vlmbp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
 
 # local time, color coded by last return code
 time_enabled="%(?.%{$fg[green]%}.%{$fg[red]%})%*%{$reset_color%}"
@@ -80,6 +80,7 @@ time=$time_enabled
 # user part, color coded by privileges
 local user="%(!.%{$fg[blue]%}.%{$fg[blue]%})%n%{$reset_color%}"
 [[ $USER = 'ericboehs' ]] && local user="%{$fg[blue]%}eb%{$reset_color%}"
+[[ $USER = 'vlucas' ]] && local user="%{$fg[blue]%}vl%{$reset_color%}"
 [[ $USER = 'brightbit' ]] && local user="%{$fg[blue]%}bb%{$reset_color%}"
 # Hostname part.  compressed and colorcoded per host_repr array
 # if not found, regular hostname in default color
