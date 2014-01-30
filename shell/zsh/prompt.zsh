@@ -70,7 +70,7 @@ bindkey -v
 typeset -A host_repr
 
 # translate hostnames into shortened, colorcoded strings
-host_repr=('Erics-MacBook-Pro.local' "%{$fg_bold[green]%}ebmbp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
+host_repr=('ebmp.local' "%{$fg_bold[green]%}ebmp" 'Brightbox.local' "%{$fg_bold[green]%}bbox" )
 
 # local time, color coded by last return code
 time_enabled="%(?.%{$fg[green]%}.%{$fg[red]%})%*%{$reset_color%}"
