@@ -16,4 +16,4 @@ windows:
         - wt rails s
         - wt rails c
         - wt rake jobs:work
-  - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; sleep 2; kr; exit
+  - starting: chmod 777 /tmp/tmux-pair-session; tmux set-window-option -t $SESSION:3 monitor-activity off; sleep 2; exit
