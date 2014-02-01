@@ -24,3 +24,5 @@
   ll = log --format=fuller --graph --decorate
   lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
   wdiff = diff --color-words
+[hub]
+	protocol = https
