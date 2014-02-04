@@ -1,6 +1,7 @@
 # directory aliases
 # use like: ls ~src OR ~src OR du -h ~src
 c=~/Code
+db=/Volumes/Dropbox/Dropbox
 
 alias fu='fresh update'
 
