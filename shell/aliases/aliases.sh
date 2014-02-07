@@ -40,7 +40,7 @@ sasw()  { export SSH_AUTH_SOCK=/tmp/ssh-agent-$1-screen }
 saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 
 # Tmux
-alias ks='tmux kill-session'
+alias ks='tmux kill-server'
 alias ksp='tmux -S /tmp/tmux-pair-session kill-session'
 alias tnp='tmux -S /tmp/tmux-pair-session new'
 alias tap='tmux -S /tmp/tmux-pair-session attach'
