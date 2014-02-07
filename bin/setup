@@ -1,0 +1,1 @@
+bash -c "$(curl -s https://raw.github.com/brightbit/bin_setup/master/bin/setup)"
