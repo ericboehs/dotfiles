@@ -40,7 +40,6 @@ Bundle 'bufexplorer.zip'
 Bundle 'rking/ag.vim'
 Bundle 'majutsushi/tagbar'
 Bundle 'justinmk/vim-sneak'
-Bundle 'nelstrom/vim-markdown-folding'
 
 " Language
 Bundle 'vim-ruby/vim-ruby'
