@@ -33,7 +33,7 @@ export REPORTTIME=4
 export TIMEFMT="%*Es total, %U user, %S system, %P cpu"
 
 # Speed up escape a little
-export KEYTIMEOUT=20
+export KEYTIMEOUT=50
 
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
