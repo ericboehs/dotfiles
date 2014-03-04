@@ -7,6 +7,7 @@ $if mode=vi
   set keymap vi-insert
   "hhh": vi-movement-mode
   "jj": vi-movement-mode
+  "jk": vi-movement-mode
   "kkk": vi-movement-mode
   "lll": vi-movement-mode
 $endif

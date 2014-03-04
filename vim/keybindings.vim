@@ -41,6 +41,8 @@ endif
 inoremap hhh <Esc>
 " Remap jj to Esc in insert mode
 inoremap jj <Esc>
+" Remap jk to Esc in insert mode
+inoremap jk <Esc>
 " Remap kkk to Esc in insert mode
 inoremap kkk <Esc>
 " Remap lll to Esc in insert mode

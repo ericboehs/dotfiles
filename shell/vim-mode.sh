@@ -7,6 +7,8 @@ bindkey -M vicmd v edit-command-line
 bindkey -M viins 'hhh' vi-cmd-mode
 # Map jj to vim-cmd-mode
 bindkey -M viins 'jj' vi-cmd-mode
+# Map jk to vim-cmd-mode
+bindkey -M viins 'jk' vi-cmd-mode
 # Map kk to vim-cmd-mode
 bindkey -M viins 'kkk' vi-cmd-mode
 # Map ll to vim-cmd-mode

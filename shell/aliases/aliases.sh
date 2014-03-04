@@ -6,7 +6,7 @@ db=/Volumes/Dropbox/Dropbox
 alias fu='fresh update'
 
 # Edit dotfiles
-alias d='(cd ~/.dotfiles && vim && gad && gcav && glr && gp) && fresh && . ~/.zshrc'
+alias d='(cd ~/.dotfiles && vim && gad && gca && glr && gp) && fresh && . ~/.zshrc'
 alias so='. ~/.zshrc'
 
 # Edit brightbit/guides #TODO: Find a better place for this as the git aliases aren't available yet
