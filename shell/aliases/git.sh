@@ -40,6 +40,7 @@ alias gacpr='git add . && git commit -av && git push -u && hub pull-request'
 
 alias gco='git checkout'
 alias gcom='git checkout master'
+alias gcod='git checkout develop'
 alias gcl='git clone'
 alias gb='git branch'
 alias gba='git branch -a'
