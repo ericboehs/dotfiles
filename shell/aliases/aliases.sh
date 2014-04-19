@@ -32,8 +32,8 @@ alias cl=clear
 alias ee='eval $(cat .env)'
 alias json="python -mjson.tool"
 alias xml="xmllint --format -"
+alias hn='noglob hcl note'
 kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') }
-hn(){ hcl note "$1" } # Harvest (time tracking)
 
 ## Used in a blue moon
 # tmux ssh agent forwarding hack
