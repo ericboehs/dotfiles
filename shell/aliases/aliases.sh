@@ -12,6 +12,7 @@ alias so='. ~/.zshrc'
 # Edit brightbit/guides #TODO: Find a better place for this as the git aliases aren't available yet
 function bg(){ (cd ~/Code/guides && vim && git checkout -b ${1:=$USER-$(date|md5)} && git add . && git commit -av && git pull --rebase origin && git push -u && git pull-request) }
 
+
 # Use color in grep
 alias grep='grep --color=auto'
 
@@ -32,6 +33,7 @@ alias ee='eval $(cat .env)'
 alias json="python -mjson.tool"
 alias xml="xmllint --format -"
 kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') }
+hn(){ hcl note "$1" } # Harvest (time tracking)
 
 ## Used in a blue moon
 # tmux ssh agent forwarding hack
