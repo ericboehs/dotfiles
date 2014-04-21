@@ -7,8 +7,8 @@ function! ColorColumnAtTextWidth(column)
   endif
 endfunction
 
-" Set colorcolumn to the current textwidth or fallback to 140
-autocmd BufWinEnter * call ColorColumnAtTextWidth(140)
+" Set colorcolumn to the current textwidth or fallback to 80
+autocmd BufWinEnter * call ColorColumnAtTextWidth(80)
 
 " Quit help easily
 function! QuitWithQ()
