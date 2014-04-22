@@ -9,6 +9,9 @@ rbv () { brew switch ruby $(brew switch ruby list 2>&1 |tail -1|cut -d\  -f3-|tr
 # Lookup gem's latest version number
 gemv() { gem sea -r "^$1$"|tail -1|cut -f2 -d' '|tr -d '()' }
 
+# Gems
+alias bp='bundle exec gem pristine'
+
 # Rails
 alias tlog='tail -f log/development.log'
 alias ttr='touch tmp/restart.txt'
