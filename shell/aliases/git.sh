@@ -64,5 +64,5 @@ alias gsu="git submodule update --init --recursive"
 
 alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELOG*'
 
-alias yolo='git commit -a --amend --no-edit && git push --force-with-lease'
+alias yolo='git commit --amend --no-edit && git push --force-with-lease'
 function unyolo() { git checkout master && git branch -D $1 && git remote update origin && git checkout $1 }
