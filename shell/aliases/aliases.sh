@@ -47,6 +47,14 @@ alias ksp='tmux -S /tmp/tmux-pair-session kill-session'
 alias tnp='tmux -S /tmp/tmux-pair-session new'
 alias tap='tmux -S /tmp/tmux-pair-session attach'
 
+# Tmux + Vim
+vo(){
+  file="$@"
+  TPANE=$(tmux list-panes -s -F '#{window_index}.#{pane_index} #{pane_current_command}' | grep Vim | head -1 | cut -f 1 -d ' ')
+  tmux send-keys -t $TPANE ":o $file" "C-j"
+}
+vos(){ vo $@ && tmux select-window -t $(echo $TPANE|cut -f1 -d.) && tmux select-pane -t $TPANE }
+
 # OS X
 # This only prompts for keychain access if you have an https credential configured in your .gitconfig as this is the only time I know of
 # that one would need to use this command. See: https://help.github.com/articles/which-remote-url-should-i-use
