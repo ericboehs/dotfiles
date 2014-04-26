@@ -8,6 +8,7 @@ alias gadu='git add -u .'
 alias gap='git add -p'
 alias gapc='git add -p && git commit -v'
 alias gapcp='git add -p && git commit -v && git push -u'
+alias gapcpr='git add -p && git commit -v && git push -u && hub pull-request'
 
 alias gl='git pull'
 alias glr='git pull --rebase'
