@@ -20,7 +20,7 @@ alias grb='git rebase'
 alias grbm='git rebase master'
 alias grba='git rebase --abort'
 alias grbc='git rebase --continue'
-alias grbim='git rebase -i HEAD~$(git log --pretty=oneline master.. | wc -l | tr -d '[:space:]')'
+alias grbim='git rebase -i HEAD~$(git log --pretty=oneline master.. | wc -l | tr -d "[:space:]")'
 
 alias gpr='hub pull-request'
 alias gprm='git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && hub pull-request'
