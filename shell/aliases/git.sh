@@ -22,7 +22,7 @@ alias grba='git rebase --abort'
 alias grbc='git rebase --continue'
 
 alias gpr='hub pull-request'
-alias gprm='git log master.. --format="%B" > .git/PULLREQ_EDITMSG'
+alias gprm='git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && hub pull-request'
 
 alias gd='git diff'
 alias gdh='git diff HEAD'
