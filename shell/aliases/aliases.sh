@@ -44,8 +44,9 @@ saswa() { ln -nfs /tmp/ssh-agent-$1-screen /tmp/ssh-agent-$USER-screen }
 # Tmux
 alias ks='tmux kill-server'
 alias ksp='tmux -S /tmp/tmux-pair-session kill-session'
-alias tnp='tmux -S /tmp/tmux-pair-session new'
-alias tap='tmux -S /tmp/tmux-pair-session attach'
+alias tp='tmux -S /tmp/tmux-pair-session new -s pair || tmux -S /tmp/tmux-pair-session attach -t pair'
+alias tpr='tmux -S /tmp/tmux-pair-session new -t pair -s rogue || tmux -S /tmp/tmux-pair-session attach -t rogue'
+alias tprk='tmux -S /tmp/tmux-pair-session kill-session -t rogue'
 
 # Tmux + Vim
 vo(){
