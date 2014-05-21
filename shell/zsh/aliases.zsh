@@ -19,4 +19,4 @@ alias -g COL='| tail +2 | sed "s/@$//" | sed "s/[0-9]\ $//" | sed "s/[0-9]$//" |
 function wt() { while; do $*; sleep 1; clear; done }
 
 # Unti command returns 0, do command, clear, sleep
-function ut() { clear && until $*; do echo 'Command failed. Trying again.'; done }
+function ut() { clear && until $*; do sleep 1; clear; done }
