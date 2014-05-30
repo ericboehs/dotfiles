@@ -1,6 +1,8 @@
 " Yank and put system pasteboard with <Leader>y/p.
 noremap <Leader>y "*y
-noremap <Leader>Y "*y$
+" noremap <Leader>Y "*y$
+" Yank to ~/bin/rpbcopy. See: http://seancoates.com/blogs/remote-pbcopy
+noremap <Leader>Y "ry:call system('~/bin/rpbcopy', @r)<cr><cr>
 nnoremap <Leader>yy "*yy
 noremap <Leader>p "*p
 noremap <Leader>P "*P
