@@ -66,6 +66,8 @@ alias gruo='git remote update origin'
 
 alias gsu="git submodule update --init --recursive"
 
+alias gfo="git fetch origin"
+
 alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELOG*'
 
 alias yolo='git commit --amend --no-edit && git push --force-with-lease'
