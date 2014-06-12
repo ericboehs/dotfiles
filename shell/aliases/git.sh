@@ -14,6 +14,7 @@ alias gl='git pull'
 alias glr='git pull --rebase'
 
 alias gp='git push'
+alias gpf='git push --force-with-lease'
 alias gpu='git push -u'
 
 alias grb='git rebase'
