@@ -1,11 +1,11 @@
 ## Pipe Aliases (Global)
+alias -g RCL=" > .git/last_pr_output | tail -1 | tr -d '\\n' | rpbcopy && cat .git/last_pr_output && rm .git/last_pr_output"
 alias -g L='|less'
 alias -g G='|grep'
 alias -g T='|tail'
 alias -g H='|head'
 alias -g W='|wc -l'
 alias -g S='|sort'
-alias -g K='|ruby -e "require %Q(open-uri); puts URI::encode STDIN.read" | while read i; do kiku $i; done'
 alias -g V='|view -'
 
 # Looks for "2 points" then sums STDIN on the index of the integer (column); only works for single digit points (0, 2, 4, 8)
