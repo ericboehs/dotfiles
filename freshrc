@@ -71,3 +71,6 @@ fresh config/powerline --file=~/.config/powerline/
 fresh Lokaltog/powerline font --file=~/.fonts/
 fresh Lokaltog/powerline-fonts SourceCodePro --file=~/.fonts/
 fresh Lokaltog/powerline powerline/bindings/tmux/powerline.conf --file=~/.tmux.conf
+
+# Fuzzy finder for shell
+fresh junegunn/fzf . --file=~/.fzf/

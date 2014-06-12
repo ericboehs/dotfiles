@@ -38,6 +38,9 @@ export KEYTIMEOUT=50
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets pattern cursor root)
 source ~/.fresh/build/vendor/zsh-syntax-highlighting.zsh
 
+# Add fuzzy finder for shell
+source ~/.fzf.zsh
+
 # Reset $PATH due to a bug in OS X; See: https://github.com/sstephenson/rbenv/issues/369#issuecomment-33156619 and thread
 [[ -x /usr/libexec/path_helper ]] && PATH='' && eval $(/usr/libexec/path_helper -s)
 
