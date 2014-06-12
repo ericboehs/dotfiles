@@ -57,6 +57,7 @@ alias prune='git remote prune origin'
 alias g='git status'
 alias gg='git lg'
 alias ggg='git ll'
+alias ggh='git lg | head'
 
 gra() { git remote add ${2:-"origin"} $1 }
 grah() { git remote add $2 git@heroku.com:$1.git }
