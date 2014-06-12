@@ -14,5 +14,11 @@ alias bp='bundle exec gem pristine'
 
 # Rails
 alias tlog='tail -f log/development.log'
-alias ttr='touch tmp/restart.txt'
-alias bs='bin/setup'
+alias rl='rails'
+alias rg='rails g'
+alias rgm='rails g migration'
+
+# Rake
+alias rk='rake'
+alias rkn='rake notes'
+alias rdm='rake db:migrate'
