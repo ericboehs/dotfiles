@@ -28,8 +28,5 @@ bindkey '\e[3~' delete-char
 
 bindkey '^[^N' newtab
 
-# Use incremental search
-# bindkey "^R" history-incremental-search-backward
-
 # Remap Ctrl-S to Ctrl-- for stopping termianl output
 stty start  stop 
