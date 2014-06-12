@@ -20,3 +20,5 @@ function wt() { while; do $*; sleep 1; clear; done }
 
 # Unti command returns 0, do command, clear, sleep
 function ut() { clear && until $*; do sleep 1; clear; done }
+
+alias .z='. ~/.zshrc'
