@@ -49,6 +49,7 @@ alias gcod='git checkout develop'
 alias gcl='git clone'
 alias gb='git branch'
 alias gba='git branch -a'
+alias gbdl='git branch -D @{-1}'
 alias gbwho="git branch --remote | grep -v master | grep origin | xargs -n1 -J {} sh -c 'git log \$0 | head -2 | tail -1|cut -f2 -d\\  && echo  \$0'|paste -d\" \" - - | sort"
 alias gbwhov="git for-each-ref --sort=-committerdate --format='%(committerdate) %(authorname) %(refname)' refs/remotes/origin/|grep -e \".\$@\"|head -n 10"
 alias gbmd='git branch --merged | grep -v "\*" | xargs -n 1 git branch -d'
