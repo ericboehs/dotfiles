@@ -78,3 +78,5 @@ alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELO
 
 alias yolo='git commit --amend --no-edit && git push --force-with-lease'
 function unyolo() { git checkout master && git branch -D $1 && git remote update origin && git checkout $1 }
+
+function eb() { git checkout -b eb-$1}
