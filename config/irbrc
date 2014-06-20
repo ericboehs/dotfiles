@@ -2,9 +2,6 @@
 
 ARGV.concat [ "--readline", "--prompt-mode", "simple" ]
 
-# Clear custom vim pager
-ENV['PAGER']=nil
-
 IRB.conf[:AUTO_INDENT]  = true
 IRB.conf[:EVAL_HISTORY] = 1000000
 IRB.conf[:SAVE_HISTORY] = 1000000
