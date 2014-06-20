@@ -39,6 +39,20 @@ if has('mac') && ($TERM == 'xterm-256color' || $TERM == 'screen-256color')
   map <Esc>[24~ <F12>
 endif
 
+" Add Option-N mappings for tab switching (in iTerm use left option as +Esc)
+map <Esc>] gt
+map <Esc>[ gT
+map <Esc>1 1gt
+map <Esc>2 2gt
+map <Esc>3 3gt
+map <Esc>4 4gt
+map <Esc>5 5gt
+map <Esc>6 6gt
+map <Esc>7 7gt
+map <Esc>8 8gt
+map <Esc>9 9gt
+map <Esc>0 :tablast<CR>
+
 " Remap hhh to Esc in insert mode
 inoremap hhh <Esc>
 " Remap jj to Esc in insert mode
