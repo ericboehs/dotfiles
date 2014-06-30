@@ -20,6 +20,11 @@ alias ghiw='ghi list -w'
 alias ghil='ghi list'
 alias ghilw='ghi list -w'
 
+alias ghp='ghi list -p'
+alias ghpc='ghi list -p -s closed'
+alias ghpv='ghi list -p -v'
+alias ghpcv='ghi list -p -s closed -v'
+
 alias ghis='ghi show'
 alias ghisw='ghi show -w'
 
