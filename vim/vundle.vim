@@ -19,6 +19,7 @@ Bundle 'jingweno/vimux-zeus'
 " Visual
 " Bundle 'Yggdroot/indentLine' "NOTE: Disabling due to poor performance. See: https://github.com/Yggdroot/indentLine/issues/48
 Bundle 'bling/vim-airline'
+Bundle 'edkolev/promptline.vim'
 " Bundle 'airblade/vim-gitgutter' "NOTE: Disabling for performance testing
 
 " Editing

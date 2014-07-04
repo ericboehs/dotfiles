@@ -41,6 +41,9 @@ fresh-options
 # completions: common completions
 fresh zsh-users/zsh-completions src --file=completion/
 
+# completions for hk (heroku command)
+fresh heroku/hk contrib/hk-zsh-completion.sh --file=completion/_hk
+
 # syntax-highlighting: fish-like syntax highlighting
 fresh zsh-users/zsh-syntax-highlighting zsh-syntax-highlighting.zsh --file=vendor/zsh-syntax-highlighting.zsh
 fresh zsh-users/zsh-syntax-highlighting highlighters --file=vendor/highlighters/
@@ -61,6 +64,7 @@ fresh-options
 
 # Tmux
 fresh config/tmuxinator  --file=~/.tmuxinator/
+fresh seebi/tmux-colors-solarized tmuxcolors-dark.conf --file=~/.tmux.conf
 
 # powerline: the ultimate statusline
 fresh Lokaltog/powerline scripts/powerline --bin

@@ -51,7 +51,6 @@ map <Esc>6 6gt
 map <Esc>7 7gt
 map <Esc>8 8gt
 map <Esc>9 9gt
-map <Esc>0 :tablast<CR>
 
 " Remap hhh to Esc in insert mode
 inoremap hhh <Esc>
