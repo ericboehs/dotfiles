@@ -62,7 +62,6 @@ fresh-options
 # Tmux
 fresh config/tmuxinator  --file=~/.tmuxinator/
 fresh config/tmuxline.conf --file=~/.tmuxline.conf
-fresh seebi/tmux-colors-solarized tmuxcolors-dark.conf --file=~/.tmux.conf
 
 # Powerline Fonts
 fresh Lokaltog/powerline font --file=~/.fonts/
