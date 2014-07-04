@@ -30,6 +30,7 @@ Bundle 'tpope/vim-unimpaired'
 Bundle 'Shougo/neocomplcache'
 Bundle 'Align'
 Bundle 'sjl/gundo.vim'
+Bundle 'tommcdo/vim-exchange'
 
 " Navigation
 Bundle 'scrooloose/nerdtree'
