@@ -15,16 +15,10 @@ export CLICOLOR=1
 # Set Python Path
 export PYTHONPATH="$HOME/.local/lib/python"
 
-# TODO: Remove old configs that you don't use anymore
-# Set current working directory for tmux prompt (powerline)
-#export PS1="$PS1"'$([ -n "$TMUX" ] && tmux setenv TMUXPWD_$(tmux display -p "#D" | tr -d %) "$PWD")'
-
 export NODE_PATH="/usr/local/lib/node_modules"
 
 # For Android emulator from homebrew
 export ANDROID_HOME=/usr/local/opt/android-sdk
-
-#export PAGER=less
 
 # Shaves about ~1s off Rails boot time
 export RUBY_GC_HEAP_INIT_SLOTS=1000000

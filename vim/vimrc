@@ -53,9 +53,6 @@ set undofile
 set undolevels=1000
 set undoreload=10000
 
-" Don't add the comment prefix when I hit enter or o/O on a comment line.
-set formatoptions-=or
-
 " Colorscheme
 syntax enable
 set background=dark

@@ -17,9 +17,3 @@ function! QuitWithQ()
   endif
 endfunction
 autocmd FileType help exe QuitWithQ()
-
-" Paste javascript in as coffee (run `npm install -g js2coffee` first)
-function! PasteAsCoffee()
-  :read !pbpaste | js2coffee
-endfunction
-:command! PasteAsCoffee :call PasteAsCoffee()
