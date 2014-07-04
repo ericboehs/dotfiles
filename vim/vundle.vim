@@ -8,16 +8,14 @@ Bundle 'tpope/vim-repeat'
 Bundle 'tpope/vim-speeddating'
 Bundle 'tpope/vim-bundler'
 Bundle 'tpope/vim-rake'
-Bundle 'wikitopian/hardmode'
 Bundle 'ReplaceWithRegister'
 Bundle 'itspriddle/vim-marked'
 
 " Tmux
 Bundle 'benmills/vimux'
-Bundle 'jingweno/vimux-zeus'
+Bundle 'edkolev/tmuxline.vim'
 
 " Visual
-" Bundle 'Yggdroot/indentLine' "NOTE: Disabling due to poor performance. See: https://github.com/Yggdroot/indentLine/issues/48
 Bundle 'bling/vim-airline'
 Bundle 'edkolev/promptline.vim'
 " Bundle 'airblade/vim-gitgutter' "NOTE: Disabling for performance testing
@@ -46,7 +44,6 @@ Bundle 'justinmk/vim-sneak'
 Bundle 'vim-ruby/vim-ruby'
 Bundle 'tpope/vim-git'
 Bundle 'tpope/vim-rails'
-Bundle 'tpope/vim-cucumber'
 Bundle 'tpope/vim-haml'
 Bundle 'tpope/vim-markdown'
 Bundle 'digitaltoad/vim-jade'
@@ -54,7 +51,6 @@ Bundle 'kchmck/vim-coffee-script'
 Bundle 'slim-template/vim-slim'
 Bundle 'itspriddle/vim-jquery'
 Bundle 'ap/vim-css-color'
-Bundle 't9md/vim-ruby-xmpfilter'
 Bundle 'vim-scripts/ruby-matchit'
 Bundle 'ecomba/vim-ruby-refactoring'
 

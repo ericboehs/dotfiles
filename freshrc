@@ -4,11 +4,8 @@
 
 # Initiate fresh so you can use this file
 fresh freshshell/fresh bin/fresh --bin
-#fresh freshshell/fresh contrib/source-build.sh --file=~/.zshrc
 
 ## Bins
-
-# Add all bins in local bin/
 fresh bin/\* --bin
 
 ## Config
@@ -64,17 +61,12 @@ fresh-options
 
 # Tmux
 fresh config/tmuxinator  --file=~/.tmuxinator/
+fresh config/tmuxline.conf --file=~/.tmuxline.conf
 fresh seebi/tmux-colors-solarized tmuxcolors-dark.conf --file=~/.tmux.conf
 
-# powerline: the ultimate statusline
-fresh Lokaltog/powerline scripts/powerline --bin
-#NOTE: Using ericboehs's powerline for his spotify tweak. See: https://github.com/Lokaltog/powerline/pull/699
-# fresh Lokaltog/powerline powerline --file=~/.local/lib/python/powerline/
-fresh ericboehs/powerline powerline --file=~/.local/lib/python/powerline/ --ref=f59f169
-fresh config/powerline --file=~/.config/powerline/
+# Powerline Fonts
 fresh Lokaltog/powerline font --file=~/.fonts/
 fresh Lokaltog/powerline-fonts SourceCodePro --file=~/.fonts/
-fresh Lokaltog/powerline powerline/bindings/tmux/powerline.conf --file=~/.tmux.conf
 
 # Fuzzy finder for shell
 fresh junegunn/fzf . --file=~/.fzf/
