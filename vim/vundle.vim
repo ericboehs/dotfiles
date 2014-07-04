@@ -14,6 +14,7 @@ Bundle 'itspriddle/vim-marked'
 " Tmux
 Bundle 'benmills/vimux'
 Bundle 'edkolev/tmuxline.vim'
+Bundle 'christoomey/vim-tmux-navigator'
 
 " Visual
 Bundle 'bling/vim-airline'
