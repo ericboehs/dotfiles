@@ -29,6 +29,7 @@ alias json="python -mjson.tool"
 alias xml="xmllint --format -"
 alias hn='noglob hcl note'
 y(){ echo \"$(history | tail -1 | cut -d ' ' -f3-)\" crits you for $RANDOM damage. }
+n(){ echo \"$(history | tail -1 | cut -d ' ' -f3-)\" crits you for $RANDOM damage. }
 kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') }
 
 # Tmux
