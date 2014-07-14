@@ -71,6 +71,7 @@ alias gsu='git submodule update --init --recursive'
 
 alias gf='git fetch'
 alias gfo='git fetch origin'
+alias gtfo='git fetch origin'
 
 alias gs='git stash'
 alias gsp='git stash pop'
