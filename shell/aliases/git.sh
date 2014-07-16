@@ -20,10 +20,11 @@ alias gpu='git push -u'
 gcopr() {
   [[ -e $GHI_NEXT_PR ]] || setnpr
   PR_ID=${1:=$GHI_NEXT_PR}
+  [[ -z $PR_ID ]] && echo "You must specify a PR id" && kill -INT $$
   git branch -D pr-$PR_ID 2>&1 | grep -v 'not found.'
-  git fetch origin || exit 1
-  git checkout master 2>&1 | grep -v "Already on 'master'" || exit 1
-  git fetch origin pull/$PR_ID/head:pr-$PR_ID || exit 1
+  git fetch origin || kill -INT $$
+  git checkout master 2>&1 | grep -v "Already on 'master'" || kill -INT $$
+  git fetch origin pull/$PR_ID/head:pr-$PR_ID || kill -INT $$
   BRANCH="$(git branch -a --contains pr-$PR_ID | grep -v pr-$PR_ID | tr -d '[:space:]' | cut -f3 -d/)"
   git branch -D $BRANCH 2>&1 | grep -v 'not found.'
   git branch -D pr-$PR_ID 1>/dev/null
