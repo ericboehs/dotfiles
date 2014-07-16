@@ -18,7 +18,7 @@ alias gpf='git push --force-with-lease'
 alias gpu='git push -u'
 
 alias gmnf='git merge --no-ff'
-alias gmnfo='git merge --no-ff origin/'
+gmnfo() { git merge --no-ff origin/$@ }
 
 alias grb='git rebase'
 alias grbm='git rebase master'
