@@ -66,6 +66,7 @@ alias gpr='hub pull-request && latestpr | rpbcopy'
 alias gprm='git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request && latestpr | rpbcopy'
 
 alias gd='git diff'
+alias gdm='git diff master..'
 alias gdh='git diff HEAD'
 alias gdh1='git diff HEAD~1'
 alias gdc='git diff --cached'
