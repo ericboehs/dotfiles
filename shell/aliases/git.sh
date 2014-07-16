@@ -17,8 +17,39 @@ alias gp='git push'
 alias gpf='git push --force-with-lease'
 alias gpu='git push -u'
 
+gcopr() {
+  git branch -D pr-$1 2>&1 | grep -v 'not found.'
+  git fetch origin || exit 1
+  git checkout master 2>&1 | grep -v "Already on 'master'" || exit 1
+  git fetch origin pull/$1/head:pr-$1 || exit 1
+  BRANCH="$(git branch -a --contains pr-$1 | grep -v pr-$1 | tr -d '[:space:]' | cut -f3 -d/)"
+  git branch -D $BRANCH 2>&1 | grep -v 'not found.'
+  git branch -D pr-$1 1>/dev/null
+  git checkout $BRANCH
+}
+
 alias gmnf='git merge --no-ff'
-gmnfo() { git merge --no-ff origin/$@ }
+gmb() {
+  git fetch origin && \
+  git checkout $1 && \
+  git checkout master && \
+  git merge --no-ff $1 && \
+  git push && \
+  git branch -D $1 && \
+  git push --delete origin $1 && \
+  git remote prune origin
+}
+
+gmpr() {
+  gcopr $1
+  git checkout master
+  git merge --no-ff -m "Merge pull request #$1 from $BRANCH" $BRANCH && (
+    git push
+    git branch -D $BRANCH
+    git push --delete origin $BRANCH
+    git remote prune origin
+  )
+}
 
 alias grb='git rebase'
 alias grbm='git rebase master'
@@ -48,7 +79,6 @@ alias gacpr='git add . && git commit -av && git push -u && hub pull-request && l
 
 alias gco='git checkout'
 alias gcom='git checkout master'
-gcopr() { git checkout master; git branch -D pr-$1 2>&1 | grep -v 'not found.'; git fetch origin pull/$1/head:pr-$1 && git checkout pr-$1 }
 alias gcl='git clone'
 alias gb='git branch'
 alias gba='git branch -a'
