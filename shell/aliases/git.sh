@@ -45,7 +45,7 @@ alias gacpr='git add . && git commit -av && git push -u && hub pull-request && l
 
 alias gco='git checkout'
 alias gcom='git checkout master'
-alias gcod='git checkout develop'
+gcopr() { git checkout master; git branch -D pr-$1 2>&1 | grep -v 'not found.'; git fetch origin pull/$1/head:pr-$1 && git checkout pr-$1 }
 alias gcl='git clone'
 alias gb='git branch'
 alias gba='git branch -a'
