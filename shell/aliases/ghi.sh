@@ -5,6 +5,8 @@ alias setcms='[[ -z $GHI_CURRENT_MILESTONE ]] && export GHI_CURRENT_MILESTONE=$(
 function prs() { ghi list $@ | grep '↑' --color=none }
 function myprs() { ghi list --mine $@ | grep '↑' --color=none }
 
+setnpr() { export GHI_NEXT_PR="$(prs | grep -vE "WIP|RTM" | awk '{print $1}' | head -1)" }
+
 alias ic='issues COL'
 function issues() { setcms; ghi list -M $GHI_CURRENT_MILESTONE $@ }
 

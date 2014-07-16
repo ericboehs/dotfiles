@@ -18,13 +18,15 @@ alias gpf='git push --force-with-lease'
 alias gpu='git push -u'
 
 gcopr() {
-  git branch -D pr-$1 2>&1 | grep -v 'not found.'
+  [[ -e $GHI_NEXT_PR ]] || setnpr
+  PR_ID=${1:=$GHI_NEXT_PR}
+  git branch -D pr-$PR_ID 2>&1 | grep -v 'not found.'
   git fetch origin || exit 1
   git checkout master 2>&1 | grep -v "Already on 'master'" || exit 1
-  git fetch origin pull/$1/head:pr-$1 || exit 1
-  BRANCH="$(git branch -a --contains pr-$1 | grep -v pr-$1 | tr -d '[:space:]' | cut -f3 -d/)"
+  git fetch origin pull/$PR_ID/head:pr-$PR_ID || exit 1
+  BRANCH="$(git branch -a --contains pr-$PR_ID | grep -v pr-$PR_ID | tr -d '[:space:]' | cut -f3 -d/)"
   git branch -D $BRANCH 2>&1 | grep -v 'not found.'
-  git branch -D pr-$1 1>/dev/null
+  git branch -D pr-$PR_ID 1>/dev/null
   git checkout $BRANCH
 }
 
@@ -41,9 +43,11 @@ gmb() {
 }
 
 gmpr() {
-  gcopr $1
+  [[ -e $GHI_NEXT_PR ]] || setnpr
+  PR_ID=${1:=$GHI_NEXT_PR}
+  gcopr $PR_ID
   git checkout master
-  git merge --no-ff -m "Merge pull request #$1 from $BRANCH" $BRANCH && (
+  git merge --no-ff -m "Merge pull request #$PR_ID from $BRANCH" $BRANCH && (
     git push
     git branch -D $BRANCH
     git push --delete origin $BRANCH
