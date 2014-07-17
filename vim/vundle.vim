@@ -1,4 +1,4 @@
-" Misc.
+" Misc
 Bundle 'kana/vim-textobj-user'
 Bundle 'kana/vim-textobj-indent'
 Bundle 'rhysd/vim-textobj-ruby'
@@ -17,27 +17,22 @@ Bundle 'edkolev/tmuxline.vim'
 Bundle 'christoomey/vim-tmux-navigator'
 
 " Visual
-Bundle 'bling/vim-airline'
+Bundle 'itchyny/lightline.vim'
 Bundle 'edkolev/promptline.vim'
-" Bundle 'airblade/vim-gitgutter' "NOTE: Disabling for performance testing
 
 " Editing
 Bundle 'godlygeek/tabular'
-Bundle 'twe4ked/vim-diff-toggle'
 Bundle 'tomtom/tcomment_vim'
 Bundle 'tpope/vim-surround'
 Bundle 'bronson/vim-trailing-whitespace'
 Bundle 'tpope/vim-unimpaired'
 Bundle 'Shougo/neocomplcache'
-Bundle 'Align'
 Bundle 'sjl/gundo.vim'
 Bundle 'tommcdo/vim-exchange'
 
 " Navigation
-Bundle 'scrooloose/nerdtree'
 Bundle 'kien/ctrlp.vim'
 Bundle 'jasoncodes/ctrlp-modified.vim'
-Bundle 'bufexplorer.zip'
 Bundle 'rking/ag.vim'
 Bundle 'majutsushi/tagbar'
 Bundle 'justinmk/vim-sneak'
