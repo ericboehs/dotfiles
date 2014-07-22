@@ -17,6 +17,7 @@ alias tlog='tail -f log/development.log'
 alias rl='rails'
 alias rg='rails g'
 alias rgm='rails g migration'
+alias ss='spring stop'
 
 # Rake
 alias rk='rake'
