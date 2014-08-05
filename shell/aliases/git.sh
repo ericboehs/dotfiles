@@ -17,6 +17,10 @@ alias gp='git push'
 alias gpf='git push --force-with-lease'
 alias gpu='git push -u'
 
+alias gchp='git cherry-pick'
+alias gchpc='git cherry-pick --continue'
+alias gchpa='git cherry-pick --skip'
+
 gcopr() {
   [[ -e $GHI_NEXT_PR ]] || setnpr
   PR_ID=${1:=$GHI_NEXT_PR}
@@ -60,6 +64,7 @@ alias grb='git rebase'
 alias grbm='git rebase master'
 alias grba='git rebase --abort'
 alias grbc='git rebase --continue'
+alias grbs='git rebase --skip'
 alias grbim='git rebase -i HEAD~$(git log --pretty=oneline master.. | wc -l | tr -d "[:space:]")'
 
 alias gpr='hub pull-request && latestpr | rpbcopy'
