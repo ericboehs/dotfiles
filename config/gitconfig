@@ -1,6 +1,5 @@
 [include]
   path = ~/.gitconfig.private
-
 [color]
   ui = auto
   diff = auto
@@ -25,4 +24,4 @@
   lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
   wdiff = diff --color-words
 [hub]
-	protocol = https
+  protocol = https
