@@ -124,6 +124,7 @@ alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELO
 
 alias yolo='git commit --amend --no-edit && git push --force-with-lease'
 function unyolo() { git checkout master && git branch -D $1 && git remote update origin && git checkout $1 }
+alias gapyolo='gap && yolo'
 
 alias latestpr='curl -s "https://api.github.com/repos/$(git config --get remote.origin.url | cut -d "/" -f4-)/pulls?state=open&access_token=$(git config ghi.token)" | jq ".[0]._links.html.href" | tr -d \"\\n'
 
