@@ -19,7 +19,7 @@ alias gpu='git push -u'
 
 alias gchp='git cherry-pick'
 alias gchpc='git cherry-pick --continue'
-alias gchpa='git cherry-pick --skip'
+alias gchpa='git cherry-pick --abort'
 
 gcopr() {
   [[ -e $GHI_NEXT_PR ]] || setnpr
