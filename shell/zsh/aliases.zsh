@@ -7,6 +7,7 @@ alias -g H='|head'
 alias -g W='|wc -l'
 alias -g S='|sort'
 alias -g V='|view -'
+alias -g Y='[[ $? -eq 0 ]] &&'
 
 # Looks for "Points: 2" from STDIN then sums capture from match
 alias -g POINTS="|ruby -e 'p STDIN.reduce(0){|sum, l| m = l.match /Points: ([0-9])+/; (m ? m.captures[0].to_i : 0) + sum}'"
