@@ -7,7 +7,6 @@ alias fu='fresh update'
 
 # Edit dotfiles
 alias d='(cd ~/.dotfiles && vim && gad && gca && glr && gp) && fresh && . ~/.zshrc'
-alias so='. ~/.zshrc'
 
 # Use color in grep
 alias grep='grep --color=auto'
