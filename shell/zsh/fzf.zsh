@@ -57,7 +57,7 @@ bindkey '\ec' fzf-cd-widget
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
-  LBUFFER=$(fc -l 1 | cut -f 3- -d' ' | fzf -e +s +m)
+  LBUFFER=$(fc -l 1 | cut -f 3- -d' ' | awk ' !x[$0]++' | fzf -e +s +m)
   zle redisplay
 }
 zle     -N   fzf-history-widget
