@@ -27,7 +27,7 @@ alias cl=clear
 alias json="python -mjson.tool"
 alias xml="xmllint --format -"
 alias hn='noglob hcl note'
-alias define='echo "Connecting to dict.org:2628 via nc..."; echo "Usage: define wn onomatopoeia"; nc dict.org 2628'
+define(){ echo "DEFINE !wn $@" | nc dict.org 2628 }
 y(){ echo \"$(history | tail -1 | cut -d ' ' -f3-)\" crits you for $RANDOM damage. }
 n(){ echo \"$(history | tail -1 | cut -d ' ' -f3-)\" crits you for $RANDOM damage. }
 kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') }
