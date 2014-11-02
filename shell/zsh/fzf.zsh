@@ -15,7 +15,7 @@ export -f fzf > /dev/null
 # CTRL-T - Paste the selected file path(s) into the command line
 __fsel() {
   set -o nonomatch
-  find * -path '*/\.*' -prune \
+  command find * -path '*/\.*' -prune \
     -o -type f -print \
     -o -type d -print \
     -o -type l -print 2> /dev/null | fzf -m | while read item; do
@@ -48,7 +48,7 @@ bindkey '^T' fzf-file-widget
 
 # ALT-C - cd into the selected directory
 fzf-cd-widget() {
-  cd "${$(set -o nonomatch; find * -path '*/\.*' -prune \
+  cd "${$(set -o nonomatch; command find -L * -path '*/\.*' -prune \
           -o -type d -print 2> /dev/null | fzf):-.}"
   zle reset-prompt
 }
@@ -57,7 +57,9 @@ bindkey '\ec' fzf-cd-widget
 
 # CTRL-R - Paste the selected command from history into the command line
 fzf-history-widget() {
+  # LBUFFER=$(fc -l 1 | fzf +s +m -n2..,.. | sed "s/ *[0-9*]* *//")
   LBUFFER=$(fc -l 1 | cut -f 3- -d' ' | awk ' !x[$0]++' | fzf -e +s +m)
+
   zle redisplay
 }
 zle     -N   fzf-history-widget
