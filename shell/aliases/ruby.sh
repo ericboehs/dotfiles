@@ -18,6 +18,7 @@ alias rl='rails'
 alias rg='rails g'
 alias rgm='rails g migration'
 alias ss='spring stop'
+alias ssr='SKIP_SLOW=true rake'
 
 # Rake
 alias rk='rake'
