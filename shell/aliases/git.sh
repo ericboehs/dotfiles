@@ -21,6 +21,8 @@ alias gchp='git cherry-pick'
 alias gchpc='git cherry-pick --continue'
 alias gchpa='git cherry-pick --abort'
 
+alias vgu='vim $(git ls-files --unmerged | cut -f2 | sort -u)'
+
 gcopr() {
   [[ -e $GHI_NEXT_PR ]] || setnpr
   PR_ID=${1:=$GHI_NEXT_PR}
