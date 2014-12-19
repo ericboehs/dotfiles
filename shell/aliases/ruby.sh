@@ -1,5 +1,5 @@
 # Install essential gems
-alias gemessentials='gem install bundler pry awesome_print rails'
+alias gemessentials='gem update -f --system && gem update -f && gem install bundler pry awesome_print rails'
 
 # bundle exec
 alias b='bundle'
