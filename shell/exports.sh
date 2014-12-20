@@ -2,7 +2,7 @@
 export EDITOR='vim'
 
 # Set PAGERs
-export PAGER="vim -c '%sm/\\e.\\{-}m//g' -c 'set ft=diff' -c 'normal gg' -c 'map q :q!<CR>' -c 'Fix' -"
+export PAGER="vim -c ':silent! %sm/\\e.\\{-}m//g' -c 'set ft=diff' -c 'normal gg' -c 'map q :q!<CR>' -c 'Fix' -"
 export MANPAGER="sh -c \"col -bx | vim -c 'set ft=man nolist' -c 'map q :q!<CR>' -MR -\""
 export GHI_PAGER="less"
 
