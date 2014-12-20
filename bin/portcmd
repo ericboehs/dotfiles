@@ -1,0 +1,9 @@
+#! /bin/bash
+
+if [ $# -ne 1 ]; then
+	echo "portcmd -- Lists command of process using the specified port."
+	echo "usage: portcmd <port>"
+	exit
+fi
+
+lsof -nPti ":$@" | xargs ps -o command= -p
