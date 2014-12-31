@@ -1,3 +1,21 @@
+# Enhanced options
+set completion-ignore-case On
+set completion-map-case On
+set visible-stats On
+set mark-symlinked-directories On
+set skip-completed-text On
+
+# Tab completion
+set show-all-if-ambiguous on
+set completion-ignore-case on
+set completion-map-case on
+
+# UTF-8 support
+set meta-flag on
+set input-meta on
+set output-meta on
+set convert-meta off
+
 # Enable vi mode for readline inputs with forceful directions
 set editing-mode vi
 $if mode=vi
@@ -11,12 +29,6 @@ $if mode=vi
   "kkk": vi-movement-mode
   "lll": vi-movement-mode
 $endif
-
-# UTF-8 support
-set meta-flag on
-set input-meta on
-set output-meta on
-set convert-meta off
 
 # By default up/down are bound to previous-history
 # and next-history respectively. The following does the
@@ -48,11 +60,7 @@ set convert-meta off
 "\C-e": end-of-line
 "\C-f": forward-char
 "\C-k": kill-line
-
-# Turn on tab completion
-#bind \\t rl_complete
-
-set show-all-if-ambiguous on
+"\C-l": clear-screen
 
 # Include system wide settings which are ignored
 # by default if one has their own .inputrc
