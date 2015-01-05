@@ -1,6 +1,5 @@
 # directory aliases
 # use like: ls ~src OR ~src OR du -h ~src
-c=~/Code
 db=/Volumes/Dropbox/Dropbox
 
 alias fu='fresh update'
@@ -12,6 +11,7 @@ alias d='(cd ~/.dotfiles && vim && gad && gca && glr && gp) && fresh && . ~/.zsh
 alias grep='grep --color=auto'
 
 # ls
+c() { cd $@ && l }
 alias l="ls -lahF"
 alias ll="ls -l"
 alias la='ls -A'
