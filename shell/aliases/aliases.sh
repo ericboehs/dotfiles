@@ -11,7 +11,7 @@ alias d='(cd ~/.dotfiles && vim && gad && gca && glr && gp) && fresh && . ~/.zsh
 alias grep='grep --color=auto'
 
 # ls
-c() { cd $@ && l }
+c() { cd $@ && ls -lahF }
 alias l="ls -lahF"
 alias ll="ls -l"
 alias la='ls -A'
