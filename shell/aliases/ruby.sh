@@ -16,7 +16,7 @@ gemv() { gem sea -r "^$1$"|tail -1|cut -f2 -d' '|tr -d '()' }
 alias bp='bundle exec gem pristine'
 
 # Rails
-alias tlog='tail -f log/development.log'
+alias devlogs='tail -f ~/Code/*/*/log/development.log'
 alias rl='rails'
 alias rg='rails g'
 alias rgm='rails g migration'
