@@ -22,6 +22,7 @@ alias rg='rails g'
 alias rgm='rails g migration'
 alias ss='spring stop'
 alias ssr='SKIP_SLOW=true rake'
+alias ttr='touch tmp/restart.txt'
 
 # Rake
 alias rk='rake'
