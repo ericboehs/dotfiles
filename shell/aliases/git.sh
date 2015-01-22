@@ -74,10 +74,9 @@ alias gprm='git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && g
 
 alias gd='git diff'
 alias gdm='git diff master..'
-alias gdh='git diff HEAD'
-alias gdh1='git diff HEAD~1'
 alias gdc='git diff --cached'
 alias gdt='git difftool'
+gdh() { git diff HEAD~${1:=0} }
 
 alias gc='git commit -v'
 alias gca='git commit -av'
