@@ -31,7 +31,7 @@ alias allowpair='chmod 777 /tmp/tmux-pair-session'
 define(){ echo "DEFINE !wn $@" | nc dict.org 2628 }
 y(){ echo \"$(history | tail -1 | cut -d ' ' -f3-)\" crits you for $RANDOM damage. }
 n(){ echo \"$(history | tail -1 | cut -d ' ' -f3-)\" crits you for $RANDOM damage. }
-kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') && chmod 770 /tmp/tmux-pair-session }
+kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') ; chmod 770 /tmp/tmux-pair-session }
 killsshtty(){ kill $(ps auxww | grep ssh | grep tty| awk '{print $2}') }
 noh(){ nohup $* >/dev/null 2>&1 & }
 
