@@ -13,6 +13,9 @@ fresh-options --file
   fresh config/\*
 fresh-options
 
+## SSH Config
+fresh config/ssh/config  --file=~/.ssh/config
+
 ## Shell
 
 # Add all aliases via local shell/aliases/*
