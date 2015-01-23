@@ -79,15 +79,10 @@ alias gdt='git difftool'
 gdh() { git diff HEAD~${1:=0} }
 
 alias gc='git commit -v'
-alias gca='git commit -av'
-alias gcaa='git commit --amend'
+alias gca='git commit --amend'
 alias gcane='git commit --amend --no-edit'
-alias gcaane='git commit -a --amend --no-edit'
-alias gcap='git commit -av && git push -u'
-alias gcapr='git commit -av && git push -u && hub pull-request && latestpr | rpbcopy'
 alias gcp='git commit -v && git push -u'
 alias gcpr='git commit -v && git push -u && hub pull-request && latestpr | rpbcopy'
-alias gacpr='git add . && git commit -av && git push -u && hub pull-request && latestpr | rpbcopy'
 
 alias gco='git checkout'
 alias gcom='git checkout master'
