@@ -1,0 +1,13 @@
+#!/bin/bash
+kill -SIGINFO $(pgrep -nf 'ping 8.8.8.8')
+
+last_ping_info=$(grep 'received' /var/log/ping.log | tail -1)
+
+packets_received=$(echo $last_ping_info | cut -f1 -d'(' |tr -d '[a-z][:space:]')
+packet_loss_info=$(echo $last_ping_info | cut -f4 -d ' ' |tr -d '()%')
+latency_info=$(echo $last_ping_info | cut -f3 -d/ |tr -d 'avg ')
+
+packet_loss=$(echo "($packet_loss_info-100)*-1" | bc)
+latency=$(echo "$latency_info/1" |bc)
+
+echo "${latency}ms : $packets_received ($packet_loss%)"
