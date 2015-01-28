@@ -1,0 +1,5 @@
+IdentityFile ~/.ssh/id_rsa
+IdentityFile ~/.ssh/id_rsa.armada.private
+
+Host box.erc.bz
+  RemoteForward 2224 localhost:8377
