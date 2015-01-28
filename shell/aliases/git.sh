@@ -117,7 +117,7 @@ alias gs='git stash'
 alias gsp='git stash pop'
 
 alias changelog='git log $(git log -1 --format=%H -- CHANGELOG*)..; cat CHANGELOG*'
-worklog() { git log --date=relative --reverse --since "${*:-"1 Saturday Ago"}" --author="$(git config --get user.name)" --format='"%cI","%B"' }
+worklog() { git log --date=relative --reverse --since "${*:-"1 Saturday Ago"}" --author="$(git config --get user.name)" --format='"%cI","%B"' --no-merges }
 # Assumes CSV from STDIN with first field as date and second field as an entry (pairs with worklog)
 alias csv_by_date="ruby -rcsv -e 'e=CSV(\$stdin).reduce({}){|e,r|k=r[0][0..9];e[k]=(e[k]||[])+[r[1]];e}; e.each{|d,l| puts d; l.each{|l| puts l};puts}'"
 
