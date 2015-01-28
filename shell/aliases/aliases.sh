@@ -5,7 +5,7 @@ db=/Volumes/Dropbox/Dropbox
 alias fu='fresh update'
 
 # Edit dotfiles
-alias d='(cd ~/.dotfiles && vim && gad && gca && glr && gp) && fresh && . ~/.zshrc'
+alias d='(cd ~/.dotfiles && vim && gad && gc -a && glr && gp) && fresh && . ~/.zshrc'
 
 # Use color in grep
 alias grep='grep --color=auto'
