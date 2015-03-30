@@ -12,6 +12,7 @@ alias gapcpr='git add -p && git commit -v && git push -u && hub pull-request && 
 
 alias gl='git pull --prune'
 alias glr='git pull --rebase --prune'
+alias glrd='git pull --rebase --prune && gbmd'
 
 alias gp='git push'
 alias gpf='git push --force-with-lease'
