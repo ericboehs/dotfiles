@@ -10,8 +10,8 @@ alias gapc='git add -p && git commit -v'
 alias gapcp='git add -p && git commit -v && git push -u'
 alias gapcpr='git add -p && git commit -v && git push -u && hub pull-request && latestpr | rpbcopy'
 
-alias gl='git pull'
-alias glr='git pull --rebase'
+alias gl='git pull --prune'
+alias glr='git pull --rebase --prune'
 
 alias gp='git push'
 alias gpf='git push --force-with-lease'
