@@ -56,4 +56,4 @@ vos(){ vo $@ && tmux select-window -t $(echo $TPANE|cut -f1 -d.) && tmux select-
 ensure_keychain_unlocked_over_ssh() { [[ -n $SSH_CONNECTION ]] && [[ $OSTYPE == darwin* ]] && git config --get-regex 'credential.https*' &> /dev/null && (security unlock-keychain -u &> /dev/null || security unlock-keychain) || (exit 0) }
 
 # Ping log
-alias pingrestart="launchctl unload -F ~/Library/LaunchAgents/com.ericboehs.ping.plist &&launchctl load ~/Library/LaunchAgents/com.ericboehs.ping.plisth"
+alias pingrestart="launchctl unload -F ~/Library/LaunchAgents/com.ericboehs.ping.plist && launchctl load ~/Library/LaunchAgents/com.ericboehs.ping.plist"
