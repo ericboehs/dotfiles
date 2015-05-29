@@ -129,4 +129,4 @@ alias gapyolo='gap && yolo'
 
 alias latestpr='curl -s "https://api.github.com/repos/$(git config --get remote.origin.url | cut -d "/" -f4-)/pulls?state=open&access_token=$(git config ghi.token)" | jq ".[0]._links.html.href" | tr -d \"\\n'
 
-function br() { git checkout -b ${GIT_BRANCH_SUFFIX:-"eb"}-$1 2> /dev/null || git checkout ${GIT_BRANCH_SUFFIX:-"eb"}-$1 }
+function br() { git checkout -b ${GIT_BRANCH_PREFIX:-"eb"}-$1 2> /dev/null || git checkout ${GIT_BRANCH_PREFIX:-"eb"}-$1 }
