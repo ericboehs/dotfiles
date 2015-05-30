@@ -10,6 +10,7 @@ Bundle 'tpope/vim-bundler'
 Bundle 'tpope/vim-rake'
 Bundle 'ReplaceWithRegister'
 Bundle 'itspriddle/vim-marked'
+Bundle 'TailMinusF'
 
 " Tmux
 Bundle 'benmills/vimux'
