@@ -1,5 +1,14 @@
 #!/bin/bash
-kill -SIGINFO $(pgrep -nf 'ping 8.8.8.8')
+pid=$(pgrep -nf 'ping 8.8.8.8')
+
+if [[ -z "$pid" ]] && [[ -f ~/Library/LaunchAgents/com.ericboehs.ping.plist ]]; then
+  launchctl unload -F ~/Library/LaunchAgents/com.ericboehs.ping.plist >/dev/null 2>&1
+  launchctl load ~/Library/LaunchAgents/com.ericboehs.ping.plist
+  sleep 1
+  pid=$(pgrep -nf 'ping 8.8.8.8')
+fi
+
+kill -SIGINFO $pid
 
 last_ping_info=$(grep 'received' /var/log/ping.log | tail -1)
 
