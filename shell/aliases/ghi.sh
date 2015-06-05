@@ -51,7 +51,7 @@ alias ghimw='ghi milestone -w'
 function ghisg() { ghi show $(ghi list | grep -i "$1" | head -1 | awk '{print $1}') }
 function ghisgv() { ghi show $(ghi list -v | grep -i -B 5000 "$1" | tail -r |grep -m1 -oE "^#[0-9]+:"|tr -d '#:')}
 
-function istart() { ghi label $1 | grep "In Progress" && echo "Aborted. \nAlready in progress!" || (ghi assign $1 && ghi label $1 "In Progress") }
+function istart() { ghi label $1 | grep "2 - Working" && echo "Aborted. \nAlready in progress!" || (ghi assign $1 && ghi label $1 "2 - Working") }
 function ifinish() { [[ ! -z $GHI_PM ]] && (ghi assign $1 $GHI_PM && ghi label $1 "Awaiting Approval") || (echo 'GHI_PM not set to a GitHub user! Issue not checked in!' && false ) }
 
 # Labels
