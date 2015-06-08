@@ -1,13 +1,6 @@
 #!/bin/bash
 pid=$(pgrep -nf 'ping 8.8.8.8')
 
-if [[ -z "$pid" ]] && [[ -f ~/Library/LaunchAgents/com.ericboehs.ping.plist ]]; then
-  launchctl unload -F ~/Library/LaunchAgents/com.ericboehs.ping.plist >/dev/null 2>&1
-  launchctl load ~/Library/LaunchAgents/com.ericboehs.ping.plist
-  sleep 1
-  pid=$(pgrep -nf 'ping 8.8.8.8')
-fi
-
 kill -SIGINFO $pid
 
 last_ping_info=$(grep 'received' /var/log/ping.log | tail -1)
@@ -18,5 +11,11 @@ latency_info=$(echo $last_ping_info | cut -f3 -d/ |tr -d 'avg ')
 
 packet_loss=$(echo "($packet_loss_info-100)*-1" | bc)
 latency=$(echo "$latency_info/1" |bc)
+
+if [[ -z "$latency" ]] && [[ -f ~/Library/LaunchAgents/com.ericboehs.ping.plist ]]; then
+  launchctl unload -F ~/Library/LaunchAgents/com.ericboehs.ping.plist >/dev/null 2>&1
+  launchctl load ~/Library/LaunchAgents/com.ericboehs.ping.plist
+  exit 1
+fi
 
 echo "${latency}ms : $packets_received ($packet_loss%)"
