@@ -20,6 +20,20 @@ alias la='ls -A'
 alias pg_start="pg_ctl -D /usr/local/var/postgres -l /usr/local/var/postgres/server.log start"
 alias pg_stop="pg_ctl -D /usr/local/var/postgres stop -s -m fast"
 
+# EC2 CLI
+exaws() {
+  export AWS_ACCESS_KEY="$(git config --get aws.access-key)"
+  export AWS_SECRET_KEY="$(git config --get aws.secret-key)"
+}
+
+start_lmu_manager() {
+  aws ec2 start-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)
+}
+
+stop_lmu_manager() {
+  aws ec2 stop-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)
+}
+
 # Misc
 alias v='vim'
 alias x=exit
