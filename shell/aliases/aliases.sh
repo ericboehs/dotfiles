@@ -49,6 +49,9 @@ kp(){ sudo kill $(ps auxww | grep ssh | grep -e '^pair' | awk '{print $2}') ; ch
 killsshtty(){ kill $(ps auxww | grep ssh | grep tty| awk '{print $2}') }
 noh(){ nohup $* >/dev/null 2>&1 & }
 
+# Ping with timestamp
+pingstamp() { ping $* | while read line; do; echo $(date | cut -f4 -d ' ') $line; done }
+
 # Tmux
 alias ks='tmux kill-server'
 alias ksp='tmux -S /tmp/tmux-pair-session kill-session'
