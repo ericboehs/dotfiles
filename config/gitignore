@@ -1,8 +1,0 @@
-.DS_Store
-.svn
-*~
-.*.swp
-vendor/bundle
-todo.txt
-tags
-latest.dump
