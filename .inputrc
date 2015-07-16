@@ -16,18 +16,14 @@ set input-meta on
 set output-meta on
 set convert-meta off
 
-# Enable vi mode for readline inputs with forceful directions
+# Enable vi mode for readline inputs
 set editing-mode vi
 $if mode=vi
   set keymap vi-command
   "gg": beginning-of-history
   "G": end-of-history
   set keymap vi-insert
-  "hhh": vi-movement-mode
-  "jj": vi-movement-mode
   "jk": vi-movement-mode
-  "kkk": vi-movement-mode
-  "lll": vi-movement-mode
 $endif
 
 # By default up/down are bound to previous-history
