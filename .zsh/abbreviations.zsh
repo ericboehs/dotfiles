@@ -6,7 +6,8 @@ typeset -A abbrevs
 
 # General aliases
 abbrevs=(
-  "l" "ls -al"
+  "l"   "ls -al"
+  "dof" "(cd ~/.dotfiles && vim && git add . && git commit -av && git pull --rebase && git push && ./bootstrap.sh) && . ~/.zshrc"
 )
 
 # Git aliases
