@@ -26,6 +26,12 @@ autocmd FileType gitcommit set spell        " Turn on spell check in Git commits
 " Treat dashed words as whole words in stylesheets
 autocmd Filetype css,scss,sass setlocal iskeyword+=-
 
+" Searching
+set hlsearch                                " Highlight searches
+set incsearch                               " Highlight search results instantly
+set ignorecase                              " Ignore case
+set smartcase                               " Override 'ignorecase' option if the search contains upper case characters.
+
 " Indentation
 set shiftwidth=2                            " Number of spaces to use in each autoindent step
 set tabstop=2                               " Two tab spaces
