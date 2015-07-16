@@ -5,10 +5,9 @@ set -e
 
 [[ -e ~/.dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/.dotfiles
 pushd ~/.dotfiles > /dev/null
- 
-#TODO: Change to master
-git checkout redux
-git pull --rebase origin redux
+
+git checkout master
+git pull --rebase origin master
 git submodule init
 git submodule update
 
@@ -32,7 +31,7 @@ for f in `ls -a`; do
       esac
     fi
   fi
-  
+
   if [ overwrite ]; then
     ln -fs ~/.dotfiles/$f ~/
   fi
