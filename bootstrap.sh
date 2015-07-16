@@ -28,8 +28,7 @@ for f in `ls -a`; do
       read -p "~/$f exists. Overwrite? [yn]" yn
       case $yn in
         [Yy]* ) overwrite=true;;
-        [Nn]* ) continue;;
-        * ) echo "Invalid option.";;
+        [N[n]]* ) continue;;
       esac
     fi
   fi
