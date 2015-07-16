@@ -15,6 +15,8 @@ export CLICOLOR=1
 source "$HOME/.zsh/completion.zsh"
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/path.zsh"
+source "$HOME/.zsh/keybindings.zsh"
+source "$HOME/.zsh/vi-mode.zsh"
 source "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 
 # Add aliases and abbreviations
