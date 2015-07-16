@@ -39,6 +39,8 @@ for f in `ls -a`; do
   fi
 done
 
+yes | ~/.fzf/install > /dev/null
+
 vim -c ':BundleInstall!' -c ':q!' -c ':q!'
 
 popd > /dev/null
