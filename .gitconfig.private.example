@@ -1,0 +1,9 @@
+[user]
+  name = Eric Boehs
+  email = ericboehs@gmail.com
+[github]
+  user = ericboehs
+[credential "https://github.com"]
+  username = ericboehs
+[ghi]
+  token = abc123
