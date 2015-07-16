@@ -79,6 +79,8 @@ abbrevs+=(
   "gst"  "git stash"
   "gstl" "git stash list"
   "gstp" "git stash pop"
+
+  "br"   "git checkout -b eb-"
 )
 
 # Add alias and autocompleteion for hub
