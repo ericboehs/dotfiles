@@ -24,10 +24,10 @@ for f in `ls -a`; do
     if [ "$FORCE_OVERWRITE" == "true" ]; then
       overwrite=true
     else
-      read -p "~/$f exists. Overwrite? [yn]" yn
+      read -p "~/$f exists. Overwrite? [[y]n]" yn
       case $yn in
-        [Yy]* ) overwrite=true;;
-        [N[n]]* ) continue;;
+        [Nn]* ) continue;;
+        * ) overwrite=true;;
       esac
     fi
   fi
