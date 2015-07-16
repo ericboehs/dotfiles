@@ -19,6 +19,11 @@ abbrevs+=(
   "stop_lmu_manager" "aws ec2 stop-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)"
 )
 
+# Ruby
+abbrevs+=(
+  "bi" 'bundle install -j8 --path vendor/bundle --binstubs vendor/bundle/bin'
+)
+
 # Git aliases
 abbrevs+=(
   "g"     "git status"
