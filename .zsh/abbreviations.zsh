@@ -21,7 +21,8 @@ abbrevs+=(
 
 # Ruby
 abbrevs+=(
-  "bi" 'bundle install -j8 --path vendor/bundle --binstubs vendor/bundle/bin'
+  "bi"  'bundle install -j8 --path vendor/bundle --binstubs vendor/bundle/bin'
+  "rdm" "rake db:migrate"
 )
 
 # Git aliases
