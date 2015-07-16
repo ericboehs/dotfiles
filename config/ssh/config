@@ -1,9 +1,0 @@
-IdentityFile ~/.ssh/id_rsa
-IdentityFile ~/.ssh/id_rsa.armada.private
-
-Host box.erc.bz
-  LocalForward 3000 localhost:3000
-  LocalForward 4430 localhost:4430
-  RemoteForward 2224 localhost:8377
-  RemoteForward 2225 localhost:8377
-  RemoteForward 2226 localhost:8377
