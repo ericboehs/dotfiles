@@ -11,6 +11,7 @@ setopt autocd
 setopt extendedglob
 
 export CLICOLOR=1
+export EDITOR=vim
 
 source "$HOME/.zsh/completion.zsh"
 source "$HOME/.zsh/history.zsh"
