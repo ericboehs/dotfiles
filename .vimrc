@@ -1,5 +1,6 @@
-set rtp+=~/.vim/bundle/Vundle.vim
-call vundle#begin()
-Plugin 'tpope/vim-sensible'
-call vundle#end()
+source ~/.vim/vundle.vim
+source ~/.vim/keybindings.vim
 
+if filereadable(expand("~/.vimrc.local"))
+  source ~/.vimrc.local
+endif
