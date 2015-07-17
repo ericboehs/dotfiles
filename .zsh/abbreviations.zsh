@@ -89,7 +89,7 @@ type compdef >/dev/null 2>&1 && compdef hub=git
 type hub >/dev/null 2>&1 && alias git='hub'
 
 for abbr in ${(k)abbrevs}; do
-  alias -g $abbr="${abbrevs[$abbr]}"
+  alias $abbr="${abbrevs[$abbr]}"
 done
 
 magic-abbrev-expand() {
