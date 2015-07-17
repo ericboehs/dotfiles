@@ -15,8 +15,8 @@ abbrevs=(
 # EC2 CLI
 abbrevs+=(
   "exaws" 'export AWS_ACCESS_KEY="$(git config --get aws.access-key)"; export AWS_SECRET_KEY="$(git config --get aws.secret-key)"'
-  "start_lmu_manager" "aws ec2 start-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)"
-  "stop_lmu_manager" "aws ec2 stop-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)"
+  "start_lmu_manager" 'aws ec2 start-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)'
+  "stop_lmu_manager" 'aws ec2 stop-instances --instance-ids $(git config --get aws.lmu-manager-instance-id)'
 )
 
 # Ruby
