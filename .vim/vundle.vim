@@ -19,6 +19,10 @@ Plugin 'bronson/vim-trailing-whitespace'
 Plugin 'sjl/gundo.vim'
 Plugin 'tommcdo/vim-exchange'
 
+" Languages
+Plugin 'slim-template/vim-slim'
+
+" Colors
 Plugin 'altercation/vim-colors-solarized'
 
 call vundle#end()
