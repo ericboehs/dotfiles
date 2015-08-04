@@ -11,10 +11,14 @@ git pull --rebase origin master
 git submodule init
 git submodule update
 
-for f in `ls -a`; do
+mkdir -p ~/.ssh
+
+dotfiles="$(ls -a) .ssh/config"
+for f in $dotfiles; do
   overwrite=false
   [ $f = "." ]            && continue
   [ $f = ".." ]           && continue
+  [ $f = ".ssh" ]         && continue
   [ $f = ".git" ]         && continue
   [ $f = ".gitignore" ]   && continue
   [ $f = ".gitmodules" ]  && continue
@@ -30,10 +34,12 @@ for f in `ls -a`; do
         * ) overwrite=true;;
       esac
     fi
-  fi
 
-  if [ overwrite ]; then
-    ln -fs ~/.dotfiles/$f ~/
+    if [ overwrite ]; then
+      ln -fs ~/.dotfiles/$f ~/
+    fi
+  else
+    ln -s ~/.dotfiles/$f ~/$(dirname $f)/$(basename $f)
   fi
 done
 
