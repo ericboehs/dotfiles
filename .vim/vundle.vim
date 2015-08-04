@@ -21,6 +21,7 @@ Plugin 'tommcdo/vim-exchange'
 
 " Languages
 Plugin 'slim-template/vim-slim'
+Plugin 'kchmck/vim-coffee-script'
 
 " Colors
 Plugin 'altercation/vim-colors-solarized'
