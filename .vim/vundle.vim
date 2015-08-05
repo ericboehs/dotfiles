@@ -18,6 +18,7 @@ Plugin 'tpope/vim-surround'
 Plugin 'bronson/vim-trailing-whitespace'
 Plugin 'sjl/gundo.vim'
 Plugin 'tommcdo/vim-exchange'
+Plugin 'tpope/vim-commentary'
 
 " Languages
 Plugin 'slim-template/vim-slim'
