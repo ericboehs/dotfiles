@@ -43,6 +43,11 @@ for f in $dotfiles; do
   fi
 done
 
+# Install fzf
+yes no | ~/.fzf/install > /dev/null
+git checkout .zshrc
+
+# Install vim plugins
 vim -c ':BundleInstall!' -c ':q!' -c ':q!'
 
 popd > /dev/null
