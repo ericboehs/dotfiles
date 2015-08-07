@@ -50,6 +50,7 @@ abbrevs+=(
   "gcl"   "git clone"
   "gb"    "git branch"
   "gba"   "git branch -a"
+  "gbmd"  'git branch --merged | grep  -v "\*\|master\|develop" | xargs -n1 git branch -d'
 
   "gd"    "git diff"
   "gdm"   "git diff master.."
