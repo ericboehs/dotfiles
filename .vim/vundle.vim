@@ -11,6 +11,9 @@ Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-eunuch'
 Plugin 'tpope/vim-repeat'
 
+" Rails
+Plugin 'tpope/vim-rails'
+
 " Editing
 Plugin 'godlygeek/tabular'
 Plugin 'tomtom/tcomment_vim'
@@ -29,4 +32,3 @@ Plugin 'tpope/vim-cucumber'
 Plugin 'altercation/vim-colors-solarized'
 
 call vundle#end()
-
