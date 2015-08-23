@@ -8,7 +8,8 @@ typeset -A abbrevs
 abbrevs=(
   "l"   "ls -al"
   "dof" "(cd ~/.dotfiles && vim && git add . && git commit -av && git pull --rebase && git push && ./bootstrap.sh) && . ~/.zshrc"
-  "killsshtty" "kill $(ps auxww | grep ssh | grep tty| awk '{print $2}')"
+  "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
+  "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
   "json" "python -mjson.tool"
 )
 
@@ -57,7 +58,7 @@ abbrevs+=(
   "gdm"   "git diff master.."
   "gdc"   "git diff --cached"
   "gdt"   "git difftool"
-  "gdh"   "git diff HEAD~${1:=0}"
+  "gdh"   "git diff HEAD~1"
 
   "gp"    "git push"
   "gpf"   "git push --force-with-lease"
