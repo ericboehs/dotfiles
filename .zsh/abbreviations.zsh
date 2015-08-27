@@ -49,6 +49,7 @@ abbrevs+=(
 
   "gco"   "git checkout"
   "gcom"  "git checkout master"
+  "gcod"  "git checkout develop"
   "gcl"   "git clone"
   "gb"    "git branch"
   "gba"   "git branch -a"
@@ -67,6 +68,7 @@ abbrevs+=(
   "glr"   "git pull --rebase --prune"
 
   "gpr"  "hub pull-request"
+  "gprbd"  "hub pull-request -b develop"
   "gprm" 'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push && hub pull-request'
 
   "grb"   "git rebase"
