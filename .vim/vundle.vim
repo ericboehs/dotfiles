@@ -4,6 +4,7 @@ call vundle#begin()
 Plugin 'junegunn/fzf'
 Plugin 'itchyny/lightline.vim'
 Plugin 'edkolev/tmuxline.vim'
+Plugin 'benmills/vimux'
 Plugin 'rking/ag.vim'
 
 Plugin 'tpope/vim-sensible'
@@ -11,8 +12,9 @@ Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-eunuch'
 Plugin 'tpope/vim-repeat'
 
-" Rails
+" Ruby/Rails
 Plugin 'tpope/vim-rails'
+Plugin 'skalnik/vim-vroom'
 
 " Editing
 Plugin 'godlygeek/tabular'

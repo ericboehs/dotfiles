@@ -2,6 +2,7 @@ source ~/.vim/vundle.vim
 source ~/.vim/keybindings.vim
 source ~/.vim/macros.vim
 source ~/.vim/lightline.vim
+source ~/.vim/vroom.vim
 
 set t_Co=256                                " Support for xterm with 256 colors (gets overriden in .gvimrc)
 set relativenumber                          " Show line numbers relative to each other
