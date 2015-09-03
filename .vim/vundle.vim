@@ -24,6 +24,7 @@ Plugin 'bronson/vim-trailing-whitespace'
 Plugin 'sjl/gundo.vim'
 Plugin 'tommcdo/vim-exchange'
 Plugin 'tpope/vim-commentary'
+Plugin 'mattboehm/vim-unstack'
 
 " Languages
 Plugin 'slim-template/vim-slim'
