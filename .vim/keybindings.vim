@@ -7,6 +7,9 @@ map <Leader>f :Ag!<Space>
 " Highlight word at cursor and then Ag it.
 nnoremap <leader>H *<C-O>:AgFromSearch!<CR>
 
+" Quickly search project for search
+map <leader>F :AgFromSearch!<CR>
+
 " Insert a single character w/o going to insert mode using <space><char>
 noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
 
@@ -17,6 +20,7 @@ vnoremap <silent> * :<C-U>
   \gvy/<C-R><C-R>=substitute(
   \escape(@", '/\.*$^~['), '\_s\+', '\\_s\\+', 'g')<CR><CR>
   \gV:call setreg('"', old_reg, old_regtype)<CR>
+
 vnoremap <silent> # :<C-U>
   \let old_reg=getreg('"')<Bar>let old_regtype=getregtype('"')<CR>
   \gvy?<C-R><C-R>=substitute(
