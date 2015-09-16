@@ -10,7 +10,10 @@ Plugin 'rking/ag.vim'
 Plugin 'tpope/vim-sensible'
 Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-eunuch'
+Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-repeat'
+Plugin 'tpope/vim-sensible'
+Plugin 'tpope/vim-unimpaired'
 
 " Ruby/Rails
 Plugin 'tpope/vim-rails'
@@ -23,8 +26,8 @@ Plugin 'tpope/vim-surround'
 Plugin 'bronson/vim-trailing-whitespace'
 Plugin 'tommcdo/vim-exchange'
 Plugin 'tpope/vim-commentary'
-Plugin 'mattboehm/vim-unstack'
 Plugin 'mbbill/undotree'
+Plugin 'henrik/vim-indexed-search'
 
 " Languages
 Plugin 'slim-template/vim-slim'
