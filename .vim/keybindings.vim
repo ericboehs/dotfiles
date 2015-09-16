@@ -34,8 +34,8 @@ nnoremap k gk
 " Converts Ruby 1.8 hashes to 1.9
 command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')
 
-" Gundo
-nnoremap <F5> :GundoToggle<CR>
+" UndoTree
+nnoremap <F5> :UndotreeToggle<CR>
 
 " Tagbar
 nnoremap <F8> :TagbarToggle<CR>

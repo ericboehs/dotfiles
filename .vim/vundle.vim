@@ -21,10 +21,10 @@ Plugin 'godlygeek/tabular'
 Plugin 'tomtom/tcomment_vim'
 Plugin 'tpope/vim-surround'
 Plugin 'bronson/vim-trailing-whitespace'
-Plugin 'sjl/gundo.vim'
 Plugin 'tommcdo/vim-exchange'
 Plugin 'tpope/vim-commentary'
 Plugin 'mattboehm/vim-unstack'
+Plugin 'mbbill/undotree'
 
 " Languages
 Plugin 'slim-template/vim-slim'
