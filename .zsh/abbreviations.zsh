@@ -38,6 +38,7 @@ abbrevs+=(
 
   "ga"   "git add"
   "gad"  "git add ."
+  "gaud"  "git add -u ."
   "gap"  "git add -p"
 
   "gapc"  "git add -p && git commit -v"
