@@ -42,10 +42,10 @@ abbrevs+=(
   "gap"  "git add -p"
 
   "gapc"  "git add -p && git commit -v"
-  "gapcp" "git add -p && git commit -v && git push"
+  "gapcp" "git add -p && git commit -v && git push -u"
 
   "gc"    "git commit -v"
-  "gcp"   "git commit -v && git push"
+  "gcp"   "git commit -v && git push -u"
   "gca"   "git commit --amend -v"
   "gcane" "git commit --amend -v --no-edit"
 
@@ -63,15 +63,14 @@ abbrevs+=(
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
 
-  "gp"    "git push"
-  "gpf"   "git push --force-with-lease"
-  "gpu"   "git push -u"
+  "gp"    "git push -u"
+  "gpf"   "git push -u --force-with-lease"
 
   "glr"   "git pull --rebase --prune"
 
   "gpr"  "hub pull-request"
   "gprbd"  "hub pull-request -b develop"
-  "gprm" 'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push && hub pull-request'
+  "gprm" 'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"
