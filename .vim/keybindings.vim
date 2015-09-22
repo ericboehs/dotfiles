@@ -1,3 +1,6 @@
+" Remap jk to Esc in insert mode
+inoremap jk <Esc>
+
 " Ctrl-P to fuzzy search files with FZF
 map <c-p> :FZF<CR>
 
