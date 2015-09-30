@@ -47,7 +47,7 @@ abbrevs+=(
   "gc"    "git commit -v"
   "gcp"   "git commit -v && git push -u"
   "gca"   "git commit --amend -v"
-  "gcane" "git commit --amend -v --no-edit"
+  "gcane" "git commit --amend --no-edit"
 
   "gco"   "git checkout"
   "gcom"  "git checkout master"
@@ -66,6 +66,7 @@ abbrevs+=(
   "gp"    "git push -u"
   "gpf"   "git push -u --force-with-lease"
 
+  "gl"    "git pull --ff-only --prune"
   "glr"   "git pull --rebase --prune"
 
   "gpr"  "hub pull-request"
