@@ -12,7 +12,7 @@
 [rebase]
   autosquash = true
 [push]
-  default = current
+  default = simple
 [credential]
   helper = osxkeychain
 [diff]
