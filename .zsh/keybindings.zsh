@@ -4,11 +4,15 @@ bindkey '^[^[[C' vi-forward-word
 bindkey '^[[5D' beginning-of-line
 bindkey '^[[5C' end-of-line
 
-# make the delete key (or Fn + Delete on the Mac) work instead of outputting a ~
+# Make the delete key (or Fn + Delete on the Mac) work instead of outputting a ~
 bindkey '^?' backward-delete-char
 bindkey '^[[3~' delete-char
 bindkey '^[3;5~' delete-char
 bindkey '\e[3~' delete-char
+
+# Make alt-delete and alt-fn-delete work
+bindkey '^[^?' backward-kill-word
+bindkey '^[(' kill-word # In iTerm you'll need to configure Alt-Fn-Delete to send this keycode
 
 # Vipermode (Vi and Emacs keybindings). https://gist.github.com/burke/1689923
 bindkey -v
