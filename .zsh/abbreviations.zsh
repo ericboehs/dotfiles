@@ -23,10 +23,19 @@ abbrevs+=(
 
 # Ruby
 abbrevs+=(
-  "bi"  'bundle install -j8 --path vendor/bundle --binstubs vendor/bundle/bin'
-  "bib" 'bundle install -j8 --path .bundle/bundle --binstubs .bundle/bundle/bin'
   "rdm" "rake db:migrate"
+  "rrun" "rails runner"
   "rap" 'rails runner "ap '
+)
+
+# Bundler
+abbrevs+=(
+  "bi"   "bundle install"
+  "be"   "bundle exec"
+  "bod"  "bundle outdated"
+  "bup"  "bundle update"
+  "bop"  "bundle open"
+  "begp" "bundle exec gem pristine"
 )
 
 # Git aliases

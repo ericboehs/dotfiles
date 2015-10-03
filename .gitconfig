@@ -25,3 +25,5 @@
   wdiff = diff --color-words
 [hub]
   protocol = https
+[url "https://github.com"]
+	insteadOf = git://github.com
