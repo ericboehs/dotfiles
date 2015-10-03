@@ -13,6 +13,7 @@ setopt NO_BEEP             # No more bells!
 
 export CLICOLOR=1
 export EDITOR=vim
+export PAGER='less -q'
 
 source "$HOME/.zsh/completion.zsh"
 source "$HOME/.zsh/history.zsh"
