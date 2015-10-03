@@ -7,3 +7,5 @@ path=(.git/safe/../../.bundle/bundle/bin "$path[@]")
 path=(.git/safe/../../bin "$path[@]")
 path=(~/bin "$path[@]")
 
+# Add ~ and ~/Code to cdpath
+cdpath=(~ ~/Code)
