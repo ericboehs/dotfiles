@@ -13,6 +13,12 @@ nnoremap <leader>H *<C-O>:AgFromSearch!<CR>
 " Quickly search project for search
 map <leader>F :AgFromSearch!<CR>
 
+" Start a ruby pry debugger
+:nmap <leader>bp Orequire 'pry'; binding.pry<esc>^
+
+" Start a javascript debugger
+:nmap <leader>de Odebugger<esc>^
+
 " Insert a single character w/o going to insert mode using <space><char>
 noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
 
