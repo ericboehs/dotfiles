@@ -18,6 +18,9 @@ Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-rails'
 Plugin 'skalnik/vim-vroom'
 
+" Tmux
+Plugin 'christoomey/vim-tmux-navigator'
+
 " Editing
 Plugin 'godlygeek/tabular'
 Plugin 'tomtom/tcomment_vim'
