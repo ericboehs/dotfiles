@@ -21,7 +21,7 @@ set showmode                                " Show current mode down the bottom
 set laststatus=2                            " Always show the status line
 set history=10000
 set autoread
-set noerrorbells
+set noerrorbells visualbell t_vb=           " No more error bells
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
 

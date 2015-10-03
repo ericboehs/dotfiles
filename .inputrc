@@ -10,6 +10,9 @@ set show-all-if-ambiguous on
 set completion-ignore-case on
 set completion-map-case on
 
+# Silence bell on tab complete
+set bell-style none
+
 # UTF-8 support
 set meta-flag on
 set input-meta on

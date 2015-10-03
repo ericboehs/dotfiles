@@ -7,8 +7,9 @@ autoload -U compinit
 compinit
 
 setopt interactivecomments # Allow comments after commands
-setopt autocd
-setopt extendedglob
+setopt autocd              # cd to paths by just typing the path
+setopt extendedglob        # Expand file expressiong (e.g. **/file)
+setopt NO_BEEP             # No more bells!
 
 export CLICOLOR=1
 export EDITOR=vim
