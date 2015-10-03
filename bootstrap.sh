@@ -6,8 +6,8 @@ set -e
 [[ -e ~/.dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/.dotfiles
 pushd ~/.dotfiles > /dev/null
 
-git checkout master
-git pull --rebase origin master
+git checkout master || echo
+git pull --rebase origin master || echo
 git submodule init
 git submodule update
 
@@ -16,6 +16,9 @@ mkdir -p ~/.ssh
 dotfiles="$(ls -a) .ssh/config"
 for f in $dotfiles; do
   overwrite=false
+  source_file=~/.dotfiles/$f
+  target_file=~/$(dirname $f)/$(basename $f)
+
   [ $f = "." ]            && continue
   [ $f = ".." ]           && continue
   [ $f = ".ssh" ]         && continue
@@ -24,7 +27,10 @@ for f in $dotfiles; do
   [ $f = ".gitmodules" ]  && continue
   [ $f = "bootstrap.sh" ] && continue
   [ $f = "README.md" ]    && continue
+
   if [ -e ~/$f ];then
+    test $(readlink $source_file) = $(readlink ~/.dotfiles/$f) && continue
+
     if [ "$FORCE_OVERWRITE" == "true" ]; then
       overwrite=true
     else
@@ -36,10 +42,11 @@ for f in $dotfiles; do
     fi
 
     if [ overwrite ]; then
-      ln -fs ~/.dotfiles/$f ~/
+      ln -fs $source_file ~/
     fi
   else
-    ln -s ~/.dotfiles/$f ~/$(dirname $f)/$(basename $f)
+    echo "-----> Linking $source_file"
+    ln -s $source_file $target_file
   fi
 done
 
@@ -48,7 +55,7 @@ yes no | ~/.fzf/install > /dev/null
 git checkout .zshrc
 
 # Install vim plugins
-vim -c ':BundleInstall!' -c ':q!' -c ':q!'
+vim -c ':BundleInstall!' -c ':qa!'
 
 popd > /dev/null
 
