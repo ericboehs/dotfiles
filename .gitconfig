@@ -27,3 +27,7 @@
   protocol = https
 [url "https://github.com"]
 	insteadOf = git://github.com
+[pull]
+	ff = only
+[fetch]
+	prune = true

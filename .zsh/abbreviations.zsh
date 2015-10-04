@@ -75,8 +75,8 @@ abbrevs+=(
   "gp"    "git push -u"
   "gpf"   "git push -u --force-with-lease"
 
-  "gl"    "git pull --ff-only --prune"
-  "glr"   "git pull --rebase --prune"
+  "gl"    "git pull"
+  "glr"   "git pull --rebase"
 
   "gpr"  "hub pull-request"
   "gprbd"  "hub pull-request -b develop"
