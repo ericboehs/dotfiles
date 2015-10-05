@@ -20,6 +20,7 @@ Plugin 'skalnik/vim-vroom'
 
 " Tmux
 Plugin 'christoomey/vim-tmux-navigator'
+Plugin 'christoomey/vim-tmux-runner'
 
 " Editing
 Plugin 'godlygeek/tabular'
