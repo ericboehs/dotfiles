@@ -62,11 +62,10 @@ abbrevs+=(
 
   "gco"   "git checkout"
   "gcom"  "git checkout master"
-  "gcod"  "git checkout develop"
   "gcl"   "git clone"
   "gb"    "git branch"
   "gba"   "git branch -a"
-  "gbmd"  'git branch --merged | grep  -v "\*\|master\|develop" | xargs -n1 git branch -d'
+  "gbmd"  'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
 
   "gd"    "git diff"
   "gdm"   "git diff master.."
@@ -81,7 +80,6 @@ abbrevs+=(
   "glr"   "git pull --rebase"
 
   "gpr"  "hub pull-request"
-  "gprbd"  "hub pull-request -b develop"
   "gprm" 'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
 
   "grb"   "git rebase"
