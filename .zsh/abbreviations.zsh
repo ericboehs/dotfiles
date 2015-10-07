@@ -12,6 +12,8 @@ abbrevs=(
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
   "json" "python -mjson.tool"
   "tl" 'vi /Users/ericboehs/Library/Mobile\ Documents/com~apple~CloudDocs/Documents/Time\ Logs.txt'
+  "psg" 'ps auxww | grep'
+  "sz" '. ~/.zshrc'
 )
 
 # EC2 CLI
@@ -86,6 +88,7 @@ abbrevs+=(
   "grbi"  "git rebase -i"
   "grba"  "git rebase --abort"
   "grbc"  "git rebase --continue"
+  "grbm"  "git rebase master"
   "grbim" 'git rebase -i HEAD~$(git log --pretty=oneline master.. | wc -l | tr -d "[:space:]")'
 
   "gchp"  "git cherry-pick"
