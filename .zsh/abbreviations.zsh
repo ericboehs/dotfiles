@@ -73,7 +73,8 @@ abbrevs+=(
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
 
-  "gp"    "git push -u"
+  "gp"    "git push"
+  "gpu"   "git push -u"
   "gpf"   "git push -u --force-with-lease"
 
   "gl"    "git pull"
