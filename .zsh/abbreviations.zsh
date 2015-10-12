@@ -75,7 +75,9 @@ abbrevs+=(
 
   "gp"    "git push"
   "gpu"   "git push -u"
-  "gpf"   "git push -u --force-with-lease"
+  "gpf"   "git push --force-with-lease"
+  "gpo"   "git push origin"
+  "gpod"  "git push origin --delete"
 
   "gl"    "git pull"
   "glr"   "git pull --rebase"
