@@ -6,7 +6,7 @@ typeset -A abbrevs
 
 # General aliases
 abbrevs=(
-  "l"   "ls -al"
+  "ll"   "ls -al"
   "dof" "(cd ~/.dotfiles && vim && git add . && git commit -av && git pull --rebase && git push && ./bootstrap.sh) && . ~/.zshrc"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
@@ -42,7 +42,7 @@ abbrevs+=(
 
 # Git aliases
 abbrevs+=(
-  "g"     "git status"
+  "gs"     "git status"
   "gg"    "git lg"
   "ggh"   "git lg | head"
   "ggg"   "git ll"
