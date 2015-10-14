@@ -31,6 +31,7 @@ Plugin 'tommcdo/vim-exchange'
 Plugin 'tpope/vim-commentary'
 Plugin 'mbbill/undotree'
 Plugin 'henrik/vim-indexed-search'
+Plugin 'ecomba/vim-ruby-refactoring'
 
 " Languages
 Plugin 'slim-template/vim-slim'
