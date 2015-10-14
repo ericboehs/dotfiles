@@ -45,6 +45,10 @@ set autoindent                              " Keep the indent when creating a ne
 set smarttab                                " Use shiftwidth and softtabstop to insert or delete (on <BS>) blanks
 set cindent                                 " Recommended seting for automatic C-style indentation
 
+" Color column at 80 characters
+set textwidth=80
+set colorcolumn=80
+
 " Undo
 if !isdirectory(expand("~/.vim/.undo/"))
   silent !mkdir -p ~/.vim/.undo/
