@@ -35,7 +35,6 @@ Plugin 'henrik/vim-indexed-search'
 " Languages
 Plugin 'slim-template/vim-slim'
 Plugin 'kchmck/vim-coffee-script'
-Plugin 'tpope/vim-cucumber'
 
 " Colors
 Plugin 'altercation/vim-colors-solarized'
