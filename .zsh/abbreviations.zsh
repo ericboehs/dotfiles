@@ -106,6 +106,8 @@ abbrevs+=(
   "gstp" "git stash pop"
 
   "br"   "git checkout -b"
+
+  "vgu"  'vim $(git ls-files --unmerged | cut -f2 | sort -u)'
 )
 
 # Add alias and autocompleteion for hub
