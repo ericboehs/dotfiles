@@ -17,6 +17,7 @@ Plugin 'tpope/vim-unimpaired'
 " Ruby/Rails
 Plugin 'tpope/vim-rails'
 Plugin 'skalnik/vim-vroom'
+Plugin 'ngmy/vim-rubocop'
 
 " Tmux
 Plugin 'christoomey/vim-tmux-navigator'
