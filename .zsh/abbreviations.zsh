@@ -96,6 +96,9 @@ abbrevs+=(
   "gchpc" "git cherry-pick --continue"
   "gchpa" "git cherry-pick --abort"
 
+  "gsh"  "git show"
+  "gshh" "git show HEAD"
+
   "gsu" "git submodule update --init --recursive"
 
   "gst"  "git stash"

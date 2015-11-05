@@ -46,7 +46,6 @@ set smarttab                                " Use shiftwidth and softtabstop to 
 set cindent                                 " Recommended seting for automatic C-style indentation
 
 " Color column at 80 characters
-set textwidth=80
 set colorcolumn=80
 
 " Undo

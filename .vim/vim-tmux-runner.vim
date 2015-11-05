@@ -1,3 +1,6 @@
+" Attach runner pane
+map <Leader>va :VtrAttachToPane<CR>
+
 " Open runner pane (needed for the other command below)
 map <Leader>vo :VtrOpenRunner<CR>
 
@@ -15,3 +18,6 @@ map <Leader>vf :VtrFocusRunner<CR>
 
 " Close runner pane
 map <Leader>vq :VtrKillRunner<CR>
+
+" Send Ctrl-D to Pane
+map <Leader>vd :VtrSendCtrlD<CR>
