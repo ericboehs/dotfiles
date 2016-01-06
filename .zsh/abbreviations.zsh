@@ -30,6 +30,11 @@ abbrevs+=(
   "rap" 'rails runner "ap '
 )
 
+# Vim
+abbrevs+=(
+  "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | paste -sd\  -)"'
+)
+
 # Bundler
 abbrevs+=(
   "bi"   "bundle install"
