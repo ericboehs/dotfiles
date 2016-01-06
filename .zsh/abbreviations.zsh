@@ -42,9 +42,11 @@ abbrevs+=(
 
 # Git aliases
 abbrevs+=(
-  "gs"     "git status"
+  "gs"    "git status"
   "gg"    "git lg"
+  "ggm"   "git lg origin/master.."
   "ggh"   "git lg | head"
+  "ggmh"  "git lg origin/master.. | head"
   "ggg"   "git ll"
 
   "ga"   "git add"
@@ -68,8 +70,8 @@ abbrevs+=(
   "gbmd"  'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
 
   "gd"    "git diff"
-  "gdm"   "git diff master.."
-  "gdms"  "git diff master:./"
+  "gdm"   "git diff origin/master.."
+  "gdms"  "git diff origin/master:./"
   "gdc"   "git diff --cached"
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
