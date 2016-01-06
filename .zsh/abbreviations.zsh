@@ -69,6 +69,7 @@ abbrevs+=(
 
   "gd"    "git diff"
   "gdm"   "git diff master.."
+  "gdms"  "git diff master:./"
   "gdc"   "git diff --cached"
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
@@ -91,6 +92,8 @@ abbrevs+=(
   "grbc"  "git rebase --continue"
   "grbm"  "git rebase master"
   "grbim" 'git rebase -i HEAD~$(git log --pretty=oneline master.. | wc -l | tr -d "[:space:]")'
+
+  "grhu"  "git reset --hard @{u}"
 
   "gchp"  "git cherry-pick"
   "gchpc" "git cherry-pick --continue"
