@@ -22,6 +22,9 @@ source "$HOME/.zsh/vi-mode.zsh"
 source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 
+# Enable autosuggestions
+# source "$HOME/.zsh/autosuggestions.zsh"
+
 # Add aliases and abbreviations
 source "$HOME/.zsh/abbreviations.zsh"
 
