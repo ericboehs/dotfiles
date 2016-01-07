@@ -32,7 +32,7 @@ abbrevs+=(
 
 # Vim
 abbrevs+=(
-  "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | paste -sd\  -)"'
+  "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
 )
 
 # Bundler
