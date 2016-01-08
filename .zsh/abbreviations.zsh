@@ -90,8 +90,9 @@ abbrevs+=(
   "gl"    "git pull"
   "glr"   "git pull --rebase"
 
-  "gpr"  "hub pull-request"
-  "gprm" 'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
+  "gpr"   "hub pull-request"
+  "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
+  "gprm"  'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"

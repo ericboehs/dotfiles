@@ -30,3 +30,7 @@ source "$HOME/.zsh/abbreviations.zsh"
 
 # Add fzf.zsh. https://github.com/junegunn/fzf
 source "$HOME/.zsh/fzf.zsh"
+
+# Automatically/easily switch ruby versions via chruby
+source /usr/local/opt/chruby/share/chruby/chruby.sh
+source /usr/local/opt/chruby/share/chruby/auto.sh
