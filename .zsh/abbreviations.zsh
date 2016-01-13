@@ -99,7 +99,7 @@ abbrevs+=(
   "grba"  "git rebase --abort"
   "grbc"  "git rebase --continue"
   "grbm"  "git rebase master"
-  "grbim" 'git rebase -i HEAD~$(git log --pretty=oneline master.. | wc -l | tr -d "[:space:]")'
+  "grbim" "git rebase -i master"
 
   "grhu"  "git reset --hard @{u}"
   "grsm"  "git reset --soft master"
