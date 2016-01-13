@@ -120,6 +120,7 @@ abbrevs+=(
   "br"   "git checkout -b"
 
   "vgu"  'vim $(git ls-files --unmerged | cut -f2 | sort -u)'
+  "gcdi" "git clean -di"
 )
 
 # Add alias and autocompleteion for hub
