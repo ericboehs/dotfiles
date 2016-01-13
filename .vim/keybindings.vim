@@ -48,3 +48,6 @@ nnoremap <F5> :UndotreeToggle<CR>
 
 " Tagbar
 nnoremap <F8> :TagbarToggle<CR>
+
+" Toggle (change option) clipboard (pasteboard) syncing on/off
+nnoremap cop :set <C-R>=&clipboard =~# "unnamed" ? 'clipboard=' : 'clipboard=unnamed'<CR><CR>
