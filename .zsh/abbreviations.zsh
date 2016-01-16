@@ -14,6 +14,7 @@ abbrevs=(
   "tl" 'vi /Users/ericboehs/Library/Mobile\ Documents/com~apple~CloudDocs/Documents/Time\ Logs.txt'
   "psg" 'ps auxww | grep'
   "sz" '. ~/.zshrc'
+  "fdg" "find . | grep"
 )
 
 # EC2 CLI
