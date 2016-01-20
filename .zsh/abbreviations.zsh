@@ -46,6 +46,14 @@ abbrevs+=(
   "begp" "bundle exec gem pristine"
 )
 
+# Invoker
+abbrevs+=(
+  "ins"   "invoker start"
+  "inp"   "invoker stop"
+  "inr"   "invoker reload"
+  "inrw"  "invoker reload web"
+)
+
 # Git aliases
 abbrevs+=(
   "gs"    "git status"
