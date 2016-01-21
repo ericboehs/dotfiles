@@ -31,6 +31,18 @@ abbrevs+=(
   "rap" 'rails runner "ap '
 )
 
+# Heroku
+abbrevs+=(
+  "hk"   "heroku"
+  "hkl"  "heroku logs -t"
+  "hkc"  "heroku config"
+  "hkcs" "heroku config:set"
+  "hkps" "heroku ps"
+  "hkr"  "heroku run"
+  "hkrc" "heroku run console"
+  "drp" "-r production"
+)
+
 # Vim
 abbrevs+=(
   "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
