@@ -15,6 +15,10 @@ export CLICOLOR=1
 export EDITOR=vim
 export PAGER='less -q'
 
+# Automatically/easily switch ruby versions via chruby
+source /usr/local/opt/chruby/share/chruby/chruby.sh
+chruby $(cat ~/.ruby-version)
+
 source "$HOME/.zsh/completion.zsh"
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/path.zsh"
@@ -30,7 +34,3 @@ source "$HOME/.zsh/abbreviations.zsh"
 
 # Add fzf.zsh. https://github.com/junegunn/fzf
 source "$HOME/.zsh/fzf.zsh"
-
-# Automatically/easily switch ruby versions via chruby
-source /usr/local/opt/chruby/share/chruby/chruby.sh
-source /usr/local/opt/chruby/share/chruby/auto.sh
