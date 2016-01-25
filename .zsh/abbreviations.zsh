@@ -15,7 +15,20 @@ abbrevs=(
   "psg" 'ps auxww | grep'
   "sz" '. ~/.zshrc'
   "fdg" "find . | grep"
-  "tan" "tmux -S /tmp/tmux-pair attach -t pair || tmux -S /tmp/tmux-pair new -s pair"
+  )
+
+# Tmux
+abbrevs+=(
+  "tman"  "tmux -S /tmp/tmux-pair attach -t pair || tmux -S /tmp/tmux-pair new -s pair -n editor"
+  "tnwa"  "tnwsh; tnwsr; tnwl; tnwp"
+  "tnwsh" "tmux new-window -dt 2 -n shell"
+  "tnwsr" "tmux new-window -dt 3 -n server"
+  "tnwl"  "tmux new-window -dt 8 -n logs heroku logs -t -r production"
+  "tnwp"  "tmux new-window -dt 9 -n ping ping 8.8.8.8"
+
+  "tks"   "tmux kill-session"
+
+  "c7tp"  "chmod 777 /tmp/tmux-pair"
 )
 
 # EC2 CLI
