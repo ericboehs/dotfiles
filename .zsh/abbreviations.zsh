@@ -7,7 +7,7 @@ typeset -A abbrevs
 # General aliases
 abbrevs=(
   "ll"   "ls -al"
-  "dof" "(cd ~/.dotfiles && vim && git add . && git commit -av && git pull --rebase && git push && ./bootstrap.sh) && . ~/.zshrc"
+  "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
   "jsun" "python -mjson.tool"
@@ -15,6 +15,7 @@ abbrevs=(
   "psg" 'ps auxww | grep'
   "sz" '. ~/.zshrc'
   "fdg" "find . | grep"
+  "tan" "tmux -S /tmp/tmux-pair attach -t pair || tmux -S /tmp/tmux-pair new -s pair"
 )
 
 # EC2 CLI
@@ -41,6 +42,7 @@ abbrevs+=(
   "hkr"  "heroku run"
   "hkrc" "heroku run console"
   "drp" "-r production"
+  "hsp" "-a hats-staging-pr-"
 )
 
 # Vim
