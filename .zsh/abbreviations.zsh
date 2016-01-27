@@ -23,7 +23,7 @@ abbrevs+=(
   "tnwa"  "tnwsh; tnwsr; tnwl; tnwp"
   "tnwsh" "tmux new-window -dt 2 -n shell"
   "tnwsr" "tmux new-window -dt 3 -n server"
-  "tnwl"  "tmux new-window -dt 8 -n logs heroku logs -t -r production"
+  "tnwl"  "tmux new-window -dt 8 -n logs \"while ((1)) { heroku logs -t -r production }\""
   "tnwp"  "tmux new-window -dt 9 -n ping ping 8.8.8.8"
 
   "tks"   "tmux kill-session"
