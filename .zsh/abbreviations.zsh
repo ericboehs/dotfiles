@@ -61,6 +61,7 @@ abbrevs+=(
 # Vim
 abbrevs+=(
   "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
+  "vbi"  'vim -c "BundleInstall" -c "q" -c "q"'
 )
 
 # Bundler
