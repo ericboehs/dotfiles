@@ -126,6 +126,7 @@ abbrevs+=(
 
   "gl"    "git pull"
   "glr"   "git pull --rebase"
+  "glro"  "git pull --rebase origin"
 
   "gpr"   "hub pull-request"
   "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
