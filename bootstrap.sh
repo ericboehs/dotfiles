@@ -55,7 +55,7 @@ yes no | ~/.fzf/install > /dev/null
 git checkout .zshrc
 
 # Install vim plugins
-vim -c ':BundleInstall!' -c ':qa!'
+vim -u NONE -c ':BundleInstall!' -c ':qa!'
 
 popd > /dev/null
 

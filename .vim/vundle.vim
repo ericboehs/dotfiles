@@ -7,6 +7,8 @@ Plugin 'edkolev/tmuxline.vim'
 Plugin 'benmills/vimux'
 Plugin 'rking/ag.vim'
 Plugin 'mattboehm/vim-unstack'
+Plugin 'rizzatti/dash.vim'
+Plugin 'kana/vim-textobj-user'
 
 Plugin 'tpope/vim-eunuch'
 Plugin 'tpope/vim-fugitive'
@@ -18,6 +20,10 @@ Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-rails'
 Plugin 'skalnik/vim-vroom'
 Plugin 'ngmy/vim-rubocop'
+Plugin 'nelstrom/vim-textobj-rubyblock'
+
+" Javascript
+Plugin 'wookiehangover/jshint.vim'
 
 " Tmux
 Plugin 'christoomey/vim-tmux-navigator'
