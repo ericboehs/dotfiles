@@ -15,6 +15,7 @@ abbrevs=(
   "psg" 'ps auxww | grep'
   "sz" '. ~/.zshrc'
   "fdg" "find . | grep"
+  "rsss"  "rsync -azP ~/Code/17hats/suitesetup/ eric.dev.17hats.com:/mnt/suitesetup/"
   )
 
 # Tmux
@@ -80,6 +81,8 @@ abbrevs+=(
   "inp"   "invoker stop"
   "inr"   "invoker reload"
   "inrw"  "invoker reload web"
+  "inrpr" "invoker reload perl-restart"
+  "int"   "invoker tail"
 )
 
 # Git aliases
