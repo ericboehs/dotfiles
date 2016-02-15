@@ -15,6 +15,7 @@ map <leader>F :AgFromSearch!<CR>
 
 " Start a ruby pry debugger
 :nmap <leader>bp Orequire 'pry'; binding.pry<esc>^
+:nmap <leader>br Orequire 'pry'; binding.remote_pry<esc>^
 
 " Start a javascript debugger
 :nmap <leader>de Odebugger<esc>^

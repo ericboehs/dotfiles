@@ -7,25 +7,32 @@ typeset -A abbrevs
 # General aliases
 abbrevs=(
   "ll"   "ls -al"
-  "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
   "jsun" "python -mjson.tool"
   "tl" 'vi /Users/ericboehs/Library/Mobile\ Documents/com~apple~CloudDocs/Documents/Time\ Logs.txt'
   "psg" 'ps auxww | grep'
-  "sz" '. ~/.zshrc'
   "fdg" "find . | grep"
   "rsss"  "rsync -azP ~/Code/17hats/suitesetup/ eric.dev.17hats.com:/mnt/suitesetup/"
+  "pgr" "| grep"
   )
+
+# Dotfiles
+abbrevs+=(
+  "cab" "cat ~/.zsh/abbreviations.zsh"
+  "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
+  "dz" '. ~/.zshrc'
+)
 
 # Tmux
 abbrevs+=(
-  "tman"  "tmux -S /tmp/tmux-pair attach -t pair || tmux -S /tmp/tmux-pair new -s pair -n editor"
-  "tnwa"  "tnwsh; tnwsr; tnwl; tnwp"
-  "tnwsh" "tmux new-window -dt 2 -n shell"
-  "tnwsr" "tmux new-window -dt 3 -n server"
-  "tnwl"  "tmux new-window -dt 8 -n logs \"while ((1)) { heroku logs -t -r production }\""
-  "tnwp"  "tmux new-window -dt 9 -n ping ping 8.8.8.8"
+  "tan"  "tmux -S /tmp/tmux-pair attach -t pair || tmux -S /tmp/tmux-pair new -s pair -n editor"
+  "tnwa"  "tnwsh; tnwsr; tnwb; tnwl; tnwp; tmux select-window -t 1"
+  "tnwsh" "tmux new-window -t 2 -n shell"
+  "tnwsr" "tmux new-window -t 3 -n server"
+  "tnwb"  "tmux new-window -t 7 -n boards vim -p board-now.md board-later.md board-scratch-pad.md"
+  "tnwl"  "tmux new-window -t 8 -n logs \"while ((1)) { heroku logs -t -r production }\""
+  "tnwp"  "tmux new-window -t 9 -n ping ping 8.8.8.8"
 
   "tks"   "tmux kill-session"
 
@@ -44,6 +51,7 @@ abbrevs+=(
   "rdm" "rake db:migrate"
   "rrun" "rails runner"
   "rap" 'rails runner "ap '
+  "rit" "ruby -Itest"
 )
 
 # Heroku
@@ -63,6 +71,7 @@ abbrevs+=(
 abbrevs+=(
   "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
   "vbi"  'vim -c "BundleInstall" -c "q" -c "q"'
+  "vbs"  'vim -p board-now.md board-later.md board-scratch-pad.md'
 )
 
 # Bundler

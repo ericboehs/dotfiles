@@ -20,6 +20,7 @@ source /usr/local/opt/chruby/share/chruby/chruby.sh
 chruby $(cat ~/.ruby-version)
 
 source "$HOME/.zsh/completion.zsh"
+source "$HOME/.zsh/rake-completion.zsh"
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/path.zsh"
 source "$HOME/.zsh/vi-mode.zsh"
