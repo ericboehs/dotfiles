@@ -8,7 +8,6 @@ Plugin 'benmills/vimux'
 Plugin 'rking/ag.vim'
 Plugin 'mattboehm/vim-unstack'
 Plugin 'rizzatti/dash.vim'
-Plugin 'kana/vim-textobj-user'
 
 Plugin 'tpope/vim-eunuch'
 Plugin 'tpope/vim-fugitive'
@@ -20,6 +19,11 @@ Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-rails'
 Plugin 'skalnik/vim-vroom'
 Plugin 'ngmy/vim-rubocop'
+
+" Text objs
+Plugin 'kana/vim-textobj-user'
+Plugin 'kana/vim-textobj-indent'
+Plugin 'kurkale6ka/vim-pairs'
 Plugin 'nelstrom/vim-textobj-rubyblock'
 
 " Javascript
