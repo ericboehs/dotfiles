@@ -90,7 +90,7 @@ abbrevs+=(
   "inp"   "invoker stop"
   "inr"   "invoker reload"
   "inrw"  "invoker reload web"
-  "inrpr" "invoker reload perl-restart"
+  "inrss" "invoker reload suitesetup"
   "int"   "invoker tail"
 )
 
@@ -139,6 +139,7 @@ abbrevs+=(
   "gl"    "git pull"
   "glr"   "git pull --rebase"
   "glro"  "git pull --rebase origin"
+  "glrom"  "git pull --rebase origin master"
 
   "gpr"   "hub pull-request"
   "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
