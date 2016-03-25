@@ -63,3 +63,20 @@ nnoremap <F8> :TagbarToggle<CR>
 
 " Toggle (change option) clipboard (pasteboard) syncing on/off
 nnoremap cop :set <C-R>=&clipboard =~# "unnamed" ? 'clipboard=' : 'clipboard=unnamed'<CR><CR>
+
+"" Perl to Ruby Refactoring
+command! -bar -range=% PTRRemoveSemis execute '<line1>,<line2>s/;\n/\r/e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRReplaceEq execute '<line1>,<line2>s/ eq / == /e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRReplaceIf execute '<line1>,<line2>s/\vif\((.*)\)( |\n)(\s+)?\{/if \1/e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRReplaceForEach execute '<line1>,<line2>s/\vforeach my \$(\w+) \(\@(\w+)\)(\n\s+\{)?/\2.each do |\1|/e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRReplaceMap normal f{%elyeF}%BPa.<Esc>ea do |changeme|<Esc>^hy0f{%Cend<Esc>^hv0"0p<C-o>xxV/end<CR>:s/\$_/changeme/g<CR>:noh<CR>
+command! -bar -range=% PTRReplaceArrow execute '<line1>,<line2>s/->/./e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRMakeLocalVariables execute '<line1>,<line2>s/\v(my )?[$@](\w+)/\2/e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRRemoveOpenBraces execute '<line1>,<line2>s/\v^\s+\{\n//e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRReplaceCloseBrace execute '<line1>,<line2>s/\v^(\s+)}\n/\1end\r/e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRRemoveSelf execute '<line1>,<line2>s/\v\$self(\.)?//e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRRemoveMy execute '<line1>,<line2>s/my \$//e' . (&gdefault ? '' : 'g')
+command! -bar -range=% PTRRemoveValue execute '<line1>,<line2>s/\v(-\>|\.)value//e' . (&gdefault ? '' : 'g')
+
+" Overrite ruby refactoring method extraction
+command! -bar -range=% RExtractMethod normal <Esc>`<widef <Esc>wwxxhr<CR>`<gv=`>oend<CR><Esc>gv2j
