@@ -1,8 +1,19 @@
+" Allow Ctrl-S and Ctrl-Q keybindings to pass through to vim
+silent !stty -ixon > /dev/null 2>/dev/null
+
 " Remap jk to Esc in insert mode
 inoremap jk <Esc>
 
 " Ctrl-P to fuzzy search files with FZF
 map <c-p> :FZF<CR>
+
+" Quit file
+map <c-q> <esc>:q<CR>
+imap <c-q> <esc>:q<CR>
+
+" Save file
+map <c-s> <esc>:w<CR>
+imap <c-s> <esc>:w<CR>
 
 " Ag with <leader>f
 map <Leader>f :Ag!<Space>
