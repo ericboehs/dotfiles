@@ -28,6 +28,7 @@ source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 
 # Add aliases and abbreviations
+source "$HOME/.zsh/functions.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
 
 # Add fzf.zsh. https://github.com/junegunn/fzf
