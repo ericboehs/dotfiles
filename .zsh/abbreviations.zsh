@@ -15,6 +15,7 @@ abbrevs=(
   "fdg" "find . | grep"
   "rsss"  "rsync -azP ~/Code/17hats/suitesetup/ eric.dev.17hats.com:/mnt/suitesetup/"
   "pgr" "| grep"
+  "awkp" "| awk '{print \$__CURSOR__}'"
   )
 
 # Dotfiles
@@ -65,6 +66,17 @@ abbrevs+=(
   "hkrc" "heroku run console"
   "drp" "-r production"
   "hsp" "-a hats-staging-pr-"
+)
+
+# Docker
+abbrevs+=(
+  "dk"   "docker"
+  "dki"  "docker images"
+  "dkig" "docker images | grep __CURSOR__ | awk '{print \$3}'"
+  "dm"   "docker-machine"
+  "dc"   "docker-compose"
+  "dkbt" "docker build -t __CURSOR__ ."
+  "drid" "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
 
 # Vim
@@ -185,8 +197,15 @@ done
 magic-abbrev-expand() {
   local MATCH
   LBUFFER=${LBUFFER%%(#m)[_a-zA-Z0-9]#}
-  LBUFFER+=${abbrevs[$MATCH]:-$MATCH}
-  zle self-insert
+  command=${abbrevs[$MATCH]}
+  LBUFFER+=${command:-$MATCH}
+
+  if [[ "${command}" =~ "__CURSOR__" ]]; then
+    RBUFFER=${LBUFFER[(ws:__CURSOR__:)2]}
+    LBUFFER=${LBUFFER[(ws:__CURSOR__:)1]}
+  else
+    zle self-insert
+  fi
 }
 
 magic-abbrev-expand-and-execute() {
