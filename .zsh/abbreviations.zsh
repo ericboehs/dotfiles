@@ -70,13 +70,15 @@ abbrevs+=(
 
 # Docker
 abbrevs+=(
-  "dk"   "docker"
-  "dki"  "docker images"
-  "dkig" "docker images | grep __CURSOR__ | awk '{print \$3}'"
-  "dm"   "docker-machine"
-  "dc"   "docker-compose"
-  "dkbt" "docker build -t __CURSOR__ ."
-  "drid" "docker rmi -f \$(docker images -q -f \"dangling=true\")"
+  "dk"    "docker"
+  "dkrit" "docker run -it"
+  "dki"   "docker images"
+  "dkig"  "docker images | grep __CURSOR__ | awk '{print \$3}'"
+  "dm"    "docker-machine"
+  "dmssh" "docker-machine ssh"
+  "dc"    "docker-compose"
+  "dkbt"  "docker build -t __CURSOR__ ."
+  "drid"  "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
 
 # Vim
@@ -134,6 +136,7 @@ abbrevs+=(
   "gb"    "git branch"
   "gba"   "git branch -a"
   "gbmd"  'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
+  "gbrmd" 'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
 
   "gd"    "git diff"
   "gdm"   "git diff origin/master.."
@@ -152,6 +155,13 @@ abbrevs+=(
   "glr"   "git pull --rebase"
   "glro"  "git pull --rebase origin"
   "glrom"  "git pull --rebase origin master"
+
+  "glu"   "git pulls update"
+  "gll"   "git pulls list"
+  "gls"   "git pulls show"
+  "glsf"  "git pulls show __CURSOR__ --full"
+  "glb"   "git pulls browse"
+  "glm"   "git pulls merge"
 
   "gpr"   "hub pull-request"
   "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
