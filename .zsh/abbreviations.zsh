@@ -132,6 +132,7 @@ abbrevs+=(
 
   "gco"   "git checkout"
   "gcom"  "git checkout master"
+  "gcopr" 'git checkout $(git pulls list | grep "^__CURSOR__" | sed -n "s/^\(.*\):\(.*\)$/\2/p")'
   "gcl"   "git clone"
   "gb"    "git branch"
   "gba"   "git branch -a"
