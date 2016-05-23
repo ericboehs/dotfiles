@@ -11,7 +11,7 @@ abbrevs=(
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
   "jsun" "python -mjson.tool"
   "tl" 'vi /Users/ericboehs/Library/Mobile\ Documents/com~apple~CloudDocs/Documents/Time\ Logs.txt'
-  "psg" 'ps auxww | grep'
+  "pag" 'ps auxww | grep'
   "fdg" "find . | grep"
   "rsss"  "rsync -azP ~/Code/17hats/suitesetup/ eric.dev.17hats.com:/mnt/suitesetup/"
   "pgr" "| grep"
@@ -146,6 +146,8 @@ abbrevs+=(
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
 
+  "gfo"   "git fetch origin"
+
   "gp"    "git push"
   "gpu"   "git push -u"
   "gpf"   "git push --force-with-lease"
@@ -154,8 +156,8 @@ abbrevs+=(
 
   "gl"    "git pull"
   "glr"   "git pull --rebase"
-  "glro"  "git pull --rebase origin"
-  "glrom"  "git pull --rebase origin master"
+  "glor"  "git pull origin --rebase"
+  "glomr" "git pull origin master --rebase"
 
   "glu"   "git pulls update"
   "gll"   "git pulls list"
@@ -173,6 +175,7 @@ abbrevs+=(
   "grba"  "git rebase --abort"
   "grbc"  "git rebase --continue"
   "grbm"  "git rebase master"
+  "grbom"  "git rebase origin/master"
   "grbim" "git rebase -i master"
 
   "grhu"  "git reset --hard @{u}"
