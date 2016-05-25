@@ -33,3 +33,5 @@ source "$HOME/.zsh/abbreviations.zsh"
 
 # Add fzf.zsh. https://github.com/junegunn/fzf
 source "$HOME/.zsh/fzf.zsh"
+
+eval $(docker-machine env default)
