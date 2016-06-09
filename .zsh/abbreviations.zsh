@@ -130,14 +130,17 @@ abbrevs+=(
   "gca"   "git commit --amend -v"
   "gcane" "git commit --amend --no-edit"
 
-  "gco"   "git checkout"
-  "gcom"  "git checkout master"
-  "gcopr" 'git checkout $(git pulls list | grep "^__CURSOR__" | sed -n "s/^\(.*\):\(.*\)$/\2/p")'
-  "gcl"   "git clone"
-  "gb"    "git branch"
-  "gba"   "git branch -a"
-  "gbmd"  'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
-  "gbrmd" 'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
+  "gco"    "git checkout"
+  "gcom"   "git checkout master"
+  "gcopr"  'git checkout $(git pulls list | grep "^__CURSOR__" | sed -n "s/^\(.*\):\(.*\)$/\2/p")'
+  "gcoh"   "git checkout HEAD"
+  "gcohd"  "git checkout HEAD --"
+  "gcohgl" "git checkout HEAD -- Gemfile.lock"
+  "gcl"    "git clone"
+  "gb"     "git branch"
+  "gba"    "git branch -a"
+  "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
+  "gbrmd"  'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
 
   "gd"    "git diff"
   "gdm"   "git diff origin/master.."
