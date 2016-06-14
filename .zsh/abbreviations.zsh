@@ -16,6 +16,8 @@ abbrevs=(
   "rsss"  "rsync -azP ~/Code/17hats/suitesetup/ eric.dev.17hats.com:/mnt/suitesetup/"
   "pgr" "| grep"
   "awkp" "| awk '{print \$__CURSOR__}'"
+  "rlw"  'readlink $(which __CURSOR__)'
+  "wtnoti" "while do; noti; sleep 120; done"
   )
 
 # Dotfiles
