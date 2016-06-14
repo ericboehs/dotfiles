@@ -14,6 +14,7 @@ setopt NO_BEEP             # No more bells!
 export CLICOLOR=1
 export EDITOR=vim
 export PAGER='less -q'
+export TMUX_TMPDIR=/tmp
 
 # Automatically/easily switch ruby versions via chruby
 source /usr/local/opt/chruby/share/chruby/chruby.sh

@@ -8,7 +8,7 @@ typeset -A abbrevs
 abbrevs=(
   "ll"   "ls -al"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
-  "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-pair'
+  "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-501'
   "jsun" "python -mjson.tool"
   "tl" 'vi /Users/ericboehs/Library/Mobile\ Documents/com~apple~CloudDocs/Documents/Time\ Logs.txt'
   "pag" 'ps auxww | grep'
@@ -27,7 +27,8 @@ abbrevs+=(
 
 # Tmux
 abbrevs+=(
-  "tan"  "tmux -S /tmp/tmux-pair attach -t pair || tmux -S /tmp/tmux-pair new -s pair -n editor"
+  "ta"   "tmux attach"
+  "tan"  "tmux attach || tmux new -n editor"
   "tnwa"  "tnwsh; tnwsr; tnwb; tnwl; tnwp; tmux select-window -t 1"
   "tnwsh" "tmux new-window -t 2 -n shell"
   "tnwsr" "tmux new-window -t 3 -n server"
@@ -37,7 +38,7 @@ abbrevs+=(
 
   "tks"   "tmux kill-session"
 
-  "c7tp"  "chmod 777 /tmp/tmux-pair"
+  "cr7t"  "chmod -R 777 /tmp/tmux-501"
 )
 
 # EC2 CLI
