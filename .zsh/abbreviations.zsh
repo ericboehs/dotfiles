@@ -7,6 +7,7 @@ typeset -A abbrevs
 # General aliases
 abbrevs=(
   "ll"   "ls -al"
+  "l1"   "ls -1A"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-501'
   "jsun" "python -mjson.tool"
@@ -25,6 +26,7 @@ abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
   "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
   "dz" '. ~/.zshrc'
+  "sase" "set -a; source .env; set +a"
 )
 
 # Tmux
@@ -80,6 +82,7 @@ abbrevs+=(
   "dm"    "docker-machine"
   "dmssh" "docker-machine ssh"
   "dc"    "docker-compose"
+  "dkbd"  "docker build ."
   "dkbt"  "docker build -t __CURSOR__ ."
   "drid"  "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
@@ -132,6 +135,8 @@ abbrevs+=(
   "gcp"   "git commit -v && git push -u"
   "gca"   "git commit --amend -v"
   "gcane" "git commit --amend --no-edit"
+  "gcm"   "git commit -m"
+  "gcmw"   "git commit -m wip"
 
   "gco"    "git checkout"
   "gcom"   "git checkout master"

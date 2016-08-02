@@ -21,6 +21,9 @@ map <Leader>f :Ag!<Space>
 " Highlight word at cursor and then Ag it.
 nnoremap <leader>H *<C-O>:AgFromSearch!<CR>
 
+" List related tags in quickfix window
+nmap <c-]> :ltag <C-R><C-W><CR>:lopen<CR><CR>
+
 " Quickly search project for search
 map <leader>F :AgFromSearch!<CR>
 
@@ -63,6 +66,10 @@ nnoremap <F8> :TagbarToggle<CR>
 
 " Toggle (change option) clipboard (pasteboard) syncing on/off
 nnoremap cop :set <C-R>=&clipboard =~# "unnamed" ? 'clipboard=' : 'clipboard=unnamed'<CR><CR>
+
+" Copy/Paste from system clipboard with Alt-C/Alt-V
+vnoremap <Esc>c "*y
+nnoremap <Esc>v "*p
 
 "" Perl to Ruby Refactoring
 command! -bar -range=% PTRRemoveSemis execute '<line1>,<line2>s/;\n/\r/e' . (&gdefault ? '' : 'g')

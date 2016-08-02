@@ -14,6 +14,7 @@ Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-sensible'
 Plugin 'tpope/vim-unimpaired'
+Plugin 'tpope/vim-haml'
 Plugin 'tmhedberg/matchit'
 
 " Ruby/Rails
@@ -29,6 +30,9 @@ Plugin 'nelstrom/vim-textobj-rubyblock'
 
 " Javascript
 " Plugin 'wookiehangover/jshint.vim'
+
+" Crystal
+Plugin 'rhysd/vim-crystal'
 
 " Tmux
 Plugin 'christoomey/vim-tmux-navigator'

@@ -31,3 +31,9 @@
 	ff = only
 [fetch]
 	prune = true
+[user]
+	signingkey = ericboehs@gmail.com
+[gpg]
+	program = gpg2
+[commit]
+	gpgsign = true
