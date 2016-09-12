@@ -6,6 +6,8 @@ inoremap jk <Esc>
 
 " Ctrl-P to fuzzy search files with FZF
 map <c-p> :FZF<CR>
+map <c-t> :Tags<CR>
+map <Leader>g :call fzf#run({'source': 'echo "$(git diff --name-only --cached)\n$(git diff --name-only)\n$(git diff --name-only master..)" \| awk NF', 'sink': 'e', 'options': '--multi', 'down': '40%'})<CR>
 
 " Quit file
 map <c-q> <esc>:q<CR>

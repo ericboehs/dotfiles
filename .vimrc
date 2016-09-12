@@ -1,4 +1,5 @@
 source ~/.vim/vundle.vim
+source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
 source ~/.vim/macros.vim
 source ~/.vim/lightline.vim

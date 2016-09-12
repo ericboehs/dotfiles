@@ -32,7 +32,9 @@ source "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 source "$HOME/.zsh/functions.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
 
-# Add fzf.zsh. https://github.com/junegunn/fzf
-source "$HOME/.zsh/fzf.zsh"
-
 eval $(docker-machine env default)
+
+export PLS_WIPE_DB=true
+
+export FZF_DEFAULT_OPTS="--exact --inline-info"
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
