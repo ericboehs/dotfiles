@@ -10,6 +10,9 @@ map <Leader>vs :VtrSendLinesToRunner<CR>
 " Prompt for a command to run
 map <Leader>vc :VtrSendCommandToRunner<Space>
 
+" Clear runner
+map <Leader>vcr :VtrClearRunner<CR>
+
 " Run last command executed by VtrSendCommandToRunner
 map <Leader>vl :VtrSendCommandToRunner<CR>
 

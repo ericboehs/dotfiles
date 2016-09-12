@@ -9,6 +9,7 @@ Plugin 'rking/ag.vim'
 Plugin 'mattboehm/vim-unstack'
 Plugin 'rizzatti/dash.vim'
 
+Plugin 'tpope/vim-abolish'
 Plugin 'tpope/vim-eunuch'
 Plugin 'tpope/vim-fugitive'
 Plugin 'tpope/vim-repeat'

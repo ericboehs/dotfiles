@@ -18,6 +18,8 @@ export TMUX_TMPDIR=/tmp
 
 # Automatically/easily switch ruby versions via chruby
 source /usr/local/opt/chruby/share/chruby/chruby.sh
+# Unfortunately auto.sh clashes with .git/safe
+# source /usr/local/opt/chruby/share/chruby/auto.sh
 chruby $(cat ~/.ruby-version)
 
 source "$HOME/.zsh/completion.zsh"
