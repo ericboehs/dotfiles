@@ -4,6 +4,7 @@ source ~/.vim/keybindings.vim
 source ~/.vim/macros.vim
 source ~/.vim/lightline.vim
 source ~/.vim/vroom.vim
+source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim
 source ~/.vim/vim-tmux-navigator.vim
 source ~/.vim/vim-unstack.vim

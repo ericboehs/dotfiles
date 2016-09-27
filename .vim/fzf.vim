@@ -1,6 +1,6 @@
 " FZF Settings
 let g:fzf_history_dir = '~/.fzf-history'
-let $FZF_DEFAULT_COMMAND = 'ag -g ""'
+let $FZF_DEFAULT_COMMAND = 'ag -U --hidden -g ""'
 let $FZF_DEFAULT_OPTS="--inline-info"
 
 " Search tags

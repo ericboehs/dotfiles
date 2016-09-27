@@ -17,6 +17,7 @@ Plugin 'tpope/vim-sensible'
 Plugin 'tpope/vim-unimpaired'
 Plugin 'tpope/vim-haml'
 Plugin 'tmhedberg/matchit'
+Plugin 'vim-ruby/vim-ruby'
 
 " Ruby/Rails
 Plugin 'tpope/vim-rails'
@@ -35,9 +36,14 @@ Plugin 'nelstrom/vim-textobj-rubyblock'
 " Crystal
 Plugin 'rhysd/vim-crystal'
 
+" iTerm
+" Plugin 'sjl/vitality.vim'
+
 " Tmux
 Plugin 'christoomey/vim-tmux-navigator'
 Plugin 'christoomey/vim-tmux-runner'
+Plugin 'tmux-plugins/vim-tmux-focus-events'
+Plugin 'blueyed/vim-diminactive'
 
 " Editing
 Plugin 'godlygeek/tabular'
