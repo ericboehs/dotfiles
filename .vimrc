@@ -29,6 +29,10 @@ set noerrorbells visualbell t_vb=           " No more error bells
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
 
+" Set Mouse Mode
+" set mouse=a
+" set ttymouse=xterm2
+
 " Treat dashed words as whole words in stylesheets
 autocmd Filetype css,scss,sass setlocal iskeyword+=-
 
