@@ -3,3 +3,5 @@
 .vim/.netrwhist
 .gitconfig.private
 .bundle/cache
+.vim/plugged/*
+!.gitkeep
