@@ -1,5 +1,5 @@
 " Allow Ctrl-S and Ctrl-Q keybindings to pass through to vim
-silent !stty -ixon > /dev/null 2>/dev/null
+" silent !stty -ixon > /dev/null 2>/dev/null
 
 " Remap jk to Esc in insert mode
 inoremap jk <Esc>

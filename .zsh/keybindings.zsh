@@ -1,3 +1,6 @@
+# Allow Ctrl-S and Ctrl-Q to be keybindings in vim
+stty -ixon > /dev/null 2>/dev/null
+
 # Set directions and delete keys
 bindkey '^[^[[D' vi-backward-word
 bindkey '^[^[[C' vi-forward-word
