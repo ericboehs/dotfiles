@@ -18,3 +18,5 @@ public/assets
 /log/*
 /tmp/*
 /node_modules
+.vim/.undo
+.vim/plugged
