@@ -57,6 +57,7 @@ Plug 'mbbill/undotree'
 Plug 'henrik/vim-indexed-search'
 Plug 'ecomba/vim-ruby-refactoring'
 Plug 'ReplaceWithRegister'
+Plug 'mattn/emmet-vim'
 
 " Languages
 Plug 'slim-template/vim-slim'
