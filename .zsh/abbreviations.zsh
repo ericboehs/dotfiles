@@ -27,6 +27,7 @@ abbrevs=(
 # Dotfiles
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
+  "vab" "vi ~/.zsh/abbreviations.zsh"
   "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
