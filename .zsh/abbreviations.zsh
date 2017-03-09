@@ -20,6 +20,8 @@ abbrevs=(
   "awkp" "| awk '{print \$__CURSOR__}'"
   "rlw"  'readlink $(which __CURSOR__)'
   "wtnoti" "while do; noti; sleep 120; done"
+  "epoch" "date +%s"
+  "epochms" 'echo $(($(gdate +%s%N)/1000000))'
   )
 
 # Dotfiles
