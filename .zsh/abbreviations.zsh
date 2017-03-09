@@ -54,10 +54,15 @@ abbrevs+=(
 
 # Ruby
 abbrevs+=(
-  "rdm" "rake db:migrate"
+  "rdm"  "rake db:migrate"
+  "rds"  "rake db:seed"
   "rrun" "rails runner"
-  "rap" 'rails runner "ap '
-  "rit" "ruby -Itest"
+  "rap"  'rails runner "ap '
+  "rit"  "ruby -Itest"
+  "tf"   "tail -f"
+  "tfl"  "tail -f log/__CURSOR__"
+  "tfld" "tail -f log/development.log"
+  "vdm"  'vi db/migrate/$(ls db/migrate | tail -1)'
 )
 
 # Heroku

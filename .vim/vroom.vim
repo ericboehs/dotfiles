@@ -11,4 +11,4 @@ let g:vroom_use_vimux = 1
 let g:vroom_ignore_color_flag = 1
 
 " Use rake test for minitest
-let g:vroom_test_unit_command = 'rake test'
+let g:vroom_test_unit_command = 'rails test'
