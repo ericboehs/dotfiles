@@ -8,6 +8,7 @@ typeset -A abbrevs
 abbrevs=(
   "ll"   "ls -al"
   "l1"   "ls -1A"
+  "mdc"  "mkdir -p __CURSOR__ && cd \$_"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-501'
   "jsun" "python -mjson.tool"
@@ -150,6 +151,7 @@ abbrevs+=(
   "gcohd"  "git checkout HEAD --"
   "gcohgl" "git checkout HEAD -- Gemfile.lock"
   "gcl"    "git clone"
+  "gclc"   "git clone __CURSOR__ && cd \$(basename \$_)"
   "gb"     "git branch"
   "gba"    "git branch -a"
   "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
