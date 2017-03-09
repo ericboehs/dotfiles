@@ -33,6 +33,26 @@ abbrevs+=(
   "sase" "set -a; source .env; set +a"
 )
 
+# Homebrew
+abbrevs+=(
+  "br"    "brew"
+  "bri"   "brew install"
+  "brui"  "brew uninstall"
+  "brl"   "brew list"
+  "brs"   "brew search"
+  "bro"   "brew options"
+  "brud"  "brew update"
+  "brug"  "brew upgrade"
+  "brod"  "brew outdated"
+  "brdoc" "brew doctor"
+
+  "brc"   "brew cask"
+  "brci"  "brew cask install"
+  "brcz"  "brew cask zap"
+  "brcl"  "brew cask list"
+  "brcs"  "brew cask search"
+)
+
 # Tmux
 abbrevs+=(
   "ta"   "tmux attach"
