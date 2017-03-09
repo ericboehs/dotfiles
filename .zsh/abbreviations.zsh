@@ -235,7 +235,7 @@ abbrevs+=(
   "gstl" "git stash list"
   "gstp" "git stash pop"
 
-  "br"   "git checkout -b"
+  "gcb"   "git checkout -b"
 
   "vgu"  'vim $(git ls-files --unmerged | cut -f2 | sort -u)'
   "gcdi" "git clean -di"
