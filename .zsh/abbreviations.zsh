@@ -210,6 +210,7 @@ abbrevs+=(
   "gpr"   "hub pull-request"
   "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
   "gprm"  'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
+  "blb"   '-b $(git rev-parse --abbrev-ref @{-1})'
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"
