@@ -26,6 +26,7 @@ set laststatus=2                            " Always show the status line
 set history=10000
 set autoread
 set noerrorbells visualbell t_vb=           " No more error bells
+set iskeyword+=\-                           " Auto complete words with dashes
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
 
