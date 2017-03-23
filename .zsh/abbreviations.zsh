@@ -243,7 +243,8 @@ abbrevs+=(
   "gsh"  "git show"
   "gshh" "git show HEAD"
 
-  "gsu" "git submodule update --init --recursive"
+  "gsu"  "git submodule update --init --recursive"
+  "gsgl" "git submodule -q foreach git pull -q origin master"
 
   "gst"  "git stash"
   "gstl" "git stash list"
