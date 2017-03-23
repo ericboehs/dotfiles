@@ -90,20 +90,28 @@ abbrevs+=(
   "tf"   "tail -f"
   "tfl"  "tail -f log/__CURSOR__"
   "tfld" "tail -f log/development.log"
+  "ttr"  "touch tmp/restart.txt"
   "vdm"  'vi db/migrate/$(ls db/migrate | tail -1)'
 )
 
 # Heroku
 abbrevs+=(
   "hk"   "heroku"
+  "hkgpr" "heroku git:remote -r pr -a"
+  "hkb"  "heroku builds"
+  "hkbo" "heroku builds:output"
+  "hkbop" "REMOTE='__CURSOR__'; heroku builds:output \$(heroku builds -r \$REMOTE | grep pending | head -1 | awk '{print \$3}') -r \$REMOTE"
+  "hkbopr" "heroku builds:output \$(heroku builds -r pr | grep pending | head -1 | awk '{print \$3}') -r pr"
+  "hkbp" "heroku builds __CURSOR__ | grep pending | head -1 | awk '{print \$3}'"
   "hkl"  "heroku logs -t"
   "hkc"  "heroku config"
   "hkcs" "heroku config:set"
   "hkps" "heroku ps"
   "hkr"  "heroku run"
   "hkrc" "heroku run console"
-  "drp" "-r production"
-  "hsp" "-a hats-staging-pr-"
+  "hkrc" "heroku run console"
+  "rprod" "-r production"
+  "rpr"  "-r pr"
 )
 
 # Docker
@@ -213,6 +221,7 @@ abbrevs+=(
 
   "gpr"   "hub pull-request"
   "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
+  "gprneh" "PR_ID=\$(basename \$(EDITOR='vim -c \":wq\"' hub pull-request | tail -1)); git remote set-url pr https://git.heroku.com/indiaboulevard-next-pr-\$PR_ID.git; echo https://github.com/indiaboulevard/next/pull/\$PR_ID"
   "gprm"  'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
   "blb"   '-b $(git rev-parse --abbrev-ref @{-1})'
 
