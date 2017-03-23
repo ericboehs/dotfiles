@@ -20,6 +20,10 @@ abbrevs=(
   "awkp" "| awk '{print \$__CURSOR__}'"
   "rlw"  'readlink $(which __CURSOR__)'
   "wtnoti" "while do; noti; sleep 120; done"
+  "wt"     "while; do __CURSOR__; clear; sleep 5; done"
+  "wtbb"   "while; do !!; clear; sleep 5; done"
+  "ut"     "clear && until __CURSOR__; do sleep 5; done"
+  "utbb"   "clear && until !!; do sleep 5; done"
   "epoch" "date +%s"
   "epochms" 'echo $(($(gdate +%s%N)/1000000))'
   )
