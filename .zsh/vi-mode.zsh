@@ -11,7 +11,7 @@ bindkey -M viins 'jk' vi-cmd-mode
 
 # Change cursor when in normal mode
 function zle-line-init zle-keymap-select {
-  PROMPT="%(?.%F{magenta}.%F{red})${${KEYMAP/vicmd/❯❯}/(main|viins)/ ❯}%f "
+  PROMPT="%(?.%F{cyan}.%F{red})${${KEYMAP/vicmd/❯❯}/(main|viins)/ ❯}%f "
   zle reset-prompt
 }
 
