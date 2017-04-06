@@ -7,6 +7,7 @@
   branch = auto
 [core]
   excludesfile = ~/.gitignore
+  pager = diff-so-fancy | less --tabs=4 -RFX --pattern '^(Date|added|deleted|modified): '
 [git-up "bundler"]
   check = true
 [rebase]
