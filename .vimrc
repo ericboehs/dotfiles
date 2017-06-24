@@ -67,7 +67,7 @@ set undoreload=10000
 
 " Colorscheme
 syntax enable
-colorscheme solarized
+silent! colorscheme solarized
 highlight SignColumn ctermbg=8
 
 " Set wildcard ignore for ctrlp and ack/ag
