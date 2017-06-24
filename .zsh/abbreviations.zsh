@@ -59,14 +59,19 @@ abbrevs+=(
 
 # Tmux
 abbrevs+=(
-  "ta"   "tmux attach"
-  "tan"  "tmux attach || tmux new -n editor"
-  "tnwa"  "tnwsh; tnwsr; tnwb; tnwl; tnwp; tmux select-window -t 1"
-  "tnwsh" "tmux new-window -t 2 -n shell"
-  "tnwsr" "tmux new-window -t 3 -n server"
-  "tnwb"  "tmux new-window -t 7 -n boards vim -p board-now.md board-later.md board-scratch-pad.md"
-  "tnwl"  "tmux new-window -t 8 -n logs \"while ((1)) { heroku logs -t -r production }\""
-  "tnwp"  "tmux new-window -t 9 -n ping ping 8.8.8.8"
+  "ta"    "tmux attach"
+  "tan"   "tmux attach || tmux new -n editor"
+  "tsw"   "tmux split-window"
+  "tswrc" "tmux split-window rails c"
+  "tswrs" "tmux split-window rails s"
+  "tswv"  "tmux split-window vim"
+  "tnw"   "tmux new-window"
+  "tnw"   "tmux new-window"
+  "tnwa"  "tnw; tnws; tnwb; tmux select-window -t 1"
+  "tnws"  "tmux new-window -n server server"
+  "tnwb"  "tmux new-window -n boards vim -p board-now.md board-later.md board-scratch-pad.md"
+  "tnwl"  "tmux new-window -n logs \"while ((1)) { heroku logs -t -r production }\""
+  "tnwp"  "tmux new-window -n ping ping 8.8.8.8"
 
   "tks"   "tmux kill-session"
 
@@ -221,7 +226,7 @@ abbrevs+=(
 
   "gpr"   "hub pull-request"
   "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
-  "gprneh" "PR_ID=\$(basename \$(EDITOR='vim -c \":wq\"' hub pull-request | tail -1)); git remote set-url pr https://git.heroku.com/indiaboulevard-next-pr-\$PR_ID.git; echo https://github.com/indiaboulevard/next/pull/\$PR_ID"
+  "gprneh" "PR_ID=\$(basename \$(EDITOR='vim -c \":wq\"' hub pull-request | tail -1)); git remote set-url pr https://git.heroku.com/indiaboulevard-staging-pr-\$PR_ID.git; echo https://github.com/indiaboulevard/indiaboulevard/pull/\$PR_ID"
   "gprm"  'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
   "blb"   '-b $(git rev-parse --abbrev-ref @{-1})'
 

@@ -9,6 +9,7 @@ export CLICOLOR=1
 export EDITOR=vim
 export PAGER='less -q'
 export TMUX_TMPDIR=/tmp
+export LANG=en_US.UTF-8
 
 source "$HOME/.zsh/pure.zsh"
 source "$HOME/.zsh/completion.zsh"
