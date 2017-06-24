@@ -53,7 +53,7 @@ done
 git checkout .zshrc
 
 # Install vim plugins
-vim -u NONE -c ':BundleInstall!' -c ':qa!'
+vim -c ':silent !echo' -c ':PlugInstall' -c ':qa!'
 
 popd > /dev/null
 
