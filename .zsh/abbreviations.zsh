@@ -194,6 +194,8 @@ abbrevs+=(
   "gclc"   "git clone __CURSOR__ && cd \$(basename \$_)"
   "gb"     "git branch"
   "gba"    "git branch -a"
+  "gbsmd"  "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
+
   "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
   "gbrmd"  'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
 
