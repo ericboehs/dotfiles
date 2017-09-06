@@ -11,7 +11,7 @@
 [pager]
   diff = diff-so-fancy | less --tabs=4 -RFX --pattern '^(added|deleted|modified): '
 [interactive]
-  diffFilter = diff-highlight
+  diffFilter = diff-so-fancy
 [git-up "bundler"]
   check = true
 [rebase]
