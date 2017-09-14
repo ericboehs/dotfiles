@@ -1,5 +1,5 @@
 # Make path unique
-typeset -U path
+typeset -Ug path
 
 # Add current directory's bin, node_modules/.bin and vendor/bundle/bin directories to path safely
 path=(.git/safe/../../vendor/bundle/bin "$path[@]")

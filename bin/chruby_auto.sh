@@ -11,6 +11,7 @@ function chruby_auto() {
 			else
 				RUBY_AUTO_VERSION="$version"
 				chruby "$version"
+				source ~/.zsh/path.zsh
 				return $?
 			fi
 		fi
