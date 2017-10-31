@@ -73,6 +73,11 @@ highlight SignColumn ctermbg=8
 " Set wildcard ignore for ctrlp and ack/ag
 set wildignore+=*/tmp/*,vendor/bundle/*,*/build/*,*/Resources/*,*.so,*.swp,*.zip,*.png,*.jpg,*.jpeg,*.gif,.gitkeep
 
+" Set ack.vim to use ag
+if executable('ag')
+  let g:ackprg = 'ag --vimgrep'
+endif
+
 if filereadable(expand("~/.vimrc.local"))
   source ~/.vimrc.local
 endif

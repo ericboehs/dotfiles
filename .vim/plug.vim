@@ -6,7 +6,7 @@ Plug 'tweekmonster/fzf-filemru'
 Plug 'itchyny/lightline.vim'
 Plug 'edkolev/tmuxline.vim'
 Plug 'benmills/vimux'
-Plug 'rking/ag.vim'
+Plug 'mileszs/ack.vim'
 Plug 'mattboehm/vim-unstack'
 Plug 'rizzatti/dash.vim'
 

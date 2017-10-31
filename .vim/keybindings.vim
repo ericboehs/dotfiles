@@ -19,17 +19,17 @@ imap <c-q> <esc>:q<CR>
 map <c-s> <esc>:w<CR>
 imap <c-s> <esc>:w<CR>
 
-" Ag with <leader>f
-map <Leader>f :Ag!<Space>
+" Ack with <leader>f
+map <Leader>f :Ack!<Space>
 
-" Highlight word at cursor and then Ag it.
-nnoremap <leader>H *<C-O>:AgFromSearch!<CR>
+" Highlight word at cursor and then Ack it.
+nnoremap <leader>H *<C-O>:AckFromSearch!<CR>
 
 " List related tags in quickfix window
 nmap <c-]> :ltag <C-R><C-W><CR>:lopen<CR><CR>
 
 " Quickly search project for search
-map <leader>F :AgFromSearch!<CR>
+map <leader>F :AckFromSearch!<CR>
 
 " Start a ruby pry debugger
 :nmap <leader>bp Orequire 'pry'; binding.pry<esc>^
