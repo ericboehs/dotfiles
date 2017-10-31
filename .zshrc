@@ -22,3 +22,5 @@ source "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
 source "$HOME/.zsh/chruby.zsh"
 source "$HOME/.zsh/fzf.zsh"
+
+[[ -f "$HOME/.zshrc.private" ]] && source "$HOME/.zshrc.private"
