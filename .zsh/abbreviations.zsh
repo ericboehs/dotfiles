@@ -133,6 +133,13 @@ abbrevs+=(
   "drid"  "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
 
+# AWS
+abbrevs+=(
+  "sshprod" "curl -X POST --data-urlencode \"payload={\\\"channel\\\": \\\"#engineering\\\", \\\"username\\\": \\\"ssh-to-prod\\\", \\\"text\\\": \\\"\$(whoami) is sshing to production. :bomb:\\\", \\\"icon_emoji\\\": \\\":fire_engine:\\\"}\" \$SPREEMO_SLACK_WEBHOOK_URL; aws ec2 authorize-security-group-ingress --group-id \$SPREEMO_PROD_SG_ID --ip-permissions '[{\"IpProtocol\": \"tcp\", \"FromPort\": 22, \"ToPort\": 22, \"IpRanges\": [{\"CidrIp\": \"'\$(curl -s http://checkip.amazonaws.com/)'/24\", \"Description\": \"'\$(whoami)'\"}]}]'; echo; aws ec2 describe-security-groups --group-ids \$SPREEMO_PROD_SG_ID | grep $(whoami); ssh spreemo-production-app1 -t \"cd /srv/www/chewy/current; sudo su deploy\"; aws ec2 revoke-security-group-ingress --group-id \$SPREEMO_PROD_SG_ID --ip-permissions '[{\"IpProtocol\": \"tcp\", \"FromPort\": 22, \"ToPort\": 22, \"IpRanges\": [{\"CidrIp\": \"'\$(curl -s http://checkip.amazonaws.com/)'/24\", \"Description\": \"'\$(whoami)'\"}]}]'; aws ec2 describe-security-groups --group-ids \$SPREEMO_PROD_SG_ID | grep $(whoami); curl -X POST --data-urlencode \"payload={\\\"channel\\\": \\\"#engineering\\\", \\\"username\\\": \\\"ssh-to-prod\\\", \\\"text\\\": \\\"\$(whoami) is all done on production. :v:\\\", \\\"icon_emoji\\\": \\\":fire_engine:\\\"}\" \$SPREEMO_SLACK_WEBHOOK_URL"
+  "depstaging" "aws opsworks update-app --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_STAGING_STACK_ID --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
+  "depdemo2" "aws opsworks update-app --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_DEMO2_STACK_ID --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
+)
+
 # Vim
 abbrevs+=(
   "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
