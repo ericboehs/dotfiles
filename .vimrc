@@ -7,32 +7,16 @@ source ~/.vim/vroom.vim
 source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim
 source ~/.vim/vim-tmux-navigator.vim
-source ~/.vim/vim-unstack.vim
 
-set t_Co=256                                " Support for xterm with 256 colors (gets overriden in .gvimrc)
 set relativenumber                          " Show line numbers relative to each other
 set number                                  " Show the current lines number w/ relative numbers around it
-set ruler                                   " Show ruler
-set listchars=trail:.,tab:>-,eol:¬          " Change the invisible characters
 set noswapfile                              " Don't create annoying *.swp files
-set scrolloff=5                             " Start scrolling the file 5 lines before the end of the window
-set spelllang=en_us                         " Set default spelling language to English
-set hidden                                  " Allow hiding buffers with unsaved changes
-set wildmenu                                " Make tab completion act more like bash
 set wildmode=list:longest                   " Tab complete to longest common string, like bash
 set showcmd                                 " Display an incomplete command in the lower right corner
-set showmode                                " Show current mode down the bottom
-set laststatus=2                            " Always show the status line
-set history=10000
-set autoread
-set noerrorbells visualbell t_vb=           " No more error bells
+set noshowmode                                " Show current mode down the bottom
 set iskeyword+=\-                           " Auto complete words with dashes
 
 autocmd FileType gitcommit set spell        " Turn on spell check in Git commits.
-
-" Set Mouse Mode
-" set mouse=a
-" set ttymouse=xterm2
 
 " Treat dashed words as whole words in stylesheets
 autocmd Filetype css,scss,sass setlocal iskeyword+=-
@@ -48,13 +32,10 @@ set shiftwidth=2                            " Number of spaces to use in each au
 set tabstop=2                               " Two tab spaces
 set softtabstop=2                           " Number of spaces to skip or insert when <BS>ing or <Tab>ing
 set expandtab                               " Spaces instead of tabs for better cross-editor compatibility
-set autoindent                              " Keep the indent when creating a new line
-set smarttab                                " Use shiftwidth and softtabstop to insert or delete (on <BS>) blanks
-set cindent                                 " Recommended seting for automatic C-style indentation
 
-" Color column at 110 characters
-set colorcolumn=110
-set textwidth=110
+" Color column at 120 characters
+set colorcolumn=120
+set textwidth=120
 
 " Undo
 if !isdirectory(expand("~/.vim/.undo/"))
@@ -66,7 +47,6 @@ set undolevels=1000
 set undoreload=10000
 
 " Colorscheme
-syntax enable
 silent! colorscheme solarized
 highlight SignColumn ctermbg=8
 
