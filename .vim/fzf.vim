@@ -2,6 +2,12 @@
 let g:fzf_history_dir = '~/.fzf-history'
 let $FZF_DEFAULT_COMMAND = 'ag -U --hidden -g ""'
 let $FZF_DEFAULT_OPTS="--inline-info"
+let g:rg_command = '
+  \ rg --column --line-number --no-heading --fixed-strings --ignore-case --no-ignore --hidden --follow --color "always"
+  \ -g "*.{js,json,php,md,styl,jade,html,config,py,cpp,c,go,hs,rb,conf}"
+  \ -g "!{.git,node_modules,vendor}/*" '
+
+command! -bang -nargs=* F call fzf#vim#grep(g:rg_command .shellescape(<q-args>), 1, <bang>0)
 
 " Search tags
 function! s:tags_sink(line)
