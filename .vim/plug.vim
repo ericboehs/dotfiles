@@ -36,6 +36,8 @@ Plug 'nelstrom/vim-textobj-rubyblock'
 
 " Javascript
 " Plug 'wookiehangover/jshint.vim'
+Plug 'posva/vim-vue'
+Plug 'w0rp/ale'
 
 " Crystal
 Plug 'rhysd/vim-crystal'
