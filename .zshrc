@@ -6,10 +6,15 @@ setopt extendedglob        # Expand file expressiong (e.g. **/file)
 setopt NO_BEEP             # No more bells!
 
 export CLICOLOR=1
-export EDITOR=vim
+export EDITOR=nvim
 export PAGER='less -q'
 export TMUX_TMPDIR=/tmp
 export LANG=en_US.UTF-8
+
+if type nvim > /dev/null 2>&1; then
+  alias vim='nvim'
+  alias vi='nvim'
+fi
 
 source "$HOME/.zsh/pure.zsh"
 source "$HOME/.zsh/completion.zsh"
