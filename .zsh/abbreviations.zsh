@@ -135,7 +135,7 @@ abbrevs+=(
 
 # AWS
 abbrevs+=(
-  "sshprod" "curl -X POST --data-urlencode \"payload={\\\"channel\\\": \\\"#engineering\\\", \\\"username\\\": \\\"ssh-to-prod\\\", \\\"text\\\": \\\"\$(whoami) is sshing to production. :bomb:\\\", \\\"icon_emoji\\\": \\\":fire_engine:\\\"}\" \$SPREEMO_SLACK_WEBHOOK_URL; aws ec2 authorize-security-group-ingress --group-id \$SPREEMO_PROD_SG_ID --ip-permissions '[{\"IpProtocol\": \"tcp\", \"FromPort\": 22, \"ToPort\": 22, \"IpRanges\": [{\"CidrIp\": \"'\$(curl -s http://checkip.amazonaws.com/)'/24\", \"Description\": \"'\$(whoami)'\"}]}]'; echo; aws ec2 describe-security-groups --group-ids \$SPREEMO_PROD_SG_ID | grep $(whoami); ssh spreemo-production-app1 -t \"cd /srv/www/chewy/current; sudo su deploy\"; aws ec2 revoke-security-group-ingress --group-id \$SPREEMO_PROD_SG_ID --ip-permissions '[{\"IpProtocol\": \"tcp\", \"FromPort\": 22, \"ToPort\": 22, \"IpRanges\": [{\"CidrIp\": \"'\$(curl -s http://checkip.amazonaws.com/)'/24\", \"Description\": \"'\$(whoami)'\"}]}]'; aws ec2 describe-security-groups --group-ids \$SPREEMO_PROD_SG_ID | grep $(whoami); curl -X POST --data-urlencode \"payload={\\\"channel\\\": \\\"#engineering\\\", \\\"username\\\": \\\"ssh-to-prod\\\", \\\"text\\\": \\\"\$(whoami) is all done on production. :v:\\\", \\\"icon_emoji\\\": \\\":fire_engine:\\\"}\" \$SPREEMO_SLACK_WEBHOOK_URL"
+  "sshprod" "curl -X POST --data-urlencode \"payload={\\\"channel\\\": \\\"#engineering\\\", \\\"username\\\": \\\"ssh-to-prod\\\", \\\"text\\\": \\\"\$(whoami) is sshing to production. :bomb:\\\", \\\"icon_emoji\\\": \\\":fire_engine:\\\"}\" \$SPREEMO_SLACK_WEBHOOK_URL; aws ec2 authorize-security-group-ingress --group-id \$SPREEMO_PROD_SG_ID --ip-permissions '[{\"IpProtocol\": \"tcp\", \"FromPort\": 22, \"ToPort\": 22, \"IpRanges\": [{\"CidrIp\": \"'\$(curl -s http://checkip.amazonaws.com/)'/24\", \"Description\": \"'\$(whoami)'\"}]}]'; echo; aws ec2 describe-security-groups --group-ids \$SPREEMO_PROD_SG_ID | grep \$(whoami); ssh spreemo-production-app1 -t \"cd /srv/www/chewy/current; sudo su deploy\"; aws ec2 revoke-security-group-ingress --group-id \$SPREEMO_PROD_SG_ID --ip-permissions '[{\"IpProtocol\": \"tcp\", \"FromPort\": 22, \"ToPort\": 22, \"IpRanges\": [{\"CidrIp\": \"'\$(curl -s http://checkip.amazonaws.com/)'/24\", \"Description\": \"'\$(whoami)'\"}]}]'; aws ec2 describe-security-groups --group-ids \$SPREEMO_PROD_SG_ID | grep \$(whoami); curl -X POST --data-urlencode \"payload={\\\"channel\\\": \\\"#engineering\\\", \\\"username\\\": \\\"ssh-to-prod\\\", \\\"text\\\": \\\"\$(whoami) is all done on production. :v:\\\", \\\"icon_emoji\\\": \\\":fire_engine:\\\"}\" \$SPREEMO_SLACK_WEBHOOK_URL"
   "depstaging" "aws opsworks update-app --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_STAGING_STACK_ID --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
   "depdemo2" "aws opsworks update-app --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_DEMO2_STACK_ID --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
 )
@@ -169,12 +169,14 @@ abbrevs+=(
 
 # Git aliases
 abbrevs+=(
-  "gs"    "git status"
+  "gs"    "git status -sb"
+  "gsl"   "git status"
   "gg"    "git lg"
   "ggm"   "git lg origin/master.."
-  "ggh"   "git lg | head"
-  "ggmh"  "git lg origin/master.. | head"
+  "ggh"   "git lg --color | head"
+  "ggmh"  "git lg origin/master.. --color | head"
   "ggg"   "git ll"
+  "glogmh" "git log --oneline --graph master HEAD"
 
   "ga"   "git add"
   "gad"  "git add ."
@@ -200,7 +202,10 @@ abbrevs+=(
   "gcl"    "git clone"
   "gclc"   "git clone __CURSOR__ && cd \$(basename \$_)"
   "gb"     "git branch"
+  "gbm"    "git branch -M"
+  "gbv"    "git branch -vv"
   "gba"    "git branch -a"
+  "gbav"   "git branch -a -vv"
   "gbsmd"  "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
 
   "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
@@ -247,6 +252,7 @@ abbrevs+=(
   "grbom"  "git rebase origin/master"
   "grbim" "git rebase -i master"
 
+  "grh"   "git reset --hard"
   "grhu"  "git reset --hard @{u}"
   "grsm"  "git reset --soft master"
 
