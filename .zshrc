@@ -25,7 +25,7 @@ source "$HOME/.zsh/vi-mode.zsh"
 source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
-source "$HOME/.zsh/chruby.zsh"
+source "$HOME/.zsh/asdf.zsh"
 source "$HOME/.zsh/fzf.zsh"
 
 [[ -f "$HOME/.zshrc.private" ]] && source "$HOME/.zshrc.private"
