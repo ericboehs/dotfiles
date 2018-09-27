@@ -29,7 +29,7 @@ abbrevs=(
 # Dotfiles
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
-  "vab" "vi ~/.zsh/abbreviations.zsh"
+  "vab" "vim ~/.zsh/abbreviations.zsh"
   "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
@@ -90,7 +90,7 @@ abbrevs+=(
   "tfl"  "tail -f log/__CURSOR__"
   "tfld" "tail -f log/development.log"
   "ttr"  "touch tmp/restart.txt"
-  "vdm"  'vi db/migrate/$(ls db/migrate | tail -1)'
+  "vdm"  'vim db/migrate/$(ls db/migrate | tail -1)'
 )
 
 # Heroku
@@ -136,6 +136,7 @@ abbrevs+=(
 abbrevs+=(
   "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
   "vbs"  'vim -p board-now.md board-later.md board-scratch-pad.md'
+  "vi"   'vim'
 )
 
 # Bundler
