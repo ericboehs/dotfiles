@@ -1,0 +1,18 @@
+[include]
+  path = ~/.gitconfig.private
+[core]
+  excludesfile = ~/.gitignore
+[push]
+  default = current
+[alias]
+  ll = log --format=fuller --graph --decorate
+  lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
+  wdiff = diff --color-words
+[hub]
+  protocol = https
+[url "https://github.com"]
+  insteadOf = git://github.com
+[pull]
+  ff = only
+[fetch]
+  prune = true
