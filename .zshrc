@@ -11,3 +11,6 @@ source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/pure.zsh"
 source "$HOME/.zsh/path.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
+
+# Inlcude a private/local zshrc for ENV secrets and customizations
+[[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
