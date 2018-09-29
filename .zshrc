@@ -1,3 +1,5 @@
+autoload -U compinit; compinit # Expand directory path shorthand (e.g. cd Co/eri/tm/cach/a<Tab>)
+
 setopt interactivecomments # Allow comments after commands
 setopt autocd              # cd to directories without typing cd
 setopt extendedglob        # Expand file expressiong (e.g. **/file)
