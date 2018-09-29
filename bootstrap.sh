@@ -6,8 +6,8 @@ set -e
 [[ -e ~/.dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/.dotfiles
 pushd ~/.dotfiles > /dev/null
 
-git checkout fresh-start || echo
-git pull --rebase origin fresh-start || echo
+git checkout master || echo
+git pull --rebase origin master || echo
 git submodule init
 git submodule update
 
