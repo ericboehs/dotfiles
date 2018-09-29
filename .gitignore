@@ -1,2 +1,3 @@
 .bundle/cache
 .zshrc.local
+.vimrc.local
