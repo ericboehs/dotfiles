@@ -30,8 +30,14 @@ set undofile
 set undolevels=1000
 set undoreload=10000
 
+" Color column at 120 characters
+set colorcolumn=120
+set textwidth=120
+
 " Colorscheme
-syntax on
+silent! colorscheme solarized
+highlight SignColumn ctermbg=8
+set background=dark
 
 if filereadable(expand("~/.vimrc.local"))
   source ~/.vimrc.local

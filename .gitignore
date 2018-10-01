@@ -2,3 +2,4 @@
 .zshrc.local
 .vimrc.local
 .vim/.undo
+.vim/pack/minpac
