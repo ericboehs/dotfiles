@@ -1,3 +1,6 @@
 [submodule ".zsh/fast-syntax-highlighting"]
 	path = .zsh/fast-syntax-highlighting
 	url = https://github.com/zdharma/fast-syntax-highlighting
+[submodule ".vim/pack/minpac/opt/minpac"]
+	path = .vim/pack/minpac/opt/minpac
+	url = https://github.com/k-takata/minpac

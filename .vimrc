@@ -1,3 +1,5 @@
+source ~/.vim/minpac.vim
+
 set relativenumber                          " Show line numbers relative to each other
 set number                                  " Show the current lines number w/ relative numbers around it
 set noswapfile                              " Don't create *.swp files
