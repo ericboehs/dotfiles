@@ -39,6 +39,7 @@ set textwidth=120
 silent! colorscheme solarized
 highlight SignColumn ctermbg=8
 set background=dark
+let g:lightline = { 'colorscheme': 'solarized' }
 
 if filereadable(expand("~/.vimrc.local"))
   source ~/.vimrc.local

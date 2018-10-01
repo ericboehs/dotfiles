@@ -11,6 +11,7 @@ if exists('*minpac#init')
 
   " Colorscheme
   call minpac#add('altercation/vim-colors-solarized')
+  call minpac#add('itchyny/lightline.vim')
 endif
 
 command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})
