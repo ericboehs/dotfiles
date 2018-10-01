@@ -1,3 +1,4 @@
 .bundle/cache
 .zshrc.local
 .vimrc.local
+.vim/.undo

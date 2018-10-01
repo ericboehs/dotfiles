@@ -19,6 +19,15 @@ set tabstop=2     " Two tab spaces
 set softtabstop=2 " Number of spaces to skip or insert when <BS>ing or <Tab>ing
 set expandtab     " Spaces instead of tabs for better cross-editor compatibility
 
+" Undo
+if !isdirectory(expand("~/.vim/.undo/"))
+  silent !mkdir -p ~/.vim/.undo/
+endif
+set undodir=$HOME/.vim/.undo
+set undofile
+set undolevels=1000
+set undoreload=10000
+
 " Colorscheme
 syntax on
 
