@@ -1,5 +1,6 @@
 source ~/.vim/minpac.vim
 source ~/.vim/fzf.vim
+source ~/.vim/vim-tmux-runner.vim
 
 set relativenumber                          " Show line numbers relative to each other
 set number                                  " Show the current lines number w/ relative numbers around it
