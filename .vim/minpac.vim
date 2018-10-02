@@ -16,6 +16,7 @@ if exists('*minpac#init')
   call minpac#add('itchyny/lightline.vim')
 
   " Tmux
+  call minpac#add('christoomey/vim-tmux-navigator')
   call minpac#add('christoomey/vim-tmux-runner')
 
   " Language
