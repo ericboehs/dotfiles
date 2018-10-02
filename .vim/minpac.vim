@@ -18,6 +18,8 @@ if exists('*minpac#init')
   " Tmux
   call minpac#add('christoomey/vim-tmux-navigator')
   call minpac#add('christoomey/vim-tmux-runner')
+  call minpac#add('tmux-plugins/vim-tmux-focus-events')
+  call minpac#add('blueyed/vim-diminactive')
 
   " Language
   call minpac#add('w0rp/ale')

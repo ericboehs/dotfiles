@@ -1,5 +1,6 @@
 source ~/.vim/minpac.vim
 source ~/.vim/fzf.vim
+source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim
 source ~/.vim/vim-tmux-navigator.vim
 
