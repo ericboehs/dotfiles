@@ -10,10 +10,7 @@ if exists('*minpac#init')
   call minpac#add('tpope/vim-sensible')
   call minpac#add('tpope/vim-commentary')
   call minpac#add('tpope/vim-eunuch')
-
-  " Colorscheme
-  call minpac#add('altercation/vim-colors-solarized')
-  call minpac#add('itchyny/lightline.vim')
+  call minpac#add('tpope/vim-unimpaired')
 
   " Tmux
   call minpac#add('christoomey/vim-tmux-navigator')
@@ -21,8 +18,15 @@ if exists('*minpac#init')
   call minpac#add('tmux-plugins/vim-tmux-focus-events')
   call minpac#add('blueyed/vim-diminactive')
 
+  " Editing
+  call minpac#add('henrik/vim-indexed-search')
+
   " Language
   call minpac#add('w0rp/ale')
+
+  " Colorscheme
+  call minpac#add('altercation/vim-colors-solarized')
+  call minpac#add('itchyny/lightline.vim')
 endif
 
 command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})
