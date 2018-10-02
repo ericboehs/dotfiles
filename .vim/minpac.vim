@@ -8,10 +8,14 @@ if exists('*minpac#init')
 
   " The great tpope
   call minpac#add('tpope/vim-sensible')
+  call minpac#add('tpope/vim-commentary')
+  call minpac#add('tpope/vim-eunuch')
 
   " Colorscheme
   call minpac#add('altercation/vim-colors-solarized')
   call minpac#add('itchyny/lightline.vim')
+
+  call minpac#add('w0rp/ale')
 endif
 
 command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})
