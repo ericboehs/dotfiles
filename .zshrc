@@ -7,6 +7,9 @@ setopt no_beep             # No more bells!
 
 # export EDITOR=vim
 
+# Allow Ctrl-S and Ctrl-Q to be keybindings in vim
+stty -ixon > /dev/null 2>/dev/null
+
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/pure.zsh"
 source "$HOME/.zsh/path.zsh"
