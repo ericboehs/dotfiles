@@ -1,3 +1,4 @@
+source ~/.vim/ale.vim
 source ~/.vim/minpac.vim
 source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
