@@ -12,6 +12,7 @@ set noswapfile                              " Don't create *.swp files
 set wildmode=list:longest                   " Tab complete to longest common string, like bash
 set showcmd                                 " Display an incomplete command in the lower right corner
 set iskeyword+=\-                           " Auto complete words with dashes
+set mouse=a                                 " Allow scrolling/visual mode with mouse; Cmd-R to disable in Terminal
 
 autocmd FileType gitcommit set spell                 " Turn on spell check in Git commits.
 autocmd Filetype css,scss,sass setlocal iskeyword+=- " Treat dashed words as whole words in stylesheets
