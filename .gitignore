@@ -3,3 +3,4 @@
 .vimrc.local
 .vim/.undo
 .vim/pack/minpac
+.vim/.netrwhist

@@ -43,7 +43,7 @@ nmap <leader>de Odebugger<esc>^
 " command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')
 
 " Toggle (switch option) clipboard (pasteboard) syncing on/off
-nnoremap yop :set <C-R>=&clipboard =~# "unnamed" ? 'clipboard=' : 'clipboard^=unnamed'<CR><CR>
+nnoremap cop :set <C-R>=&clipboard =~# "unnamed" ? 'clipboard=' : 'clipboard^=unnamed'<CR><CR>
 
 "" These should probably be remapped to a leader key somehow
 " Gets the current version of a gem for a Gemfile

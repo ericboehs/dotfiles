@@ -10,6 +10,8 @@ if exists('*minpac#init')
   call minpac#add('tpope/vim-sensible')
   call minpac#add('tpope/vim-commentary')
   call minpac#add('tpope/vim-eunuch')
+  call minpac#add('tpope/vim-repeat')
+  call minpac#add('tpope/vim-surround')
   call minpac#add('tpope/vim-unimpaired')
 
   " Tmux
