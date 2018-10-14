@@ -5,7 +5,8 @@ setopt autocd              # cd to directories without typing cd
 setopt extendedglob        # Expand file expressiong (e.g. **/file)
 setopt no_beep             # No more bells!
 
-# export EDITOR=vim
+export CLICOLOR=1 # Enable color in some commands (e.g. ls)
+export EDITOR=vim
 
 # Allow Ctrl-S and Ctrl-Q to be keybindings in vim
 stty -ixon > /dev/null 2>/dev/null
