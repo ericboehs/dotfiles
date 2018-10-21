@@ -16,6 +16,7 @@ abbrevs=(
   "fdg" "find . | grep"
   "pgr" "| grep"
   "awkp" "| awk '{print \$__CURSOR__}'"
+  "tstamp" "| while read line; do ; echo \$(date | cut -f4 -d ' ') \$line; done"
   "rlw"  'readlink $(which __CURSOR__)'
   "wtnoti" "while do; noti; sleep 120; done"
   "wt"     "while; do __CURSOR__; clear; sleep 5; done"
