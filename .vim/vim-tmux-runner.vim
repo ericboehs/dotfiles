@@ -10,6 +10,9 @@ map <Leader>vs :VtrSendLinesToRunner<CR>
 " Prompt for a command to run
 map <Leader>vc :VtrSendCommandToRunner<Space>
 
+" Prompt for a command to run
+map <Leader>vct :VtrSendCommandToRunner rails test <C-r>%:<C-r>=line('.')<CR>
+
 " Clear runner
 map <Leader>vcr :VtrClearRunner<CR>
 
