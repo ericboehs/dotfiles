@@ -17,6 +17,8 @@ source "$HOME/.zsh/path.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
 source "$HOME/.zsh/completion.zsh"
 source "$HOME/.zsh/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
+source "$HOME/.asdf/asdf.sh"
+source "$HOME/.asdf/completions/asdf.bash"
 source "$HOME/.zsh/fzf.zsh"
 
 # Inlcude a private/local zshrc for ENV secrets and customizations
