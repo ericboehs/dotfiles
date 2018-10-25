@@ -66,7 +66,7 @@ abbrevs+=(
   "tswv"  "tmux split-window vim"
   "tnw"   "tmux new-window"
   "tnwa"  "tnw; tnws; tnwb; tmux select-window -t 1"
-  "tnws"  "tmux new-window -n server server"
+  "tnws"  "tmux new-window -n server bin/webpack-dev-server \; split-window -v rails s"
   "tnwb"  "tmux new-window -n boards vim -p board-now.md board-later.md board-scratch-pad.md"
   "tnwl"  "tmux new-window -n logs \"while ((1)) { heroku logs -t -r production }\""
   "tnwp"  "tmux new-window -n ping ping 8.8.8.8"
