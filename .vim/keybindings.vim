@@ -51,3 +51,6 @@ let @v="f\'vi\'yA, \'~> :r !gem sea -r \'^\"$\'|tail -1|cut -f2 -d' '|tr -d '(
 
 " Aligns a trailing comment with the previous line (used in Gemfile)
 let @a="kf\';;mm0jf\';;i                                       `mjdt\'0j"
+
+" Open Mac Dictionary to word under cursor
+map <leader>d :execute ":silent !open -g dict://"\|redraw!<cr>
