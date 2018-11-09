@@ -10,11 +10,11 @@ map <Leader>vs :VtrSendLinesToRunner<CR>
 " Prompt for a command to run
 map <Leader>vc :VtrSendCommandToRunner<Space>
 
-" Prompt for a command to run
-map <Leader>vct :VtrSendCommandToRunner rails test <C-r>%:<C-r>=line('.')<CR>
+" Run rails c
+map <Leader>vcr :VtrSendCommandToRunner rails c<CR>
 
-" Clear runner
-map <Leader>vcr :VtrClearRunner<CR>
+" Prompt for a command to run
+map <Leader>vct :VtrSendCommandToRunner rails test <C-r>%:<C-r>=line('.')<CR><CR>
 
 " Run last command executed by VtrSendCommandToRunner
 map <Leader>vl :VtrSendCommandToRunner<CR>
@@ -22,8 +22,11 @@ map <Leader>vl :VtrSendCommandToRunner<CR>
 " Focus runner pane
 map <Leader>vf :VtrFocusRunner<CR>
 
-" Close runner pane
-map <Leader>vq :VtrKillRunner<CR>
-
 " Send Ctrl-D to Pane
 map <Leader>vd :VtrSendCtrlD<CR>
+
+" Send 'Gq' to runner pane
+map <Leader>vgq :VtrSendCommandToRunner Gq<CR>
+
+" Send 'q' to runner pane
+map <Leader>vq :VtrSendCommandToRunner q<CR>
