@@ -9,7 +9,12 @@ if exists('*minpac#init')
   " The great tpope
   call minpac#add('tpope/vim-sensible')
   call minpac#add('tpope/vim-commentary')
+  call minpac#add('tpope/vim-dispatch')
   call minpac#add('tpope/vim-eunuch')
+  call minpac#add('tpope/vim-fugitive')
+  call minpac#add('tpope/vim-rails')
+  call minpac#add('tpope/vim-ragtag')
+  call minpac#add('tpope/vim-rhubarb')
   call minpac#add('tpope/vim-repeat')
   call minpac#add('tpope/vim-surround')
   call minpac#add('tpope/vim-unimpaired')
@@ -22,9 +27,14 @@ if exists('*minpac#init')
 
   " Editing
   call minpac#add('henrik/vim-indexed-search')
+  call minpac#add('mattn/emmet-vim')
 
   " Language
+  call minpac#add('slim-template/vim-slim')
   call minpac#add('w0rp/ale')
+
+  " Rails
+  call minpac#add('ngmy/vim-rubocop')
 
   " Colorscheme
   call minpac#add('altercation/vim-colors-solarized')
