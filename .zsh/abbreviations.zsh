@@ -177,20 +177,22 @@ abbrevs+=(
   "gcm"   "git commit -m"
   "gcmw"   "git commit -m wip"
 
-  "gco"    "git checkout"
-  "gcom"   "git checkout master"
-  "gcopr"  'git checkout $(git pulls list | grep "^__CURSOR__" | sed -n "s/^\(.*\):\(.*\)$/\2/p")'
-  "gcoh"   "git checkout HEAD"
-  "gcohd"  "git checkout HEAD --"
-  "gcohgl" "git checkout HEAD -- Gemfile.lock"
-  "gcl"    "git clone"
-  "gclc"   "git clone __CURSOR__ && cd \$(basename \$_)"
-  "gb"     "git branch"
-  "gbm"    "git branch -M"
-  "gbv"    "git branch -vv"
-  "gba"    "git branch -a"
-  "gbav"   "git branch -a -vv"
-  "gbsmd"  "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
+  "gco"     "git checkout"
+  "gcom"    "git checkout master"
+  "gcopr"   'git checkout $(git pulls list | grep "^__CURSOR__" | sed -n "s/^\(.*\):\(.*\)$/\2/p")'
+  "gcoh"    "git checkout HEAD"
+  "gcohd"   "git checkout HEAD --"
+  "gcohgl"  "git checkout HEAD -- Gemfile.lock"
+  "gcohglb" "git checkout HEAD -- Gemfile.lock; bundle"
+  "gcohyly" "git checkout HEAD -- yarn.lock; yarn"
+  "gcl"     "git clone"
+  "gclc"    "git clone __CURSOR__ && cd \$(basename \$_)"
+  "gb"      "git branch"
+  "gbm"     "git branch -M"
+  "gbv"     "git branch -vv"
+  "gba"     "git branch -a"
+  "gbav"    "git branch -a -vv"
+  "gbsmd"   "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
 
   "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
   "gbrmd"  'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
