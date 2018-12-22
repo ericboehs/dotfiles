@@ -25,6 +25,7 @@ abbrevs=(
   "utbb"   "clear && until !!; do sleep 5; done"
   "epoch" "date +%s"
   "epochms" 'echo $(($(gdate +%s%N)/1000000))'
+  "oedm" "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'"
   )
 
 # Dotfiles
