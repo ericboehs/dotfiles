@@ -8,17 +8,15 @@ setopt no_beep             # No more bells!
 export CLICOLOR=1 # Enable color in some commands (e.g. ls)
 export EDITOR=vim
 
-# Allow Ctrl-S and Ctrl-Q to be keybindings in vim
-stty -ixon > /dev/null 2>/dev/null
-
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/pure.zsh"
+source "$HOME/.asdf/asdf.sh"
+source "$HOME/.asdf/completions/asdf.bash"
 source "$HOME/.zsh/path.zsh"
+source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
 source "$HOME/.zsh/completion.zsh"
 source "$HOME/.zsh/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
-source "$HOME/.asdf/asdf.sh"
-source "$HOME/.asdf/completions/asdf.bash"
 source "$HOME/.zsh/fzf.zsh"
 
 # Inlcude a private/local zshrc for ENV secrets and customizations
