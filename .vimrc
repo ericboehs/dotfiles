@@ -2,6 +2,7 @@ source ~/.vim/ale.vim
 source ~/.vim/minpac.vim
 source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
+source ~/.vim/coc.vim
 source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim
 source ~/.vim/vim-tmux-navigator.vim
@@ -44,7 +45,7 @@ set textwidth=120
 " Colorscheme
 silent! colorscheme solarized
 highlight SignColumn ctermbg=8
-set background=dark
+" set background=dark
 let g:lightline = { 'colorscheme': 'solarized' }
 
 if filereadable(expand("~/.vimrc.local"))

@@ -26,13 +26,15 @@ abbrevs=(
   "epoch" "date +%s"
   "epochms" 'echo $(($(gdate +%s%N)/1000000))'
   "oedm" "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'"
+  "rfs" "refresh_safari"
+  "trash" "mv __CURSOR__ ~/.Trash"
   )
 
 # Dotfiles
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
-  "vab" "vim ~/.zsh/abbreviations.zsh"
-  "dof" "cd ~/.dotfiles; vim; . ~/.zshrc"
+  "vab" "nvim ~/.zsh/abbreviations.zsh"
+  "dof" "cd ~/.dotfiles; nvim; . ~/.zshrc"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
 )
@@ -59,16 +61,21 @@ abbrevs+=(
 
 # Tmux
 abbrevs+=(
-  "ta"    "tmux attach"
-  "tan"   "tmux attach || tmux new -n editor"
+  "ta"    "tmux -u attach"
+  "tan"   "tmux -u attach || tmux -u new -n editor"
+  "tda"   "tmux detach -a"
   "tsw"   "tmux split-window"
   "tswrc" "tmux split-window rails c"
   "tswrs" "tmux split-window rails s"
-  "tswv"  "tmux split-window vim"
+  "tswv"  "tmux split-window nvim"
   "tnw"   "tmux new-window"
-  "tnwa"  "tnw; tnws; tnwb; tmux select-window -t 1"
-  "tnws"  "tmux new-window -n server bin/webpack-dev-server \; split-window -v rails s"
-  "tnwb"  "tmux new-window -n boards vim -p board-now.md board-later.md board-scratch-pad.md"
+  "tnwa"  "tnw; tnws; tnwj; tnwc; tnwm; tnwr; tmux select-window -t 1"
+  "tnws"  "tmux new-window -n server rails s"
+  "tnwws" "tmux new-window -n server bin/webpack-dev-server \; split-window -v rails s"
+  "tnwj"  "tmux new-window -n journal nvim ~/Documents/Notes/\$(date +%Y-%m)-Journal.md \"+/^## \$(date +%d)...\" -c noh"
+  "tnwc"  "tmux new-window -n chat weechat"
+  "tnwm"  "tmux new-window -n mail mutt"
+  "tnwr"  "tmux new-window -n rss newsboat"
   "tnwl"  "tmux new-window -n logs \"while ((1)) { heroku logs -t -r production }\""
   "tnwp"  "tmux new-window -n ping ping 8.8.8.8"
 
@@ -92,7 +99,7 @@ abbrevs+=(
   "tfl"  "tail -f log/__CURSOR__"
   "tfld" "tail -f log/development.log"
   "ttr"  "touch tmp/restart.txt"
-  "vdm"  'vim db/migrate/$(ls db/migrate | tail -1)'
+  "vdm"  'nvim db/migrate/$(ls db/migrate | tail -1)'
 )
 
 # Heroku
@@ -136,9 +143,9 @@ abbrevs+=(
 
 # Vim
 abbrevs+=(
-  "vrcf" 'vim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
-  "vbs"  'vim -p board-now.md board-later.md board-scratch-pad.md'
-  "vi"   'vim'
+  "vrcf" 'nvim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
+  "vbs"  'nvim -p board-now.md board-later.md board-scratch-pad.md'
+  "vi"   'nvim'
 )
 
 # Bundler
@@ -149,6 +156,12 @@ abbrevs+=(
   "bup"  "bundle update"
   "bop"  "bundle open"
   "begp" "bundle exec gem pristine"
+)
+
+# Google
+abbrevs+=(
+  "gogp"   "googler --np -n 5"
+  "gogj"   "googler __CURSOR__ -j -s 0"
 )
 
 # Git aliases
@@ -203,8 +216,11 @@ abbrevs+=(
   "gdc"   "git diff --cached"
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
+  "gdsh"  "git diff --stat __CURSOR__ HEAD~1"
 
   "gfo"   "git fetch origin"
+  
+  "gmnf"  "git merge --no-ff"
 
   "gp"    "git push"
   "gpu"   "git push -u"
@@ -224,10 +240,12 @@ abbrevs+=(
   "glb"   "git pulls browse"
   "glm"   "git pulls merge"
 
-  "gpr"   "hub pull-request"
-  "gprne" "EDITOR='vim -c \":wq\"' hub pull-request"
-  "gprm"  'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
-  "blb"   '-b $(git rev-parse --abbrev-ref @{-1})'
+  "gpr"    "hub pull-request"
+  "gprne"  "EDITOR='nvim -c \":wq\"' hub pull-request"
+  "gprd"   "hub pull-request --draft"
+  "gprdne" "EDITOR='nvim -c \":wq\"' hub pull-request --draft"
+  "gprm"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
+  "blb"    '-b $(git rev-parse --abbrev-ref @{-1})'
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"
@@ -240,6 +258,8 @@ abbrevs+=(
   "grh"   "git reset --hard"
   "grhu"  "git reset --hard @{u}"
   "grsm"  "git reset --soft master"
+
+  "grlm"  "echo \"behind\\tahead\"; git rev-list --left-right --count master..."
 
   "gchp"  "git cherry-pick"
   "gchpc" "git cherry-pick --continue"
@@ -257,7 +277,7 @@ abbrevs+=(
 
   "gcb"   "git checkout -b"
 
-  "vgu"  'vim $(git ls-files --unmerged | cut -f2 | sort -u)'
+  "vgu"  'nvim $(git ls-files --unmerged | cut -f2 | sort -u)'
   "gcdi" "git clean -di"
 )
 

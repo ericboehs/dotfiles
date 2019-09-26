@@ -18,6 +18,21 @@ nmap <leader>bp Orequire 'pry'; binding.pry<esc>^
 " Start a javascript debugger
 nmap <leader>de Odebugger<esc>^
 
+" Press `Esc`, `1` to go to tab 1 (etc)
+nnoremap <silent> <Esc>1 :tabn 1<CR>
+nnoremap <silent> <Esc>2 :tabn 2<CR>
+nnoremap <silent> <Esc>3 :tabn 3<CR>
+nnoremap <silent> <Esc>4 :tabn 4<CR>
+nnoremap <silent> <Esc>5 :tabn 5<CR>
+nnoremap <silent> <Esc>6 :tabn 6<CR>
+nnoremap <silent> <Esc>7 :tabn 7<CR>
+nnoremap <silent> <Esc>8 :tabn 8<CR>
+nnoremap <silent> <Esc>9 :tabn 9<CR>
+
+" Press `Esc`, `Left`/`Right` to move a tab
+nnoremap <Esc><Left> :-tabmove<CR>
+nnoremap <Esc><Right> :+tabmove<CR>
+
 " Insert a single character w/o going to insert mode using <space><char>
 " noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
 

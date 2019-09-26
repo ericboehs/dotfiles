@@ -21,3 +21,9 @@ source "$HOME/.zsh/fzf.zsh"
 
 # Inlcude a private/local zshrc for ENV secrets and customizations
 [[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
+
+# heroku autocomplete setup
+HEROKU_AC_ZSH_SETUP_PATH=/Users/ericboehs/Library/Caches/heroku/autocomplete/zsh_setup && test -f $HEROKU_AC_ZSH_SETUP_PATH && source $HEROKU_AC_ZSH_SETUP_PATH;
+
+# heroku autocomplete setup
+HEROKU_AC_ZSH_SETUP_PATH=/Users/ericboehs/Library/Caches/heroku/autocomplete/zsh_setup && test -f $HEROKU_AC_ZSH_SETUP_PATH && source $HEROKU_AC_ZSH_SETUP_PATH;

@@ -28,10 +28,14 @@ if exists('*minpac#init')
   " Editing
   call minpac#add('henrik/vim-indexed-search')
   call minpac#add('mattn/emmet-vim')
+  call minpac#add('justinmk/vim-sneak')
+  call minpac#add('tommcdo/vim-exchange')
+  call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
 
   " Language
   call minpac#add('slim-template/vim-slim')
   call minpac#add('w0rp/ale')
+  call minpac#add('mxw/vim-jsx')
 
   " Rails
   call minpac#add('ngmy/vim-rubocop')
@@ -39,6 +43,11 @@ if exists('*minpac#init')
   " Colorscheme
   call minpac#add('altercation/vim-colors-solarized')
   call minpac#add('itchyny/lightline.vim')
+  call minpac#add('ayu-theme/ayu-vim')
+  call minpac#add('jdsimcoe/panic.vim')
+
+  " Misc
+  call minpac#add('jremmen/vim-ripgrep')
 endif
 
 command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})

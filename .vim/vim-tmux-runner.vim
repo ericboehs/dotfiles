@@ -11,7 +11,7 @@ map <Leader>vs :VtrSendLinesToRunner<CR>
 map <Leader>vc :VtrSendCommandToRunner<Space>
 
 " Run rails c
-map <Leader>vcr :VtrSendCommandToRunner rails c<CR>
+map <Leader>vrc :VtrSendCommandToRunner rails c<CR>
 
 " Prompt for a command to run
 map <Leader>vct :VtrSendCommandToRunner rails test <C-r>%:<C-r>=line('.')<CR><CR>
