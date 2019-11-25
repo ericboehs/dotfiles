@@ -50,10 +50,26 @@ for f in $dotfiles; do
   fi
 done
 
-# git checkout .zshrc
+# Configure nvim
+mkdir -p ~/.config
+ln -fs ~/.vim ~/.config/nvim
+
+echo "-----> Install asdf-vm"
+git clone https://github.com/asdf-vm/asdf.git ~/.asdf
+cd ~/.asdf
+git checkout "$(git describe --abbrev=0 --tags)"
+
+# Install node
+asdf plugin-add nodejs
+bash ~/.asdf/plugins/nodejs/bin/import-release-team-keyring
+#asdf install nodejs 8.12.0
+# Install ruby
+asdf plugin-add ruby
+asdf install ruby 2.6.5
+asdf global ruby 2.6.5
 
 # Install vim plugins
-# vim -c ':silent !echo' -c ':PlugInstall' -c ':qa!'
+vim -c ':silent !echo' -c ':PackUpdate' -c ':qa!'
 
 popd > /dev/null
 
