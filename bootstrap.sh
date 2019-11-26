@@ -54,11 +54,13 @@ done
 mkdir -p ~/.config
 ln -fs ~/.vim ~/.config/nvim
 
-if [ -z ~/.asdf ];then
+if [ ! -d ~/.asdf ];then
   echo "-----> Install asdf-vm"
   git clone https://github.com/asdf-vm/asdf.git ~/.asdf
   cd ~/.asdf
   git checkout "$(git describe --abbrev=0 --tags)"
+
+  source ~/.asdf/asdf.sh
 
   # Install node
   asdf plugin-add nodejs
