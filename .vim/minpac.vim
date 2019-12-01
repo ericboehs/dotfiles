@@ -43,6 +43,7 @@ if exists('*minpac#init')
   " Colorscheme
   call minpac#add('altercation/vim-colors-solarized')
   call minpac#add('itchyny/lightline.vim')
+  call minpac#add('edkolev/tmuxline.vim')
   call minpac#add('ayu-theme/ayu-vim')
   call minpac#add('jdsimcoe/panic.vim')
 

@@ -47,6 +47,7 @@ silent! colorscheme solarized
 highlight SignColumn ctermbg=8
 " set background=dark
 let g:lightline = { 'colorscheme': 'solarized' }
+let g:tmuxline_separators = { 'left' : '', 'left_alt': '', 'right' : '', 'right_alt' : '' }
 
 if filereadable(expand("~/.vimrc.local"))
   source ~/.vimrc.local
