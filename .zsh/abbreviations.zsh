@@ -81,6 +81,7 @@ abbrevs+=(
 
   "tks"   "tmux kill-session"
 
+  "screst"  "sudo chown -R ericboehs:staff /tmp/tmux-501"
   "cr7t"  "chmod -R 777 /tmp/tmux-501"
 )
 
@@ -233,19 +234,23 @@ abbrevs+=(
   "glor"  "git pull origin --rebase"
   "glomr" "git pull origin master --rebase"
 
-  "glu"   "git pulls update"
-  "gll"   "git pulls list"
-  "gls"   "git pulls show"
-  "glsf"  "git pulls show __CURSOR__ --full"
-  "glb"   "git pulls browse"
-  "glm"   "git pulls merge"
-
-  "gpr"    "hub pull-request"
-  "gprne"  "EDITOR='nvim -c \":wq\"' hub pull-request"
-  "gprd"   "hub pull-request --draft"
-  "gprdne" "EDITOR='nvim -c \":wq\"' hub pull-request --draft"
-  "gprm"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && hub pull-request'
+  "gpr"    "git pull-request"
+  "gprbc"  "git pull-request --browse --copy"
+  "gprl"   "git pr list"
+  "gprco"  "git pr checkout"
+  "gprne"  "git pull-request --no-edit"
+  "gprd"   "git pull-request --draft"
+  "gprdne" "git pull-request --draft --no-edit"
+  "gprm"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
+  "gprmd"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
   "blb"    '-b $(git rev-parse --abbrev-ref @{-1})'
+
+  "gbr"    "git browse"
+  "gbrp"  "git browse -- pulls"
+  "gbrpl"  "git browse -- pull/"
+  "gbrpr"  "git browse -- pull/\$(git pr list -h \$(git rev-parse --abbrev-ref HEAD) | awk '{print \$1}' | tr -d '#')"
+  "gbrb"  "git browse -- branches"
+  "gbrby"  "git browse -- branches/yours"
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"

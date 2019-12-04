@@ -8,10 +8,13 @@ if exists('*minpac#init')
 
   " The great tpope
   call minpac#add('tpope/vim-sensible')
+  call minpac#add('tpope/vim-bundler')
   call minpac#add('tpope/vim-commentary')
+  call minpac#add('tpope/vim-dadbod')
   call minpac#add('tpope/vim-dispatch')
   call minpac#add('tpope/vim-eunuch')
   call minpac#add('tpope/vim-fugitive')
+  call minpac#add('tpope/vim-heroku')
   call minpac#add('tpope/vim-rails')
   call minpac#add('tpope/vim-ragtag')
   call minpac#add('tpope/vim-rhubarb')
@@ -37,8 +40,9 @@ if exists('*minpac#init')
   call minpac#add('w0rp/ale')
   call minpac#add('mxw/vim-jsx')
 
-  " Rails
+  " Rails/Rails
   call minpac#add('ngmy/vim-rubocop')
+  call minpac#add('ecomba/vim-ruby-refactoring')
 
   " Colorscheme
   call minpac#add('altercation/vim-colors-solarized')

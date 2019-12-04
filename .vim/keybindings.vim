@@ -18,6 +18,9 @@ nmap <leader>bp Orequire 'pry'; binding.pry<esc>^
 " Start a javascript debugger
 nmap <leader>de Odebugger<esc>^
 
+" Run current line as SQL against local db (via dadbod)
+nmap <leader>db :.DB<CR>
+
 " Press `Esc`, `1` to go to tab 1 (etc)
 nnoremap <silent> <Esc>1 :tabn 1<CR>
 nnoremap <silent> <Esc>2 :tabn 2<CR>
@@ -29,7 +32,9 @@ nnoremap <silent> <Esc>7 :tabn 7<CR>
 nnoremap <silent> <Esc>8 :tabn 8<CR>
 nnoremap <silent> <Esc>9 :tabn 9<CR>
 
-" Press `Esc`, `Left`/`Right` to move a tab
+" Press `Esc`, `Left`/`Right` to move to a tab
+nnoremap <Esc>h gT
+nnoremap <Esc>l gt
 nnoremap <Esc><Left> :-tabmove<CR>
 nnoremap <Esc><Right> :+tabmove<CR>
 
@@ -67,5 +72,22 @@ let @v="f\'vi\'yA, \'~> :r !gem sea -r \'^\"$\'|tail -1|cut -f2 -d' '|tr -d '(
 " Aligns a trailing comment with the previous line (used in Gemfile)
 let @a="kf\';;mm0jf\';;i                                       `mjdt\'0j"
 
-" Open Mac Dictionary to word under cursor
-map <leader>d :execute ":silent !open -g dict://"\|redraw!<cr>
+" CleverTab (taken from :help ins-completion)
+function! CleverTab()
+  if strpart( getline('.'), 0, col('.')-1 ) =~ '^\s*$'
+    return "\<Tab>"
+  else
+    return "\<C-N>"
+  endif
+endfunction
+" inoremap <Tab> <C-R>=CleverTab()<CR>
+" I'm not enabling this yet. I want to see how I do with C-n/C-p
+
+function! CleverShiftTab()
+  if strpart( getline('.'), 0, col('.')-1 ) =~ '^\s*$'
+    return "\<C-d>"
+  else
+    return "\<C-P>"
+  endif
+endfunction
+" inoremap <S-Tab> <C-R>=CleverShiftTab()<CR>
