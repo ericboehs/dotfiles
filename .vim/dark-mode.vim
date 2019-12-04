@@ -14,6 +14,13 @@ function! SetBackgroundMode(...)
     if &background !=? s:new_bg
         let &background = s:new_bg
 
+        if exists("*lightline#init")
+          call lightline#init()
+          execute 'source' globpath(&rtp, 'autoload/lightline/colorscheme/solarized.vim')
+          call lightline#colorscheme()
+          call lightline#update()
+        endif
+
         silent execute "!go-" . s:new_bg
         silent execute "!tmux source-file ~/.tmux/tmuxline." . s:new_bg . ".conf"
     endif
