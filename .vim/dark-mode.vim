@@ -2,12 +2,15 @@ function! SetBackgroundMode(...)
     let s:new_bg = "light"
 
     if $TERM_PROGRAM ==? "Apple_Terminal"
-        let s:mode = systemlist("defaults read -g AppleInterfaceStyle")[0]
+        let s:style_list = systemlist("defaults read -g AppleInterfaceStyle")
+        if len(s:style_list) > 0
+          let s:mode = s:style_list[0]
 
-        if s:mode ==? "dark"
-            let s:new_bg = "dark"
-        else
-            let s:new_bg = "light"
+          if s:mode ==? "dark"
+              let s:new_bg = "dark"
+          else
+              let s:new_bg = "light"
+          endif
         endif
     endif
 
