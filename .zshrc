@@ -1,4 +1,4 @@
-autoload -U compinit; compinit # Expand directory path shorthand (e.g. cd Co/eri/tm/cach/a<Tab>)
+autoload -Uz compinit; compinit # Expand directory path shorthand (e.g. cd Co/eri/tm/cach/a<Tab>)
 
 setopt interactivecomments # Allow comments after commands
 setopt autocd              # cd to directories without typing cd
@@ -10,8 +10,7 @@ export EDITOR=vim
 
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/pure.zsh"
-source "$HOME/.asdf/asdf.sh"
-source "$HOME/.asdf/completions/asdf.bash"
+source "$HOME/.zsh/asdf.zsh"
 source "$HOME/.zsh/path.zsh"
 source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
