@@ -241,6 +241,8 @@ abbrevs+=(
   "gprne"  "git pull-request --no-edit"
   "gprd"   "git pull-request --draft"
   "gprdne" "git pull-request --draft --no-edit"
+  "nebp"   "--no-edit --browse --push"
+  "necp"   "--no-edit --copy --push"
   "gprm"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
   "gprmd"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
   "blb"    '-b $(git rev-parse --abbrev-ref @{-1})'
