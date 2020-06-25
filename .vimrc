@@ -41,7 +41,6 @@ set undoreload=10000
 
 " Color column at 120 characters
 set colorcolumn=120
-set textwidth=120
 
 " Colorscheme
 silent! colorscheme solarized
