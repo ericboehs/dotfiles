@@ -62,8 +62,14 @@ nnoremap <Esc><Right> :+tabmove<CR>
 "       \gV:call setreg('"', old_reg, old_regtype)<CR>
 
 " Movement & wrapped long lines
-" nnoremap j gj
-" nnoremap k gk
+nnoremap j gj
+nnoremap k gk
+
+" Mimic Emacs Line Editing in Insert Mode Only
+inoremap <C-A> <Home>
+inoremap <C-B> <Left>
+inoremap <C-E> <End>
+inoremap <C-F> <Right>
 
 " Converts Ruby 1.8 hashes to 1.9
 " command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')
