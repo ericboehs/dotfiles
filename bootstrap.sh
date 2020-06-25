@@ -46,7 +46,7 @@ for f in $dotfiles; do
     fi
   else
     echo "-----> Linking $source_file"
-    ln -s $source_file $target_file
+    ln -fs $source_file $target_file
   fi
 done
 
