@@ -38,9 +38,6 @@ nnoremap <silent> <Esc>7 :tabn 7<CR>
 nnoremap <silent> <Esc>8 :tabn 8<CR>
 nnoremap <silent> <Esc>9 :tabn 9<CR>
 
-" Press `Esc`, `Left`/`Right` to move to a tab
-nnoremap <Esc>h gT
-nnoremap <Esc>l gt
 nnoremap <Esc><Left> :-tabmove<CR>
 nnoremap <Esc><Right> :+tabmove<CR>
 
