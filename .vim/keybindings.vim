@@ -21,6 +21,12 @@ nmap <leader>de Odebugger<esc>^
 " Run current line as SQL against local db (via dadbod)
 nmap <leader>db :.DB<CR>
 
+" Copy/paste from system clipboard
+xnoremap <leader>c "+y
+nnoremap <leader>c "+yy
+xnoremap <leader>p "+p
+nnoremap <leader>p "+p
+
 " Press `Esc`, `1` to go to tab 1 (etc)
 nnoremap <silent> <Esc>1 :tabn 1<CR>
 nnoremap <silent> <Esc>2 :tabn 2<CR>
