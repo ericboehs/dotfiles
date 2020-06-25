@@ -1,0 +1,8 @@
+AwesomePrint.defaults = {
+  ruby19_syntax: true,
+  color: {
+    hash: :blue,
+    array: :blue,
+    struct: :blue
+  }
+}
