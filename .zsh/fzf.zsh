@@ -28,7 +28,7 @@ _gen_fzf_default_opts() {
   ## Solarized Light color scheme for fzf
   export FZF_DEFAULT_OPTS_LIGHT="
     --color fg:-1,bg:-1,hl:$blue,fg+:$base02,bg+:$base2,hl+:$blue
-    --color info:$yellow,prompt:$yellow,pointer:$base03,marker:$base03,spinner:$yellow
+    --color info:$magenta,prompt:$magenta,pointer:$base03,marker:$base3,spinner:$magenta
   "
 
   export FZF_DEFAULT_OPTS=$(defaults read -g AppleInterfaceStyle 2>&1 | grep -q Dark && echo $FZF_DEFAULT_OPTS_DARK || echo $FZF_DEFAULT_OPTS_LIGHT)

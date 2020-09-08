@@ -25,6 +25,7 @@ autocmd Filetype css,scss,sass setlocal iskeyword+=- " Treat dashed words as who
 set hlsearch      " Highlight searches
 set ignorecase    " Ignore case
 set smartcase     " Override 'ignorecase' option if the search contains upper case characters.
+hi Search ctermfg=DarkMagenta ctermbg=White
 
 " Indentation
 set shiftwidth=2  " Number of spaces to use in each autoindent step

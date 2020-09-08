@@ -161,6 +161,7 @@ abbrevs+=(
 
 # Google
 abbrevs+=(
+  "g"      "googler"
   "gogp"   "googler --np -n 5"
   "gogj"   "googler __CURSOR__ -j -s 0"
 )
