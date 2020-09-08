@@ -1,9 +1,6 @@
 " Allow Ctrl-S and Ctrl-Q keybindings to pass through to vim (I do this in .zshrc)
 " silent !stty -ixon > /dev/null 2>/dev/null
 
-" Remap jk to Esc in insert mode
-" inoremap jk <Esc>
-
 " Quit file
 map <c-q> <esc>:q<CR>
 imap <c-q> <esc>:q<CR>
@@ -20,6 +17,15 @@ nmap <leader>de Odebugger<esc>^
 
 " Run current line as SQL against local db (via dadbod)
 nmap <leader>db :.DB<CR>
+
+" Auto-commit Wiki
+nmap <leader>wc :!cd ~/Documents/Wiki && git add . && git commit -m 'Auto-commit' && git push<CR>
+
+" Goyo
+nmap <leader>g :Goyo<CR>
+
+" Insert markdown header with filename
+nmap <leader>fn i# <C-R>=expand("%:t:r")<CR><CR><CR>
 
 " Copy/paste from system clipboard
 xnoremap <leader>c "+y

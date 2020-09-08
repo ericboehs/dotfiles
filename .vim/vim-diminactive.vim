@@ -2,12 +2,12 @@
 let g:diminactive_enable_focus = 1
 
 " Toggle relative numbers  on FocusLost
-autocmd FocusLost * :set number norelativenumber
+autocmd FocusLost * :if !exists('#goyo') | set number norelativenumber
 
 " Using vim-tmux-navigator bindings, on FocusLost ^[[O was left behind
 autocmd FocusLost * silent redraw!
-autocmd FocusGained * :set number relativenumber
+autocmd FocusGained * :if !exists('#goyo') | set number relativenumber
 
 " Toggle relative numbers in insert mode
-autocmd InsertEnter * :set number norelativenumber
-autocmd InsertLeave * :set number relativenumber
+autocmd InsertEnter * :if !exists('#goyo') | set number norelativenumber
+autocmd InsertLeave * :if !exists('#goyo') | set number relativenumber

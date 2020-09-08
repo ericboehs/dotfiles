@@ -178,6 +178,7 @@ abbrevs+=(
 
   "ga"   "git add"
   "gad"  "git add ."
+  "gadcp" "git add . && git commit -m 'Auto-commit' && git push"
   "gaud"  "git add -u ."
   "gap"  "git add -p"
 

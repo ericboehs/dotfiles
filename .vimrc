@@ -4,9 +4,11 @@ source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
 source ~/.vim/coc.vim
 source ~/.vim/dark-mode.vim
+source ~/.vim/goyo.vim
 source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim
 source ~/.vim/vim-tmux-navigator.vim
+source ~/.vim/vim-wiki.vim
 
 set relativenumber                          " Show line numbers relative to each other
 set number                                  " Show the current lines number w/ relative numbers around it

@@ -15,6 +15,7 @@ if exists('*minpac#init')
   call minpac#add('tpope/vim-eunuch')
   call minpac#add('tpope/vim-fugitive')
   call minpac#add('tpope/vim-heroku')
+  call minpac#add('tpope/vim-markdown')
   call minpac#add('tpope/vim-rails')
   call minpac#add('tpope/vim-ragtag')
   call minpac#add('tpope/vim-rhubarb')
@@ -34,6 +35,8 @@ if exists('*minpac#init')
   call minpac#add('justinmk/vim-sneak')
   call minpac#add('tommcdo/vim-exchange')
   call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
+  call minpac#add('junegunn/goyo.vim')
+  call minpac#add('mhinz/vim-signify')
 
   " Language
   call minpac#add('slim-template/vim-slim')
@@ -48,11 +51,13 @@ if exists('*minpac#init')
   call minpac#add('altercation/vim-colors-solarized')
   call minpac#add('itchyny/lightline.vim')
   call minpac#add('edkolev/tmuxline.vim')
-  call minpac#add('ayu-theme/ayu-vim')
-  call minpac#add('jdsimcoe/panic.vim')
 
   " Misc
   call minpac#add('jremmen/vim-ripgrep')
+  call minpac#add('vimwiki/vimwiki')
+  call minpac#add('junegunn/fzf')
+  call minpac#add('junegunn/fzf.vim')
+  call minpac#add('michal-h21/vim-zettel')
 endif
 
 command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})
