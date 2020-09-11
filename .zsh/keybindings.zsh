@@ -1,3 +1,11 @@
+# Open vim when pressing `v` in normal mode
+autoload edit-command-line; zle -N edit-command-line
+bindkey -M vicmd v edit-command-line
+
+# Open fzf browser for git branches
+bindkey -s '^[g' 'git checkout $(git branch | fzf)^M'
+bindkey -s '^[G' 'git checkout $(git branch --all | fzf)^M'
+
 # Allow Ctrl-S and Ctrl-Q to be keybindings in vim
 stty -ixon > /dev/null 2>/dev/null
 

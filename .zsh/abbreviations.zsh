@@ -34,7 +34,7 @@ abbrevs=(
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
   "vab" "nvim ~/.zsh/abbreviations.zsh"
-  "dof" "cd ~/.dotfiles; nvim; . ~/.zshrc"
+  "dof" "cd ~/.dotfiles; nvim; zsh; . ~/.zshrc; cd -"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
 )
@@ -195,7 +195,6 @@ abbrevs+=(
 
   "gco"     "git checkout"
   "gcom"    "git checkout master"
-  "gcopr"   'git checkout $(git pulls list | grep "^__CURSOR__" | sed -n "s/^\(.*\):\(.*\)$/\2/p")'
   "gcoh"    "git checkout HEAD"
   "gcohd"   "git checkout HEAD --"
   "gcohgl"  "git checkout HEAD -- Gemfile.lock"
@@ -288,6 +287,16 @@ abbrevs+=(
 
   "vgu"  'nvim $(git ls-files --unmerged | cut -f2 | sort -u)'
   "gcdi" "git clean -di"
+)
+
+# GitHub aliases
+abbrevs+=(
+  "ghs"    "gh pr checkout \$(unbuffer gh pr status | tail +4 | fzf --ansi --tac | awk '{print \$1}' | tr -d '#')"
+  "ghco"   "gh pr checkout \$(unbuffer gh pr list | tail +4 | fzf --ansi | awk '{print \$1}' | tr -d '#')"
+  "ghv"    "gh pr view"
+  "ghm"    "gh pr merge"
+  "ghd"    "gh pr diff"
+  "ghr"    "gh pr review"
 )
 
 # Add alias and autocompleteion for hub
