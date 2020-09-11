@@ -5,6 +5,7 @@ source ~/.vim/keybindings.vim
 source ~/.vim/coc.vim
 source ~/.vim/dark-mode.vim
 source ~/.vim/goyo.vim
+source ~/.vim/lightline.vim
 source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim
 source ~/.vim/vim-tmux-navigator.vim
@@ -25,7 +26,6 @@ autocmd Filetype css,scss,sass setlocal iskeyword+=- " Treat dashed words as who
 set hlsearch      " Highlight searches
 set ignorecase    " Ignore case
 set smartcase     " Override 'ignorecase' option if the search contains upper case characters.
-hi Search ctermfg=DarkMagenta ctermbg=White
 
 " Indentation
 set shiftwidth=2  " Number of spaces to use in each autoindent step
@@ -48,8 +48,7 @@ set colorcolumn=120
 " Colorscheme
 silent! colorscheme solarized
 highlight SignColumn ctermbg=8
-" set background=dark
-let g:lightline = { 'colorscheme': 'solarized' }
+highlight Search ctermfg=5 ctermbg=15
 let g:tmuxline_separators = { 'left' : '', 'left_alt': '', 'right' : '', 'right_alt' : '' }
 
 if filereadable(expand("~/.vimrc.local"))
