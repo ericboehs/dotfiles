@@ -53,7 +53,6 @@ if exists('*minpac#init')
   call minpac#add('edkolev/tmuxline.vim')
 
   " Misc
-  call minpac#add('jremmen/vim-ripgrep')
   call minpac#add('vimwiki/vimwiki')
   call minpac#add('junegunn/fzf')
   call minpac#add('junegunn/fzf.vim')
