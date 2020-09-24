@@ -8,5 +8,6 @@ let g:vimwiki_list = [
       \]
 let g:vimwiki_global_ext = 0
 let g:vimwiki_auto_header = 1
+autocmd VimEnter * let g:vimwiki_syntaxlocal_vars['markdown']['Link1'] = g:vimwiki_syntaxlocal_vars['default']['Link1']
 
 autocmd FocusLost,FocusLost * if &ft==# 'vimwiki' | :update | endif

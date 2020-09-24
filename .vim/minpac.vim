@@ -53,7 +53,7 @@ if exists('*minpac#init')
   call minpac#add('edkolev/tmuxline.vim')
 
   " Misc
-  call minpac#add('vimwiki/vimwiki')
+  call minpac#add('vimwiki/vimwiki', { 'branch': 'dev' })
   call minpac#add('junegunn/fzf')
   call minpac#add('junegunn/fzf.vim')
   call minpac#add('michal-h21/vim-zettel')
