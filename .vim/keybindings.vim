@@ -46,6 +46,9 @@ nnoremap <silent> <Esc>9 :tabn 9<CR>
 
 nnoremap <Esc><Left> :-tabmove<CR>
 nnoremap <Esc><Right> :+tabmove<CR>
+inoremap <M-BS> <C-w>
+inoremap <M-Left> <C-Left>
+inoremap <M-Right> <C-Right>
 
 " Insert a single character w/o going to insert mode using <space><char>
 " noremap <silent> <space> :exe "normal i".nr2char(getchar())<CR>
