@@ -1,7 +1,8 @@
 " Enable fzf fuzzy search
 set rtp+=/usr/local/opt/fzf " FZF is maintained via homebrew
 nnoremap <C-p> :<C-u>Files<CR>
-nnoremap <C-g> :<C-u>RG<CR>
+nnoremap <Leader>R :<C-u>RG<CR>
+vnoremap <Leader>R <Esc>:<C-u>RG <C-r><C-w><CR>
 
 autocmd! FileType fzf set laststatus=0 noshowmode noruler nonumber norelativenumber
   \| autocmd BufLeave <buffer> set laststatus=2 showmode ruler
