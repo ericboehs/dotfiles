@@ -28,7 +28,12 @@ for f in $dotfiles; do
   [ $f = "bootstrap.sh" ] && continue
   [ $f = "README.md" ]    && continue
 
-  if [ -e ~/$f ];then
+  if [ $f = ".gitconfig.private.example" ]; then
+    [[ $USER = "ericboehs" ]] && ln -fs $source_file ~/.gitconfig.private
+    continue
+  fi
+
+  if [ -e ~/$f ]; then
     test $(readlink $source_file) = $(readlink ~/.dotfiles/$f) && continue
 
     if [ "$FORCE_OVERWRITE" == "true" ]; then
