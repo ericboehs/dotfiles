@@ -27,6 +27,21 @@ nmap <leader>g :Goyo<CR>
 " Insert markdown header with filename
 nmap <leader>fn i# <C-R>=expand("%:t:r")<CR><CR><CR>
 
+" Insert current date with day name (e.g. 2020-11-02 Monday)
+nnoremap <F5> "=strftime("%Y-%m-%d %A")<CR>P
+inoremap <F5> <C-R>=strftime("%Y-%m-%d %A")<CR>
+
+" Create a Markdown-link structure for the current word or visual selection with
+" leader 3. Paste in the URL later. Or use leader 4 to insert the current
+" system clipboard as an URL.
+nnoremap <leader>3 ciw[<C-r>"]()<Esc>
+vnoremap <leader>3 c[<C-r>"]()<Esc>
+nnoremap <leader>4 ciw[<C-r>"](<C-r>*)<Esc>
+vnoremap <leader>4 c[<C-r>"](<C-r>*)<Esc>
+
+" Open current file in Marked 2
+nmap <leader>m :silent !open -ga "Marked 2" "%"<CR>
+
 " Copy/paste from system clipboard
 xnoremap <leader>c "+y
 nnoremap <leader>c "+yy
