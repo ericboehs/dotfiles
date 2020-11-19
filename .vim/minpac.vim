@@ -48,6 +48,7 @@ if exists('*minpac#init')
   call minpac#add('ecomba/vim-ruby-refactoring')
 
   " Colorscheme
+  call minpac#add('ayu-theme/ayu-vim')
   call minpac#add('altercation/vim-colors-solarized')
   call minpac#add('itchyny/lightline.vim')
   call minpac#add('edkolev/tmuxline.vim')

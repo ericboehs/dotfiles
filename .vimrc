@@ -18,6 +18,13 @@ set wildmode=list:longest                   " Tab complete to longest common str
 set showcmd                                 " Display an incomplete command in the lower right corner
 set iskeyword+=\-                           " Auto complete words with dashes
 set mouse=a                                 " Allow scrolling/visual mode with mouse; Cmd-R to disable in Terminal
+set nowrap                                  " Turn off line wrapping; use yow to turn back on
+
+if has("gui_macvim")
+  set guioptions=                           " Removes scroll bars in macvim
+  let macvim_hig_shift_movement = 1         " Allow VISUAL selections via Shift+Arrows
+  " set selectmode=                           " Use VISUAL mode instead of SELECT mode (for shift_movements)
+endif
 
 autocmd FileType gitcommit set spell                 " Turn on spell check in Git commits.
 autocmd Filetype css,scss,sass setlocal iskeyword+=- " Treat dashed words as whole words in stylesheets
@@ -46,9 +53,17 @@ set undoreload=10000
 set colorcolumn=120
 
 " Colorscheme
-silent! colorscheme solarized
+if has("gui_macvim")
+  let ayucolor="light"
+  silent! colorscheme ayu
+  set laststatus=1
+  set guifont=Menlo-Regular:h18
+  set norelativenumber
+  set nonumber
+else
+  silent! colorscheme solarized
+endif
 highlight SignColumn ctermbg=8
-highlight Search ctermfg=5 ctermbg=15
 let g:tmuxline_separators = { 'left' : '', 'left_alt': '', 'right' : '', 'right_alt' : '' }
 
 if filereadable(expand("~/.vimrc.local"))
