@@ -8,7 +8,7 @@ if exists('*minpac#init')
 
   " The great tpope
   call minpac#add('tpope/vim-sensible')
-  call minpac#add('tpope/vim-bundler')
+  " call minpac#add('tpope/vim-bundler') " Causes long boot on rails projects
   call minpac#add('tpope/vim-commentary')
   call minpac#add('tpope/vim-dadbod')
   call minpac#add('tpope/vim-dispatch')
@@ -35,11 +35,8 @@ if exists('*minpac#init')
   call minpac#add('justinmk/vim-sneak')
   call minpac#add('tommcdo/vim-exchange')
   call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
-  call minpac#add('junegunn/goyo.vim')
-  call minpac#add('mhinz/vim-signify')
 
   " Language
-  call minpac#add('slim-template/vim-slim')
   call minpac#add('w0rp/ale')
   call minpac#add('mxw/vim-jsx')
 
@@ -57,7 +54,6 @@ if exists('*minpac#init')
   call minpac#add('vimwiki/vimwiki', { 'branch': 'dev' })
   call minpac#add('junegunn/fzf')
   call minpac#add('junegunn/fzf.vim')
-  call minpac#add('michal-h21/vim-zettel')
 endif
 
 command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})

@@ -41,6 +41,8 @@ abbrevs+=(
 
 # Homebrew
 abbrevs+=(
+  "ibr"   "arch -x86_64 /usr/local/bin/brew"
+  "ibrew" "arch -x86_64 /usr/local/bin/brew"
   "br"    "brew"
   "bri"   "brew install"
   "brui"  "brew uninstall"

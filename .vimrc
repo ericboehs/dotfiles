@@ -4,7 +4,6 @@ source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
 source ~/.vim/coc.vim
 source ~/.vim/dark-mode.vim
-source ~/.vim/goyo.vim
 source ~/.vim/lightline.vim
 source ~/.vim/vim-diminactive.vim
 source ~/.vim/vim-tmux-runner.vim

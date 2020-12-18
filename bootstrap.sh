@@ -74,8 +74,9 @@ if [ ! -d ~/.asdf ];then
 
   # Install ruby
   asdf plugin-add ruby
-  asdf install ruby 2.6.5
-  asdf global ruby 2.6.5
+  export RUBY_CONFIGURE_OPTS="--with-openssl-dir=$(/usr/local/bin/brew --prefix openssl) --with-readline-dir=$(/usr/local/bin/brew --prefix readline)"
+  arch -x86_64 asdf install ruby 2.7.2
+  asdf global ruby 2.6.6
 fi
 
 # Install vim plugins

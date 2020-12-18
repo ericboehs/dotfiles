@@ -6,7 +6,7 @@ setopt extendedglob        # Expand file expressiong (e.g. **/file)
 setopt no_beep             # No more bells!
 
 export CLICOLOR=1 # Enable color in some commands (e.g. ls)
-export EDITOR=vim
+export EDITOR=nvim
 
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/pure.zsh"
