@@ -24,4 +24,16 @@ source "$HOME/.zsh/fzf.zsh"
 # heroku autocomplete setup
 HEROKU_AC_ZSH_SETUP_PATH=/Users/ericboehs/Library/Caches/heroku/autocomplete/zsh_setup && test -f $HEROKU_AC_ZSH_SETUP_PATH && source $HEROKU_AC_ZSH_SETUP_PATH;
 
+opsi() {
+  eval $(op signin my --cache)
+  sed -i '' '/export OP_SESSION_my/d' ~/.zshrc.local
+  env | grep OP_SESSION_my | sed -e 's/^/export /' >> ~/.zshrc.local
+}
+
+mfa() {
+  source ~/Code/department-of-veterans-affairs/devops/utilities/issue_mfa.sh Eric.Boehs $1
+  sed -i '' '/export AWS_/d' ~/.zshrc.local
+  env | grep AWS_ | sed -e 's/^/export /' >> ~/.zshrc.local
+}
+
 export PATH="$HOME/.yarn/bin:$HOME/.config/yarn/global/node_modules/.bin:$PATH"
