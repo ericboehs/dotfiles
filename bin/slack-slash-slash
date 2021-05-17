@@ -1,0 +1,16 @@
+#! /usr/bin/ruby
+# Converts https://*.slack.com URLs into slack:// URLs
+
+TEAM_MAP = {
+  'reforgehq' => 'T3F19R4SK',
+  'dsva' => 'T03FECE8V',
+  'oddball' => 'T1ZD0UBMZ',
+  'gorails' => 'T0BRFRYBU',
+  'craft-community' => 'TTASEL98X'
+}.freeze
+
+input_url = ARGV[0] || `pbpaste`
+team_name, channel_id, message_id = input_url.scan(%r{https://(.*)\.slack\.com/archives/(.*)/p(.*)}).first
+message_id.gsub! '?', '&' # Support for messages inside threads
+url = "slack://channel?team=#{TEAM_MAP[team_name]}&id=#{channel_id}&message=#{message_id.insert(10, '.')}"
+IO.popen('pbcopy', 'w') { |f| f << url }
