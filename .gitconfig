@@ -17,8 +17,13 @@
 [fetch]
   prune = true
 [user]
-	signingkey = eric@boehs.com
+	signingkey = C919402C33E7F71F
 [gpg]
 	program = gpg
 [commit]
 	gpgsign = true
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true

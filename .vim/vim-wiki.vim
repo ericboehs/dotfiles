@@ -10,8 +10,15 @@ let g:vimwiki_list = [
 
 let g:vimwiki_global_ext = 0     " Don't create temporary wikis (they must be in the wiki_list)
 let g:vimwiki_auto_header = 1    " Put the file name as a first level header when creating a new entry
-let g:calendar_options = 'nornu' " Not vimwiki specific; but fixes calendar-vim not being wide enough
+
+let g:calendar_diary = '~/Documents/Wiki'
 
 autocmd VimEnter * let g:vimwiki_syntaxlocal_vars['markdown']['Link1'] = g:vimwiki_syntaxlocal_vars['default']['Link1']
 
 autocmd FocusLost,FocusLost * if &ft==# 'vimwiki' | :update | endif
+
+" Auto open VimWiki in MacVim
+if has("gui_macvim")
+  " Had to add a delay or VimWiki wasn't fully loaded
+  autocmd VimEnter * call timer_start(100, { tid -> execute('VimwikiMakeDiaryNote')})
+endif

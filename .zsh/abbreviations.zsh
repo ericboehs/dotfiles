@@ -1,7 +1,5 @@
 # Adopted from http://stackoverflow.com/questions/28573145/how-can-i-move-the-cursor-after-a-zsh-abbreviation
 
-setopt extendedglob
-
 typeset -A abbrevs
 
 # General aliases
@@ -28,13 +26,13 @@ abbrevs=(
   "oedm" "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'"
   "rfs" "refresh_safari"
   "trash" "mv __CURSOR__ ~/.Trash"
-  )
+)
 
 # Dotfiles
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
   "vab" "nvim ~/.zsh/abbreviations.zsh"
-  "dof" "cd ~/.dotfiles; nvim; zsh; . ~/.zshrc; cd -"
+  "dof" "cd ~/Code/ericboehs/dotfiles; nvim; zsh; . ~/.zshrc; cd -"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
 )
@@ -87,11 +85,6 @@ abbrevs+=(
   "cr7t"  "chmod -R 777 /tmp/tmux-501"
 )
 
-# EC2 CLI
-abbrevs+=(
-  "exaws" 'export AWS_ACCESS_KEY="$(git config --get aws.access-key)"; export AWS_SECRET_KEY="$(git config --get aws.secret-key)"'
-)
-
 # Ruby
 abbrevs+=(
   "rdm"  "rails db:migrate"
@@ -138,17 +131,15 @@ abbrevs+=(
   "drid"  "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
 
-# AWS
-abbrevs+=(
-  "depstaging" "aws opsworks update-app --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_STAGING_STACK_ID --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
-  "depdemo2" "aws opsworks update-app --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_DEMO2_STACK_ID --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
-)
-
 # Vim
 abbrevs+=(
   "vrcf" 'nvim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
-  "vbs"  'nvim -p board-now.md board-later.md board-scratch-pad.md'
   "vi"   'nvim'
+  "wix"   'nvim -c "VimwikiIndex"'
+  "wid"  'nvim -c "VimwikiDiaryIndex"'
+  "wi"   'nvim -c "VimwikiMakeDiaryNote"'
+  "wim"   'nvim -c "VimwikiMakeTomorrowDiaryNote"'
+  "wiy"   'nvim -c "VimwikiMakeYesterdayDiaryNote"'
 )
 
 # Bundler
@@ -159,13 +150,6 @@ abbrevs+=(
   "bup"  "bundle update"
   "bop"  "bundle open"
   "begp" "bundle exec gem pristine"
-)
-
-# Google
-abbrevs+=(
-  "g"      "googler"
-  "gogp"   "googler --np -n 5"
-  "gogj"   "googler __CURSOR__ -j -s 0"
 )
 
 # Git aliases
@@ -237,25 +221,14 @@ abbrevs+=(
   "glor"  "git pull origin --rebase"
   "glomr" "git pull origin master --rebase"
 
-  "gpr"    "git pull-request"
-  "gprbc"  "git pull-request --browse --copy"
-  "gprl"   "git pr list"
-  "gprco"  "git pr checkout"
-  "gprne"  "git pull-request --no-edit"
-  "gprd"   "git pull-request --draft"
-  "gprdne" "git pull-request --draft --no-edit"
-  "nebp"   "--no-edit --browse --push"
-  "necp"   "--no-edit --copy --push"
-  "gprm"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
-  "gprmd"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
-  "blb"    '-b $(git rev-parse --abbrev-ref @{-1})'
+  "gpr"    "gh pr create"
+  "gprl"   "gh pr list"
+  "gprf"   "gh pr create --fill"
+  "gprd"   "gh pr create --draft"
+  "gprdf"  "gh pr create --draft --fill"
+  "gpvw"   "gh pr view --web"
 
-  "gbr"    "git browse"
-  "gbrp"  "git browse -- pulls"
-  "gbrpl"  "git browse -- pull/"
-  "gbrpr"  "git browse -- pull/\$(git pr list -h \$(git rev-parse --abbrev-ref HEAD) | awk '{print \$1}' | tr -d '#')"
-  "gbrb"  "git browse -- branches"
-  "gbrby"  "git browse -- branches/yours"
+  "gbr"    "gh browse"
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"
@@ -300,10 +273,6 @@ abbrevs+=(
   "ghd"    "gh pr diff"
   "ghr"    "gh pr review"
 )
-
-# Add alias and autocompleteion for hub
-type compdef >/dev/null 2>&1 && compdef hub=git
-type hub >/dev/null 2>&1 && alias git='hub'
 
 for abbr in ${(k)abbrevs}; do
   alias $abbr="${abbrevs[$abbr]}"

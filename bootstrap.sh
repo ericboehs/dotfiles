@@ -1,24 +1,28 @@
 #!/bin/sh
 # Installation script adopted from https://gist.github.com/sonots/4239842
 
-set -e
+set -e # Exit on any error
 
-[[ -e ~/.dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/.dotfiles
-pushd ~/.dotfiles > /dev/null
+# Checkout dotfiles repo and cd (pushd) to it
+mkdir -p ~/Code/ericboehs/
+[[ -e ~/Code/ericboehs/dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/Code/ericboehs/dotfiles
+pushd ~/Code/ericboehs/dotfiles > /dev/null
+mkdir -p ~/.ssh
 
+# Make sure we're on the latest master and have the correct submodule versions
 git checkout master || echo
 git pull --rebase origin master || echo
 git submodule init
 git submodule update
 
-mkdir -p ~/.ssh
-
+# symlink all dotfiles into ~ (skip if they exist)
 dotfiles="$(ls -a) .ssh/config"
 for f in $dotfiles; do
   overwrite=false
-  source_file=~/.dotfiles/$f
+  source_file=~/Code/ericboehs/dotfiles/$f
   target_file=~/$(dirname $f)/$(basename $f)
 
+  # Skip these files
   [ $f = "." ]            && continue
   [ $f = ".." ]           && continue
   [ $f = ".ssh" ]         && continue
@@ -33,8 +37,13 @@ for f in $dotfiles; do
     continue
   fi
 
+  if [ $f = ".gitignore.global" ]; then
+    ln -fs $source_file ~/.gitignore
+    continue
+  fi
+
   if [ -e ~/$f ]; then
-    test $(readlink $source_file) = $(readlink ~/.dotfiles/$f) && continue
+    test $(readlink $source_file) = $(readlink ~/Code/ericboehs/dotfiles/$f) && continue
 
     if [ "$FORCE_OVERWRITE" == "true" ]; then
       overwrite=true
@@ -59,7 +68,8 @@ done
 mkdir -p ~/.config
 ln -fs ~/.vim ~/.config/nvim
 
-if [ ! -d ~/.asdf ];then
+# Configure asdf if it doesn't exists and install ruby and node
+if [ ! -d ~/.asdf ]; then
   echo "-----> Install asdf-vm"
   git clone https://github.com/asdf-vm/asdf.git ~/.asdf
   cd ~/.asdf
@@ -67,20 +77,20 @@ if [ ! -d ~/.asdf ];then
 
   source ~/.asdf/asdf.sh
 
-  # Install node
+  # Install node and yarn
   asdf plugin-add nodejs
-  bash ~/.asdf/plugins/nodejs/bin/import-release-team-keyring
-  asdf install nodejs 8.12.0
+  arch -x86_64 asdf install nodejs 14.17.5
+  asdf global nodejs 14.17.5
+  npm install -g yarn
 
   # Install ruby
   asdf plugin-add ruby
-  export RUBY_CONFIGURE_OPTS="--with-openssl-dir=$(/usr/local/bin/brew --prefix openssl) --with-readline-dir=$(/usr/local/bin/brew --prefix readline)"
-  arch -x86_64 asdf install ruby 2.7.2
-  asdf global ruby 2.6.6
+  asdf install ruby 2.6.8
+  asdf global ruby 2.6.8
 fi
 
-# Install vim plugins
-vim -c ':silent !echo' -c ':PackUpdate' -c ':qa!'
+# Install nvim plugins
+nvim -c ':silent !echo' -c ':PackUpdate' -c ':qa!'
 
 popd > /dev/null
 
