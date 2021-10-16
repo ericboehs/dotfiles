@@ -30,7 +30,7 @@ nnoremap <F6> "=strftime("%-l:%M %p")<CR>P
 inoremap <F6> <C-R>=strftime("%-l:%M %p")<CR>
 
 " Insert "- [ ] " when typing "x " at the beginning of a line or if the line ends with "- "
-inoremap x<space> <C-R>=col('.') == "1" ? "- [ ]" : getline('.') =~ "- $" ? "[ ] " : "x "<CR>
+inoremap x<space> <C-R>=col('.') == "1" ? "- [ ] " : getline('.') =~ "- $" ? "[ ] " : "x "<CR>
 
 " Create a Markdown-link structure for the current word or visual selection with
 " leader 3. Paste in the URL later. Or use leader 4 to insert the current
@@ -62,18 +62,31 @@ nnoremap <silent> <Esc>9 :tabn 9<CR>
 
 nnoremap <silent> <Esc><Left> :-tabmove<CR>
 nnoremap <silent> <Esc><Right> :+tabmove<CR>
-nnoremap <silent> <M-h> :tabprev<CR>
-nnoremap <silent> <M-l> :tabnext<CR>
 
 inoremap <M-BS> <C-w>
 inoremap <M-Left> <C-Left>
 inoremap <M-Right> <C-Right>
+
+" Move lines
+nnoremap <M-j> :m .+1<CR>==
+nnoremap <M-k> :m .-2<CR>==
 
 " Mimic Emacs Line Editing in Insert Mode Only
 inoremap <C-A> <Home>
 inoremap <C-B> <Left>
 inoremap <C-E> <End>
 inoremap <C-F> <Right>
+
+" VimWiki Bindings
+nnoremap <Leader>tl <Plug>VimwikiToggleListItem
+vnoremap <Leader>tl <Plug>VimwikiToggleListItem
+
+" Next/Previous File
+nnoremap ]a :next<cr>
+nnoremap [a :prev<cr>
+
+" Converts visual selection to array (e.g. a\nb\nc -> ["a", "b", "c"])
+vnoremap <Leader>a !ruby -e 'p $stdin.read.split'<cr>
 
 " Converts Ruby 1.8 hashes to 1.9
 " command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')

@@ -17,7 +17,7 @@ abbrevs=(
   "tstamp" "| while read line; do ; echo \$(date | cut -f4 -d ' ') \$line; done"
   "rlw"  'readlink $(which __CURSOR__)'
   "wtnoti" "while do; noti; sleep 120; done"
-  "wt"     "while; do __CURSOR__; clear; sleep 5; done"
+  "wt"     "while; do clear; __CURSOR__; sleep 5; done"
   "wtbb"   "while; do !!; clear; sleep 5; done"
   "ut"     "clear && until __CURSOR__; do sleep 5; done"
   "utbb"   "clear && until !!; do sleep 5; done"
@@ -179,6 +179,7 @@ abbrevs+=(
   "gcm"   "git commit -m"
   "gcmw"   "git commit -m wip"
 
+  "gcb"     "git checkout -b"
   "gco"     "git checkout"
   "gcom"    "git checkout master"
   "gcoh"    "git checkout HEAD"
@@ -186,9 +187,11 @@ abbrevs+=(
   "gcohgl"  "git checkout HEAD -- Gemfile.lock"
   "gcohglb" "git checkout HEAD -- Gemfile.lock; bundle"
   "gcohyly" "git checkout HEAD -- yarn.lock; yarn"
+
   "gcl"     "git clone"
   "gclc"    "git clone __CURSOR__ && cd \$(basename \$_)"
   "gb"      "git branch"
+  "gbz"     "git branch | fzf | xargs git checkout"
   "gbm"     "git branch -M"
   "gbv"     "git branch -vv"
   "gba"     "git branch -a"
@@ -223,6 +226,9 @@ abbrevs+=(
 
   "gpr"    "gh pr create"
   "gprl"   "gh pr list"
+  "gpco"   "gh pr checkout"
+  "gpcor"  "gh pr checkout \$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title\" | fzf | awk '{print \$1}')"
+  "gpcorb" "gh pr checkout \$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title -label:Lighthouse -label:mobile\" | fzf | awk '{print \$1}')"
   "gprf"   "gh pr create --fill"
   "gprd"   "gh pr create --draft"
   "gprdf"  "gh pr create --draft --fill"
@@ -257,8 +263,6 @@ abbrevs+=(
   "gst"  "git stash"
   "gstl" "git stash list"
   "gstp" "git stash pop"
-
-  "gcb"   "git checkout -b"
 
   "vgu"  'nvim $(git ls-files --unmerged | cut -f2 | sort -u)'
   "gcdi" "git clean -di"

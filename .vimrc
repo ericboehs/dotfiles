@@ -1,8 +1,8 @@
-source ~/.vim/ale.vim
+"source ~/.vim/ale.vim
 source ~/.vim/minpac.vim
-source ~/.vim/fzf.vim
+"source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
-source ~/.vim/coc.vim
+" source ~/.vim/coc.vim
 source ~/.vim/lightline.vim
 source ~/.vim/gui.vim
 source ~/.vim/vim-diminactive.vim
@@ -39,7 +39,9 @@ set undoreload=10000
 set colorcolumn=120
 
 " Colorscheme
-lua require("github-theme").setup({ themeStyle = "light" })
+if !has("gui_macvim")
+  autocmd VimEnter * call timer_start(10, { tid -> execute('colorscheme github_light')})
+endif
 let g:better_whitespace_guicolor='pink'
 
 if filereadable(expand("~/.vimrc.local"))

@@ -19,8 +19,10 @@ function! PackInit() abort
   call minpac#add('projekt0n/github-nvim-theme')
 
   " Language
-  call minpac#add('w0rp/ale')
-  call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
+  " call minpac#add('w0rp/ale')
+  " call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
+  call minpac#add('neovim/nvim-lspconfig')
+  call minpac#add('nvim-lua/completion-nvim')
 
   " Tmux
   call minpac#add('blueyed/vim-diminactive')
@@ -28,10 +30,16 @@ function! PackInit() abort
   call minpac#add('christoomey/vim-tmux-runner')
   call minpac#add('tmux-plugins/vim-tmux-focus-events')
 
+  " Project Finding
+  call minpac#add('nvim-lua/plenary.nvim')
+  call minpac#add('nvim-treesitter/nvim-treesitter')
+  call minpac#add('nvim-telescope/telescope.nvim')
+  call minpac#add('nvim-telescope/telescope-fzy-native.nvim')
+
   " Misc
   call minpac#add('henrik/vim-indexed-search')
-  call minpac#add('junegunn/fzf')
-  call minpac#add('junegunn/fzf.vim')
+  "call minpac#add('junegunn/fzf')
+  "call minpac#add('junegunn/fzf.vim')
   call minpac#add('mattn/calendar-vim')
   call minpac#add('ntpeters/vim-better-whitespace')
   call minpac#add('vimwiki/vimwiki', { 'branch': 'dev' })
