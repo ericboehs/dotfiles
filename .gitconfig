@@ -16,14 +16,14 @@
   ff = only
 [fetch]
   prune = true
-[user]
-	signingkey = C919402C33E7F71F
 [gpg]
-	program = gpg
+  program = gpg
 [commit]
-	gpgsign = true
+  gpgsign = true
+[credential]
+  helper = cache --timeout=600
 [filter "lfs"]
-	clean = git-lfs clean -- %f
-	smudge = git-lfs smudge -- %f
-	process = git-lfs filter-process
-	required = true
+  process = git-lfs filter-process
+  required = true
+  clean = git-lfs clean -- %f
+  smudge = git-lfs smudge -- %f

@@ -1,4 +1,5 @@
 [user]
+  signingkey = C919402C33E7F71F
   name = Eric Boehs
   email = eric@boehs.com
 [github]
