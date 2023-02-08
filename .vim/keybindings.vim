@@ -12,6 +12,9 @@ nmap <leader>bp Orequire 'pry'; binding.pry<esc>^
 " Start a javascript debugger
 nmap <leader>de Odebugger<esc>^
 
+" Format JSON
+nmap <leader>j :%!ruby -rjson -e 'puts JSON.pretty_generate(JSON.parse(STDIN.read))'<CR>
+
 " Open markdown URL (works with app protocols like slack://)
 nmap <leader><space> f(yi):silent !open "<c-r>"" &<cr>
 
@@ -68,8 +71,8 @@ inoremap <M-Left> <C-Left>
 inoremap <M-Right> <C-Right>
 
 " Move lines
-nnoremap <M-j> :m .+1<CR>==
-nnoremap <M-k> :m .-2<CR>==
+nnoremap <D-j> :m .+1<CR>==
+nnoremap <D-k> :m .-2<CR>==
 
 " Mimic Emacs Line Editing in Insert Mode Only
 inoremap <C-A> <Home>
@@ -85,8 +88,58 @@ vnoremap <Leader>tl <Plug>VimwikiToggleListItem
 nnoremap ]a :next<cr>
 nnoremap [a :prev<cr>
 
+" VimR Tabs
+nnoremap <S-D-{> :tabp<CR>
+vnoremap <S-D-{> :tabp<CR>
+inoremap <S-D-{> :tabp<CR>
+nnoremap <S-D-}> :tabn<CR>
+vnoremap <S-D-}> :tabn<CR>
+inoremap <S-D-}> :tabn<CR>
+nnoremap <D-1> 1gt
+vnoremap <D-1> 1gt
+inoremap <D-1> <Esc>1gt
+nnoremap <D-2> 2gt
+vnoremap <D-2> 2gt
+inoremap <D-2> <Esc>2gt
+nnoremap <D-3> 3gt
+vnoremap <D-3> 3gt
+inoremap <D-3> <Esc>3gt
+nnoremap <D-4> 4gt
+vnoremap <D-4> 4gt
+inoremap <D-4> <Esc>4gt
+nnoremap <D-5> 5gt
+vnoremap <D-5> 5gt
+inoremap <D-5> <Esc>5gt
+nnoremap <D-6> 6gt
+vnoremap <D-6> 6gt
+inoremap <D-6> <Esc>6gt
+nnoremap <D-7> 7gt
+vnoremap <D-7> 7gt
+inoremap <D-7> <Esc>7gt
+nnoremap <D-8> 8gt
+vnoremap <D-8> 8gt
+inoremap <D-8> <Esc>8gt
+nnoremap <D-9> 9gt
+vnoremap <D-9> 9gt
+inoremap <D-9> <Esc>9gt
+
+" Cmd-Left/Right to go to beginning/end of line
+inoremap <D-Left> <Home>
+inoremap <D-Right> <End>
+
 " Converts visual selection to array (e.g. a\nb\nc -> ["a", "b", "c"])
 vnoremap <Leader>a !ruby -e 'p $stdin.read.split'<cr>
+
+" Search for visual selection
+xnoremap * :<C-u>call <SID>VSetSearch()<CR>/<C-R>=@/<CR><CR>
+xnoremap # :<C-u>call <SID>VSetSearch()<CR>?<C-R>=@/<CR><CR>
+
+function! s:VSetSearch()
+    let temp = @s
+    norm! gv"sy
+    let @/ = '\V' . substitute(escape(@s, '/\'), '\n', '\\n','g')
+    let @s = temp
+endfunction
 
 " Converts Ruby 1.8 hashes to 1.9
 " command! -bar -range=% NotRocket execute '<line1>,<line2>s/:\(\w\+\)\s*=>/\1:/e' . (&gdefault ? '' : 'g')
