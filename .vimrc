@@ -1,7 +1,7 @@
-"source ~/.vim/ale.vim
 source ~/.vim/minpac.vim
 "source ~/.vim/fzf.vim
 source ~/.vim/keybindings.vim
+luafile ~/.vim/nvim-lint.lua
 " source ~/.vim/coc.vim
 source ~/.vim/lightline.vim
 source ~/.vim/gui.vim

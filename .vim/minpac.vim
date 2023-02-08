@@ -11,15 +11,16 @@ function! PackInit() abort
   call minpac#add('tpope/vim-fugitive')
   call minpac#add('tpope/vim-rhubarb')
   call minpac#add('tpope/vim-sensible')
+  call minpac#add('tpope/vim-unimpaired')
+  call minpac#add('junegunn/goyo.vim')
 
   " Colorscheme
-  call minpac#add('ayu-theme/ayu-vim')
   call minpac#add('edkolev/tmuxline.vim')
   call minpac#add('itchyny/lightline.vim')
   call minpac#add('projekt0n/github-nvim-theme')
 
   " Language
-  " call minpac#add('w0rp/ale')
+  call minpac#add('mfussenegger/nvim-lint')
   " call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
   call minpac#add('neovim/nvim-lspconfig')
   call minpac#add('nvim-lua/completion-nvim')
@@ -37,6 +38,7 @@ function! PackInit() abort
   call minpac#add('nvim-telescope/telescope-fzy-native.nvim')
 
   " Misc
+  call minpac#add('github/copilot.vim')
   call minpac#add('henrik/vim-indexed-search')
   "call minpac#add('junegunn/fzf')
   "call minpac#add('junegunn/fzf.vim')

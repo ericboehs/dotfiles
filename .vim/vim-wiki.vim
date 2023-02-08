@@ -18,7 +18,7 @@ autocmd VimEnter * let g:vimwiki_syntaxlocal_vars['markdown']['Link1'] = g:vimwi
 autocmd FocusLost,FocusLost * if &ft==# 'vimwiki' | :update | endif
 
 " Auto open VimWiki in MacVim
-if has("gui_macvim")
+if has("gui_vimr")
   " Had to add a delay or VimWiki wasn't fully loaded
-  autocmd VimEnter * call timer_start(100, { tid -> execute('VimwikiMakeDiaryNote')})
+  autocmd VimEnter * call timer_start(0, { tid -> execute('VimwikiMakeDiaryNote')})
 endif
