@@ -150,3 +150,7 @@ endfunction
 
 " Aligns a trailing comment with the previous line (used in Gemfile)
 " let @a="kf\';;mm0jf\';;i                                       `mjdt\'0j"
+
+" telescope-repo
+
+nmap <leader>fr :lua require'telescope'.extensions.repo.list{search_dirs = {"~/Code"}}<cr>

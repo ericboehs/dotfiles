@@ -36,6 +36,8 @@ function! PackInit() abort
   call minpac#add('nvim-treesitter/nvim-treesitter')
   call minpac#add('nvim-telescope/telescope.nvim')
   call minpac#add('nvim-telescope/telescope-fzy-native.nvim')
+  call minpac#add('cljoly/telescope-repo.nvim')
+  call minpac#add('airblade/vim-rooter')
 
   " Misc
   call minpac#add('github/copilot.vim')
