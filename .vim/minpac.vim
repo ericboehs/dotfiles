@@ -2,60 +2,53 @@ if &compatible
   set nocompatible
 endif
 
-if exists('*minpac#init')
-  call minpac#init()
-  call minpac#add('k-takata/minpac', {'type': 'opt'})
+function! PackInit() abort
+  packadd minpac
 
   " The great tpope
-  call minpac#add('tpope/vim-sensible')
-  " call minpac#add('tpope/vim-bundler') " Causes long boot on rails projects
   call minpac#add('tpope/vim-commentary')
-  call minpac#add('tpope/vim-dadbod')
-  call minpac#add('tpope/vim-dispatch')
   call minpac#add('tpope/vim-eunuch')
   call minpac#add('tpope/vim-fugitive')
-  call minpac#add('tpope/vim-heroku')
-  call minpac#add('tpope/vim-markdown')
-  call minpac#add('tpope/vim-rails')
-  call minpac#add('tpope/vim-ragtag')
   call minpac#add('tpope/vim-rhubarb')
-  call minpac#add('tpope/vim-repeat')
-  call minpac#add('tpope/vim-surround')
+  call minpac#add('tpope/vim-sensible')
   call minpac#add('tpope/vim-unimpaired')
+  call minpac#add('junegunn/goyo.vim')
+
+  " Colorscheme
+  call minpac#add('edkolev/tmuxline.vim')
+  call minpac#add('itchyny/lightline.vim')
+  call minpac#add('projekt0n/github-nvim-theme')
+
+  " Language
+  call minpac#add('mfussenegger/nvim-lint')
+  " call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
+  call minpac#add('neovim/nvim-lspconfig')
+  call minpac#add('nvim-lua/completion-nvim')
 
   " Tmux
+  call minpac#add('blueyed/vim-diminactive')
   call minpac#add('christoomey/vim-tmux-navigator')
   call minpac#add('christoomey/vim-tmux-runner')
   call minpac#add('tmux-plugins/vim-tmux-focus-events')
-  call minpac#add('blueyed/vim-diminactive')
 
-  " Editing
-  call minpac#add('henrik/vim-indexed-search')
-  call minpac#add('mattn/emmet-vim')
-  call minpac#add('justinmk/vim-sneak')
-  call minpac#add('tommcdo/vim-exchange')
-  call minpac#add('neoclide/coc.nvim', { 'branch': 'release' })
-
-  " Language
-  call minpac#add('w0rp/ale')
-  call minpac#add('mxw/vim-jsx')
-
-  " Rails/Rails
-  call minpac#add('ngmy/vim-rubocop')
-  call minpac#add('ecomba/vim-ruby-refactoring')
-
-  " Colorscheme
-  call minpac#add('ayu-theme/ayu-vim')
-  call minpac#add('altercation/vim-colors-solarized')
-  call minpac#add('itchyny/lightline.vim')
-  call minpac#add('edkolev/tmuxline.vim')
+  " Project Finding
+  call minpac#add('nvim-lua/plenary.nvim')
+  call minpac#add('nvim-treesitter/nvim-treesitter')
+  call minpac#add('nvim-telescope/telescope.nvim')
+  call minpac#add('nvim-telescope/telescope-fzy-native.nvim')
+  call minpac#add('cljoly/telescope-repo.nvim')
+  call minpac#add('airblade/vim-rooter')
 
   " Misc
+  call minpac#add('github/copilot.vim')
+  call minpac#add('henrik/vim-indexed-search')
+  "call minpac#add('junegunn/fzf')
+  "call minpac#add('junegunn/fzf.vim')
+  call minpac#add('mattn/calendar-vim')
+  call minpac#add('ntpeters/vim-better-whitespace')
   call minpac#add('vimwiki/vimwiki', { 'branch': 'dev' })
-  call minpac#add('junegunn/fzf')
-  call minpac#add('junegunn/fzf.vim')
-endif
+endfunction
 
-command! PackUpdate packadd minpac | source $MYVIMRC | call minpac#update('', {'do': 'call minpac#status()'})
-command! PackClean  packadd minpac | source $MYVIMRC | call minpac#clean()
-command! PackStatus packadd minpac | source $MYVIMRC | call minpac#status()
+command! PackUpdate call PackInit() | call minpac#update()
+command! PackClean  call PackInit() | call minpac#clean()
+command! PackStatus packadd minpac | call minpac#status()

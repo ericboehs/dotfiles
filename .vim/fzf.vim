@@ -1,5 +1,5 @@
 " Enable fzf fuzzy search
-set rtp+=/usr/local/opt/fzf " FZF is maintained via homebrew
+set rtp+=/opt/homebrew/bin/fzf " FZF is maintained via homebrew
 nnoremap <C-p> :<C-u>Files<CR>
 nnoremap <Leader>R :<C-u>RG<CR>
 vnoremap <Leader>R <Esc>:<C-u>RG <C-r><C-w><CR>

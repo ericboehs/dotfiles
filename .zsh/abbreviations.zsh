@@ -1,7 +1,5 @@
 # Adopted from http://stackoverflow.com/questions/28573145/how-can-i-move-the-cursor-after-a-zsh-abbreviation
 
-setopt extendedglob
-
 typeset -A abbrevs
 
 # General aliases
@@ -19,7 +17,7 @@ abbrevs=(
   "tstamp" "| while read line; do ; echo \$(date | cut -f4 -d ' ') \$line; done"
   "rlw"  'readlink $(which __CURSOR__)'
   "wtnoti" "while do; noti; sleep 120; done"
-  "wt"     "while; do __CURSOR__; clear; sleep 5; done"
+  "wt"     "while; do clear; __CURSOR__; sleep 5; done"
   "wtbb"   "while; do !!; clear; sleep 5; done"
   "ut"     "clear && until __CURSOR__; do sleep 5; done"
   "utbb"   "clear && until !!; do sleep 5; done"
@@ -28,13 +26,13 @@ abbrevs=(
   "oedm" "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'"
   "rfs" "refresh_safari"
   "trash" "mv __CURSOR__ ~/.Trash"
-  )
+)
 
 # Dotfiles
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
   "vab" "nvim ~/.zsh/abbreviations.zsh"
-  "dof" "cd ~/.dotfiles; nvim; zsh; . ~/.zshrc; cd -"
+  "dof" "cd ~/Code/ericboehs/dotfiles; nvim; zsh; . ~/.zshrc; cd -"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
 )
@@ -87,11 +85,6 @@ abbrevs+=(
   "cr7t"  "chmod -R 777 /tmp/tmux-501"
 )
 
-# EC2 CLI
-abbrevs+=(
-  "exaws" 'export AWS_ACCESS_KEY="$(git config --get aws.access-key)"; export AWS_SECRET_KEY="$(git config --get aws.secret-key)"'
-)
-
 # Ruby
 abbrevs+=(
   "rdm"  "rails db:migrate"
@@ -138,17 +131,25 @@ abbrevs+=(
   "drid"  "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
 
-# AWS
+# Kube
 abbrevs+=(
-  "depstaging" "aws opsworks update-app --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_STAGING_STACK_ID --app-id \$SPREEMO_STAGING_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
-  "depdemo2" "aws opsworks update-app --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --app-source Revision=__CURSOR__ ; aws opsworks create-deployment --stack-id \$SPREEMO_DEMO2_STACK_ID --app-id \$SPREEMO_DEMO2_CHEWY_APP_ID --command='{ \"Name\": \"deploy\", \"Args\": { \"migrate\": [\"true\"] } }'"
+  "kc"    "kubectl"
+  "kgn"   "kubectl get nodes"
+  "kgp"   "kubectl get pods"
+  "kgs"   "kubectl get services"
+  "klf"   "kubectl logs -f"
+  "kaf"   "kubectl apply -f"
 )
 
 # Vim
 abbrevs+=(
   "vrcf" 'nvim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
-  "vbs"  'nvim -p board-now.md board-later.md board-scratch-pad.md'
   "vi"   'nvim'
+  "wix"   'nvim -c "VimwikiIndex"'
+  "wid"  'nvim -c "VimwikiDiaryIndex"'
+  "wi"   'nvim -c "VimwikiMakeDiaryNote"'
+  "wim"   'nvim -c "VimwikiMakeTomorrowDiaryNote"'
+  "wiy"   'nvim -c "VimwikiMakeYesterdayDiaryNote"'
 )
 
 # Bundler
@@ -161,16 +162,9 @@ abbrevs+=(
   "begp" "bundle exec gem pristine"
 )
 
-# Google
-abbrevs+=(
-  "g"      "googler"
-  "gogp"   "googler --np -n 5"
-  "gogj"   "googler __CURSOR__ -j -s 0"
-)
-
 # Git aliases
 abbrevs+=(
-  "gs"    "git status -sb"
+  "gs"    "git status -s"
   "gsl"   "git status"
   "gg"    "git lg"
   "ggm"   "git lg origin/master.."
@@ -185,26 +179,29 @@ abbrevs+=(
   "gaud"  "git add -u ."
   "gap"  "git add -p"
 
-  "gapc"  "git add -p && git commit -v"
-  "gapcp" "git add -p && git commit -v && git push -u"
+  "gapc"  "git add -p && git commit"
+  "gapcp" "git add -p && git commit && git push -u"
 
-  "gc"    "git commit -v"
-  "gcp"   "git commit -v && git push -u"
-  "gca"   "git commit --amend -v"
+  "gc"    "git commit"
+  "gcp"   "git commit && git push -u"
+  "gca"   "git commit --amend"
   "gcane" "git commit --amend --no-edit"
   "gcm"   "git commit -m"
   "gcmw"   "git commit -m wip"
 
+  "gcb"     "git checkout -b"
   "gco"     "git checkout"
-  "gcom"    "git checkout master"
+  "gcom"    "git checkout master || git checkout main"
   "gcoh"    "git checkout HEAD"
   "gcohd"   "git checkout HEAD --"
   "gcohgl"  "git checkout HEAD -- Gemfile.lock"
   "gcohglb" "git checkout HEAD -- Gemfile.lock; bundle"
   "gcohyly" "git checkout HEAD -- yarn.lock; yarn"
+
   "gcl"     "git clone"
   "gclc"    "git clone __CURSOR__ && cd \$(basename \$_)"
   "gb"      "git branch"
+  "gbz"     "git branch | fzf | xargs git checkout"
   "gbm"     "git branch -M"
   "gbv"     "git branch -vv"
   "gba"     "git branch -a"
@@ -237,25 +234,17 @@ abbrevs+=(
   "glor"  "git pull origin --rebase"
   "glomr" "git pull origin master --rebase"
 
-  "gpr"    "git pull-request"
-  "gprbc"  "git pull-request --browse --copy"
-  "gprl"   "git pr list"
-  "gprco"  "git pr checkout"
-  "gprne"  "git pull-request --no-edit"
-  "gprd"   "git pull-request --draft"
-  "gprdne" "git pull-request --draft --no-edit"
-  "nebp"   "--no-edit --browse --push"
-  "necp"   "--no-edit --copy --push"
-  "gprm"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
-  "gprmd"   'git log master.. --format="%B" --reverse > .git/PULLREQ_EDITMSG && git push -u && git pull-request'
-  "blb"    '-b $(git rev-parse --abbrev-ref @{-1})'
+  "gpr"    "gh pr create"
+  "gprl"   "gh pr list"
+  "gpco"   "gh pr checkout"
+  "gpcor"  "gh pr checkout \$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title\" | fzf | awk '{print \$1}')"
+  "gpcorb" "gh pr checkout \$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title -label:Lighthouse -label:mobile\" | fzf | awk '{print \$1}')"
+  "gprf"   "gh pr create --fill"
+  "gprd"   "gh pr create --draft"
+  "gprdf"  "gh pr create --draft --fill"
+  "gpvw"   "gh pr view --web"
 
-  "gbr"    "git browse"
-  "gbrp"  "git browse -- pulls"
-  "gbrpl"  "git browse -- pull/"
-  "gbrpr"  "git browse -- pull/\$(git pr list -h \$(git rev-parse --abbrev-ref HEAD) | awk '{print \$1}' | tr -d '#')"
-  "gbrb"  "git browse -- branches"
-  "gbrby"  "git browse -- branches/yours"
+  "gbr"    "gh browse"
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"
@@ -285,8 +274,6 @@ abbrevs+=(
   "gstl" "git stash list"
   "gstp" "git stash pop"
 
-  "gcb"   "git checkout -b"
-
   "vgu"  'nvim $(git ls-files --unmerged | cut -f2 | sort -u)'
   "gcdi" "git clean -di"
 )
@@ -300,10 +287,6 @@ abbrevs+=(
   "ghd"    "gh pr diff"
   "ghr"    "gh pr review"
 )
-
-# Add alias and autocompleteion for hub
-type compdef >/dev/null 2>&1 && compdef hub=git
-type hub >/dev/null 2>&1 && alias git='hub'
 
 for abbr in ${(k)abbrevs}; do
   alias $abbr="${abbrevs[$abbr]}"

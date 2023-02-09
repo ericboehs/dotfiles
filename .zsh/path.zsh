@@ -10,3 +10,6 @@ path=(~/bin "$path[@]")
 
 # Add ~ and ~/Code to cdpath
 cdpath=(~ ~/Code)
+
+# Add direnv
+eval "$(direnv hook zsh)"

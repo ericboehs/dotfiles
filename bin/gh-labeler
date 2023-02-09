@@ -1,0 +1,196 @@
+#! /usr/bin/env ruby
+
+require 'json'
+require 'net/http'
+
+class GQLBuilder
+  attr_reader :mutations, :queries, :result
+
+  def initialize
+    @mutations = []
+    @queries = []
+    initialize_result
+  end
+
+  def build
+    build_mutations
+    # build_queries
+    result
+  end
+
+  def build_mutations
+    if mutations.any?
+      @result += "mutation {\n"
+      mutations.each.with_index do |mutation, i|
+        @result += "mutation#{i}: #{mutation}"
+      end
+      @result += "}"
+    end
+  end
+
+  def build_queries
+  end
+
+  def add_mutation(mutation)
+    initialize_result
+    @mutations.push mutation
+  end
+
+  def add_query(query)
+    initialize_result
+    @mutations.push query
+  end
+
+  def initialize_result
+    @result = String.new
+  end
+end
+
+
+class GQLClient
+  attr_reader :url, :bearer
+
+  def initialize(url, bearer:)
+    @url = url
+    @bearer = bearer
+  end
+
+  def perform(query)
+    uri = URI url
+    Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
+      params = { 'query': query }
+      headers = { 'Authorization' => "Bearer #{bearer}" }
+      response = http.post uri.path, params.to_json, headers
+      puts response.body if ENV['DEBUG']
+      json = JSON.parse response.body
+      if json.empty? || json['errors']
+        puts "Query: #{query}"
+        puts "Code: #{response.code}"
+        puts "Body: #{response.body}"
+        puts "Errors:"
+        json['errors'].map {|e| puts e['message'] }
+        raise 'Query failed'
+      end
+      json
+    end
+  end
+end
+
+module Github
+  class IssueSearcher
+    def initialize(client)
+      @client = client
+    end
+
+    def perform(search, after: nil, fetch_all: false)
+      result = @client.perform <<-GRAPHQL
+        query {
+          search(query: "#{search}",#{" after: \"#{after}\"," if after} type: ISSUE, first: 100) {
+            pageInfo {
+              startCursor
+              hasNextPage
+              endCursor
+            }
+            issueCount
+            edges {
+              node {
+                ... on Issue {
+                  id
+                  number
+                  title
+                  labels(first: 100) {
+                    nodes {
+                      name
+                      id
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        GRAPHQL
+
+      if (after || fetch_all) && result['data']['search']['pageInfo']['hasNextPage']
+        after = result['data']['search']['pageInfo']['endCursor']
+        result['data']['search']['edges'] =
+          result['data']['search']['edges'] +
+            perform(search, after: after)['data']['search']['edges']
+      end
+
+      result
+    end
+  end
+
+  class LabelRemover
+    attr_reader :client, :issues, :label
+
+    def initialize(client:, issues:, label:)
+      @client = client
+      @issues = issues
+      @label = label
+    end
+
+    # GitHub's API times out fater 20 seconds. A size of ~15 will usually respond.
+    def perform(slice_size: 15)
+      print "Removing '#{label}' from #{issues_with_label_omitted.count} issues"
+      issues_with_label_omitted.each_slice(slice_size) do |issues_slice|
+        reset_builder
+        issues_slice.each do |id, label_ids|
+          builder.add_mutation <<-GRAPHQL
+            updateIssue(
+              input: {
+                id: "#{id}"
+                labelIds: #{label_ids}
+              }
+            ) {
+              issue {
+                id
+                number
+                title
+              }
+            }
+          GRAPHQL
+        end
+        client.perform builder.build
+        print '.'
+      end
+      puts "\nDone."
+    end
+
+    private
+
+    def reset_builder
+      @builder = GQLBuilder.new
+    end
+
+    def builder
+      @builder ||= GQLBuilder.new
+    end
+
+    def issues_with_label_omitted
+      issues['data']['search']['edges'].map do |edge|
+        [
+          edge['node']['id'],
+          edge['node']['labels']['nodes'].select { |l| l['name'] != label rescue nil }.map {|l| l['id'] }
+        ]
+      end.to_h
+    end
+  end
+end
+
+if ARGV[0] == "remove"
+  if ARGV[1] == "help"
+    puts "Remove <label> from all issues matching <search>:\n\n"
+    puts %Q{  gh-labeler remove <label> "<search>"}
+    puts %Q{\nExample: gh-labeler remove high-priority "repo:ericboehs/gh-labeler is:closed"}
+    exit
+  end
+
+  client = GQLClient.new('https://api.github.com/graphql', bearer: ENV.fetch('GH_TOKEN'))
+  issues = Github::IssueSearcher.new(client).perform ARGV[2], fetch_all: true
+  Github::LabelRemover.new(client: client, issues: issues, label: ARGV[1]).perform
+else
+  puts "gh-labeler: '#{ARGV[0]}' is not a subcommand."
+  exit 1
+end
