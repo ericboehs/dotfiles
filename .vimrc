@@ -18,6 +18,7 @@ set mouse=a                                 " Allow mouse interaction; Cmd-R to 
 
 autocmd FileType gitcommit set spell                 " Turn on spell check in Git commits.
 " autocmd Filetype css,scss,sass setlocal iskeyword+=- " Treat dashed words as whole words in stylesheets
+set laststatus=0         " Hide the status bar (for now)
 
 " Searching
 set ignorecase " Ignore case
@@ -39,9 +40,7 @@ set undoreload=10000
 set colorcolumn=120
 
 " Colorscheme
-if !has("gui_macvim")
-  autocmd VimEnter * call timer_start(10, { tid -> execute('colorscheme github_light')})
-endif
+colorscheme github_dark
 let g:better_whitespace_guicolor='pink'
 
 if filereadable(expand("~/.vimrc.local"))
