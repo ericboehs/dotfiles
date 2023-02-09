@@ -3,9 +3,9 @@ lua << EOF
     defaults = {
       layout_strategy = "vertical",
       layout_config = {
-	height = vim.o.lines, -- maximally available lines
-	width = vim.o.columns, -- maximally available columns
-	prompt_position = "top"
+        height = vim.o.lines, -- maximally available lines
+        width = vim.o.columns, -- maximally available columns
+        prompt_position = "top"
       },
       vimgrep_arguments = {
 	'rg',

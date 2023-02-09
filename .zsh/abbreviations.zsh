@@ -131,6 +131,16 @@ abbrevs+=(
   "drid"  "docker rmi -f \$(docker images -q -f \"dangling=true\")"
 )
 
+# Kube
+abbrevs+=(
+  "kc"    "kubectl"
+  "kgn"   "kubectl get nodes"
+  "kgp"   "kubectl get pods"
+  "kgs"   "kubectl get services"
+  "klf"   "kubectl logs -f"
+  "kaf"   "kubectl apply -f"
+)
+
 # Vim
 abbrevs+=(
   "vrcf" 'nvim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
@@ -154,7 +164,7 @@ abbrevs+=(
 
 # Git aliases
 abbrevs+=(
-  "gs"    "git status -sb"
+  "gs"    "git status -s"
   "gsl"   "git status"
   "gg"    "git lg"
   "ggm"   "git lg origin/master.."
@@ -169,19 +179,19 @@ abbrevs+=(
   "gaud"  "git add -u ."
   "gap"  "git add -p"
 
-  "gapc"  "git add -p && git commit -v"
-  "gapcp" "git add -p && git commit -v && git push -u"
+  "gapc"  "git add -p && git commit"
+  "gapcp" "git add -p && git commit && git push -u"
 
-  "gc"    "git commit -v"
-  "gcp"   "git commit -v && git push -u"
-  "gca"   "git commit --amend -v"
+  "gc"    "git commit"
+  "gcp"   "git commit && git push -u"
+  "gca"   "git commit --amend"
   "gcane" "git commit --amend --no-edit"
   "gcm"   "git commit -m"
   "gcmw"   "git commit -m wip"
 
   "gcb"     "git checkout -b"
   "gco"     "git checkout"
-  "gcom"    "git checkout master"
+  "gcom"    "git checkout master || git checkout main"
   "gcoh"    "git checkout HEAD"
   "gcohd"   "git checkout HEAD --"
   "gcohgl"  "git checkout HEAD -- Gemfile.lock"
