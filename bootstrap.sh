@@ -79,14 +79,14 @@ if [ ! -d ~/.asdf ]; then
 
   # Install node and yarn
   asdf plugin-add nodejs
-  arch -x86_64 asdf install nodejs 14.17.5
-  asdf global nodejs 14.17.5
+  arch -x86_64 asdf install nodejs 18.15.0
+  asdf global nodejs  18.15.0
   npm install -g yarn
 
   # Install ruby
   asdf plugin-add ruby
-  asdf install ruby 2.6.8
-  asdf global ruby 2.6.8
+  asdf install ruby 3.2.2
+  asdf global ruby 3.2.2
 fi
 
 # Install nvim plugins
