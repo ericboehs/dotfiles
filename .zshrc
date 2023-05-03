@@ -37,3 +37,6 @@ mfa() {
 }
 
 # export PATH="$HOME/.yarn/bin:$HOME/.config/yarn/global/node_modules/.bin:$PATH"
+
+# Include aliases for github copilot cli
+eval "$(github-copilot-cli alias -- "$0")"
