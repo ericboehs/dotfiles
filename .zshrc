@@ -25,7 +25,7 @@ source "$HOME/.zsh/auto-notify.plugin.zsh"
 
 # TODO: Move these; and make them work:
 opsi() {
-  eval $(op signin my --cache)
+  eval $(op signin)
   sed -i '' '/export OP_SESSION_my/d' ~/.zshrc.local
   env | grep OP_SESSION_my | sed -e 's/^/export /' >> ~/.zshrc.local
 }
