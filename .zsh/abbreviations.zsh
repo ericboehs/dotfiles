@@ -26,6 +26,8 @@ abbrevs=(
   "oedm" "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'"
   "rfs" "refresh_safari"
   "trash" "mv __CURSOR__ ~/.Trash"
+  "gcs" "gh copilot suggest -t shell \"__CURSOR__\""
+  "rr" "cd \$(git rev-parse --show-toplevel)"
 )
 
 # Dotfiles
