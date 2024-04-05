@@ -5,3 +5,6 @@
 .vim/pack/minpac
 .vim/.netrwhist
 .tmux/plugins
+.config/*
+!.config/nvim/
+.config/nvim/lazy-lock.json
