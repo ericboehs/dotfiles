@@ -1,2 +1,5 @@
 .tool-versions
 .DS_Store
+.tags
+.envrc
+.obsidian/
