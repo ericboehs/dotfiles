@@ -14,7 +14,7 @@ class GitHubBranch
         @tsv
       ' |
       column -ts $'\t' |
-      head -11
+      head -21
     }
   end
 
@@ -102,6 +102,7 @@ begin
   command = ARGV[0]&.gsub '-', '_'
   output = GitHubBranch.new.send command || 'help'
   puts output unless output == true
+  exit $?&.exitstatus || 0
 rescue => e
   $stderr.puts e.message
   exit 1
