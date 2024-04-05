@@ -1,9 +1,8 @@
 # Check out https://minsw.github.io/fzf-color-picker/
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
-# Light theme
-# export FZF_DEFAULT_OPTS=$FZF_DEFAULT_OPTS' --color=fg:#000000,bg:#ffffff,hl:#5f87af --color=fg+:#ffffff,bg+:#0449b6,hl+:#aeebe9 --color=info:#7600ad,prompt:#0449b6,pointer:#ffffff --color=marker:#a1a1a1,spinner:#af5fff,header:#008000'
-
-# Dark theme
-export FZF_DEFAULT_OPTS=$FZF_DEFAULT_OPTS' --color=fg:#f8f8f2,bg:#26292E,hl:#bd93f9 --color=fg+:#f8f8f2,bg+:#44475a,hl+:#bd93f9 --color=info:#ffb86c,prompt:#50fa7b,pointer:#ff79c6 --color=marker:#ff79c6,spinner:#ffb86c,header:#6272a4'
-
+# Catpuccin Mocha
+export FZF_DEFAULT_OPTS="$FZF_DEFAULT_OPS \
+--color=bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8 \
+--color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc \
+--color=marker:#f5e0dc,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8"
