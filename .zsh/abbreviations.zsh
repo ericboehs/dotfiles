@@ -4,8 +4,8 @@ typeset -A abbrevs
 
 # General aliases
 abbrevs=(
-  "ll"   "ls -al"
-  "l1"   "ls -1A"
+  "ll"   "lsd -al"
+  "l1"   "lsd -1A"
   "mdc"  "mkdir -p __CURSOR__ && cd \$_"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
   "kp" 'sudo kill $(ps auxww | grep ssh | grep -e "^pair" | awk "{print \$2}") ; chmod 770 /tmp/tmux-501'
@@ -13,6 +13,7 @@ abbrevs=(
   "pag" 'ps auxww | grep'
   "fdg" "find . | grep"
   "pgr" "| grep"
+  "awkfp" "| awk -F'__CURSOR__' '{print \$1}'"
   "awkp" "| awk '{print \$__CURSOR__}'"
   "tstamp" "| while read line; do ; echo \$(date | cut -f4 -d ' ') \$line; done"
   "rlw"  'readlink $(which __CURSOR__)'
@@ -64,7 +65,7 @@ abbrevs+=(
 # Tmux
 abbrevs+=(
   "ta"    "tmux -u attach"
-  "tan"   "tmux -u attach || tmux -u new -n editor"
+  "tan"   "tmux -u attach || (tmux -u new -d -s 👨🏼‍💻 -n editor; tmux new -d -s 📝; tmux send-keys -t 📝:1.0 'nvim -c :VimwikiIndex' C-m; tmux new -d -s 📻; tmux send-keys -t 📻:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t 👨🏼‍💻)"
   "tda"   "tmux detach -a"
   "tsw"   "tmux split-window"
   "tswrc" "tmux split-window rails c"
@@ -145,7 +146,7 @@ abbrevs+=(
 
 # Vim
 abbrevs+=(
-  "vrcf" 'nvim -c ":RuboCop $(git diff origin/master:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
+  "vrcf" 'nvim -c ":RuboCop $(git diff origin/\$GIT_MASTER_BRANCH:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
   "vi"   'nvim'
   "wix"   'nvim -c "VimwikiIndex"'
   "wid"  'nvim -c "VimwikiDiaryIndex"'
@@ -169,11 +170,11 @@ abbrevs+=(
   "gs"    "git status -s"
   "gsl"   "git status"
   "gg"    "git lg"
-  "ggm"   "git lg origin/master.."
+  "ggm"   "git lg origin/\$GIT_MASTER_BRANCH.."
   "ggh"   "git lg --color | head"
-  "ggmh"  "git lg origin/master.. --color | head"
+  "ggmh"  "git lg origin/\$GIT_MASTER_BRANCH.. --color | head"
   "ggg"   "git ll"
-  "glogmh" "git log --oneline --graph master HEAD"
+  "glogmh" "git log --oneline --graph \$GIT_MASTER_BRANCH HEAD"
 
   "ga"   "git add"
   "gad"  "git add ."
@@ -193,7 +194,7 @@ abbrevs+=(
 
   "gcb"     "git checkout -b"
   "gco"     "git checkout"
-  "gcom"    "git checkout master || git checkout main"
+  "gcom"    "git checkout \$GIT_MASTER_BRANCH"
   "gcoh"    "git checkout HEAD"
   "gcohd"   "git checkout HEAD --"
   "gcohgl"  "git checkout HEAD -- Gemfile.lock"
@@ -208,14 +209,15 @@ abbrevs+=(
   "gbv"     "git branch -vv"
   "gba"     "git branch -a"
   "gbav"    "git branch -a -vv"
+  "gbsc"    "git branch --show-current"
   "gbsmd"   "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
 
   "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
   "gbrmd"  'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
 
   "gd"    "git diff"
-  "gdm"   "git diff origin/master.."
-  "gdms"  "git diff origin/master:./"
+  "gdm"   "git diff origin/\$GIT_MASTER_BRANCH.."
+  "gdms"  "git diff origin/\$GIT_MASTER_BRANCH:./"
   "gdc"   "git diff --cached"
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
@@ -234,16 +236,24 @@ abbrevs+=(
   "gl"    "git pull"
   "glr"   "git pull --rebase"
   "glor"  "git pull origin --rebase"
-  "glomr" "git pull origin master --rebase"
+  "glomr" "git pull origin \$GIT_MASTER_BRANCH --rebase"
+
+  "ghrv"  "GHWR_URL=__CURSOR__;
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run view --log-failed \$GHWR_ID"
+  "ghrvr" "GHWR_URL=__CURSOR__;
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run view --log-failed \$GHWR_ID | grep -E \"rspec [']?\./\""
 
   "gpr"    "gh pr create"
   "gprl"   "gh pr list"
+  "gprlr"  "gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title -label:Lighthouse -label:mobile\""
   "gpco"   "gh pr checkout"
-  "gpcor"  "gh pr checkout \$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title\" | fzf | awk '{print \$1}')"
-  "gpcorb" "gh pr checkout \$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title -label:Lighthouse -label:mobile\" | fzf | awk '{print \$1}')"
+  "gpcor"  "GHPR_ID=\$(gh pr list --search \"is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title -label:Lighthouse -label:mobile\" | fzf | awk '{print \$1}'); gh pr checkout \$GHPR_ID"
   "gprf"   "gh pr create --fill"
   "gprd"   "gh pr create --draft"
   "gprdf"  "gh pr create --draft --fill"
+  "gprr"   "pr_id=__CURSOR__; gh pr view \$pr_id --comments; gh pr diff \$pr_id; echo -n \"[approve] or request-changes? \"; read review; gh pr review \$pr_id --\${review:-approve}"
   "gpvw"   "gh pr view --web"
 
   "gbr"    "gh browse"
@@ -252,15 +262,15 @@ abbrevs+=(
   "grbi"  "git rebase -i"
   "grba"  "git rebase --abort"
   "grbc"  "git rebase --continue"
-  "grbm"  "git rebase master"
-  "grbom"  "git rebase origin/master"
-  "grbim" "git rebase -i master"
+  "grbm"  "git rebase \$GIT_MASTER_BRANCH"
+  "grbom"  "git rebase origin/\$GIT_MASTER_BRANCH"
+  "grbim" "git rebase -i \$GIT_MASTER_BRANCH"
 
   "grh"   "git reset --hard"
   "grhu"  "git reset --hard @{u}"
-  "grsm"  "git reset --soft master"
+  "grsm"  "git reset --soft \$GIT_MASTER_BRANCH"
 
-  "grlm"  "echo \"behind\\tahead\"; git rev-list --left-right --count master..."
+  "grlm"  "echo \"behind\\tahead\"; git rev-list --left-right --count \$GIT_MASTER_BRANCH..."
 
   "gchp"  "git cherry-pick"
   "gchpc" "git cherry-pick --continue"
@@ -270,7 +280,7 @@ abbrevs+=(
   "gshh" "git show HEAD"
 
   "gsu"  "git submodule update --init --recursive"
-  "gsgl" "git submodule -q foreach git pull -q origin master"
+  "gsgl" "git submodule -q foreach git pull -q origin \$GIT_MASTER_BRANCH"
 
   "gst"  "git stash"
   "gstl" "git stash list"
@@ -326,3 +336,6 @@ bindkey " " magic-abbrev-expand
 bindkey "^M" magic-abbrev-expand-and-execute
 bindkey "^x " no-magic-abbrev-expand
 bindkey -M isearch " " self-insert
+
+# Fixes autosuggest not clearing when ENTER (^M) is pressed
+export ZSH_AUTOSUGGEST_CLEAR_WIDGETS=(magic-abbrev-expand-and-execute)

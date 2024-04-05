@@ -6,6 +6,7 @@ setopt extendedglob             # Expand file expression (e.g. **/file)
 
 export CLICOLOR=1 # Enable color in some commands (e.g. ls)
 export EDITOR=nvim
+export GIT_MASTER_BRANCH=master # Use env var to set default git branch name
 
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/pure.zsh"
