@@ -4,3 +4,4 @@
 .vim/.undo
 .vim/pack/minpac
 .vim/.netrwhist
+.tmux/plugins
