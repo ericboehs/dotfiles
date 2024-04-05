@@ -7,6 +7,7 @@ path=(.git/safe/../../node_modules/.bin "$path[@]")
 path=(.git/safe/../../.bundle/bundle/bin "$path[@]")
 path=(.git/safe/../../bin "$path[@]")
 path=(~/bin "$path[@]")
+path=(~/.local/bin "$path[@]")
 path=(/Applications/Postgres.app/Contents/Versions/latest/bin "$path[@]")
 
 # Add ~ and ~/Code to cdpath
