@@ -7,3 +7,6 @@ bindkey -M vicmd v edit-command-line
 
 # Bind the Esc key to clear the screen
 bindkey '\e' clear-screen
+
+# Delete words delimited by /
+export WORDCHARS=${WORDCHARS//[\/]}
