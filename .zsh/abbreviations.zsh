@@ -243,7 +243,7 @@ GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
 gh run view --log-failed \$GHWR_ID"
   "ghrvr" "GHWR_URL=__CURSOR__;
 GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
-gh run view --log-failed \$GHWR_ID | grep -E \"rspec [']?\./\""
+gh run view --log-failed \$GHWR_ID | grep -A2 -E \"rspec [']?\./\""
 
   "gpr"    "gh pr create"
   "gprl"   "gh pr list"
