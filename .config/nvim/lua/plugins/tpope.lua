@@ -16,4 +16,7 @@ return {
     "GRemove",
     "GBrowse",
   },
+  {
+    "tpope/vim-rhubarb",
+  },
 }
