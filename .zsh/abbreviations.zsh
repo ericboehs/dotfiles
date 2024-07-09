@@ -298,7 +298,7 @@ abbrevs+=(
   "ghm"    "gh pr merge"
   "ghd"    "gh pr diff"
   "ghr"    "gh pr review"
-  "ghadmins" "REPO_PATH=\$(git remote get-url origin | sed 's|https://github.com/||'); __CURSOR__gh api /repos/\$REPO_PATH/collaborators --jq '.[] | select(.permissions.admin == true) | .html_url'; gh api /repos/\$REPO_PATH/teams --jq '.[] | select(.permissions.admin == true) | .html_url' "
+  "ghadmins" "REPO_PATH=\$(git remote get-url origin | sed 's|https://github.com/||') __CURSOR__; gh api /repos/\$REPO_PATH/collaborators --jq '.[] | select(.permissions.admin == true) | .html_url'; gh api /repos/\$REPO_PATH/teams --jq '.[] | select(.permissions.admin == true) | .html_url' "
 )
 
 for abbr in ${(k)abbrevs}; do
