@@ -4,3 +4,9 @@
 
 -- Sync system clipboard with vim clipboard
 vim.opt.clipboard = "unnamedplus"
+
+-- Disable auto formatting for all file types
+vim.g.autoformat = false
+
+-- Hide statusline
+vim.opt.laststatus = 0

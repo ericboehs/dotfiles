@@ -17,7 +17,14 @@ vim.keymap.set("n", "<leader>ta", "<Cmd>VtrAttachToPane<CR>", { silent = true })
 vim.keymap.set("n", "<leader>tc", "<Cmd>VtrSendCommandToRunner<CR>", { silent = true })
 vim.keymap.set("n", "<leader>tl", "<Cmd>VtrSendLinesToRunner<CR>", { silent = true })
 vim.keymap.set("v", "<leader>tl", "<Cmd>VtrSendLinesToRunner<CR>", { silent = true })
+vim.keymap.set("v", "<leader>tq", "<Cmd>VtrSendCommandToRunner q<CR>", { silent = true })
 
 -- Disable moving lines via <M-j> and <M-k>
 vim.keymap.set("n", "<M-j>", "j")
 vim.keymap.set("n", "<M-k>", "k")
+
+-- Octo.nvim --
+vim.keymap.set("n", "<leader>gV", "<Cmd>Octo issue create department-of-veterans-affairs/va.gov-team<CR>")
+
+-- Repeat in visual mode
+vim.keymap.set('x', '.', ':normal .<CR>')
