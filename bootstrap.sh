@@ -19,6 +19,44 @@ git submodule update
 if [[ "$OSTYPE" == "darwin"* ]]; then
   echo "-----> Installing Homebrew dependencies"
   brew install mise neovim git direnv lsd starship zoxide fzf zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier
+
+  # Setup iTerm2 with Catppuccin Mocha theme and Inconsolata Nerd Font
+  # Check if Inconsolata Nerd Font is already installed
+  if [ ! -f ~/Library/Fonts/InconsolataNerdFontMono-Regular.ttf ]; then
+    echo "-----> Setting up Inconsolata Nerd Font"
+    TEMP_DIR=$(mktemp -d)
+
+    echo "-----> Downloading Inconsolata Nerd Font..."
+    curl -fsSL -o "$TEMP_DIR/Inconsolata.zip" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/Inconsolata.zip
+    unzip -q "$TEMP_DIR/Inconsolata.zip" -d "$TEMP_DIR"
+
+    echo "-----> Installing fonts..."
+    mkdir -p ~/Library/Fonts
+    cp "$TEMP_DIR"/*.ttf ~/Library/Fonts/ 2>/dev/null || true
+
+    rm -rf "$TEMP_DIR"
+    echo "-----> Inconsolata Nerd Font installed"
+  else
+    echo "-----> Inconsolata Nerd Font already installed"
+  fi
+
+  # Check if Catppuccin Mocha color scheme is already imported
+  if ! plutil -extract "Custom Color Presets"."Catppuccin Mocha" xml1 -o - ~/Library/Preferences/com.googlecode.iterm2.plist >/dev/null 2>&1; then
+    echo "-----> Setting up Catppuccin Mocha color scheme"
+    TEMP_DIR=$(mktemp -d)
+
+    echo "-----> Downloading Catppuccin Mocha color scheme..."
+    curl -fsSL -o "$TEMP_DIR/Catppuccin Mocha.itermcolors" "https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/Catppuccin%20Mocha.itermcolors"
+
+    echo "-----> Importing color scheme (iTerm2 will briefly open)..."
+    open "$TEMP_DIR/Catppuccin Mocha.itermcolors"
+    sleep 2
+
+    rm -rf "$TEMP_DIR"
+    echo "-----> Catppuccin Mocha color scheme imported"
+  else
+    echo "-----> Catppuccin Mocha color scheme already imported"
+  fi
 fi
 
 # symlink all dotfiles into ~ (skip if they exist)
@@ -73,7 +111,7 @@ done
 # Symlink neovim config
 mkdir -p ~/.config
 echo "-----> Linking neovim config"
-ln -fs $PWD/.config/nvim ~/.config/nvim
+ln -fns $PWD/.config/nvim ~/.config/nvim
 
 popd > /dev/null
 
