@@ -1,0 +1,722 @@
+#!/bin/bash
+
+# Claude Tmux Manager - Monitor and manage Claude CLI sessions
+
+set -e
+
+# Parse command line arguments
+COMMAND=""
+PANE=""
+MESSAGE=""
+NOTIFY=false
+NOTIFY_ALWAYS=false
+NOTIFY_SLACK=false
+CONTINUOUS=false
+WATCH_CONTEXT=false
+TIMEOUT=0
+FILE=""
+
+# Get the subcommand
+if [[ $# -gt 0 ]] && [[ "$1" != -* ]]; then
+    COMMAND="$1"
+    shift
+fi
+
+# Parse remaining options
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --pane|-p)
+            PANE="$2"
+            shift 2
+            ;;
+        --notify|-n)
+            NOTIFY=true
+            shift
+            ;;
+        --notify-always)
+            NOTIFY_ALWAYS=true
+            shift
+            ;;
+        --notify-slack)
+            NOTIFY_SLACK=true
+            shift
+            ;;
+        --continuous|-c)
+            CONTINUOUS=true
+            shift
+            ;;
+        --watch-context)
+            WATCH_CONTEXT=true
+            shift
+            ;;
+        --timeout)
+            TIMEOUT="$2"
+            shift 2
+            ;;
+        --file)
+            FILE="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Claude Man - Claude Session Manager"
+            echo "====================================="
+            echo ""
+            echo "Usage: claude-man <command> [options] [message]"
+            echo ""
+            echo "Commands:"
+            echo "  monitor                Monitor a Claude session and notify when idle"
+            echo "  send                   Send message to Claude (supports multi-line)"
+            echo "  select                 Select menu option (yes/no, numbered options)"
+            echo "  interrupt              Interrupt Claude session (Esc+Esc+i)"
+            echo "  view                   View current session output"
+            echo "  list                   List all active Claude sessions"
+            echo ""
+            echo "Options:"
+            echo "  --pane, -p PANE        Specify pane to use (e.g., 0:1.0)"
+            echo "  --notify, -n           Send desktop notification when session goes idle"
+            echo "  --notify-always        Send notification always (no sender restriction)"
+            echo "  --notify-slack         Send Slack notification when session goes idle"
+            echo "  --continuous, -c       Keep monitoring after session goes idle"
+            echo "  --watch-context        Notify when context drops below 10%"
+            echo "  --timeout SECONDS      Timeout after specified seconds (default: no timeout)"
+            echo "  --file FILE            Read message from file"
+            echo "  --help, -h             Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  # Send messages"
+            echo "  claude-man send --pane 0:1.0 'Hello world'      # Direct message"
+            echo "  claude-man send --pane 0:1.0 --file msg.txt     # From file (best for automation)"
+            echo "  echo 'Hello' | claude-man send --pane 0:1.0     # From stdin"
+            echo "  claude-man send --pane 0:1.0 <<EOF              # Heredoc/multi-line"
+            echo "    Multi-line message"
+            echo "    EOF"
+            echo ""
+            echo "  # Menu selection"
+            echo "  claude-man select --pane 0:1.0 yes              # Select yes"
+            echo "  claude-man select --pane 0:1.0 no2              # Select 3rd option (no)"
+            echo "  claude-man select --pane 0:1.0 2                # Select option 2"
+            echo ""
+            echo "  # Monitoring"
+            echo "  claude-man monitor --pane 0:1.0 --notify-slack  # With Slack alerts"
+            echo "  claude-man monitor --pane 0:1.0 --timeout 90    # 90s timeout"
+            echo ""
+            echo "  # Control"
+            echo "  claude-man interrupt --pane 0:1.0               # Stop Claude"
+            echo "  claude-man list                                  # Show all sessions"
+            echo ""
+            echo "Note: --file option is recommended for multi-line messages in automation"
+            echo "      as it doesn't require user interaction or terminal input."
+            echo ""
+            echo "Pane format: session:window.pane (e.g., 0:1.0, 2:3.1)"
+            echo "Run 'claude-man' without arguments for interactive mode."
+            exit 0
+            ;;
+        *)
+            # If it's not an option and we're in send/select command, treat as message/selection
+            if [[ ("$COMMAND" == "send" || "$COMMAND" == "select") ]] && [[ -z "$MESSAGE" ]] && [[ -z "$FILE" ]]; then
+                MESSAGE="$1"
+                shift
+            else
+                echo "Unknown option: $1"
+                echo "Use --help for usage information"
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+# Function to get all Claude tmux panes
+get_claude_panes() {
+    tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}" #{pane_current_command}' | grep -E "(node|claude)" | grep -v "nvim\|vim"
+}
+
+# Function to select pane with fzf
+select_pane() {
+    local prompt="$1"
+    get_claude_panes | fzf --prompt="$prompt" --height=10 | awk '{print $1}'
+}
+
+# Function to monitor a pane
+monitor_pane() {
+    local pane="$1"
+    local pane_title=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}"' | grep "^$pane " | cut -d'"' -f2)
+
+    echo "Monitoring $pane ($pane_title)..."
+    if [[ $TIMEOUT -gt 0 ]]; then
+        echo "Press Ctrl+C to stop monitoring (timeout: ${TIMEOUT}s)"
+    else
+        echo "Press Ctrl+C to stop monitoring"
+    fi
+
+    local prev_output=""
+    local stable_count=0
+    local first_check=true
+    local last_notified_user_input=""
+    local last_shown_activity=""
+    local already_idle=false
+    local context_warned=false
+    local start_time=0
+    local elapsed_time=0
+
+    # Record start time if timeout is set
+    if [[ $TIMEOUT -gt 0 ]]; then
+        start_time=$(date +%s)
+    fi
+
+    while true; do
+        # Check timeout if set
+        if [[ $TIMEOUT -gt 0 ]]; then
+            elapsed_time=$(($(date +%s) - start_time))
+            if [[ $elapsed_time -ge $TIMEOUT ]]; then
+                echo ""
+                echo "⏰ TIMEOUT after ${TIMEOUT} seconds"
+                echo "Session $pane ($pane_title) did not go idle within the timeout period."
+                echo ""
+                echo "💡 To continue monitoring, run:"
+                echo "   claude-man monitor --pane $pane --timeout $TIMEOUT"
+                exit 0
+            fi
+        fi
+
+        # Get output but exclude the input line to avoid detecting typing as activity
+        full_output=$(tmux capture-pane -t "$pane" -p)
+        # Remove the last few lines that contain the input box and status
+        total_lines=$(echo "$full_output" | wc -l)
+        lines_to_show=$((total_lines - 3))
+        output=$(echo "$full_output" | head -n "$lines_to_show" | tail -10)
+
+        # Show initial status
+        if [[ "$first_check" == true ]]; then
+            echo "$(date '+%H:%M:%S') - Checking session..."
+        fi
+
+        # Check if needs attention (prompts, errors, etc.)
+        if echo "$output" | grep -q "Do you want to proceed\|❯\|waiting\|error\|Error\|failed\|Failed"; then
+            echo ""
+            echo "🚨 ATTENTION NEEDED on $pane ($pane_title):"
+            echo "----------------------------------------"
+            echo "$output"
+            echo "----------------------------------------"
+
+            # Only exit if not using monitor command
+            if [[ "$COMMAND" != "monitor" ]]; then
+                break
+            else
+                echo "💬 Waiting for user input (press Ctrl+C to stop monitoring)..."
+                # Reset to continue monitoring after attention
+                stable_count=0
+                already_idle=false
+            fi
+        fi
+
+        # Compare with previous output
+        if [[ "$output" == "$prev_output" ]]; then
+            ((stable_count++))
+
+            # Only show "stable" message if not already idle
+            if [[ "$already_idle" == false ]]; then
+                echo -ne "\r$(date '+%H:%M:%S') - Output stable for ${stable_count}5 seconds..."
+            fi
+
+            # If output hasn't changed for 5 seconds, consider it idle
+            if [[ $stable_count -ge 1 ]] && [[ "$already_idle" == false ]]; then
+                echo ""
+                echo "✅ SESSION IS IDLE on $pane ($pane_title):"
+                already_idle=true
+
+                # Get current user input to check if we should notify
+                current_user_input=$(tmux capture-pane -t "$pane" -p -S -3000 | grep "^>" | tail -1)
+
+                # Check if this is a new user input for both notification and output
+                is_new_user_input=false
+                if [[ "$current_user_input" != "$last_notified_user_input" ]] || [[ -z "$last_notified_user_input" ]]; then
+                    is_new_user_input=true
+                fi
+
+                # Send notification if requested and this is a new user input
+                if [[ "$NOTIFY" == true ]] || [[ "$NOTIFY_ALWAYS" == true ]] || [[ "$NOTIFY_SLACK" == true ]]; then
+                    if [[ "$is_new_user_input" == true ]]; then
+                        # Send Slack notification if requested
+                        if [[ "$NOTIFY_SLACK" == true ]]; then
+                            if command -v slack-noti >/dev/null 2>&1; then
+                                slack-noti "Claude Session Idle: $pane ($pane_title) is now idle"
+                            else
+                                echo "Warning: slack-noti not found, skipping Slack notification"
+                            fi
+                        fi
+
+                        # Send desktop notification if requested
+                        if [[ "$NOTIFY" == true ]] || [[ "$NOTIFY_ALWAYS" == true ]]; then
+                            if command -v terminal-notifier >/dev/null 2>&1; then
+                                if [[ "$NOTIFY_ALWAYS" == true ]]; then
+                                    terminal-notifier -title "Claude Session Idle" -message "Session $pane ($pane_title) is now idle"
+                                else
+                                    terminal-notifier -title "Claude Session Idle" -message "Session $pane ($pane_title) is now idle" -sender com.googlecode.iterm2
+                                fi
+                            else
+                                echo "Warning: terminal-notifier not found, skipping notification"
+                            fi
+                        fi
+                    else
+                        echo "📵 Skipping notification (same user input as last time)"
+                    fi
+                fi
+
+                # Show output if this is a new user input
+                if [[ "$is_new_user_input" == true ]]; then
+                    echo "---"
+                    echo ""
+
+                    # Get full pane content including scrollback to find user input
+                    full_output=$(tmux capture-pane -t "$pane" -p -S -3000)
+
+                    # Find the last user input (line starting with ">")
+                    last_user_line=$(echo "$full_output" | grep -n "^>" | tail -1 | cut -d: -f1)
+
+                    if [[ -n "$last_user_line" ]]; then
+                        # Show from the last user input to the end
+                        echo "$full_output" | tail -n +$last_user_line
+                    else
+                        # Fallback to last 100 lines if no user input found
+                        tmux capture-pane -t "$pane" -p | tail -100
+                    fi
+
+                    echo ""
+                    echo "---"
+
+                    # Update the last notified user input
+                    last_notified_user_input="$current_user_input"
+                else
+                    echo "📝 Output suppressed (same conversation as before)"
+                fi
+
+                # In continuous mode, just wait quietly for activity
+                if [[ "$CONTINUOUS" != true ]]; then
+                    break
+                fi
+            fi
+        else
+            stable_count=0
+            already_idle=false  # Reset idle state when activity detected
+
+            # Only show activity after we've done at least one comparison (not first check)
+            if [[ "$first_check" == false ]]; then
+                echo ""
+                echo "$(date '+%H:%M:%S') - Session active"
+
+                # Show current activity content
+                current_activity=$(tmux capture-pane -t "$pane" -p | tail -15 | sed '/^[[:space:]]*$/d' | tail -5)
+                if [[ "$current_activity" != "$last_shown_activity" ]]; then
+                    echo "$current_activity"
+                    last_shown_activity="$current_activity"
+                fi
+            fi
+        fi
+
+        # Check context level if --watch-context is enabled
+        if [[ "$WATCH_CONTEXT" == true ]]; then
+            context_line=$(echo "$full_output" | grep "Context left until auto-compact:" | tail -1)
+
+            if [[ -n "$context_line" ]]; then
+                context_percent=$(echo "$context_line" | grep -o '[0-9]\+%' | grep -o '[0-9]\+')
+
+                if [[ -n "$context_percent" ]] && [[ "$context_percent" -lt 10 ]] && [[ "$context_warned" == false ]]; then
+                    echo ""
+                    echo "⚠️  LOW CONTEXT WARNING: Only $context_percent% context remaining!"
+
+                    # Send notification if enabled
+                    if [[ "$NOTIFY" == true ]] || [[ "$NOTIFY_ALWAYS" == true ]] || [[ "$NOTIFY_SLACK" == true ]]; then
+                        # Send Slack notification if requested
+                        if [[ "$NOTIFY_SLACK" == true ]]; then
+                            if command -v slack-noti >/dev/null 2>&1; then
+                                slack-noti "Claude Low Context: Only $context_percent% context remaining in $pane"
+                            fi
+                        fi
+
+                        # Send desktop notification if requested
+                        if [[ "$NOTIFY" == true ]] || [[ "$NOTIFY_ALWAYS" == true ]]; then
+                            if command -v terminal-notifier >/dev/null 2>&1; then
+                                if [[ "$NOTIFY_ALWAYS" == true ]]; then
+                                    terminal-notifier -title "Claude Low Context" -message "Only $context_percent% context remaining in $pane"
+                                else
+                                    terminal-notifier -title "Claude Low Context" -message "Only $context_percent% context remaining in $pane" -sender com.googlecode.iterm2
+                                fi
+                            fi
+                        fi
+                    fi
+
+                    context_warned=true
+                elif [[ -n "$context_percent" ]] && [[ "$context_percent" -ge 15 ]]; then
+                    # Reset warning if context goes back up
+                    context_warned=false
+                fi
+            fi
+        fi
+
+        prev_output="$output"
+        first_check=false  # Mark that we've completed first check
+        sleep 5
+    done
+}
+
+# Function to send message to pane
+send_message() {
+    local pane="$1"
+    local message="$2"
+    local file="$3"
+
+    # Determine message source priority: file > argument > stdin > interactive
+    if [[ -n "$file" ]]; then
+        # Read from file
+        if [[ ! -f "$file" ]]; then
+            echo "Error: File '$file' not found"
+            return 1
+        fi
+        message=$(cat "$file")
+        echo "Reading message from file: $file"
+    elif [[ -n "$message" ]]; then
+        # Message provided as argument
+        echo "Using message from argument"
+    elif [[ ! -t 0 ]]; then
+        # Read from stdin (pipe or redirect)
+        message=$(cat)
+        echo "Reading message from stdin"
+    else
+        # Interactive mode - prompt for message
+        echo "Enter message to send to $pane (Ctrl+D to finish multi-line):"
+        message=$(cat)
+    fi
+
+    if [[ -z "$message" ]]; then
+        echo "Error: No message provided"
+        return 1
+    fi
+
+    # Clear any existing text
+    tmux send-keys -t "$pane" C-u  # Clear line
+
+    # Send the message (tmux handles multi-line automatically)
+    tmux send-keys -t "$pane" "$message"
+    tmux send-keys -t "$pane" C-m  # Send message (Ctrl+M = Enter)
+
+    # Show confirmation with message preview
+    local preview=$(echo "$message" | head -3)
+    local line_count=$(echo "$message" | wc -l)
+
+    if [[ $line_count -gt 3 ]]; then
+        echo "Message sent to $pane ($line_count lines):"
+        echo "$preview"
+        echo "... (truncated)"
+    else
+        echo "Message sent to $pane:"
+        echo "$message"
+    fi
+}
+
+# Function to select menu option
+select_option() {
+    local pane="$1"
+    local selection="$2"
+
+    if [[ -z "$selection" ]]; then
+        echo "Error: No selection provided"
+        echo "Usage: select_option <pane> <selection>"
+        echo "Selection can be: yes, no, 1, 2, 3, etc."
+        return 1
+    fi
+
+    case "$selection" in
+        "yes"|"YES"|"Yes"|"y"|"Y")
+            # Select first option (usually "Yes")
+            tmux send-keys -t "$pane" C-m
+            echo "Selected: Yes"
+            ;;
+        "no"|"NO"|"No"|"n"|"N")
+            # Move down to "No" option and select
+            tmux send-keys -t "$pane" Down C-m
+            echo "Selected: No"
+            ;;
+        "no2"|"NO2"|"No2")
+            # For menus with "Yes/Yes and don't ask/No" - move down twice
+            tmux send-keys -t "$pane" Down Down C-m
+            echo "Selected: No (option 3)"
+            ;;
+        [1-9])
+            # Select numbered option
+            local option_num=$((selection - 1))
+            for ((i = 0; i < option_num; i++)); do
+                tmux send-keys -t "$pane" Down
+            done
+            tmux send-keys -t "$pane" C-m
+            echo "Selected: Option $selection"
+            ;;
+        *)
+            echo "Unknown selection: $selection"
+            echo "Supported: yes, no, no2 (for 3rd option), or numbers 1-9"
+            return 1
+            ;;
+    esac
+}
+
+# Function to interrupt Claude session
+interrupt_session() {
+    local pane="$1"
+
+    # Send escape twice with a small delay, followed by 'i' to interrupt and return to insert mode
+    tmux send-keys -t "$pane" Escape
+    sleep 0.1
+    tmux send-keys -t "$pane" Escape
+    sleep 0.1
+    tmux send-keys -t "$pane" i
+    echo "Interrupted session $pane (sent Escape + Escape + i with delays)"
+}
+
+# Function to view pane output
+view_pane() {
+    local pane="$1"
+    local pane_title=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}"' | grep "^$pane " | cut -d'"' -f2)
+
+    echo "Session output for $pane ($pane_title):"
+    echo "---"
+    echo ""
+
+    # Get full pane content including scrollback to find user input
+    full_output=$(tmux capture-pane -t "$pane" -p -S -3000)
+
+    # Find the last user input (line starting with ">")
+    last_user_line=$(echo "$full_output" | grep -n "^>" | tail -1 | cut -d: -f1)
+
+    if [[ -n "$last_user_line" ]]; then
+        # Show from the last user input to the end
+        echo "$full_output" | tail -n +$last_user_line
+    else
+        # Fallback to last 100 lines if no user input found
+        tmux capture-pane -t "$pane" -p | tail -100
+    fi
+
+    echo ""
+    echo "---"
+}
+
+# Main menu
+main_menu() {
+    while true; do
+        echo ""
+        echo "Claude Tmux Manager"
+        echo "=================="
+        echo "1. Monitor a Claude session"
+        echo "2. Send message to a Claude session"
+        echo "3. Select menu option"
+        echo "4. Interrupt Claude session"
+        echo "5. View session output"
+        echo "6. List all Claude sessions"
+        echo "7. Exit"
+        echo ""
+        read -p "Select option (1-7): " choice
+
+        case $choice in
+            1)
+                if ! command -v fzf >/dev/null 2>&1; then
+                    echo "Error: fzf is required but not installed"
+                    exit 1
+                fi
+                pane=$(select_pane "Select Claude session to monitor: ")
+                if [[ -n "$pane" ]]; then
+                    monitor_pane "$pane"
+                fi
+                ;;
+            2)
+                if ! command -v fzf >/dev/null 2>&1; then
+                    echo "Error: fzf is required but not installed"
+                    exit 1
+                fi
+                pane=$(select_pane "Select Claude session to send message to: ")
+                if [[ -n "$pane" ]]; then
+                    send_message "$pane" "" ""
+                fi
+                ;;
+            3)
+                if ! command -v fzf >/dev/null 2>&1; then
+                    echo "Error: fzf is required but not installed"
+                    exit 1
+                fi
+                pane=$(select_pane "Select Claude session for menu selection: ")
+                if [[ -n "$pane" ]]; then
+                    echo "Enter selection (yes/no/no2/1/2/etc.):"
+                    read -r selection
+                    select_option "$pane" "$selection"
+                fi
+                ;;
+            4)
+                if ! command -v fzf >/dev/null 2>&1; then
+                    echo "Error: fzf is required but not installed"
+                    exit 1
+                fi
+                pane=$(select_pane "Select Claude session to interrupt: ")
+                if [[ -n "$pane" ]]; then
+                    interrupt_session "$pane"
+                fi
+                ;;
+            5)
+                if ! command -v fzf >/dev/null 2>&1; then
+                    echo "Error: fzf is required but not installed"
+                    exit 1
+                fi
+                pane=$(select_pane "Select Claude session to view: ")
+                if [[ -n "$pane" ]]; then
+                    view_pane "$pane"
+                fi
+                ;;
+            6)
+                echo ""
+                echo "Active Claude Sessions:"
+                echo "======================"
+                get_claude_panes
+                ;;
+            7)
+                echo "Goodbye!"
+                exit 0
+                ;;
+            *)
+                echo "Invalid option. Please select 1-7."
+                ;;
+        esac
+    done
+}
+
+# Check if tmux is running
+if ! tmux list-sessions >/dev/null 2>&1; then
+    echo "Error: No tmux sessions found"
+    exit 1
+fi
+
+# Check if there are Claude panes
+if [[ -z "$(get_claude_panes)" ]]; then
+    echo "Error: No Claude sessions found in tmux"
+    exit 1
+fi
+
+# Handle commands
+case "$COMMAND" in
+    monitor)
+        if [[ -n "$PANE" ]]; then
+            # Validate pane exists
+            if ! tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}' | grep -q "^$PANE$"; then
+                echo "Error: Pane $PANE not found"
+                exit 1
+            fi
+            monitor_pane "$PANE"
+        else
+            # Use fzf to select pane
+            if ! command -v fzf >/dev/null 2>&1; then
+                echo "Error: fzf is required but not installed (or use --pane option)"
+                exit 1
+            fi
+            pane=$(select_pane "Select Claude session to monitor: ")
+            if [[ -n "$pane" ]]; then
+                monitor_pane "$pane"
+            fi
+        fi
+        ;;
+    send)
+        if [[ -n "$PANE" ]]; then
+            # Validate pane exists
+            if ! tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}' | grep -q "^$PANE$"; then
+                echo "Error: Pane $PANE not found"
+                exit 1
+            fi
+            send_message "$PANE" "$MESSAGE" "$FILE"
+        else
+            # Use fzf to select pane
+            if ! command -v fzf >/dev/null 2>&1; then
+                echo "Error: fzf is required but not installed (or use --pane option)"
+                exit 1
+            fi
+            pane=$(select_pane "Select Claude session to send message to: ")
+            if [[ -n "$pane" ]]; then
+                send_message "$pane" "$MESSAGE" "$FILE"
+            fi
+        fi
+        ;;
+    select)
+        if [[ -n "$PANE" ]]; then
+            # Validate pane exists
+            if ! tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}' | grep -q "^$PANE$"; then
+                echo "Error: Pane $PANE not found"
+                exit 1
+            fi
+            select_option "$PANE" "$MESSAGE"
+        else
+            # Use fzf to select pane
+            if ! command -v fzf >/dev/null 2>&1; then
+                echo "Error: fzf is required but not installed (or use --pane option)"
+                exit 1
+            fi
+            pane=$(select_pane "Select Claude session for menu selection: ")
+            if [[ -n "$pane" ]]; then
+                if [[ -z "$MESSAGE" ]]; then
+                    echo "Enter selection (yes/no/no2/1/2/etc.):"
+                    read -r selection
+                    select_option "$pane" "$selection"
+                else
+                    select_option "$pane" "$MESSAGE"
+                fi
+            fi
+        fi
+        ;;
+    interrupt)
+        if [[ -n "$PANE" ]]; then
+            # Validate pane exists
+            if ! tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}' | grep -q "^$PANE$"; then
+                echo "Error: Pane $PANE not found"
+                exit 1
+            fi
+            interrupt_session "$PANE"
+        else
+            # Use fzf to select pane
+            if ! command -v fzf >/dev/null 2>&1; then
+                echo "Error: fzf is required but not installed (or use --pane option)"
+                exit 1
+            fi
+            pane=$(select_pane "Select Claude session to interrupt: ")
+            if [[ -n "$pane" ]]; then
+                interrupt_session "$pane"
+            fi
+        fi
+        ;;
+    view)
+        if [[ -n "$PANE" ]]; then
+            # Validate pane exists
+            if ! tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}' | grep -q "^$PANE$"; then
+                echo "Error: Pane $PANE not found"
+                exit 1
+            fi
+            view_pane "$PANE"
+        else
+            # Use fzf to select pane
+            if ! command -v fzf >/dev/null 2>&1; then
+                echo "Error: fzf is required but not installed (or use --pane option)"
+                exit 1
+            fi
+            pane=$(select_pane "Select Claude session to view: ")
+            if [[ -n "$pane" ]]; then
+                view_pane "$pane"
+            fi
+        fi
+        ;;
+    list)
+        echo ""
+        echo "Active Claude Sessions:"
+        echo "======================"
+        get_claude_panes
+        ;;
+    "")
+        # No command given, start interactive menu
+        main_menu
+        ;;
+    *)
+        echo "Unknown command: $COMMAND"
+        echo "Use --help for usage information"
+        exit 1
+        ;;
+esac

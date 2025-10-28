@@ -20,33 +20,33 @@ class GitHubBranch
 
   # Rerun the latest run for the current branch.
   def rerun
-    system %{CLICOLOR_FORCE=1 gh run rerun #{run_id} #{extra_args}}
+    system %(CLICOLOR_FORCE=1 gh run rerun #{run_id} #{extra_args})
   end
 
   # View the latest run for the current branch.
   def view
-    system %{CLICOLOR_FORCE=1 gh run view #{run_id} #{extra_args}}
+    system %(CLICOLOR_FORCE=1 gh run view #{run_id} #{extra_args})
   end
 
   # View the failure logs for the current branch.
   def logs
-    system %{CLICOLOR_FORCE=1 gh run view #{run_id} --log-failed #{extra_args}}
+    system %(CLICOLOR_FORCE=1 gh run view #{run_id} --log-failed #{extra_args})
   end
 
   # View the failure logs after the first match of "Failures:".
   def failures
-    system %{CLICOLOR_FORCE=1 gh run view #{run_id} --log-failed #{extra_args} | grep -A10000 Failures:}
+    system %(CLICOLOR_FORCE=1 gh run view #{run_id} --log-failed #{extra_args} | grep -A10000 Failures:)
   end
 
   # Watches the in-progress workflow for the current branch.
   def watch
-    raise 'No runs in progress.' if check_run_id == ""
+    raise 'No runs in progress.' if check_run_id == ''
 
     title = "GitHub Workflow - #{WORKFLOW}"
-    noti_pass = %{noti -t "#{title}" -m "✅ #{branch_name} Passed"}
-    noti_fail = %{noti -t "#{title}" -m "❌ #{branch_name} Failed"}
+    noti_pass = %(noti -t "#{title}" -m "✅ #{branch_name} Passed")
+    noti_fail = %(noti -t "#{title}" -m "❌ #{branch_name} Failed")
 
-    system %{CLICOLOR_FORCE=1 gh run watch #{check_run_id} --exit-status #{extra_args} && #{noti_pass} || #{noti_fail}}
+    system %(CLICOLOR_FORCE=1 gh run watch #{check_run_id} --exit-status #{extra_args} && #{noti_pass} || #{noti_fail})
   end
 
   # Returns each method in the defined order and the comment before its definition.
@@ -67,19 +67,19 @@ class GitHubBranch
   private
 
   def run_id
-    @run_id ||= (
+    @run_id ||= begin
       jq_workflow_select_cmd = %{jq -r '[.workflow_runs[] | select(.name == "#{WORKFLOW}")][0].id'}
       `gh api "repos/{owner}/{repo}/actions/runs?branch=#{branch_name}" | #{jq_workflow_select_cmd}`.chomp
-    )
+    end
   end
 
   def check_run_id
-    @check_run_id ||= (
+    @check_run_id ||= begin
       workflow = WORKFLOW.downcase.gsub ' ', '_'
-      grep_id_cmd = %{grep "#{branch_name}" | grep in_progress | head -1 | awk -F '\t' '{print $7}'}
+      grep_id_cmd = %(grep "#{branch_name}" | grep in_progress | head -1 | awk -F '\t' '{print $7}')
 
       `gh run list --workflow #{workflow}.yml | #{grep_id_cmd}`.chomp
-    )
+    end
   end
 
   def branch_name
@@ -103,7 +103,7 @@ begin
   output = GitHubBranch.new.send command || 'help'
   puts output unless output == true
   exit $?&.exitstatus || 0
-rescue => e
-  $stderr.puts e.message
+rescue StandardError => e
+  warn e.message
   exit 1
 end
