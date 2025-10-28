@@ -68,30 +68,6 @@ done
 mkdir -p ~/.config
 ln -fs ~/.vim ~/.config/nvim
 
-# Configure asdf if it doesn't exists and install ruby and node
-if [ ! -d ~/.asdf ]; then
-  echo "-----> Install asdf-vm"
-  git clone https://github.com/asdf-vm/asdf.git ~/.asdf
-  cd ~/.asdf
-  git checkout "$(git describe --abbrev=0 --tags)"
-
-  source ~/.asdf/asdf.sh
-
-  # Install node and yarn
-  asdf plugin-add nodejs
-  arch -x86_64 asdf install nodejs 18.15.0
-  asdf global nodejs  18.15.0
-  npm install -g yarn
-
-  # Install ruby
-  asdf plugin-add ruby
-  asdf install ruby 3.2.2
-  asdf global ruby 3.2.2
-fi
-
-# Install nvim plugins
-nvim -c ':silent !echo' -c ':PackUpdate' -c ':qa!'
-
 popd > /dev/null
 
 echo "-----> All done. Enjoy your shell."
