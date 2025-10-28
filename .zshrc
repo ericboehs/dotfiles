@@ -71,7 +71,7 @@ export OPENSSL_DIR="$(brew --prefix openssl)"
 [[ $- == *i* ]] && [ -z "$DISABLE_ZOXIDE" ] && eval "$(zoxide init --cmd cd zsh)"
 
 eval "$(starship init zsh)"
-eval "$($HOME/.local/bin/mise activate zsh)"
+eval "$(mise activate zsh)"
 
 # Added by LM Studio CLI (lms)
 export PATH="$PATH:/Users/ericboehs/.cache/lm-studio/bin"

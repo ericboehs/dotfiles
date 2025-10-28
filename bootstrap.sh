@@ -10,10 +10,16 @@ pushd ~/Code/ericboehs/dotfiles > /dev/null
 mkdir -p ~/.ssh
 
 # Make sure we're on the latest master and have the correct submodule versions
-git checkout master || echo
-git pull --rebase origin master || echo
+# git checkout master || echo
+# git pull --rebase origin master || echo
 git submodule init
 git submodule update
+
+# Install brew dependencies on macOS
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  echo "-----> Installing Homebrew dependencies"
+  brew install mise neovim git direnv lsd starship zoxide fzf zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier
+fi
 
 # symlink all dotfiles into ~ (skip if they exist)
 dotfiles="$(ls -a) .ssh/config"
@@ -64,9 +70,10 @@ for f in $dotfiles; do
   fi
 done
 
-# Configure nvim
+# Symlink neovim config
 mkdir -p ~/.config
-ln -fs ~/.vim ~/.config/nvim
+echo "-----> Linking neovim config"
+ln -fs $PWD/.config/nvim ~/.config/nvim
 
 popd > /dev/null
 
