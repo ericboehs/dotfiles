@@ -4,6 +4,7 @@ typeset -A abbrevs
 
 # General aliases
 abbrevs=(
+  "lld"  "lsd -altr"
   "ll"   "lsd -al"
   "l1"   "lsd -1A"
   "mdc"  "mkdir -p __CURSOR__ && cd \$_"
@@ -20,15 +21,18 @@ abbrevs=(
   "wtnoti" "while do; noti; sleep 120; done"
   "wt"     "while; do clear; __CURSOR__; sleep 5; done"
   "wtbb"   "while; do !!; clear; sleep 5; done"
+  "fori"   "for i in {1..5__CURSOR__}; do !!; done"
   "ut"     "clear && until __CURSOR__; do sleep 5; done"
   "utbb"   "clear && until !!; do sleep 5; done"
   "epoch" "date +%s"
   "epochms" 'echo $(($(gdate +%s%N)/1000000))'
   "oedm" "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'"
   "rfs" "refresh_safari"
-  "trash" "mv __CURSOR__ ~/.Trash"
+  "ttrash" "mv __CURSOR__ ~/.Trash"
   "gcs" "gh copilot suggest -t shell \"__CURSOR__\""
   "rr" "cd \$(git rev-parse --show-toplevel)"
+  "ptp" " | tee >(pbcopy)"
+  "wl" "weelog"
 )
 
 # Dotfiles
@@ -65,7 +69,8 @@ abbrevs+=(
 # Tmux
 abbrevs+=(
   "ta"    "tmux -u attach"
-  "tan"   "tmux -u attach || (tmux -u new -d -s 👨🏼‍💻 -n editor; tmux new -d -s 📝; tmux send-keys -t 📝:1.0 'nvim -c :VimwikiIndex' C-m; tmux new -d -s 📻; tmux send-keys -t 📻:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t 👨🏼‍💻)"
+  # "tan"   "tmux -u attach || (tmux -u new -d -s 👨🏼‍💻 -n editor; tmux new -d -s 📝; tmux send-keys -t 📝:1.0 'nvim -c :VimwikiIndex' C-m; tmux new -d -s 📻; tmux send-keys -t 📻:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t 👨🏼‍💻)"
+  "tan"   "tmux -u attach || (tmux -u new -d -s 0; tmux new -d -s 1; tmux send-keys -t 1:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t 0)"
   "tda"   "tmux detach -a"
   "tsw"   "tmux split-window"
   "tswrc" "tmux split-window rails c"
@@ -94,7 +99,6 @@ abbrevs+=(
   "rds"  "rails db:seed"
   "rrun" "rails runner"
   "rit"  "ruby -Itest"
-  "tf"   "tail -f"
   "tfl"  "tail -f log/__CURSOR__"
   "tfld" "tail -f log/development.log"
   "ttr"  "touch tmp/restart.txt"
@@ -189,7 +193,7 @@ abbrevs+=(
   "gcp"   "git commit && git push -u"
   "gca"   "git commit --amend"
   "gcane" "git commit --amend --no-edit"
-  "gcm"   "git commit -m"
+  "gcm"   "git commit -m '__CURSOR__'"
   "gcmw"   "git commit -m wip"
 
   "gcb"     "git checkout -b"
@@ -204,12 +208,13 @@ abbrevs+=(
   "gcl"     "git clone"
   "gclc"    "git clone __CURSOR__ && cd \$(basename \$_)"
   "gb"      "git branch"
-  "gbz"     "git branch | fzf | xargs git checkout"
+  "gbz"     "git branch --sort=-committerdate | fzf | xargs git checkout"
   "gbm"     "git branch -M"
   "gbv"     "git branch -vv"
   "gba"     "git branch -a"
   "gbav"    "git branch -a -vv"
   "gbsc"    "git branch --show-current"
+  "gbmsc"   "git branch -M \$(git branch --show-current)__CURSOR__"
   "gbsmd"   "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
 
   "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
@@ -224,7 +229,7 @@ abbrevs+=(
   "gdsh"  "git diff --stat __CURSOR__ HEAD~1"
 
   "gfo"   "git fetch origin"
-  
+
   "gmnf"  "git merge --no-ff"
 
   "gp"    "git push"
@@ -241,9 +246,24 @@ abbrevs+=(
   "ghrv"  "GHWR_URL=__CURSOR__;
 GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
 gh run view --log-failed \$GHWR_ID"
+  "ghrvb" "GHWR_URL=\$(gh pr checks --json state,workflow,name,link --jq '.[] | select(.workflow == \"Code Checks\" and .name == \"Test\") | .link');
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run view --log-failed \$GHWR_ID"
   "ghrvr" "GHWR_URL=__CURSOR__;
 GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
 gh run view --log-failed \$GHWR_ID | grep -A2 -E \"rspec [']?\./\""
+  "ghrvrb" "GHWR_URL=\$(gh pr checks --json state,workflow,name,link --jq '.[] | select(.workflow == \"Code Checks\" and .name == \"Test\") | .link');
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run view --log-failed \$GHWR_ID | grep -A2 -E \"rspec [']?\./\""
+  "ghrw"  "GHWR_URL=__CURSOR__;
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run watch \$GHWR_ID"
+  "ghrr"  "GHWR_URL=__CURSOR__;
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run rerun \$GHWR_ID"
+  "ghrrt"  "GHWR_URL=\$(gh pr checks __CURSOR__ --json name,state,link --jq '.[] | select(.name == \"Test\" and .state == \"FAILURE\") | .link');
+GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
+gh run rerun \$GHWR_ID"
 
   "gpr"    "gh pr create"
   "gprl"   "gh pr list"
@@ -257,6 +277,8 @@ gh run view --log-failed \$GHWR_ID | grep -A2 -E \"rspec [']?\./\""
   "gpvw"   "gh pr view --web"
 
   "gbr"    "gh browse"
+
+  "grcl"   "REPO_URL=\"__CURSOR__\"; ORG_NAME=\$(basename \$(dirname \"\$REPO_URL\")); REPO_NAME=\$(basename -s .git \"\$REPO_URL\"); cd ~/Code; mkdir -p \$ORG_NAME ; cd \$ORG_NAME; [ -d \$REPO_NAME ] || git clone \$REPO_URL; cd \$REPO_NAME"
 
   "grb"   "git rebase"
   "grbi"  "git rebase -i"

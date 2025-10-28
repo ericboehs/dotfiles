@@ -1,10 +1,3 @@
-# Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
-# Initialization code that may require console input (password prompts, [y/n]
-# confirmations, etc.) must go above this block; everything else may go below.
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
-fi
-
 autoload -Uz compinit; compinit # Expand directory path shorthand (e.g. cd Co/eri/tm/cach/a<Tab>)
 setopt interactivecomments      # Allow comments after commands
 setopt autocd                   # cd to directories without typing cd
@@ -16,8 +9,6 @@ export EDITOR=nvim
 export GIT_MASTER_BRANCH=master # Use env var to set default git branch name
 
 source "$HOME/.zsh/history.zsh"
-source ~/Code/powerlevel10k/powerlevel10k.zsh-theme
-source "$HOME/.zsh/asdf.zsh"
 source "$HOME/.zsh/path.zsh"
 source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
@@ -52,15 +43,43 @@ review_prs() {
   review_pr $pr_id
 }
 
-copilot_shell_suggest() { gh copilot suggest -t shell "$@" }
-alias '??'='copilot_shell_suggest';
+llm_shell_suggest() {
+  local template=${1:-cmd}
+  shift
+  llm -t $template "$*" | tee >(pbcopy)
+}
+alias '??'='llm_shell_suggest cmd-gem-flash'
+alias '???'='llm_shell_suggest cmd-llama-70b'
+alias '??o'='llm_shell_suggest cmd-4o'
+alias '??r'='llm_shell_suggest cmd-history'
 
 alias ls=lsd
+#alias cd=z
+
+# Search weechat logs (e.g. weelog foo)
+alias weelog='cd /Users/ericboehs/.local/share/weechat/logs && rg'
+
+# Search oddball slack emojis
+alias ose='ranger ~/Code/oddballteam/slack-emojis/'
 
 export PATH="/opt/homebrew/opt/libxml2/bin:$PATH"
-
-# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+export PATH="/Users/ericboehs/Code/ggerganov/whisper.cpp:$PATH"
+export OPENSSL_DIR="$(brew --prefix openssl)"
 
 # Zoxide (cd replacement)
-eval "$(zoxide init zsh)"
+# Only initialize in interactive shells to avoid issues with Claude Code
+[[ $- == *i* ]] && [ -z "$DISABLE_ZOXIDE" ] && eval "$(zoxide init --cmd cd zsh)"
+
+eval "$(starship init zsh)"
+eval "$($HOME/.local/bin/mise activate zsh)"
+
+# Added by LM Studio CLI (lms)
+export PATH="$PATH:/Users/ericboehs/.cache/lm-studio/bin"
+
+# pnpm
+export PNPM_HOME="/Users/ericboehs/Library/pnpm"
+case ":$PATH:" in
+  *":$PNPM_HOME:"*) ;;
+  *) export PATH="$PNPM_HOME:$PATH" ;;
+esac
+# pnpm end

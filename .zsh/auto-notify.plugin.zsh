@@ -56,13 +56,11 @@ function _auto_notify_message() {
         fi
         notify-send "$title" "$body" --app-name=zsh "--urgency=$urgency" "--expire-time=$AUTO_NOTIFY_EXPIRE_TIME"
     elif [[ "$platform" == "Darwin" ]]; then
-        # osascript \
-        #   -e 'on run argv' \
-        #   -e 'display notification (item 1 of argv) with title (item 2 of argv)' \
-        #   -e 'end run' \
-        #   "$body" "$title"
-        # noti -t "$title" -m "$body"
-	terminal-notifier -title "$title" -message "$body" -sender com.googlecode.iterm2
+        # Only send notification if iTerm2 is not the frontmost application
+        local frontmost_app=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
+        if [[ "$frontmost_app" != "iTerm2" ]]; then
+            terminal-notifier -title "$title" -message "$body"
+        fi
     else
         printf "Unknown platform for sending notifications: $platform\n"
         printf "Please post an issue on gitub.com/MichaelAquilina/zsh-auto-notify/issues/\n"
