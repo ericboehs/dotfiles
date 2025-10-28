@@ -3,3 +3,9 @@
 .tags
 .envrc
 .obsidian/
+.aider*
+.mise.toml
+CLAUDE.md
+.claude
+TODO.md
+.opencode

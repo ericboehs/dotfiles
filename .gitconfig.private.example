@@ -1,7 +1,7 @@
 [user]
-  signingkey = 54767C89D0F6768B
   name = Eric Boehs
   email = eric@boehs.com
+  signingkey = 54767C89D0F6768B
 [github]
   user = ericboehs
 [credential "https://github.com"]

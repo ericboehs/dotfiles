@@ -1,6 +1,9 @@
 [include]
   path = ~/.gitconfig.private
 
+[includeIf "gitdir:~/Code/department-of-veterans-affairs-ghec-us/**"]
+  path = ~/.gitconfig.va-ghe
+
 [core]
   excludesfile = ~/.gitignore
   pager = delta
@@ -31,7 +34,6 @@
 [commit]
   gpgsign = true
 	verbose = true
-	template = /Users/ericboehs/.git-commit-template.txt
 
 [credential]
   helper = cache --timeout=600
@@ -43,7 +45,7 @@
   smudge = git-lfs smudge -- %f
 
 [init]
-	defaultBranch = master
+	defaultBranch = main
 
 [blame]
 	coloring = highlightRecent
@@ -102,3 +104,11 @@
     merge-conflict-ours-diff-header-decoration-style = "#3e3e43" box
     merge-conflict-theirs-diff-header-style = yellow bold
     merge-conflict-theirs-diff-header-decoration-style = "#3e3e43" box
+[credential "https://github.com"]
+	helper =
+	helper = !/opt/homebrew/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !/opt/homebrew/bin/gh auth git-credential
+[http]
+	postBuffer = 524288000
