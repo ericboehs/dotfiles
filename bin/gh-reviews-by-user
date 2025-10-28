@@ -1,0 +1,247 @@
+#!/bin/bash
+
+# Script to find PRs reviewed by a specific user since a given date
+# Usage: gh-reviews-by-user --org <org> --since <date> <username>
+
+set -e
+
+# Function to get current repo's org
+get_current_org() {
+  gh repo view --json owner --jq '.owner.login' 2>/dev/null || echo ""
+}
+
+# Default values
+ORG=""
+DATE=""
+USERNAME=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --org)
+      ORG="$2"
+      shift 2
+      ;;
+    --since)
+      DATE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 --org <org> --since <date> <username>"
+      echo ""
+      echo "Options:"
+      echo "  --org <org>        GitHub organization (default: current repo's org)"
+      echo "  --since <date>     Date in YYYY-MM-DD format (e.g., 2025-09-11)"
+      echo "  <username>         GitHub username (e.g., ericboehs)"
+      echo ""
+      echo "Examples:"
+      echo "  $0 --since 2025-09-11 ericboehs"
+      echo "  $0 --org myorg --since 2025-09-01 johndoe"
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option $1"
+      exit 1
+      ;;
+    *)
+      if [[ -z "$USERNAME" ]]; then
+        USERNAME="$1"
+      else
+        echo "Error: Multiple usernames provided"
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Validate required arguments
+if [[ -z "$USERNAME" ]]; then
+  echo "Error: Username is required"
+  echo "Use --help for usage information"
+  exit 1
+fi
+
+if [[ -z "$DATE" ]]; then
+  echo "Error: --since date is required"
+  echo "Use --help for usage information"
+  exit 1
+fi
+
+# Set default org if not provided
+if [[ -z "$ORG" ]]; then
+  CURRENT_ORG=$(get_current_org)
+  if [[ -n "$CURRENT_ORG" ]]; then
+    ORG="$CURRENT_ORG"
+  else
+    echo "Error: No organization specified and not in a GitHub repo"
+    echo "Use --org <organization> or run from within a GitHub repository"
+    exit 1
+  fi
+fi
+
+# Validate date format
+if ! date -j -f "%Y-%m-%d" "$DATE" >/dev/null 2>&1; then
+  echo "Error: Date must be in YYYY-MM-DD format"
+  exit 1
+fi
+
+echo "Finding PRs reviewed by $USERNAME since $DATE in org:$ORG..."
+echo
+
+# Function to check and handle rate limiting
+check_rate_limit() {
+  local rate_info=$(gh api rate_limit 2>/dev/null || echo '{}')
+  local remaining=$(echo "$rate_info" | jq -r '.rate.remaining // 5000')
+  local reset_time=$(echo "$rate_info" | jq -r '.rate.reset // 0')
+
+  if [[ "$remaining" -lt 10 ]]; then
+    local current_time=$(date +%s)
+    local sleep_time=$((reset_time - current_time))
+    if [[ $sleep_time -gt 0 ]]; then
+      echo "Rate limit almost exceeded ($remaining requests remaining). Sleeping for $sleep_time seconds..." >&2
+      sleep "$sleep_time"
+    fi
+  fi
+}
+
+# Function to fetch all PRs with pagination
+fetch_all_prs() {
+  local after=""
+  local all_results="[]"
+
+  while true; do
+    # Check rate limit before making request
+    check_rate_limit
+
+    local after_clause=""
+    if [[ -n "$after" ]]; then
+      after_clause=", after: \"$after\""
+    fi
+
+    local result=$(gh api graphql -f query="
+    query {
+      search(query: \"org:$ORG type:pr reviewed-by:$USERNAME\", type: ISSUE, first: 100$after_clause) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          ... on PullRequest {
+            url
+            title
+            repository {
+              name
+            }
+            reviews(first: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]) {
+              nodes {
+                submittedAt
+                url
+                state
+                author {
+                  login
+                }
+              }
+            }
+          }
+        }
+      }
+    }")
+
+    local has_next_page=$(echo "$result" | jq -r '.data.search.pageInfo.hasNextPage')
+    local end_cursor=$(echo "$result" | jq -r '.data.search.pageInfo.endCursor')
+    local nodes=$(echo "$result" | jq '.data.search.nodes')
+
+    all_results=$(echo "$all_results" | jq ". + $nodes")
+
+    if [[ "$has_next_page" != "true" ]]; then
+      break
+    fi
+
+    after="$end_cursor"
+    echo "Fetched $(echo "$all_results" | jq 'length') PRs so far..." >&2
+
+    # Small delay between requests to be nice to the API
+    sleep 0.1
+  done
+
+  echo "$all_results"
+}
+
+echo "Fetching all PRs reviewed by $USERNAME (this may take a moment for users with many reviews)..."
+all_prs=$(fetch_all_prs)
+
+echo
+echo "Reviews since $DATE:"
+
+# Process the data to get unique PRs with review counts and dates
+result=$(echo "$all_prs" | jq -r --arg date "${DATE}T00:00:00Z" --arg username "$USERNAME" '
+  [
+    .[]
+    | select(.reviews.nodes | map(select(.author.login == $username and .submittedAt >= $date)) | length > 0)
+    | . as $pr
+    | ($pr.reviews.nodes | map(select(.author.login == $username and .submittedAt >= $date))) as $user_reviews
+    | {
+        url: $pr.url,
+        title: $pr.title,
+        repository: $pr.repository.name,
+        reviews: $user_reviews,
+        review_count: ($user_reviews | length),
+        earliest_review: ($user_reviews | map(.submittedAt) | min),
+        approved_count: ($user_reviews | map(select(.state == "APPROVED")) | length),
+        changes_requested_count: ($user_reviews | map(select(.state == "CHANGES_REQUESTED")) | length),
+        commented_count: ($user_reviews | map(select(.state == "COMMENTED")) | length)
+      }
+  ]
+  | sort_by(.earliest_review)
+  | .[]
+  | if .review_count == 1 then
+      "\(.earliest_review[:10]) - \(.url)"
+    else
+      (
+        [
+          (if .approved_count > 0 then "approved: \(.approved_count)" else empty end),
+          (if .changes_requested_count > 0 then "changes requested: \(.changes_requested_count)" else empty end),
+          (if .commented_count > 0 then "comments: \(.commented_count)" else empty end)
+        ] | join(", ")
+      ) as $breakdown
+      | "\(.earliest_review[:10]) - \(.url) - \(.review_count) reviews (\($breakdown))"
+    end
+')
+
+echo "$result"
+
+# Calculate totals
+if [[ -z "$result" || "$result" == "" ]]; then
+  total_prs=0
+else
+  total_prs=$(echo "$result" | grep -c '^' || echo 0)
+fi
+
+totals=$(echo "$all_prs" | jq --arg date "${DATE}T00:00:00Z" --arg username "$USERNAME" '
+  [
+    .[]
+    | select(.reviews.nodes | map(select(.author.login == $username and .submittedAt >= $date)) | length > 0)
+    | (.reviews.nodes | map(select(.author.login == $username and .submittedAt >= $date)))
+  ]
+  | flatten
+  | {
+      total: length,
+      approved: map(select(.state == "APPROVED")) | length,
+      changes_requested: map(select(.state == "CHANGES_REQUESTED")) | length,
+      commented: map(select(.state == "COMMENTED")) | length
+    }
+')
+
+total_reviews=$(echo "$totals" | jq -r '.total // 0')
+total_approved=$(echo "$totals" | jq -r '.approved // 0')
+total_changes_requested=$(echo "$totals" | jq -r '.changes_requested // 0')
+total_commented=$(echo "$totals" | jq -r '.commented // 0')
+
+echo
+echo "Summary:"
+echo "- Pull requests reviewed: $total_prs"
+echo "- Total reviews: $total_reviews"
+echo "  - Approved: $total_approved"
+echo "  - Changes requested: $total_changes_requested"
+echo "  - Comments: $total_commented"

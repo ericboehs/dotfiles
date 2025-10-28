@@ -1,0 +1,39 @@
+#! /usr/bin/env bash
+
+set -e
+set -u
+set -o pipefail
+
+export CACHE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/gh-pm-list.txt"
+mkdir -p "$(dirname "$CACHE_FILE")"
+
+# Only refresh if cache is older than 5 minutes, missing, or empty
+if [[ ! -f "$CACHE_FILE" ]] || [[ ! -s "$CACHE_FILE" ]] || [[ -n "$(find "$CACHE_FILE" -mmin +5 2>/dev/null)" ]]; then
+  echo "Fetching issues..."
+  gh pm list --limit 100 > "$CACHE_FILE"
+fi
+
+cat "$CACHE_FILE" | fzf \
+  --delimiter='\s\s+' \
+  --tac \
+  --multi \
+  --header-lines=1 \
+  --header='Enter: edit | Ctrl-e: echo | Ctrl-s: change status | Ctrl-r: reload | Alt-i: sort ID | Alt-d: default' \
+  --bind 'enter:execute(cmds=""; for issue in {+1}; do cmds="$cmds -c \"Octo issue edit $issue\""; done; eval nvim $cmds)+deselect-all' \
+  --bind 'ctrl-e:become(printf "%s\n" {+1})' \
+  --bind 'ctrl-s:execute(
+    new_status=$(ruby -ryaml -e "YAML.load_file(\".gh-pm.yml\")[\"fields\"][\"status\"][\"values\"].each {|k,v| puts \"#{k}:#{v}\"}" | \
+      fzf --delimiter=":" --with-nth=2 --header="Select status" | cut -d: -f1)
+    if [[ -n "$new_status" ]]; then
+      for issue in {+1}; do
+        gh pm move "$issue" --status "$new_status"
+      done
+    fi
+  )+reload(gh pm list --limit 100 | tee "$CACHE_FILE")+deselect-all' \
+  --bind 'ctrl-r:reload(gh pm list --limit 100 | tee "$CACHE_FILE")' \
+  --bind 'alt-i:reload(sh -c "head -1 \"$CACHE_FILE\"; tail -n +2 \"$CACHE_FILE\" | sort -n")' \
+  --bind 'alt-d:reload(cat "$CACHE_FILE")' \
+  --bind 'ctrl-h:execute-silent(tmux select-pane -L)' \
+  --bind 'ctrl-j:execute-silent(tmux select-pane -D)' \
+  --bind 'ctrl-k:execute-silent(tmux select-pane -U)' \
+  --bind 'ctrl-l:execute-silent(tmux select-pane -R)'

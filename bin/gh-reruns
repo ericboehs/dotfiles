@@ -1,0 +1,53 @@
+#!/bin/bash
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <github_actions_url> <max_reruns>"
+    echo "Example: $0 'https://github.com/department-of-veterans-affairs/vets-api/actions/runs/16324087966/job/46109427429?pr=23123' 8"
+    exit 1
+fi
+
+# Detect GNU grep
+GREP_CMD=""
+if grep --version 2>/dev/null | grep -q "GNU grep"; then
+    GREP_CMD="grep"
+elif command -v ggrep >/dev/null 2>&1; then
+    GREP_CMD="ggrep"
+else
+    echo "Error: GNU grep is required for this script."
+    echo "Please install GNU grep with: brew install grep"
+    exit 1
+fi
+
+GHWR_URL="$1"
+MAX_RERUNS="$2"
+GHWR_ID=$(echo $GHWR_URL | $GREP_CMD -oP 'runs/\K\d+')
+RERUN_COUNT=0
+
+echo "Monitoring GitHub Actions run $GHWR_ID"
+echo "Will rerun up to $MAX_RERUNS times if successful"
+
+while [ $RERUN_COUNT -lt $MAX_RERUNS ]; do
+    # Check run status
+    STATUS=$(gh run view $GHWR_ID --json status,conclusion -q '.status')
+    CONCLUSION=$(gh run view $GHWR_ID --json status,conclusion -q '.conclusion')
+
+    echo "$(date): Run status: $STATUS, conclusion: $CONCLUSION"
+
+    if [ "$STATUS" = "completed" ]; then
+        if [ "$CONCLUSION" = "success" ]; then
+            echo "Run completed successfully! Rerunning... (attempt $((RERUN_COUNT + 1))/$MAX_RERUNS)"
+            gh run rerun $GHWR_ID
+            RERUN_COUNT=$((RERUN_COUNT + 1))
+            echo "Rerun #$RERUN_COUNT initiated"
+        else
+            echo "Run failed with conclusion: $CONCLUSION"
+            echo "Stopping script due to failure"
+            exit 1
+        fi
+    else
+        echo "Run still in progress, checking again in 60 seconds..."
+        sleep 60
+    fi
+done
+
+echo "Completed $MAX_RERUNS reruns. Script finished."

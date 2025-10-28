@@ -1,0 +1,193 @@
+#!/bin/bash
+
+# Claude resume script with fzf session picker
+
+# Parse arguments
+SEARCH_MESSAGES=false
+MESSAGE_LIMIT=20
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -s|--searchable)
+            SEARCH_MESSAGES=true
+            shift
+            ;;
+        -n|--limit)
+            MESSAGE_LIMIT="$2"
+            shift 2
+            ;;
+        -a|--all)
+            MESSAGE_LIMIT=""
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: claude-resume [OPTIONS]"
+            echo "Options:"
+            echo "  -s, --searchable       Search through messages (slower)"
+            echo "  -n, --limit N          Limit to last N messages per session (default: 20)"
+            echo "  -a, --all              Include all messages (no limit)"
+            echo "  -h, --help             Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  claude-resume                    # Fast session picker"
+            echo "  claude-resume -s                 # Search last 20 messages per session"
+            echo "  claude-resume -s -n 50           # Search last 50 messages per session"
+            echo "  claude-resume -s -a              # Search all messages (slowest)"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Auto-detect project directory based on pwd (same logic as claude-watcher)
+current_dir=$(pwd)
+# Remove leading slash and replace slashes with dashes
+project_path="${current_dir#/}"
+project_dir="$HOME/.claude/projects/-${project_path//\//-}"
+
+echo "Project directory: ${project_dir/$HOME/~}"
+
+# Check if directory exists
+if [ ! -d "$project_dir" ]; then
+    echo "No Claude sessions found for current directory."
+    echo "Expected directory: ${project_dir/$HOME/~}"
+    exit 1
+fi
+
+# Find all .jsonl files in the project directory, sorted by modification time (newest first)
+sessions=($(ls -t "$project_dir"/*.jsonl 2>/dev/null))
+
+if [ ${#sessions[@]} -eq 0 ]; then
+    echo "No session files found in ${project_dir/$HOME/~}"
+    exit 1
+fi
+
+# Check if fzf and jq are available
+if ! command -v fzf &> /dev/null; then
+    echo "fzf is required but not installed. Please install fzf first."
+    exit 1
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "jq is required but not installed. Please install jq first."
+    exit 1
+fi
+
+# Function to extract session info (fast mode)
+get_session_info() {
+    local session_file="$1"
+    local basename=$(basename "$session_file" .jsonl)
+    
+    # Get first user message and timestamp
+    local first_message=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | .message.content' | head -1)
+    local first_timestamp=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | .timestamp' | head -1)
+    
+    # Get message count
+    local message_count=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string")' | wc -l | tr -d ' ')
+    
+    # Skip sessions with 0 messages
+    if [ "$message_count" -eq 0 ]; then
+        return
+    fi
+    
+    # Format timestamp to be more readable
+    local formatted_time=""
+    if [ -n "$first_timestamp" ]; then
+        formatted_time=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${first_timestamp%.*}" "+%m/%d %I:%M %p" 2>/dev/null || echo "${first_timestamp%.*}")
+    fi
+    
+    printf "%s|%4s msgs %s\n" "$basename" "$message_count" "$formatted_time"
+}
+
+# Function to extract all messages from all sessions (slow mode)
+get_all_messages() {
+    local all_messages=""
+    for session in "${sessions[@]}"; do
+        local basename=$(basename "$session" .jsonl)
+        
+        # Get user messages with timestamps, applying limit if set
+        local messages
+        if [ -n "$MESSAGE_LIMIT" ]; then
+            messages=$(cat "$session" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | "\(.timestamp)|\(.message.content | gsub("\n"; " ") | gsub("  +"; " "))"' 2>/dev/null | tail -n "$MESSAGE_LIMIT")
+        else
+            messages=$(cat "$session" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | "\(.timestamp)|\(.message.content | gsub("\n"; " ") | gsub("  +"; " "))"' 2>/dev/null)
+        fi
+        
+        if [ -n "$messages" ]; then
+            while IFS='|' read -r timestamp message; do
+                # Format timestamp
+                local formatted_time=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${timestamp%.*}" "+%m/%d %I:%M %p" 2>/dev/null || echo "${timestamp%.*}")
+                
+                # Create searchable line with session ID hidden at the start
+                printf "%s|%s - %s\n" "$basename" "$formatted_time" "$message"
+            done <<< "$messages"
+        fi
+    done
+}
+
+if [ "$SEARCH_MESSAGES" = true ]; then
+    # Message search mode (slow but thorough)
+    if [ -n "$MESSAGE_LIMIT" ]; then
+        echo "Loading last $MESSAGE_LIMIT messages per session..."
+    else
+        echo "Loading all messages..."
+    fi
+    message_list=$(get_all_messages)
+    
+    if [ -z "$message_list" ]; then
+        echo "No messages found in any sessions."
+        exit 1
+    fi
+    
+    # Use fzf to search through all messages
+    selected_line=$(echo "$message_list" | fzf \
+        --prompt="Search messages: " \
+        --height=60% \
+        --border \
+        --delimiter='|' \
+        --with-nth=2.. \
+        --preview="session_id=\$(echo {} | awk -F'|' '{print \$1}'); echo 'Session: '\$session_id; echo ''; if [ -f '$project_dir'/\$session_id.jsonl ]; then cat '$project_dir'/\$session_id.jsonl | jq -r 'select(.type == \"user\" and (.message.content | type) == \"string\") | \"▶ \" + .message.content'; else echo 'Session file not found'; fi" \
+        --preview-window=right:50%:wrap \
+        --bind="ctrl-u:preview-page-up,ctrl-d:preview-page-down,ctrl-j:preview-down,ctrl-k:preview-up")
+    
+    # Check if user cancelled or no selection made
+    if [ -z "$selected_line" ]; then
+        echo "No message selected."
+        exit 1
+    fi
+else
+    # Session summary mode (fast)
+    session_info=""
+    for session in "${sessions[@]}"; do
+        info=$(get_session_info "$session")
+        if [ -n "$info" ]; then
+            session_info+="$info"$'\n'
+        fi
+    done
+    
+    # Use fzf to select a session with preview
+    selected_line=$(echo "$session_info" | fzf \
+        --prompt="Select Claude session: " \
+        --height=60% \
+        --border \
+        --delimiter='|' \
+        --with-nth=2.. \
+        --preview="session_id=\$(echo {} | awk -F'|' '{print \$1}'); if [ -f '$project_dir'/\$session_id.jsonl ]; then cat '$project_dir'/\$session_id.jsonl | jq -r 'select(.type == \"user\" and (.message.content | type) == \"string\") | \"▶ \" + .message.content'; else echo 'Session file not found'; fi" \
+        --preview-window=right:60%:wrap \
+        --bind="ctrl-u:preview-page-up,ctrl-d:preview-page-down,ctrl-j:preview-down,ctrl-k:preview-up")
+    
+    # Check if user cancelled or no selection made
+    if [ -z "$selected_line" ]; then
+        echo "No session selected."
+        exit 1
+    fi
+fi
+
+# Extract session ID from selected line (before the |)
+selected_session=$(echo "$selected_line" | awk -F'|' '{print $1}')
+
+# Resume the selected session
+echo "Resuming session: $selected_session"
+exec claude --resume "$selected_session"

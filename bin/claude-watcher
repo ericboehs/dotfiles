@@ -1,0 +1,226 @@
+#!/bin/bash
+
+# Tool watcher script
+
+# Parse arguments
+SHOW_FILENAMES=""  # empty = auto, true = force show, false = force hide
+LOGPATH=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --show-filenames)
+            SHOW_FILENAMES=true
+            shift
+            ;;
+        --no-filenames)
+            SHOW_FILENAMES=false
+            shift
+            ;;
+        *)
+            LOGPATH="$1"
+            shift
+            ;;
+    esac
+done
+
+# Function to select conversation file
+select_conversation() {
+    local project_dir="$1"
+    
+    if [ ! -d "$project_dir" ]; then
+        echo "Project directory not found: $project_dir"
+        exit 1
+    fi
+    
+    echo "Available conversations:"
+    local files=($(ls "$project_dir"/*.jsonl 2>/dev/null))
+    
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "No conversation files found in $project_dir"
+        exit 1
+    fi
+    
+    for i in "${!files[@]}"; do
+        local basename=$(basename "${files[$i]}" .jsonl)
+        echo "$((i+1)). $basename"
+    done
+    
+    echo -n "Select conversation (1-${#files[@]}): "
+    read selection
+    
+    if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#files[@]}" ]; then
+        echo "${files[$((selection-1))]}"
+    else
+        echo "Invalid selection"
+        exit 1
+    fi
+}
+
+# Check if path provided as argument
+if [ -n "$LOGPATH" ]; then
+    if [ -f "$LOGPATH" ]; then
+        # Single file provided
+        LOGFILES=("$LOGPATH")
+    elif [ -d "$LOGPATH" ]; then
+        # Directory provided - watch all files in it
+        LOGFILES=($(ls "$LOGPATH"/*.jsonl 2>/dev/null))
+        if [ ${#LOGFILES[@]} -eq 0 ]; then
+            echo "No conversation files found in $LOGPATH"
+            exit 1
+        fi
+    else
+        echo "File or directory not found: $LOGPATH"
+        exit 1
+    fi
+else
+    # Auto-detect project directory based on pwd
+    current_dir=$(pwd)
+    # Remove leading slash and replace slashes with dashes
+    project_path="${current_dir#/}"
+    project_dir="$HOME/.claude/projects/-${project_path//\//-}"
+    
+    echo "Auto-detected project directory: ${project_dir/$HOME/~}"
+    
+    # Check if directory exists and has conversation files
+    if [ ! -d "$project_dir" ]; then
+        echo "Project directory not found. Run from a different directory or specify a path."
+        exit 1
+    fi
+    
+    LOGFILES=($(ls "$project_dir"/*.jsonl 2>/dev/null))
+    if [ ${#LOGFILES[@]} -eq 0 ]; then
+        echo "No conversation files found in $project_dir"
+        exit 1
+    fi
+fi
+
+# Determine if we should show filenames
+SHOULD_SHOW_FILENAMES=false
+if [ "$SHOW_FILENAMES" = true ]; then
+    SHOULD_SHOW_FILENAMES=true
+elif [ "$SHOW_FILENAMES" = false ]; then
+    SHOULD_SHOW_FILENAMES=false
+elif [ ${#LOGFILES[@]} -gt 1 ]; then
+    SHOULD_SHOW_FILENAMES=true
+fi
+
+# Show appropriate startup message
+if [ ${#LOGFILES[@]} -gt 1 ]; then
+    if [ "$SHOW_FILENAMES" = false ]; then
+        echo "Monitoring ${#LOGFILES[@]} sessions (--no-filenames enabled). Press Ctrl+C to stop."
+    else
+        echo "Monitoring ${#LOGFILES[@]} sessions (filenames will be shown). Press Ctrl+C to stop."
+    fi
+elif [ "$SHOW_FILENAMES" = true ]; then
+    echo "Monitoring ${#LOGFILES[@]} session (--show-filenames enabled). Press Ctrl+C to stop."
+else
+    echo "Monitoring ${#LOGFILES[@]} session. Press Ctrl+C to stop."
+fi
+
+echo ""
+
+# Process output from tool results
+process_tool_result() {
+    local line="$1"
+    local file="$2"
+    
+    # Find the corresponding tool call by looking for the tool_use_id
+    local tool_use_id=$(echo "$line" | jq -r '.message.content[0].tool_use_id // empty')
+    local tool_name="unknown tool"
+    local command=""
+    
+    if [ -n "$tool_use_id" ]; then
+        # Search backwards in the file for the tool call with this ID
+        local tool_line=$(tac "$file" | grep -m1 "\"id\":\"$tool_use_id\"" 2>/dev/null)
+        if [ -n "$tool_line" ]; then
+            tool_name=$(echo "$tool_line" | jq -r '.message.content[0].name // "unknown tool"' 2>/dev/null || echo "unknown tool")
+            command=$(echo "$tool_line" | jq -r '.message.content[0].input.command // .message.content[0].input.description // .message.content[0].input.pattern // .message.content[0].input.file_path // empty' 2>/dev/null || echo "")
+        fi
+    fi
+    
+    
+    # Format like Claude with green dot and tool(command)
+    if [ -n "$command" ]; then
+        echo -e "\033[38;5;71m⏺\033[0m $tool_name($command)"
+    else
+        echo -e "\033[38;5;71m⏺\033[0m $tool_name"
+    fi
+    
+    if [ "$SHOULD_SHOW_FILENAMES" = true ]; then
+        echo "   └─ $(basename "$file")"
+    fi
+    
+    # Only show stdout if not empty
+    local stdout=$(echo "$line" | jq -r '.toolUseResult.stdout // empty')
+    if [ -n "$stdout" ]; then
+        echo "$stdout"
+        echo ""
+    fi
+    
+    # Only show stderr if not empty
+    local stderr=$(echo "$line" | jq -r '.toolUseResult.stderr // empty')
+    if [ -n "$stderr" ]; then
+        echo "STDERR:"
+        echo "$stderr"
+        echo ""
+    fi
+}
+
+
+# Process user messages
+process_user_message() {
+    local line="$1"
+    local file="$2"
+    
+    # Extract user message content (handle both string and array formats)
+    local message=$(echo "$line" | jq -r '
+        if (.message.content | type) == "string" then
+            .message.content
+        elif (.message.content | type) == "array" then
+            .message.content[] | select(.type == "text") | .text
+        else
+            empty
+        end
+    ' 2>/dev/null)
+    
+    if [ -n "$message" ]; then
+        echo -e "\033[38;5;244m> $message\033[0m"
+        echo ""
+        
+        if [ "$SHOULD_SHOW_FILENAMES" = true ]; then
+            echo "   └─ $(basename "$file")"
+        fi
+    fi
+}
+
+# Follow multiple files and process new lines (only new additions, not existing content)
+if [ ${#LOGFILES[@]} -eq 1 ]; then
+    # Single file - use tail with -n 0 to start from end of file
+    tail -n 0 -f "${LOGFILES[0]}" | while read -r line; do
+        # Check for tool results first (they're also type "user" but have toolUseResult)
+        if echo "$line" | jq -e 'has("toolUseResult")' >/dev/null 2>&1; then
+            process_tool_result "$line" "${LOGFILES[0]}"
+        # Check for regular user messages
+        elif echo "$line" | jq -e '.type == "user"' >/dev/null 2>&1; then
+            process_user_message "$line" "${LOGFILES[0]}"
+        fi
+    done
+else
+    # Multiple files - use tail with -n 0 to start from end of files
+    tail -n 0 -f "${LOGFILES[@]}" | while read -r line; do
+        # tail -f with multiple files prefixes lines with ==> filename <==
+        if [[ "$line" =~ ^==\>.*\<==$ ]]; then
+            # Extract filename from tail output
+            current_file=$(echo "$line" | sed 's/^==> \(.*\) <==/\1/')
+            continue
+        fi
+        
+        # Check for tool results first (they're also type "user" but have toolUseResult)
+        if echo "$line" | jq -e 'has("toolUseResult")' >/dev/null 2>&1; then
+            process_tool_result "$line" "${current_file:-unknown}"
+        # Check for regular user messages
+        elif echo "$line" | jq -e '.type == "user"' >/dev/null 2>&1; then
+            process_user_message "$line" "${current_file:-unknown}"
+        fi
+    done
+fi

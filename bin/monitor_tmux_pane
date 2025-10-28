@@ -1,0 +1,172 @@
+#!/bin/zsh
+
+# Usage: ./monitor_tmux_pane.sh [idle_threshold_seconds] [--terminal-notifier]
+# Monitors all tmux panes running Claude processes
+
+# Parse arguments
+USE_TERMINAL_NOTIFIER=false
+IDLE_THRESHOLD=5
+
+for arg in "$@"; do
+    case $arg in
+        --terminal-notifier)
+            USE_TERMINAL_NOTIFIER=true
+            ;;
+        --help)
+            echo "Usage: $0 [idle_threshold_seconds] [--terminal-notifier]"
+            echo "  idle_threshold_seconds: Time in seconds before considering pane idle (default: 5)"
+            echo "  --terminal-notifier: Use terminal-notifier instead of OS9 notifications"
+            exit 0
+            ;;
+        [0-9]*)
+            IDLE_THRESHOLD="$arg"
+            ;;
+    esac
+done
+
+DEBOUNCE_TIME=30  # seconds before we can send another notification
+
+# Trap Ctrl+C to exit cleanly
+trap 'echo -e "\nMonitoring stopped."; exit 0' INT
+
+# Get all tmux panes that contain Claude processes
+get_claude_panes() {
+    # Get all Claude PIDs
+    local claude_pids=($(ps -eo pid,comm | awk '$2 == "claude" {print $1}'))
+
+    if [ ${#claude_pids[@]} -eq 0 ]; then
+        return
+    fi
+
+    # For each Claude PID, find which tmux pane it belongs to
+    for claude_pid in "${claude_pids[@]}"; do
+        # Get the terminal of the Claude process
+        local tty=$(ps -p "$claude_pid" -o tty= 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+        if [[ -n "$tty" && "$tty" != "??" ]]; then
+            # Find tmux pane with matching tty
+            tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_tty}' | while IFS='|' read pane_id pane_tty; do
+                # Compare just the tty name (e.g., ttys003)
+                if [[ "/dev/$tty" == "$pane_tty" ]]; then
+                    echo "$pane_id"
+                fi
+            done
+        fi
+    done | sort -u
+}
+
+CLAUDE_PANES=($(get_claude_panes))
+
+if [ ${#CLAUDE_PANES[@]} -eq 0 ]; then
+    echo "No tmux panes running Claude found"
+    exit 1
+fi
+
+echo "Found Claude panes: ${CLAUDE_PANES[*]}"
+echo "Monitoring for inactivity (threshold: ${IDLE_THRESHOLD}s, debounce: ${DEBOUNCE_TIME}s)"
+echo "Press Ctrl+C to stop monitoring"
+
+# Reload tmux config to ensure activity monitoring is enabled
+tmux source-file ~/.tmux.conf >/dev/null 2>&1
+
+# Associative arrays to track state for each pane
+typeset -A LAST_ACTIVITY
+typeset -A LAST_NOTIFICATION
+typeset -A NOTIFICATION_SENT
+
+# Get a hash of the pane's visible content
+get_pane_content_hash() {
+    tmux capture-pane -t "$1" -p 2>/dev/null | md5
+}
+
+# Send notification using the configured method
+send_notification() {
+    local pane="$1"
+    local duration="$2"
+    
+    if [[ "$USE_TERMINAL_NOTIFIER" == true ]]; then
+        terminal-notifier -title "Claude Monitor" -message "Claude pane $pane idle for $duration seconds" -sender com.googlecode.iterm2
+    else
+        # Default OS9 notification via tmux
+        printf '\ePtmux;\e\e]9;Claude pane %s idle for %d seconds\a\e\\' "$pane" "$duration"
+    fi
+}
+
+# Associative array to track content hash
+typeset -A LAST_CONTENT_HASH
+typeset -A LAST_ACTIVITY_TIME
+
+# Initialize state for each pane
+for pane in "${CLAUDE_PANES[@]}"; do
+    LAST_CONTENT_HASH[$pane]=$(get_pane_content_hash "$pane")
+    LAST_ACTIVITY_TIME[$pane]=$(date +%s)
+    LAST_NOTIFICATION[$pane]=0
+    NOTIFICATION_SENT[$pane]=false
+done
+
+while true; do
+    # Refresh Claude panes list (in case new ones start or old ones stop)
+    CURRENT_PANES=($(get_claude_panes))
+
+    # Add new panes to our tracking
+    for pane in "${CURRENT_PANES[@]}"; do
+        if [[ -z "${LAST_CONTENT_HASH[$pane]}" ]]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - New Claude pane detected: $pane"
+            LAST_CONTENT_HASH[$pane]=$(get_pane_content_hash "$pane")
+            LAST_ACTIVITY_TIME[$pane]=$(date +%s)
+            LAST_NOTIFICATION[$pane]=0
+            NOTIFICATION_SENT[$pane]=false
+        fi
+    done
+
+    # Monitor each Claude pane
+    for pane in "${CURRENT_PANES[@]}"; do
+        # Check if pane still exists
+        if ! tmux list-panes -t "$pane" >/dev/null 2>&1; then
+            # Only report termination if we were tracking this pane
+            if [[ -n "${LAST_CONTENT_HASH[$pane]}" ]]; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - Pane '$pane' no longer exists"
+            fi
+            unset LAST_CONTENT_HASH[$pane]
+            unset LAST_ACTIVITY_TIME[$pane]
+            unset LAST_NOTIFICATION[$pane]
+            unset NOTIFICATION_SENT[$pane]
+            continue
+        fi
+
+        CURRENT_CONTENT_HASH=$(get_pane_content_hash "$pane")
+        CURRENT_TIME=$(date +%s)
+
+        # Check if pane content changed
+        if [ "$CURRENT_CONTENT_HASH" != "${LAST_CONTENT_HASH[$pane]}" ]; then
+            LAST_CONTENT_HASH[$pane]="$CURRENT_CONTENT_HASH"
+            LAST_ACTIVITY_TIME[$pane]=$CURRENT_TIME
+            NOTIFICATION_SENT[$pane]=false  # Reset notification flag when activity resumes
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - Pane '$pane': activity detected"
+        else
+            # Calculate idle duration based on last activity time
+            IDLE_DURATION=$((CURRENT_TIME - ${LAST_ACTIVITY_TIME[$pane]}))
+
+            if [ $IDLE_DURATION -ge $IDLE_THRESHOLD ]; then
+                # Check if we should send a notification
+                TIME_SINCE_LAST_NOTIFICATION=$((CURRENT_TIME - ${LAST_NOTIFICATION[$pane]}))
+
+                if [ "${NOTIFICATION_SENT[$pane]}" = false ]; then
+                    if [ $TIME_SINCE_LAST_NOTIFICATION -ge $DEBOUNCE_TIME ]; then
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') - ALERT: Pane '$pane' idle for ${IDLE_DURATION}s"
+                        send_notification "$pane" "$IDLE_DURATION"
+                        LAST_NOTIFICATION[$pane]=$CURRENT_TIME
+                        NOTIFICATION_SENT[$pane]=true
+                    else
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') - Pane '$pane' idle for ${IDLE_DURATION}s (notification suppressed, ${TIME_SINCE_LAST_NOTIFICATION}s since last)"
+                        NOTIFICATION_SENT[$pane]=true
+                    fi
+                fi
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - Pane '$pane' idle for ${IDLE_DURATION}s (threshold: ${IDLE_THRESHOLD}s)"
+            fi
+        fi
+    done
+
+    sleep 1
+done

@@ -1,0 +1,9 @@
+#! /usr/bin/env bash
+
+if tmux has-session -t 📝 2> /dev/null && tmux list-panes -t 📝:1 -F "#{pane_current_command}" | grep -q nvim; then
+  tmux display-message 'Joining'
+  tmux join-pane -hf -p 40 -s "📝:1"
+else
+  tmux has-session -t 📝 2> /dev/null || tmux new -d -s 📝
+  tmux move-pane -t 📝
+fi
