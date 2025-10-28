@@ -18,7 +18,7 @@ git submodule update
 # Install brew dependencies on macOS
 if [[ "$OSTYPE" == "darwin"* ]]; then
   echo "-----> Installing Homebrew dependencies"
-  brew install mise neovim git direnv lsd starship zoxide fzf zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier
+  brew install mise neovim git direnv lsd starship zoxide fzf zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier delta
 
   # Setup iTerm2 with Catppuccin Mocha theme and Inconsolata Nerd Font
   # Check if Inconsolata Nerd Font is already installed
@@ -112,6 +112,16 @@ done
 mkdir -p ~/.config
 echo "-----> Linking neovim config"
 ln -fns $PWD/.config/nvim ~/.config/nvim
+
+# Install TPM (Tmux Plugin Manager) and plugins
+if [ ! -d ~/.tmux/plugins/tpm ]; then
+  echo "-----> Installing TPM (Tmux Plugin Manager)"
+  git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+  echo "-----> Installing tmux plugins"
+  ~/.tmux/plugins/tpm/bin/install_plugins
+else
+  echo "-----> TPM already installed"
+fi
 
 popd > /dev/null
 
