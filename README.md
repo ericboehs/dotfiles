@@ -1,50 +1,116 @@
-# ~/.dotfiles
+# dotfiles
 
-My dotfiles tuned for zsh and OS X.
+Personal dotfiles optimized for macOS and zsh. Features modern shell tools, comprehensive git configuration, and a customized development environment.
 
 ## Installation
-``` sh
+
+```sh
 bash -c "$(curl -sL https://raw.github.com/ericboehs/dotfiles/master/bootstrap.sh)"
 ```
 
-And then configure git:
-``` sh
-cp ~/.dotfiles/.gitconfig.private.example ~/.gitconfig.private
+Configure git with your personal information:
+```sh
+cp ~/.gitconfig.private.example ~/.gitconfig.private
 $EDITOR ~/.gitconfig.private
 ```
 
-Also install zsh and `chsh` your shell to it and use the Solarized color scheme (iTerm or Terminal).
+## Core Components
 
-## What's in the box?
+### Shell (zsh)
 
-### .fzf and .zsh/fzf.zsh
-https://github.com/junegunn/fzf
+- **Prompt**: [Starship](https://starship.rs/) - Fast, customizable prompt
+- **Syntax highlighting**: [fast-syntax-highlighting](https://github.com/zdharma-continuum/fast-syntax-highlighting)
+- **Autosuggestions**: [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions)
+- **Smart cd**: [zoxide](https://github.com/ajeetdsouza/zoxide) - Directory jumper that learns your habits
+- **Abbreviations**: Custom expansion system (see [.zsh/abbreviations.zsh](.zsh/abbreviations.zsh))
+  - Type abbreviation + space/enter to expand
+  - Extensive git shortcuts (e.g., `gco` → `git checkout`, `gs` → `git status`)
+  - GitHub CLI helpers for PRs and workflow runs
+- **Notifications**: Auto-notify for long-running commands
 
-General purpose fuzzy finder. Find files, command history and more.
+### Editor (Neovim)
 
-Usage: `Ctrl-R` and `Ctrl-T` in zsh. `Ctrl-P` in vim.
+- Configuration: [LazyVim](https://www.lazyvim.org/)
+- Location: `.config/nvim/`
+- Custom plugins for CSV, Markdown, Tailwind, and GitHub integration
 
-### .tmux and .tmux.conf
-Terminal multiplexer. You can create persisted sessions with multiple tabs and panes for your projects.
+### Terminal Multiplexer (tmux)
 
-Prefix is set to ``` ` ``` and to type a ``` ` ``` use ``` \` ```.
+- Prefix: `Ctrl-B` (default)
+- Plugins: vim-tmux-navigator, tmux-yank, tmux-copycat, tmux-floax
+- Features:
+  - Vi-mode copy/paste
+  - Mouse support
+  - Activity and bell monitoring
+  - Custom status line with zoom indicator
+  - Auto-renumber windows
 
-UI Customized with [tmuxline.vim](https://github.com/edkolev/tmuxline.vim) and [lightline.vim](https://github.com/itchyny/lightline.vim).
+### Version Management
 
-`bin/utcdate` is shown in the bottom right of the tmux status line.
+- **Tool**: [mise](https://mise.jdx.dev/) (replaces asdf)
+- Manages Node.js, Ruby, Python, and other language runtimes
 
-TODO: Document other tmux settings and keybindings (e.g. resizing, switching panes, zooming, scrolling, searching, copy/pasting, last window, etc)
+### Fuzzy Finder
 
-### .vim and .vimrc
+- **Tool**: [fzf](https://github.com/junegunn/fzf)
+- Keybindings:
+  - `Ctrl-R`: Command history search (with regex support)
+  - `Ctrl-T`: File search
+- Enhanced with preview windows and custom options
 
-### .zsh and .zshrc
-Includes [pure prompt](https://github.com/sindresorhus/pure), [zsh-syntax-highlighting](https://github.com/zsh-users/zsh-syntax-highlighting) and some tidbits (tab completion) from [slim.zsh](https://github.com/changs/slimzsh).
+### Git
 
-I'm using abbreviations instead of aliases. Pressing `<space>` or `<enter>` will auto expand any abbreviation. See [abbreviations.zsh](https://github.com/ericboehs/dotfiles/blob/master/.zsh/abbreviations.zsh) for a list of abbreviations. There is currently a [bug](https://github.com/ericboehs/dotfiles/issues/13) where expansion happens unexpectedly mid command (especially noticable for `l` and `g`. See ticket for workaround.
+- **Pager**: [Delta](https://github.com/dandavison/delta) - Syntax-highlighted diffs
+- **Features**:
+  - GPG signing enabled
+  - Conditional includes for different organizations
+  - GitHub CLI credential helpers
+  - Verbose commits
+  - Rebase by default for pulls
 
-To enter vi-mode, press `jk`. Vi mode is indicated by a `❯❯` prompt. Emacs bindings are still in place so if you don't like vi mode, just don't press `jk`.
+### Utilities
 
-TODO: Document other zsh settings
+Enhanced replacements for common commands:
+- `ls` → `lsd` (modern ls with icons and colors)
+- `cd` → `zoxide` (smart directory jumping)
 
-### bootstrap.sh
-Used to install and update dotfiles to this repo.
+## Bin Scripts
+
+Collection of utility scripts in `bin/` including:
+
+- **Claude Code helpers**: claude-man, claude-notify, claude-resume, claude-watcher
+- **GitHub CLI extensions**: gh-pm, gh-reruns, gh-reviews-by-user, gh-labeler, ghb
+- **Tmux utilities**: toggle_notes_pane, monitor_tmux_pane, notes
+- **Development tools**: refresh_safari, colors, true-colors, utcdate
+
+## Keybindings
+
+### Zsh
+- `Esc`: Enter vi command mode
+- `Alt-L`: Clear screen
+- `Ctrl-Y`: Copy current command to clipboard
+- `Ctrl-R`: Fuzzy search command history
+
+### Tmux
+- `Ctrl-h/j/k/l`: Navigate between vim and tmux panes
+
+## Directory Structure
+
+```
+.
+├── .config/nvim/        # Neovim configuration
+├── .zsh/                # Zsh configuration modules
+│   ├── abbreviations.zsh
+│   ├── keybindings.zsh
+│   ├── history.zsh
+│   └── fzf.zsh
+├── bin/                 # Utility scripts
+├── .gitconfig           # Git configuration
+├── .tmux.conf           # Tmux configuration
+├── .zshrc               # Zsh initialization
+└── bootstrap.sh         # Installation script
+```
+
+## License
+
+MIT
