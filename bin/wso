@@ -1,0 +1,73 @@
+#!/bin/bash
+# OpenCode workspace launcher - quickly cd to a workspace and run opencode
+
+# Set workspaces directory directly
+WORKSPACES_DIR="$HOME/Code/ericboehs/opencode-config/workspaces"
+
+show_usage() {
+  echo "Usage: wso <workspace>"
+  echo ""
+  echo "OpenCode Workspaces:"
+  echo "  manager, mgr, man  - OpenCode Manager (productivity - calendar, mail, reminders, messages)"
+  echo "  media              - OpenCode Media Manager (Plex, arr-suite)"
+  echo "  ha, home           - OpenCode Home Automation (HA config, puppeteer)"
+  echo "  playwright, pw     - OpenCode Browser Automation (Playwright MCP)"
+  echo "  copilot, cp, co    - OpenCode Copilot (localhost:4141)"
+  echo "  mux                - OpenCode Mux (localhost:13456)"
+  echo "  cerebras, cere     - OpenCode Cerebras (localhost:8082)"
+  echo ""
+  echo "Options:"
+  echo "  -l, --list     - List workspaces without launching"
+  echo "  -h, --help     - Show this help"
+}
+
+launch_opencode() {
+  local workspace_dir="$1"
+  cd "$workspace_dir"
+
+  # Export OPENCODE_CONFIG to use the local opencode.json
+  export OPENCODE_CONFIG="./opencode.json"
+
+  # Load direnv if present
+  if [ -f ".envrc" ]; then
+    eval "$(direnv export bash)"
+  fi
+
+  exec opencode
+}
+
+case "$1" in
+  manager|mgr|man)
+    launch_opencode "$WORKSPACES_DIR/manager"
+    ;;
+  media)
+    launch_opencode "$WORKSPACES_DIR/media-manager"
+    ;;
+  ha|home|home-automation)
+    launch_opencode "$WORKSPACES_DIR/home-automation"
+    ;;
+  playwright|pw)
+    launch_opencode "$WORKSPACES_DIR/browser-automation"
+    ;;
+  copilot|cp|co)
+    launch_opencode "$WORKSPACES_DIR/copilot"
+    ;;
+  mux)
+    launch_opencode "$WORKSPACES_DIR/mux"
+    ;;
+  cerebras|cere)
+    launch_opencode "$WORKSPACES_DIR/cerebras"
+    ;;
+  -l|--list)
+    echo "Available OpenCode workspaces:"
+    ls -1 "$WORKSPACES_DIR"
+    ;;
+  -h|--help|"")
+    show_usage
+    ;;
+  *)
+    echo "Unknown workspace: $1"
+    show_usage
+    exit 1
+    ;;
+esac

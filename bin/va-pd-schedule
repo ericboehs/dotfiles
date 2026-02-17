@@ -1,0 +1,48 @@
+#! /usr/bin/env ruby
+# https://gist.github.com/ericboehs/d1a88345ac526eb9851ff41155adc3bc
+
+require 'open-uri'
+require 'json'
+
+# Configure PagerDuty base URL - change to 'ecc' if needed
+#PAGERDUTY_BASE = 'dsva'
+PAGERDUTY_BASE = 'ecc'
+
+BOLD = `tput bold`
+NORMAL = `tput sgr0`
+
+def print_all_schedules_names_and_ids
+  url = "https://api.pagerduty.com/schedules?limit=100"
+
+  puts "To list a scheudle, run one of the following commands:\n\n"
+  URI.open(url, 'Authorization' => "Token token=#{ENV['DSVA_PD_API_TOKEN']}") do |response|
+    json = JSON.parse response.gets
+    json['schedules'].each do |schedule|
+      puts "#{File.basename $PROGRAM_NAME} #{schedule['id']} #{BOLD}# #{schedule['name']}#{NORMAL}"
+    end
+  end
+end
+
+def print_schedule(id)
+  url = "https://#{PAGERDUTY_BASE}.pagerduty.com/api/v1/schedules/#{id}?since=#{`date +%Y-%m-%d`}&until=#{`date -v+6m +%Y-%m-%d`}"
+
+  URI.open(url, 'Authorization' => "Token token=#{ENV['DSVA_PD_API_TOKEN']}") do |response|
+    json = JSON.parse response.gets
+    json['schedule']['final_schedule']['rendered_schedule_entries'].map {|h| { h['user']['summary'] => h['start'].split('T').first } }.uniq(&:keys).map(&:invert).reduce(Hash.new, :merge).each { |date, dude| puts "#{date}: #{dude}"}
+  end
+end
+
+if ARGV[0] == 'list'
+  print_all_schedules_names_and_ids
+else
+  print_schedule ARGV[0]
+end
+
+__END__
+curl --silent --header "Authorization: Token token=$DSVA_PD_API_TOKEN" \
+ "https://dsva.pagerduty.com/api/v1/schedules/$1?since=$(date +%Y-%m-%d)&until=$(date -v+1m +%Y-%m-%d)" \
+ | jq '.schedule.final_schedule.rendered_schedule_entries | map({(.user.summary): (.start | split("T")[0])}) | unique_by(keys) | sort_by(values) | reverse | map(to_entries | map( {(.value) : .key } ) | add) | add | to_entries | sort_by(.key) | from_entries'
+
+curl --silent --header "Authorization: Token token=$DSVA_PD_API_TOKEN" \
+ "https://api.pagerduty.com/schedules" \
+ | jq

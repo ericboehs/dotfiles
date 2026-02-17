@@ -1,0 +1,123 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+# ─── Defaults & ENV Override ────────────────────────────────────────────────────
+SOURCE_PREFIX="${SOURCE_PREFIX:-/dsva-vagov/vets-api}"
+ARCHIVE_PREFIX="${ARCHIVE_PREFIX:-/dsva-vagov/vets-api/archived}"
+DRY_RUN=false
+UNARCHIVE=false
+
+usage() {
+  cat <<EOF
+Usage: $0 [--source-prefix PREFIX] [--archive-prefix PREFIX] [--dry-run] [--unarchive] [param1 param2 ...]
+
+  --source-prefix    Base path to archive from  (env or default: $SOURCE_PREFIX)
+  --archive-prefix   Base path to archive to    (env or default: $ARCHIVE_PREFIX)
+  --dry-run          Show actions but don’t modify anything
+  --unarchive        Move parameters from archive prefix back to source prefix
+
+You may supply parameters as positional args, or pipe them via stdin (one per line).
+EOF
+  exit 1
+}
+
+# ─── Parse Flags ────────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --source-prefix)  SOURCE_PREFIX=$2; shift 2 ;;
+    --archive-prefix) ARCHIVE_PREFIX=$2; shift 2 ;;
+    --dry-run)        DRY_RUN=true;     shift ;;
+    --unarchive)      UNARCHIVE=true;   shift ;;
+    --help)           usage ;;
+    --*)              echo "Unknown option: $1"; usage ;;
+    *)                break ;;
+  esac
+done
+
+# If unarchive, swap prefixes internally
+if [[ "$UNARCHIVE" == true ]]; then
+  tmp="$SOURCE_PREFIX"
+  SOURCE_PREFIX="$ARCHIVE_PREFIX"
+  ARCHIVE_PREFIX="$tmp"
+  echo "↩️  Unarchive mode enabled: swapping direction"
+fi
+
+# ─── Collect Parameter Names ───────────────────────────────────────────────────
+typeset -a params
+if (( $# > 0 )); then
+  params=("$@")
+else
+  if [ -t 0 ]; then
+    echo "❌  No parameters provided and no piped input."
+    usage
+  fi
+  while IFS= read -r line; do
+    [[ -n $line ]] && params+=("$line")
+  done
+fi
+
+if (( ${#params[@]} == 0 )); then
+  echo "⚠️  No parameters to process."
+  exit 0
+fi
+
+echo "→ Source prefix:   $SOURCE_PREFIX"
+echo "→ Archive prefix:  $ARCHIVE_PREFIX"
+echo "→ Dry run mode:    $DRY_RUN"
+[[ "$UNARCHIVE" == true ]] && echo "→ Direction:       unarchive"
+echo
+
+# ─── Process Each Parameter ────────────────────────────────────────────────────
+for old_name in "${params[@]}"; do
+  if [[ $old_name != "$SOURCE_PREFIX"* ]]; then
+    echo "⚠️  Skipping: '$old_name' does not start with '$SOURCE_PREFIX'"
+    continue
+  fi
+
+  rel_path=${old_name#"$SOURCE_PREFIX"}
+  new_name="$ARCHIVE_PREFIX$rel_path"
+  echo "⟳ Processing: $old_name → $new_name"
+
+  # ─── Dry-run output ──────────────────────────────────────────────────────────
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "    [DRY RUN] aws ssm get-parameter --name \"$old_name\" --with-decryption --output json | \\"
+    echo "               jq --arg name \"$new_name\" '"
+    echo "                 .Parameter"
+    echo "                 | {Name: \$name,"
+    echo "                    Value: .Value,"
+    echo "                    Type: .Type,"
+    echo "                    Description: (.Description // \"\"),"
+    echo "                    Overwrite: true}"
+    echo "               ' | \\"
+    echo "               aws ssm put-parameter --cli-input-json -"
+    echo "    [DRY RUN] aws ssm delete-parameter --name \"$old_name\""
+    echo
+    continue
+  fi
+
+  # ─── Fetch original JSON, transform with jq, stash it in a variable ─────────
+  JSON_PAYLOAD=$(
+    aws ssm get-parameter \
+      --name "$old_name" \
+      --with-decryption \
+      --output json \
+    | jq --arg name "$new_name" '
+        .Parameter
+        | { Name: $name
+          , Value: .Value
+          , Type: .Type
+          , Description: (.Description // "")
+          , Overwrite: true
+          }
+      '
+  )
+
+  # ─── Put & Delete ────────────────────────────────────────────────────────────
+  aws ssm put-parameter --cli-input-json "$JSON_PAYLOAD" >/dev/null
+  aws ssm delete-parameter --name "$old_name" >/dev/null
+
+  echo "✅  Moved $old_name → $new_name"
+  echo
+done
+
+echo "All done."

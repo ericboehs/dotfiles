@@ -1,0 +1,63 @@
+#!/bin/bash
+# Search VA acronyms database
+# Usage: va-wtf [-a|--all] <search-term>
+
+search_all=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -a|--all) search_all=true; shift ;;
+    -h|--help)
+      echo "Usage: va-wtf [-a|--all] <search-term>"
+      echo "  -a, --all  Search acronyms, definitions, and notes"
+      exit 0 ;;
+    *) term="$1"; shift ;;
+  esac
+done
+
+if [[ -z "$term" ]]; then
+  echo "Usage: va-wtf [-a|--all] <search-term>" >&2
+  exit 1
+fi
+
+if [[ "$search_all" == true ]]; then
+  filter="grep -i \"$term\""
+else
+  lc_term=$(echo "$term" | tr '[:upper:]' '[:lower:]')
+  filter="awk -F',' 'tolower(\$1) ~ /$lc_term/'"
+fi
+
+curl -s https://raw.githubusercontent.com/department-of-veterans-affairs/acronyms/master/acronyms.csv \
+  | eval "$filter" \
+  | awk -F',' -v term="$term" '
+    function highlight(str, pat,    result, lc_str, lc_pat, idx, len) {
+      result = ""
+      lc_pat = tolower(pat)
+      len = length(pat)
+      while ((idx = index(tolower(str), lc_pat)) > 0) {
+        result = result substr(str, 1, idx-1) "\033[43;30m" substr(str, idx, len) "\033[0m"
+        str = substr(str, idx + len)
+      }
+      return result str
+    }
+    {
+      acronym = $1
+      definition = $2
+      notes = $4
+
+      # Remove surrounding quotes from notes if present
+      gsub(/^"/, "", notes)
+      gsub(/"$/, "", notes)
+
+      # Highlight matches
+      acronym = highlight(acronym, term)
+      definition = highlight(definition, term)
+
+      # Print acronym (bold) and definition
+      printf "\033[1m%-10s\033[0m %s\n", acronym, definition
+
+      # Print notes indented on next line if present
+      if (notes != "") {
+        notes = highlight(notes, term)
+        printf "           \033[2m%s\033[0m\n", notes
+      }
+    }'

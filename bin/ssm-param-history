@@ -1,0 +1,286 @@
+#!/usr/bin/env zsh
+
+###############################################################################
+# ssm-param-history
+#
+# Description:
+#   Inspect recently updated AWS SSM parameters under a given base path. Uses a
+#   local twenty-minute cache to avoid redundant API calls. Parameters can be
+#   selected interactively via fzf or printed directly in a clean, sorted list.
+#   Shows complete parameter change history via CloudTrail integration.
+#
+# Features:
+#   - Queries AWS SSM via `get-parameters-by-path` and caches results for 20 minutes
+#   - Automatically refreshes if cache is missing, empty, or expired
+#   - Displays parameters updated within the last N days (--days, default: 7)
+#   - Supports fuzzy selection with fzf (or use --no-fzf for plain output)
+#   - Displays metadata (type, version, last modified date & user)
+#   - Always shows `String` values; optionally shows decrypted `SecureString` values (--decrypt)
+#   - Shows complete parameter change history via CloudTrail events
+#   - Displays timestamp, user, and value for each parameter change
+#   - Gracefully handles missing CloudTrail data with informative messages
+#
+# Usage:
+#   ./ssm-param-history [options] <ssm-path>
+#
+# Options:
+#   --no-fzf         Disable fzf picker (just prints recent params)
+#   --no-cache       Skip cache (force fresh query)
+#   --decrypt        Show decrypted SecureString values
+#   --days=N         Show values modified in the last N days (default: 7)
+#   --help           Show this help message
+#
+# Example:
+#   ./ssm-param-history --decrypt /dsva-vagov/vets-api/prod/
+#
+#
+# Dependencies:
+#   - aws cli
+#   - jq
+#   - fzf (optional)
+#   - gdate
+#
+# On macOS: `brew install awscli session-manager-plugin jq fzf coreutils`
+#
+###############################################################################
+
+set -eo pipefail  # Don't treat unset vars as fatal to allow --help fallback
+
+cleanup_spinner() {
+  tput cnorm
+  [[ -n "$fetch_pid" ]] && kill "$fetch_pid" 2>/dev/null || true
+}
+trap cleanup_spinner INT TERM EXIT
+
+spinner() {
+  local delay=0.1
+  local spin_chars=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+  local total=${#spin_chars[@]}
+  local i=0
+
+  tput civis
+  while ps -p $fetch_pid > /dev/null 2>&1; do
+    local char="${spin_chars[i+1]}"
+    printf "\r\033[2K%-2s Fetching cache for %s..." "$char" "$base_path"
+    i=$(( (i + 1) % total ))
+    sleep $delay
+  done
+
+  wait $fetch_pid 2>/dev/null
+  local exit_code=$?
+
+  tput cnorm
+  if [[ $exit_code -eq 0 ]]; then
+    printf "\r\033[2K✅ Cache refreshed for %s\n" "$base_path"
+  else
+    printf "\r\033[2K❌ Cache failed for %s (exit code $exit_code)\n" "$base_path"
+  fi
+
+  return $exit_code
+}
+
+CACHE_DIR="${HOME}/.cache/ssm-path-picker"
+mkdir -p "$CACHE_DIR"
+
+# --- Default flag values ---
+use_fzf=true
+use_cache=true
+decrypt=false
+days=7
+
+# --- Usage/help ---
+if [[ "$1" == "--help" ]]; then
+  echo "Usage: $(basename $0) [options] <ssm-path>"
+  echo ""
+  echo "Options:"
+  echo "  --no-fzf         Disable fzf picker (prints list instead)"
+  echo "  --no-cache       Skip cache (force fresh fetch)"
+  echo "  --decrypt        Show decrypted parameter values"
+  echo "  --days=N         Look back N days (default: 7)"
+  echo "  --help           Show this help message"
+  exit 0
+fi
+
+# --- Parse flags and path ---
+path_arg=""
+for arg in "$@"; do
+  case $arg in
+    --no-fzf) use_fzf=false ;;
+    --no-cache) use_cache=false ;;
+    --decrypt) decrypt=true ;;
+    --days=*) days=${arg#*=} ;;
+    --*) echo "Unknown option: $arg"; exit 1 ;;
+    *)
+      if [[ -z "$path_arg" ]]; then
+        path_arg="$arg"
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$path_arg" ]]; then
+  echo "❌ No SSM path provided."
+  "$0" --help
+  exit 1
+fi
+
+if command -v gdate >/dev/null 2>&1; then
+  date_cmd="gdate"
+elif date --version 2>&1 | grep -q "GNU coreutils"; then
+  date_cmd="date"
+else
+  echo "❌ Neither 'gdate' nor GNU 'date' found. Please install coreutils."
+  exit 1
+fi
+
+base_path="$path_arg"
+
+# Create a safe cache key (hash or path-safe slug)
+cache_key=$(echo "${base_path}--days=${days}" | base64 | tr -d '=' | tr '/+=' '_-~')
+cache_file="$CACHE_DIR/$cache_key.json"
+
+# Only refresh cache if older than 20 minutes
+if $use_cache; then
+  if [[ ! -s "$cache_file" || $(($($date_cmd +%s) - $($date_cmd -r "$cache_file" +%s))) -gt 1200 ]]; then
+    aws ssm get-parameters-by-path \
+      --path "$base_path" \
+      --recursive \
+      --with-decryption \
+      --output json > "$cache_file" &
+    fetch_pid=$!
+    spinner || exit $?
+  else
+    echo "✅ Using cached results for $base_path"
+  fi
+else
+  echo "🚫 Skipping cache; fetching fresh results"
+  aws ssm get-parameters-by-path \
+    --path "$base_path" \
+    --recursive \
+    --with-decryption \
+    --output json > "$cache_file"
+fi
+
+cutoff_epoch=$($date_cmd -u -d "$days days ago" +%s)
+
+# Get recent parameters
+param_list=$(jq -r --argjson cutoff "$cutoff_epoch" '
+  .Parameters[]
+  | select(.Name and .LastModifiedDate)
+  | .LastModifiedDate as $iso
+  | .Name as $name
+  | ($iso
+      | sub("\\..*"; "")
+      | sub("([-+]\\d+:\\d+)?$"; "Z")
+      | fromdateiso8601
+    ) as $date
+  | select($date >= $cutoff)
+  | [$date | strftime("%Y-%m-%d %H:%M"), $name]
+  | @tsv
+' < "$cache_file" | sort -r)
+
+if $use_fzf; then
+  selection=$(echo "$param_list" | fzf --multi --ansi --prompt="Select SSM parameters: " --header=$'LAST MODIFIED\tNAME')
+  if [[ -z "$selection" ]]; then
+    echo "No selection made."
+    exit 0
+  fi
+  param_names=(${(@f)$(echo "$selection" | cut -f2-)})
+else
+  echo "$param_list"
+  exit 0
+fi
+
+# Show details for selected params
+for name in "${param_names[@]}"; do
+  echo -e "\n\033[1m=== $name ===\033[0m"
+
+  # Get parameter metadata
+  meta_json=$(aws ssm describe-parameters \
+    --parameter-filters Key=Name,Option=Equals,Values="$name" \
+    --output json 2>/dev/null)
+
+  if [[ -z "$meta_json" || "$meta_json" == "{}" || "$meta_json" == *'"Parameters": []'* ]]; then
+    echo "Warning: Unable to retrieve metadata for $name"
+    continue
+  fi
+
+  meta=$(echo "$meta_json" | jq '.Parameters[0] | {Name, Type, Version, LastModifiedDate, LastModifiedUser}')
+  param_type=$(echo "$meta" | jq -r '.Type')
+
+  # Get current value
+  if [[ "$param_type" == "SecureString" && "$decrypt" == true ]]; then
+    current_value=$(aws ssm get-parameter --name "$name" --with-decryption --output json | jq -r '.Parameter.Value')
+  elif [[ "$param_type" == "String" ]]; then
+    current_value=$(aws ssm get-parameter --name "$name" --output json | jq -r '.Parameter.Value')
+  else
+    current_value=""
+  fi
+
+  # Show current metadata
+  if [[ -n "$current_value" ]]; then
+    echo "$meta" | jq --arg val "$current_value" '. + {Value: $val}'
+  else
+    echo "$meta" | jq
+  fi
+
+  # Get parameter history from parameter versions
+  echo -e "\n\033[1;33m📋 Parameter Version History:\033[0m"
+  
+  # Try to get parameter history using get-parameter-history
+  history_json=$(aws ssm get-parameter-history \
+    --name "$name" \
+    --max-results 50 \
+    --output json 2>/dev/null)
+
+  if [[ -n "$history_json" && "$history_json" != "{}" ]]; then
+    # Parse parameter history
+    echo "$history_json" | jq -r --argjson cutoff "$cutoff_epoch" '
+      .Parameters[]
+      | .LastModifiedDate as $iso
+      | ($iso
+          | sub("\\..*"; "")
+          | sub("([-+]\\d+:\\d+)?$"; "Z")
+          | fromdateiso8601
+        ) as $date
+      | select($date >= $cutoff)
+      | [.LastModifiedDate, .LastModifiedUser // "unknown", .Version, .Value // "***"]
+      | @tsv
+    ' | sort -r | while IFS=$'\t' read -r mod_time user_name version param_value; do
+      if [[ "$param_type" == "SecureString" && "$decrypt" == false ]]; then
+        param_value="[SecureString - use --decrypt to view]"
+      fi
+      echo "  📅 $mod_time | 👤 $user_name | 🔢 v$version | 📝 $param_value"
+    done
+  else
+    # Fallback: try CloudTrail if parameter history is not available
+    echo "  ⚠️  Parameter history not available via SSM API"
+    echo "  🔄 Attempting CloudTrail lookup..."
+    
+    start_time=$($date_cmd -u -d "$days days ago" --iso-8601=seconds)
+    
+    cloudtrail_events=$(aws cloudtrail lookup-events \
+      --lookup-attributes AttributeKey=EventName,AttributeValue=PutParameter \
+      --start-time "$start_time" \
+      --output json 2>/dev/null)
+    
+    if [[ -n "$cloudtrail_events" ]]; then
+      echo "$cloudtrail_events" | jq -r '
+        .Events[]
+        | .CloudTrailEvent | fromjson
+        | select(.requestParameters.name == "'$name'")
+        | [.eventTime, .userIdentity.userName // .userIdentity.type, .requestParameters.value // "***"]
+        | @tsv
+      ' | sort -r | while IFS=$'\t' read -r event_time user_name param_value; do
+        if [[ "$param_type" == "SecureString" && "$decrypt" == false ]]; then
+          param_value="[SecureString - use --decrypt to view]"
+        fi
+        echo "  📅 $event_time | 👤 $user_name | 📝 $param_value"
+      done
+    else
+      echo "  ⚠️  No CloudTrail access or history found"
+      echo "  💡 Note: Full parameter history requires CloudTrail access"
+      echo "  💡 Current implementation shows only the latest parameter state"
+    fi
+  fi
+done

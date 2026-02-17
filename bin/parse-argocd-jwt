@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+# Determine grep command
+if command -v ggrep &>/dev/null; then
+  GREP_CMD="ggrep"
+elif grep -P '' <<< "" &>/dev/null; then
+  GREP_CMD="grep"
+else
+  echo "❌ Your grep doesn't support -P. Please install GNU grep (e.g., 'brew install grep')."
+  exit 1
+fi
+
+# Read from stdin
+INPUT=$(cat)
+
+# Extract token parts using grep -P
+TOKEN_PART1=$(echo "$INPUT" | $GREP_CMD -oP 'argocd\.token\s+\K\S+')
+TOKEN_PART2=$(echo "$INPUT" | $GREP_CMD -oP 'argocd\.token-1\s+\K\S+')
+
+if [[ -z "$TOKEN_PART1" || -z "$TOKEN_PART2" ]]; then
+  echo "❌ Could not extract both token parts from input."
+  exit 1
+fi
+
+# Remove ArgoCD version prefix
+TOKEN_PART1="${TOKEN_PART1#2:}"
+
+# Combine JWT
+FULL_JWT="${TOKEN_PART1}${TOKEN_PART2}"
+
+# Handle flags
+case "$1" in
+  --groups)
+    jwt decode "$FULL_JWT" --json 2>/dev/null | jq '.payload.groups'
+    ;;
+  --redacted)
+    jwt decode "$FULL_JWT" --json | jq '{
+      iss: .claims.iss,
+      aud: .claims.aud,
+      exp: .claims.exp,
+      iat: .claims.iat,
+      groups: .claims.groups,
+      name: .claims.name
+    }'
+    ;;
+  *)
+    echo "🔓 Decoded JWT:"
+    jwt decode "$FULL_JWT"
+    ;;
+esac

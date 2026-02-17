@@ -1,0 +1,10 @@
+#!/bin/zsh
+
+eval $(op signin)
+sed -i '' '/export OP_SESSION_my/d' ~/.zshrc.local
+env | grep OP_SESSION_my | sed -e 's/^/export /' >> ~/.zshrc.local
+
+MFA_CODE=$(op item get "Amazon AWS (Oddball)" --otp)
+source ~/Code/department-of-veterans-affairs/devops/utilities/issue_mfa.sh $VA_IAM_USER $MFA_CODE
+sed -i '' '/export AWS_/d' ~/.zshrc.local
+env | grep AWS_ | sed -e 's/^/export /' >> ~/.zshrc.local

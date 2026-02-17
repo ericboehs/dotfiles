@@ -1,0 +1,44 @@
+#! /usr/bin/env ruby
+
+# Eric's Veterans Association Commands
+
+case ARGV[0]
+when 'mfa' # MFAs with Amazon pulling TOTP from 1Password (also stores session keys in ~/.zshrc.local for new shells)
+  require 'pry'; binding.pry
+  system %{
+    eval $(op signin my --cache)
+    sed -i '' '/export OP_SESSION_my/d' ~/.zshrc.local
+    env | grep OP_SESSION_my | sed -e 's/^/export /' >> ~/.zshrc.local
+
+    sed -i '' '/export AWS_/d' ~/.zshrc.local
+    aws sts get-session-token --output text --serial-number arn:aws-us-gov:iam::${VA_AWS_ACCOUNT}:mfa/${VA_IAM_USER} --token-code $(op get totp "Amazon AWS (Oddball)")
+    env | grep AWS_ | sed -e 's/^/export /' >> ~/.zshrc.local
+  }
+when 'ssms' # SSM Search
+  unless ARGV[1]
+    $stderr.puts 'Missing Argument: Please pass search query as second arugment.'
+    $stderr.puts
+    $stderr.puts '    vt ssms <search_query>'
+    $stderr.puts
+    $stderr.puts 'You can also pass `-i` to return the first instance id that matches your query.'
+    $stderr.puts 'You can also pass `-f` to call FZF for picking the instance.'
+    exit 1
+  end
+
+  search_command = %{aws ec2 describe-instances --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`].Value | [0],LaunchTime,PrivateDnsName]' --filters Name=instance-state-name,Values=running --output text | sort -k2 | grep "#{ARGV[1]}"}
+  # search_command = %{aws ec2 describe-instances --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`]| [0].Value,LaunchTime]' --filters Name=instance-state-name,Values=running --output text | sort -k2 | grep "#{ARGV[1]}"}
+  search_command += %{ | head -1 | awk '{print $1}'} if ARGV[2] == '-i'
+  search_command += %{ | fzf | awk '{print $1}'} if ARGV[2] == '-f'
+  system search_command
+when 'ssm'
+  instance_id = ARGV[1]
+  instance_id = %x(vt ssms #{ARGV[1]} #{ARGV[2] == '-f' ? '-f' : '-i'}) unless ARGV[1].start_with? 'i-'
+  ssm_command =  %{aws ssm start-session --target #{instance_id}}
+  puts "Running: #{ssm_command}"
+  Kernel.exec ssm_command, 'vt hi'
+when 'hi'
+  require 'pry'; binding.pry
+else
+  puts 'Sub-command not found.'
+  exit 1
+end

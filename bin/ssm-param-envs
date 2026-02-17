@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+# ssm-param-envs
+
+show_help() {
+  cat <<EOF
+Usage:
+  $0 [--help] [--direct-only] [--exists-only] [--plain] [/param/path …]
+  cat paths.txt | $0 [--help] [--direct-only] [--exists-only] [--plain] -
+
+Flags:
+  --help          show this help message and exit
+  --direct-only   only check the “Direct” variants (skip env_vars paths)
+  --exists-only   only output parameters that exist (status ✅)
+  --plain         only print the parameter names (no status or labels)
+EOF
+  exit 0
+}
+
+# --- parse flags ---
+direct_only=false
+exists_only=false
+plain=false
+
+while [[ "$1" =~ ^- ]]; do
+  case "$1" in
+    --help)        show_help ;;
+    --direct-only) direct_only=true;  shift ;;
+    --exists-only) exists_only=true;  shift ;;
+    --plain)       plain=true;        shift ;;
+    -)             shift; break ;;  # read from stdin
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
+# --- collect input paths ---
+input_paths=()
+if [[ $# -eq 0 ]]; then
+  # no args: read from stdin
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && input_paths+=("$line")
+  done
+else
+  input_paths=("$@")
+fi
+
+if [[ ${#input_paths[@]} -eq 0 ]]; then
+  echo "Error: no parameter paths provided."
+  echo
+  show_help
+fi
+
+# --- env definitions ---
+environments=(dev staging sandbox prod)
+env_pattern="$(IFS='|'; echo "${environments[*]}")"
+escaped_env_pattern="\\/(${env_pattern})\\/"
+
+# --- helper: get status of a parameter name ---
+get_status() {
+  local name="$1"
+  if aws ssm get-parameter --name "$name" --query Parameter.Name --output text &>/dev/null; then
+    echo "✅"
+  else
+    local err
+    err=$(aws ssm get-parameter --name "$name" 2>&1 >/dev/null)
+    if [[ "$err" == *"AccessDeniedException"* || "$err" == *"ExpiredTokenException"* ]]; then
+      echo "❓"
+    else
+      echo "❌"
+    fi
+  fi
+}
+
+# --- main loop ---
+for input_path in "${input_paths[@]}"; do
+  canonical="${input_path//\/env_vars/}"
+
+  for env in "${environments[@]}"; do
+    # build direct & namespaced variants
+    direct_path="$(echo "$canonical" | sed -E "s/${escaped_env_pattern}/\/${env}\//")"
+    namespaced_path="${direct_path//\/${env}\//\/${env}\/env_vars\/}"
+
+    # check direct
+    status=$(get_status "$direct_path")
+    # skip if exists-only and not ✅
+    if [[ "$exists_only" == true && "$status" != "✅" ]]; then
+      :
+    else
+      if [[ "$plain" == true ]]; then
+        echo "$direct_path"
+      else
+        echo "$status  [$env]  $direct_path"
+      fi
+    fi
+
+    # check namespaced only if not direct-only
+    if [[ "$direct_only" == false ]]; then
+      status_ns=$(get_status "$namespaced_path")
+      if [[ "$exists_only" == true && "$status_ns" != "✅" ]]; then
+        :
+      else
+        if [[ "$plain" == true ]]; then
+          echo "$namespaced_path"
+        else
+          echo "$status_ns  [$env]  $namespaced_path"
+        fi
+      fi
+    fi
+  done
+
+  # blank line to separate blocks (only in verbose & non-exists-only mode)
+  if [[ "$exists_only" == false && "$plain" == false ]]; then
+    echo ""
+  fi
+done
