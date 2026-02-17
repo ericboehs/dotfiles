@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INTERVAL="${1:-30}"
+COST_PER_1000=40
+
+while true; do
+  clear
+  day_of_month=$(date +%-d)
+  days_in_month=$(date -v1d -v+1m -v-1d +%-d)
+
+  curl -s http://localhost:4141/usage | jq -r --argjson dom "$day_of_month" --argjson dim "$days_in_month" --argjson rate "$COST_PER_1000" '
+    .quota_snapshots.premium_interactions |
+    (.entitlement - .remaining) as $used |
+    .entitlement as $ent |
+    ($dom / $dim) as $pct_month |
+    ($used / $pct_month | round) as $projected |
+
+    def fmt_cost: tostring | split(".") |
+      if length == 1 then .[0] + ".00"
+      elif (.[1] | length) == 1 then .[0] + "." + .[1] + "0"
+      else join(".") end;
+
+    def overage_cost(n): ([(n - $ent), 0] | max) / 1000 * $rate * 100 | round / 100;
+
+    ($used | round | tostring) + "/" + ($ent | tostring) +
+    (if .remaining < 0 then
+      " ($" + (overage_cost($used) | fmt_cost) + " overage)"
+    else "" end) +
+    "\nProjected: " + ($projected | tostring) + "/" + ($ent | tostring) +
+    " ($" + (overage_cost($projected) | fmt_cost) + " est. cost)" +
+    "\nMonth: " + ($dom | tostring) + "/" + ($dim | tostring) + " days (" + (($pct_month * 100 | round | tostring)) + "%)"
+  '
+  sleep "$INTERVAL"
+done

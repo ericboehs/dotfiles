@@ -1,0 +1,334 @@
+#!/bin/bash
+# llama-serve: Switch between different llama.cpp models
+# Usage: llama-serve start [--model MODEL] | list | status | stop | restart
+
+set -e
+
+# Source XDG environment
+source ~/.config/llama.cpp/xdg-env.sh
+
+MODELS_CONF="$LLAMA_CONFIG_DIR/models.conf"
+PID_FILE="$LLAMA_STATE_DIR/server.pid"
+MODEL_FILE="$LLAMA_STATE_DIR/current-model"
+LOG_DIR="$LLAMA_STATE_DIR/logs"
+
+# Create log directory
+mkdir -p "$LOG_DIR"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Server configuration
+HOST="127.0.0.1"
+PORT="11434"
+THREADS=8
+THREADS_BATCH=10
+BATCH_SIZE=2048
+UBATCH_SIZE=512
+GPU_LAYERS=-1
+PARALLEL_SLOTS=4
+FLASH_ATTN="on"
+CACHE_TYPE_K="f16"
+CACHE_TYPE_V="f16"
+SLOT_SIMILARITY=0.3
+CACHE_REUSE=2048
+
+usage() {
+    echo "Usage: llama-serve <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  start [--model MODEL]  Start/switch to specified model (default: nemotron)"
+    echo "  list                   List available models"
+    echo "  status                 Show current server status"
+    echo "  stop                   Stop the server"
+    echo "  restart [--model MODEL] Restart server with model (or current model)"
+    echo ""
+    echo "Available models:"
+    while IFS='|' read -r name file ctx desc; do
+        [[ -z "$name" || "$name" =~ ^# ]] && continue
+        printf "  %-15s %s\n" "$name" "$desc"
+    done < "$MODELS_CONF"
+    echo ""
+    echo "Caching:"
+    echo "  Prompt cache similarity threshold: 0.3 (aggressive reuse)"
+    echo "  Cache reuse chunk size: 2048 tokens"
+    echo "  Slot cache persisted to: $LLAMA_CACHE_DIR/slots"
+    echo ""
+    echo "Logging:"
+    echo "  Logs location: $LOG_DIR"
+    echo "  View logs: tail -f $LOG_DIR/llama-server-error.log"
+    echo ""
+    echo "Examples:"
+    echo "  llama-serve start                    # Start with Nemotron (default)"
+    echo "  llama-serve start --model qwen3-coder # Start with Qwen3-Coder"
+    echo "  llama-serve start --model deepseek    # Start with DeepSeek"
+    echo "  llama-serve list                      # List all models"
+    echo "  llama-serve status                    # Check server status"
+    echo "  llama-serve stop                      # Stop server"
+}
+
+list_models() {
+    echo -e "${BLUE}Available Models:${NC}"
+    echo ""
+    while IFS='|' read -r name file ctx desc; do
+        [[ -z "$name" || "$name" =~ ^# ]] && continue
+        printf "${GREEN}%-15s${NC} [%5sk ctx] %s\n" "$name" "$((ctx/1024))" "$desc"
+        printf "                File: %s\n" "$file"
+        echo ""
+    done < "$MODELS_CONF"
+}
+
+get_current_model() {
+    if [[ -f "$MODEL_FILE" ]]; then
+        cat "$MODEL_FILE"
+    else
+        echo "none"
+    fi
+}
+
+is_server_running() {
+    if [[ -f "$PID_FILE" ]]; then
+        local pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+server_status() {
+    echo -e "${BLUE}Server Status:${NC}"
+
+    if is_server_running; then
+        local pid=$(cat "$PID_FILE")
+        echo -e "Process:     ${GREEN}running${NC} (PID: $pid)"
+
+        # Check if actually responding
+        if curl -s -f http://$HOST:$PORT/health > /dev/null 2>&1 || \
+           curl -s -f http://$HOST:$PORT/v1/models > /dev/null 2>&1; then
+            echo -e "Server:      ${GREEN}responding${NC}"
+            echo -e "Endpoint:    http://$HOST:$PORT"
+
+            # Get model info
+            MODEL_INFO=$(curl -s http://$HOST:$PORT/v1/models 2>/dev/null | jq -r '.data[0].id' 2>/dev/null || echo "unknown")
+            echo -e "Model:       $MODEL_INFO"
+
+            # Get context size
+            CTX_SIZE=$(curl -s http://$HOST:$PORT/props 2>/dev/null | jq -r '.default_generation_settings.n_ctx' 2>/dev/null || echo "unknown")
+            echo -e "Context:     $CTX_SIZE tokens"
+        else
+            echo -e "Server:      ${YELLOW}starting up...${NC}"
+        fi
+
+        # Show current model from state file
+        local current=$(get_current_model)
+        if [[ "$current" != "none" ]]; then
+            echo -e "Config:      $current"
+        fi
+    else
+        echo -e "Process:     ${RED}not running${NC}"
+        echo -e "Server:      ${RED}stopped${NC}"
+    fi
+
+    echo ""
+    echo "Logs:"
+    echo "  stdout: $LOG_DIR/llama-server.log"
+    echo "  stderr: $LOG_DIR/llama-server-error.log"
+}
+
+stop_server() {
+    echo "Stopping llama.cpp server..."
+
+    if is_server_running; then
+        local pid=$(cat "$PID_FILE")
+        kill "$pid" 2>/dev/null || true
+
+        # Wait for process to die
+        local count=0
+        while ps -p "$pid" > /dev/null 2>&1 && [ $count -lt 10 ]; do
+            sleep 1
+            ((count++))
+        done
+
+        # Force kill if still running
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "Process didn't stop gracefully, force killing..."
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+
+        rm -f "$PID_FILE"
+        echo -e "${GREEN}Server stopped${NC}"
+    else
+        rm -f "$PID_FILE"  # Clean up stale PID file
+        echo "Server not running"
+    fi
+}
+
+start_model() {
+    local model_name=$1
+    local model_file=""
+    local ctx_size=""
+    local desc=""
+
+    # Find model in config
+    while IFS='|' read -r name file ctx description; do
+        [[ -z "$name" || "$name" =~ ^# ]] && continue
+        if [[ "$name" == "$model_name" ]]; then
+            model_file="$file"
+            ctx_size="$ctx"
+            desc="$description"
+            break
+        fi
+    done < "$MODELS_CONF"
+
+    if [[ -z "$model_file" ]]; then
+        echo -e "${RED}Error: Model '$model_name' not found${NC}"
+        echo ""
+        echo "Available models:"
+        list_models
+        exit 1
+    fi
+
+    # Check if model file exists
+    if [[ ! -f "$LLAMA_MODEL_DIR/$model_file" ]]; then
+        echo -e "${RED}Error: Model file not found${NC}"
+        echo "Expected: $LLAMA_MODEL_DIR/$model_file"
+        echo ""
+        echo "Download it first or check your models.conf configuration"
+        exit 1
+    fi
+
+    echo -e "${BLUE}Starting llama.cpp server with:${NC}"
+    echo "  Model:   $model_name"
+    echo "  Desc:    $desc"
+    echo "  File:    $model_file"
+    echo "  Context: $ctx_size tokens"
+    echo ""
+
+    # Stop existing server
+    if is_server_running; then
+        echo "Stopping existing server..."
+        stop_server
+        sleep 2
+    fi
+
+    # Start server in background
+    nohup llama-server \
+        --model "$LLAMA_MODEL_DIR/$model_file" \
+        --host "$HOST" \
+        --port "$PORT" \
+        --ctx-size "$ctx_size" \
+        --cont-batching \
+        --kv-unified \
+        --threads "$THREADS" \
+        --threads-batch "$THREADS_BATCH" \
+        --batch-size "$BATCH_SIZE" \
+        --ubatch-size "$UBATCH_SIZE" \
+        --gpu-layers "$GPU_LAYERS" \
+        --parallel "$PARALLEL_SLOTS" \
+        --flash-attn "$FLASH_ATTN" \
+        --cache-type-k "$CACHE_TYPE_K" \
+        --cache-type-v "$CACHE_TYPE_V" \
+        --slot-prompt-similarity "$SLOT_SIMILARITY" \
+        --cache-reuse "$CACHE_REUSE" \
+        --slot-save-path "$LLAMA_CACHE_DIR/slots" \
+        --metrics \
+        --reasoning-format none \
+        --chat-template-kwargs '{"enable_thinking":false}' \
+        -v \
+        > "$LOG_DIR/llama-server.log" \
+        2> "$LOG_DIR/llama-server-error.log" &
+
+    # Save PID and model name
+    echo $! > "$PID_FILE"
+    echo "$model_name" > "$MODEL_FILE"
+
+    echo -e "${GREEN}Server started in background${NC}"
+    echo -e "  PID: $(cat "$PID_FILE")"
+    echo -e "  Endpoint: http://$HOST:$PORT"
+    echo ""
+    echo "Waiting for server to start..."
+    sleep 5
+
+    # Verify server started
+    local retries=0
+    while [ $retries -lt 10 ]; do
+        if curl -s -f http://$HOST:$PORT/v1/models > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ Server started successfully${NC}"
+            echo ""
+            echo "Logs:"
+            echo "  stdout: $LOG_DIR/llama-server.log"
+            echo "  stderr: $LOG_DIR/llama-server-error.log"
+            return 0
+        fi
+        sleep 2
+        ((retries++))
+    done
+
+    echo -e "${YELLOW}⚠ Server may still be loading...${NC}"
+    echo "Check logs for status:"
+    echo "  tail -f $LOG_DIR/llama-server-error.log"
+}
+
+# Main command handling
+case "${1:-}" in
+    start)
+        # Parse --model flag, default to nemotron
+        model="nemotron"
+        shift
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --model)
+                    model="$2"
+                    shift 2
+                    ;;
+                *)
+                    echo -e "${RED}Error: Unknown option '$1'${NC}"
+                    echo ""
+                    usage
+                    exit 1
+                    ;;
+            esac
+        done
+        start_model "$model"
+        ;;
+    list)
+        list_models
+        ;;
+    status)
+        server_status
+        ;;
+    stop)
+        stop_server
+        ;;
+    restart)
+        # Parse --model flag, or restart current model
+        shift
+        if [[ "$1" == "--model" ]]; then
+            start_model "$2"
+        else
+            current=$(get_current_model)
+            if [[ "$current" != "none" ]]; then
+                echo "Restarting server with $current..."
+                start_model "$current"
+            else
+                echo -e "${RED}No server currently running${NC}"
+                echo "Use: llama-serve start [--model MODEL]"
+                exit 1
+            fi
+        fi
+        ;;
+    ""|help|-h|--help)
+        usage
+        ;;
+    *)
+        echo -e "${RED}Error: Unknown command '$1'${NC}"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac

@@ -1,0 +1,50 @@
+#!/bin/bash
+# Check Cerebras API usage limits
+
+# Get API key from 1Password if not set
+if [ -z "$CEREBRAS_API_KEY" ]; then
+  CEREBRAS_API_KEY=$(op item get "cerebras.ai" --fields "label=API Key (Cerebras Code)" --reveal 2>/dev/null)
+fi
+
+if [ -z "$CEREBRAS_API_KEY" ]; then
+  echo "Error: CEREBRAS_API_KEY not set and not found in 1Password"
+  exit 1
+fi
+
+tmpfile=$(mktemp)
+curl -sS -D "$tmpfile" --max-time 30 'https://api.cerebras.ai/v1/chat/completions' \
+  -H "Authorization: Bearer $CEREBRAS_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"zai-glm-4.6","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
+  -o /dev/null 2>/dev/null
+response=$(cat "$tmpfile")
+rm -f "$tmpfile"
+
+# Parse remaining values from headers
+req_day_remaining=$(echo "$response" | grep -i 'x-ratelimit-remaining-requests-day' | cut -d' ' -f2 | tr -d '\r')
+req_hour_remaining=$(echo "$response" | grep -i 'x-ratelimit-remaining-requests-hour' | cut -d' ' -f2 | tr -d '\r')
+req_min_remaining=$(echo "$response" | grep -i 'x-ratelimit-remaining-requests-minute' | cut -d' ' -f2 | tr -d '\r')
+tok_day_remaining=$(echo "$response" | grep -i 'x-ratelimit-remaining-tokens-day' | cut -d' ' -f2 | tr -d '\r')
+tok_min_remaining=$(echo "$response" | grep -i 'x-ratelimit-remaining-tokens-minute' | cut -d' ' -f2 | tr -d '\r')
+
+if [ -z "$req_day_remaining" ]; then
+  echo "Error: Could not fetch rate limit headers"
+  echo "$response"
+  exit 1
+fi
+
+# Code Pro limits
+REQ_DAY_LIMIT=72000
+TOK_DAY_LIMIT=24000000
+
+req_day_used=$((REQ_DAY_LIMIT - req_day_remaining))
+req_day_pct=$((req_day_used * 100 / REQ_DAY_LIMIT))
+tok_day_used=$((TOK_DAY_LIMIT - tok_day_remaining))
+tok_day_pct=$((tok_day_used * 100 / TOK_DAY_LIMIT))
+
+echo "📊 Cerebras Usage (GLM 4.6 - Code Pro)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf "Daily Requests: %'d / %'d (%d%% used)\n" "$req_day_used" "$REQ_DAY_LIMIT" "$req_day_pct"
+printf "Daily Tokens:   %'d / %'d (%d%% used)\n" "$tok_day_used" "$TOK_DAY_LIMIT" "$tok_day_pct"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf "Remaining: %'d req/min, %'d req/hr, %'d tok/min\n" "$req_min_remaining" "$req_hour_remaining" "$tok_min_remaining"

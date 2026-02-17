@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+#
+# Lightweight Devin CLI in Bash
+#
+# Usage:
+#   devin new "<prompt>"
+#   devin message <session_id> "<text>"
+#   devin list [--all]
+#
+
+set -e
+
+# Check for DEVIN_API_KEY
+if [ -z "$DEVIN_API_KEY" ]; then
+  echo "⚠️  Please set DEVIN_API_KEY in your environment." >&2
+  exit 1
+fi
+
+# Base URL and headers
+BASE_URL="https://api.devin.ai/v1"
+AUTH_HEADER="Authorization: Bearer $DEVIN_API_KEY"
+CONTENT_HEADER="Content-Type: application/json"
+
+cmd="$1"; shift || true
+
+case "$cmd" in
+  new)
+    # devin new "<prompt>"
+    prompt="$*"
+    if [ -z "$prompt" ]; then
+      echo "Usage: devin new \"<prompt>\"" >&2
+      exit 1
+    fi
+
+    # Safely build JSON payload via jq
+    payload=$(jq -n --arg p "$prompt" '{prompt: $p}')
+
+    # POST /sessions
+    resp=$(curl -s -H "$AUTH_HEADER" -H "$CONTENT_HEADER" -d "$payload" "$BASE_URL/sessions")
+
+    # Extract and print the URL
+    url=$(echo "$resp" | jq -r .url)
+    echo "$url"
+    ;;
+
+  message)
+    # devin message [<session_id>] "<text>"
+    
+    # Check if first argument looks like a session ID (starts with "devin-")
+    if [[ "$1" =~ ^devin- ]]; then
+      sid="$1"
+      shift
+      message_text="$*"
+    else
+      sid=""
+      message_text="$*"
+    fi
+    
+    if [ -z "$message_text" ]; then
+      echo "Usage: devin message [<session_id>] \"<text>\"" >&2
+      exit 1
+    fi
+    
+    # Auto-select session if not provided
+    if [ -z "$sid" ]; then
+      # Get running sessions first
+      resp=$(curl -s -H "$AUTH_HEADER" "$BASE_URL/sessions")
+      running_sessions=$(echo "$resp" | jq -r '.sessions[] | select(.status == "running") | "\(.session_id)\t\(.status)\t\(.title)"')
+      
+      if [ -z "$running_sessions" ]; then
+        # No running sessions, get all sessions
+        all_sessions=$(echo "$resp" | jq -r '.sessions[] | "\(.session_id)\t\(.status)\t\(.title)"')
+        if [ -z "$all_sessions" ]; then
+          echo "❌  No sessions found" >&2
+          exit 1
+        fi
+        
+        session_count=$(echo "$all_sessions" | wc -l)
+        if [ "$session_count" -eq 1 ]; then
+          sid=$(echo "$all_sessions" | cut -f1)
+        else
+          if ! command -v fzf >/dev/null 2>&1; then
+            echo "❌  Multiple sessions found. Please install fzf or provide a session_id explicitly:" >&2
+            echo "   brew install fzf  # or your package manager" >&2
+            echo "   devin message <session_id> \"<text>\"" >&2
+            exit 1
+          fi
+          echo "📋  No running sessions. Select from all sessions:"
+          selected=$(echo "$all_sessions" | fzf --with-nth=2,3 --delimiter='\t' | cut -f1)
+          if [ -z "$selected" ]; then
+            echo "❌  No session selected" >&2
+            exit 1
+          fi
+          sid="$selected"
+        fi
+      else
+        session_count=$(echo "$running_sessions" | wc -l)
+        if [ "$session_count" -eq 1 ]; then
+          sid=$(echo "$running_sessions" | cut -f1)
+        else
+          if ! command -v fzf >/dev/null 2>&1; then
+            echo "❌  Multiple running sessions found. Please install fzf or provide a session_id explicitly:" >&2
+            echo "   brew install fzf  # or your package manager" >&2
+            echo "   devin message <session_id> \"<text>\"" >&2
+            exit 1
+          fi
+          echo "🏃  Select running session:"
+          selected=$(echo "$running_sessions" | fzf --with-nth=2,3 --delimiter='\t' | cut -f1)
+          if [ -z "$selected" ]; then
+            echo "❌  No session selected" >&2
+            exit 1
+          fi
+          sid="$selected"
+        fi
+      fi
+    fi
+
+    # Safely build JSON payload via jq
+    payload=$(jq -n --arg m "$message_text" '{message: $m}')
+
+    # POST /session/{id}/message
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X POST \
+      -H "$AUTH_HEADER" -H "$CONTENT_HEADER" \
+      -d "$payload" \
+      "$BASE_URL/session/$sid/message")
+
+    if [[ "$http_code" =~ ^2 ]]; then
+      echo "✅  message sent"
+    else
+      echo "❌  HTTP $http_code" >&2
+      exit 1
+    fi
+    ;;
+
+  view)
+    # devin view [<session_id>] [--tail [n]] [--follow]
+    tail_count=""
+    session_id=""
+    follow_mode=false
+    
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --tail)
+          if [[ "$2" =~ ^[0-9]+$ ]]; then
+            tail_count="$2"
+            shift 2
+          else
+            tail_count="10"
+            shift
+          fi
+          ;;
+        --follow|-f)
+          follow_mode=true
+          # If --follow is used without --tail, default to showing last 10
+          if [ -z "$tail_count" ]; then
+            tail_count="10"
+          fi
+          shift
+          ;;
+        *)
+          if [[ "$1" =~ ^devin- ]]; then
+            session_id="$1"
+          else
+            echo "❌  Invalid session ID: $1" >&2
+            echo "Usage: devin view [<session_id>] [--tail [n]] [--follow]" >&2
+            exit 1
+          fi
+          shift
+          ;;
+      esac
+    done
+    
+    # Auto-select session if not provided (optimized for view command)
+    if [ -z "$session_id" ]; then
+      echo "🔍  Fetching recent sessions..." >&2
+      resp=$(curl -s --max-time 5 -H "$AUTH_HEADER" "$BASE_URL/sessions?limit=20")
+      if [ $? -ne 0 ]; then
+        echo "❌  Failed to fetch sessions (timeout or network error)" >&2
+        echo "💡  Try specifying a session ID explicitly: devin view <session_id>" >&2
+        exit 1
+      fi
+      running_sessions=$(echo "$resp" | jq -r '.sessions[] | select(.status == "running") | "\(.session_id)\t\(.status)\t\(.title)"')
+      
+      if [ -z "$running_sessions" ]; then
+        all_sessions=$(echo "$resp" | jq -r '.sessions[] | "\(.session_id)\t\(.status)\t\(.title)"')
+        if [ -z "$all_sessions" ]; then
+          echo "❌  No sessions found" >&2
+          exit 1
+        fi
+        
+        session_count=$(echo "$all_sessions" | wc -l)
+        if [ "$session_count" -eq 1 ]; then
+          session_id=$(echo "$all_sessions" | cut -f1)
+        else
+          if ! command -v fzf >/dev/null 2>&1; then
+            echo "❌  Multiple sessions found. Please install fzf or provide a session_id explicitly:" >&2
+            echo "   brew install fzf  # or your package manager" >&2
+            echo "   devin view <session_id> [--tail [n]]" >&2
+            exit 1
+          fi
+          echo "📋  No running sessions. Select from all sessions:"
+          selected=$(echo "$all_sessions" | fzf --with-nth=2,3 --delimiter='\t' | cut -f1)
+          if [ -z "$selected" ]; then
+            echo "❌  No session selected" >&2
+            exit 1
+          fi
+          session_id="$selected"
+        fi
+      else
+        session_count=$(echo "$running_sessions" | wc -l)
+        if [ "$session_count" -eq 1 ]; then
+          session_id=$(echo "$running_sessions" | cut -f1)
+        else
+          if ! command -v fzf >/dev/null 2>&1; then
+            echo "❌  Multiple running sessions found. Please install fzf or provide a session_id explicitly:" >&2
+            echo "   brew install fzf  # or your package manager" >&2
+            echo "   devin view <session_id> [--tail [n]]" >&2
+            exit 1
+          fi
+          echo "🏃  Select running session:"
+          selected=$(echo "$running_sessions" | fzf --with-nth=2,3 --delimiter='\t' | cut -f1)
+          if [ -z "$selected" ]; then
+            echo "❌  No session selected" >&2
+            exit 1
+          fi
+          session_id="$selected"
+        fi
+      fi
+    fi
+    
+    # GET /session/{id}
+    session_resp=$(curl -s -H "$AUTH_HEADER" "$BASE_URL/session/$session_id")
+    
+    # Check if response is valid JSON
+    if ! echo "$session_resp" | jq . >/dev/null 2>&1; then
+      echo "❌  API Error: $session_resp" >&2
+      exit 1
+    fi
+    
+    # Function to display session info and messages
+    display_session() {
+      local session_data="$1"
+      local is_update="$2"
+      
+      if [ "$is_update" != "true" ]; then
+        echo "📋  Session: $(echo "$session_data" | jq -r .title)"
+        echo "🔗  Status: $(echo "$session_data" | jq -r .status)"
+        if [ "$(echo "$session_data" | jq -r '.pull_request.url // empty')" != "" ]; then
+          echo "🔗  PR: $(echo "$session_data" | jq -r .pull_request.url)"
+        fi
+        echo ""
+      fi
+      
+      # Extract and display messages
+      if [ -n "$tail_count" ]; then
+        # Show only last n messages
+        echo "$session_data" | jq -r ".messages | .[-$tail_count:] | .[] | \"\(.timestamp | split(\"T\")[1] | split(\":\")[0:2] | join(\":\")) [\(if (.type == \"user_message\" or .type == \"initial_user_message\") then \"👤 \" + (.username // \"User\") else \"🤖 Devin\" end)] \(.message)\""
+      else
+        # Show all messages
+        echo "$session_data" | jq -r '.messages[] | "\(.timestamp | split("T")[1] | split(":")[0:2] | join(":")) [\(if (.type == "user_message" or .type == "initial_user_message") then "👤 " + (.username // "User") else "🤖 Devin" end)] \(.message)"'
+      fi
+    }
+    
+    # Display initial session info and messages
+    display_session "$session_resp" false
+    
+    # Follow mode: continuously poll for new messages
+    if [ "$follow_mode" = true ]; then
+      echo ""
+      echo "👀  Following session (Ctrl+C to stop)..."
+      last_message_count=$(echo "$session_resp" | jq '.messages | length')
+      
+      while true; do
+        sleep 3
+        new_session_resp=$(curl -s --max-time 5 -H "$AUTH_HEADER" "$BASE_URL/session/$session_id" 2>/dev/null)
+        
+        if [ $? -eq 0 ] && echo "$new_session_resp" | jq . >/dev/null 2>&1; then
+          new_message_count=$(echo "$new_session_resp" | jq '.messages | length')
+          
+          if [ "$new_message_count" -gt "$last_message_count" ]; then
+            # New messages found, show only the new ones
+            messages_to_show=$((new_message_count - last_message_count))
+            echo "$new_session_resp" | jq -r ".messages | .[-$messages_to_show:] | .[] | \"\(.timestamp | split(\"T\")[1] | split(\":\")[0:2] | join(\":\")) [\(if (.type == \"user_message\" or .type == \"initial_user_message\") then \"👤 \" + (.username // \"User\") else \"🤖 Devin\" end)] \(.message)\""
+            last_message_count="$new_message_count"
+          fi
+        fi
+      done
+    fi
+    ;;
+
+  list)
+    # devin list [--all]
+    show_all=false
+    if [ "$1" == "--all" ]; then
+      show_all=true
+    fi
+
+    # GET /sessions
+    resp=$(curl -s -H "$AUTH_HEADER" "$BASE_URL/sessions")
+
+    # Check if response is valid JSON
+    if ! echo "$resp" | jq . >/dev/null 2>&1; then
+      echo "❌  API Error: $resp" >&2
+      exit 1
+    fi
+
+    if [ "$show_all" = true ]; then
+      # Print every session
+      echo "$resp" | jq -r '.sessions[] | "\(.session_id)\t\(.status)\t\(.title)"'
+    else
+      # Only show running sessions
+      echo "$resp" | jq -r '.sessions[] | select(.status == "running") | "\(.session_id)\t\(.status)\t\(.title)"'
+    fi
+    ;;
+
+  *)
+    echo "Usage: devin {new \"<prompt>\" | message [<session_id>] \"<text>\" | view [<session_id>] [--tail [n]] [--follow] | list [--all]}" >&2
+    exit 1
+    ;;
+esac

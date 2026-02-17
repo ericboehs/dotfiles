@@ -1,0 +1,271 @@
+#!/bin/bash
+#
+# ollama-search - Search and explore Ollama models
+#
+# Usage:
+#   ollama-search              # List featured models
+#   ollama-search <query>      # Search models by name
+#   ollama-search -i <model>   # Show model info/details
+#   ollama-search -p <model>   # Pull/download a model
+#
+
+set -euo pipefail
+
+OLLAMA_API="https://ollama.com/api/tags"
+OLLAMA_LOCAL="http://localhost:11434"
+
+# Colors
+BOLD='\033[1m'
+DIM='\033[2m'
+CYAN='\033[36m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RESET='\033[0m'
+
+usage() {
+    echo "Usage: ollama-search [OPTIONS] [QUERY]"
+    echo ""
+    echo "Search and explore Ollama models from the command line."
+    echo ""
+    echo "Options:"
+    echo "  -i, --info <model>    Show detailed info about a model"
+    echo "  -t, --tags <model>    List available tags/versions for a model"
+    echo "  -p, --pull <model>    Pull/download a model"
+    echo "  -l, --local           List locally installed models"
+    echo "  -r, --running         Show currently running models"
+    echo "  -f, --featured        List featured/trending models"
+    echo "  -h, --help            Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  ollama-search llama           # Search for 'llama' models"
+    echo "  ollama-search -i llama3.2     # Show info about llama3.2"
+    echo "  ollama-search -t qwen2.5      # List available tags for qwen2.5"
+    echo "  ollama-search -p mistral      # Download mistral"
+}
+
+format_size() {
+    local bytes=$1
+    if [[ $bytes -ge 1000000000000 ]]; then
+        echo "$(( bytes / 1000000000000 ))TB"
+    elif [[ $bytes -ge 1000000000 ]]; then
+        echo "$(( bytes / 1000000000 ))GB"
+    elif [[ $bytes -ge 1000000 ]]; then
+        echo "$(( bytes / 1000000 ))MB"
+    else
+        echo "${bytes}B"
+    fi
+}
+
+search_models() {
+    local query="$1"
+
+    echo -e "${BOLD}Searching Ollama library for: ${CYAN}$query${RESET}\n"
+
+    local results
+    results=$(curl -s "https://ollama.com/search?q=${query}" | \
+        grep -o 'href="/library/[^"]*' | \
+        sed 's|href="/library/||' | \
+        sort -u)
+
+    if [[ -z "$results" ]]; then
+        echo -e "${YELLOW}No models found matching '$query'${RESET}"
+        return 1
+    fi
+
+    echo "$results" | while read -r model; do
+        # Check if installed locally
+        local installed=""
+        if curl -s "$OLLAMA_LOCAL/api/tags" 2>/dev/null | jq -e --arg m "$model" '.models[] | select(.name | startswith($m))' > /dev/null 2>&1; then
+            installed=" ${GREEN}[installed]${RESET}"
+        fi
+        echo -e "  ${GREEN}${model}${RESET}${installed}"
+    done
+
+    echo -e "\n${DIM}Use 'ollama-search -i <model>' for details${RESET}"
+}
+
+list_featured() {
+    echo -e "${BOLD}Featured/Trending models:${RESET}\n"
+
+    curl -s "$OLLAMA_API" | jq -r '
+        .models[] |
+        "\(.name)\t\(.size)\t\(.modified_at)"
+    ' | while IFS=$'\t' read -r name size modified; do
+        printf "  ${GREEN}%-35s${RESET} ${YELLOW}%8s${RESET}  ${DIM}%s${RESET}\n" \
+            "$name" "$(format_size "$size")" "${modified:0:10}"
+    done
+}
+
+show_info() {
+    local model="$1"
+
+    echo -e "${BOLD}Model: ${CYAN}$model${RESET}\n"
+
+    # Check if installed locally first
+    if curl -s "$OLLAMA_LOCAL/api/tags" 2>/dev/null | jq -e --arg m "$model" '.models[] | select(.name | startswith($m))' > /dev/null 2>&1; then
+        echo -e "${GREEN}[Installed locally]${RESET}\n"
+
+        echo -e "${BOLD}Local Details:${RESET}"
+        curl -s "$OLLAMA_LOCAL/api/show" -d "{\"name\": \"$model\"}" 2>/dev/null | jq -r '
+            "  Parameters:   \(.details.parameter_size // "N/A")",
+            "  Quantization: \(.details.quantization_level // "N/A")",
+            "  Family:       \(.details.family // "N/A")",
+            "  Format:       \(.details.format // "N/A")"
+        ' 2>/dev/null || echo "  Could not fetch local details"
+        echo ""
+    else
+        echo -e "${DIM}[Not installed locally]${RESET}\n"
+    fi
+
+    # Scrape model page for description
+    echo -e "${BOLD}Fetching from ollama.com...${RESET}"
+    local page
+    page=$(curl -s "https://ollama.com/library/$model" 2>/dev/null)
+
+    if [[ -z "$page" ]] || echo "$page" | grep -q "Page not found"; then
+        echo -e "${YELLOW}Model not found in registry${RESET}"
+        return 1
+    fi
+
+    # Extract description
+    local desc
+    desc=$(echo "$page" | grep -o '<meta name="description" content="[^"]*' | sed 's/<meta name="description" content="//' | head -1)
+    if [[ -n "$desc" ]]; then
+        echo -e "\n${BOLD}Description:${RESET}"
+        echo -e "  $desc"
+    fi
+
+    # Extract tags from page
+    echo -e "\n${BOLD}Available Tags:${RESET}"
+    echo "$page" | grep -o 'href="/library/'"$model"':[^"]*' | \
+        sed 's|href="/library/||' | \
+        sort -u | \
+        head -15 | \
+        while read -r tag; do
+            echo -e "  ${CYAN}$tag${RESET}"
+        done
+
+    echo -e "\n${DIM}Pull with: ollama pull $model${RESET}"
+    echo -e "${DIM}More info: https://ollama.com/library/$model${RESET}"
+}
+
+list_tags() {
+    local model="$1"
+
+    echo -e "${BOLD}Available tags for ${CYAN}$model${RESET}:\n"
+
+    local page
+    page=$(curl -s "https://ollama.com/library/$model" 2>/dev/null)
+
+    if [[ -z "$page" ]] || echo "$page" | grep -q "Page not found"; then
+        echo -e "${YELLOW}Model not found in registry${RESET}"
+        return 1
+    fi
+
+    echo "$page" | grep -o 'href="/library/'"$model"':[^"]*' | \
+        sed 's|href="/library/||' | \
+        sort -u | \
+        while read -r tag; do
+            # Check if this tag is installed locally
+            local installed=""
+            if curl -s "$OLLAMA_LOCAL/api/tags" 2>/dev/null | jq -e --arg t "$tag" '.models[] | select(.name == $t)' > /dev/null 2>&1; then
+                installed=" ${GREEN}[installed]${RESET}"
+            fi
+            echo -e "  ${CYAN}$tag${RESET}${installed}"
+        done
+
+    echo -e "\n${DIM}Pull with: ollama pull $model:<tag>${RESET}"
+}
+
+list_local() {
+    echo -e "${BOLD}Locally installed models:${RESET}\n"
+
+    local result
+    result=$(curl -s "$OLLAMA_LOCAL/api/tags" 2>/dev/null)
+
+    if [[ -z "$result" ]] || ! echo "$result" | jq -e '.models' > /dev/null 2>&1; then
+        echo -e "${YELLOW}Could not connect to Ollama. Is it running?${RESET}"
+        echo -e "${DIM}Start with: brew services start ollama${RESET}"
+        return 1
+    fi
+
+    echo "$result" | jq -r '
+        .models[] |
+        "\(.name)\t\(.size)\t\(.details.parameter_size // "?")\t\(.details.quantization_level // "?")"
+    ' | while IFS=$'\t' read -r name size params quant; do
+        printf "  ${GREEN}%-35s${RESET} ${YELLOW}%8s${RESET}  ${CYAN}%-10s${RESET}  ${DIM}%s${RESET}\n" \
+            "$name" "$(format_size "$size")" "$params" "$quant"
+    done
+}
+
+show_running() {
+    echo -e "${BOLD}Currently running models:${RESET}\n"
+
+    local result
+    result=$(curl -s "$OLLAMA_LOCAL/api/ps" 2>/dev/null)
+
+    if [[ -z "$result" ]]; then
+        echo -e "${YELLOW}Could not connect to Ollama. Is it running?${RESET}"
+        return 1
+    fi
+
+    local count
+    count=$(echo "$result" | jq -r '.models | length' 2>/dev/null)
+
+    if [[ "$count" == "0" ]] || [[ -z "$count" ]]; then
+        echo -e "${DIM}No models currently running${RESET}"
+        return 0
+    fi
+
+    echo "$result" | jq -r '
+        .models[] |
+        "  \(.name) - \(.size / 1000000000 | floor)GB VRAM"
+    '
+}
+
+pull_model() {
+    local model="$1"
+    echo -e "${BOLD}Pulling ${CYAN}$model${RESET}...\n"
+    ollama pull "$model"
+}
+
+# Parse arguments
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+case "${1:-}" in
+    -h|--help)
+        usage
+        ;;
+    -i|--info)
+        [[ -z "${2:-}" ]] && { echo "Error: Model name required"; exit 1; }
+        show_info "$2"
+        ;;
+    -t|--tags)
+        [[ -z "${2:-}" ]] && { echo "Error: Model name required"; exit 1; }
+        list_tags "$2"
+        ;;
+    -p|--pull)
+        [[ -z "${2:-}" ]] && { echo "Error: Model name required"; exit 1; }
+        pull_model "$2"
+        ;;
+    -l|--local)
+        list_local
+        ;;
+    -r|--running)
+        show_running
+        ;;
+    -f|--featured)
+        list_featured
+        ;;
+    -*)
+        echo "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    *)
+        search_models "$1"
+        ;;
+esac
