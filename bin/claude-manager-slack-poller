@@ -1,0 +1,113 @@
+#!/bin/bash
+# Slack Poller - polls for new messages from Eric and exits when found
+# Used by Claude Manager to detect replies in #notifications channel
+
+set -e
+
+STATE_FILE="$HOME/.claude/manager/slack-poller-last-seen"
+CHANNEL_FILE="$HOME/.claude/manager/slack-channel"
+DEFAULT_INTERVAL=30
+
+usage() {
+  cat <<EOF
+USAGE: claude-manager-slack-poller [channel-url] [options]
+
+Poll a Slack channel for new messages from Eric (non-bot messages).
+Exits when new messages are found, outputting them.
+
+ARGUMENTS:
+  channel-url    Slack channel URL (optional, falls back to $CHANNEL_FILE)
+
+OPTIONS:
+  -i, --interval <seconds>   Polling interval (default: $DEFAULT_INTERVAL)
+  -h, --help                 Show this help
+
+EXAMPLES:
+  claude-manager-slack-poller
+  claude-manager-slack-poller https://boehs.slack.com/archives/C038H1BD4SH
+  claude-manager-slack-poller -i 15
+EOF
+}
+
+# Parse arguments
+channel_url=""
+interval=$DEFAULT_INTERVAL
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -i|--interval)
+      interval="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -z "$channel_url" ]]; then
+        channel_url="$1"
+      else
+        echo "Unexpected argument: $1" >&2
+        usage >&2
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Fall back to config file if no channel URL provided
+if [[ -z "$channel_url" ]]; then
+  if [[ -f "$CHANNEL_FILE" ]]; then
+    channel_url=$(cat "$CHANNEL_FILE" | tr -d '[:space:]')
+  else
+    echo "Error: No channel URL provided and $CHANNEL_FILE not found" >&2
+    usage >&2
+    exit 1
+  fi
+fi
+
+# Ensure state directory exists
+mkdir -p "$(dirname "$STATE_FILE")"
+
+# Get or initialize last seen timestamp
+if [[ -f "$STATE_FILE" ]]; then
+  last_seen=$(cat "$STATE_FILE")
+else
+  # Seed with current time (as Slack timestamp format: epoch.microseconds)
+  last_seen=$(date +%s).000000
+  echo "$last_seen" > "$STATE_FILE"
+fi
+
+# Poll loop
+while true; do
+  # Fetch recent messages as JSON
+  messages=$(slack messages "$channel_url" -n 20 --json 2>/dev/null || echo "[]")
+
+  # Filter for non-bot messages (Eric's messages) newer than last_seen
+  # Sort by timestamp ascending so oldest new message is first
+  new_messages=$(echo "$messages" | jq -r --arg last "$last_seen" '
+    [.[] | select(.bot_id == null) | select((.ts | tonumber) > ($last | tonumber))]
+    | sort_by(.ts | tonumber)
+  ')
+
+  count=$(echo "$new_messages" | jq 'length')
+
+  if [[ "$count" -gt 0 ]]; then
+    # Update last seen to the newest message timestamp
+    newest_ts=$(echo "$new_messages" | jq -r '.[-1].ts')
+    echo "$newest_ts" > "$STATE_FILE"
+
+    # Output all new messages (human-readable format)
+    echo "$new_messages" | jq -r '.[] | "[" + .ts + "] " + .text'
+
+    exit 0
+  fi
+
+  sleep "$interval"
+done

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /Users/ericboehs/Code/ericboehs/claude-config/workspaces/copilot/.envrc
+
+exec claude "$@"

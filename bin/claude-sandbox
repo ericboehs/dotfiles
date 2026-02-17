@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SANDBOX_ENV="${CLAUDE_SANDBOX_ENV:-$HOME/.config/claude-sandbox/env}"
+IMAGE="${CLAUDE_SANDBOX_IMAGE:-claude-sandbox:latest}"
+SANDBOX_STATE="${CLAUDE_SANDBOX_STATE:-$HOME/.config/claude-sandbox/state}"
+
+if [[ ! -f "$SANDBOX_ENV" ]]; then
+  echo "Missing env file: $SANDBOX_ENV"
+  echo "Create it with your scoped credentials. See ~/.config/claude-sandbox/env.example"
+  exit 1
+fi
+
+# Persistent state dir for Claude settings (theme, bypass acceptance, etc.)
+mkdir -p "$SANDBOX_STATE"
+
+# Seed settings from host if not yet initialized
+if [[ ! -f "$SANDBOX_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
+  cp "$HOME/.claude.json" "$SANDBOX_STATE/.claude.json"
+  # Container uses npm install, not native
+  if command -v python3 &>/dev/null; then
+    python3 -c "
+import json, sys
+with open('$SANDBOX_STATE/.claude.json') as f: d = json.load(f)
+d['installMethod'] = 'npm'
+with open('$SANDBOX_STATE/.claude.json', 'w') as f: json.dump(d, f, indent=2)
+"
+  fi
+fi
+
+# Extract fresh Claude credentials from macOS Keychain into state dir
+CREDS=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || true)
+if [[ -n "$CREDS" ]]; then
+  echo "$CREDS" > "$SANDBOX_STATE/.credentials.json"
+  chmod 600 "$SANDBOX_STATE/.credentials.json"
+else
+  echo "Warning: No Claude credentials found in Keychain. Run 'claude login' first."
+fi
+
+exec docker run -it --rm \
+  --env-file "$SANDBOX_ENV" \
+  -v "$SANDBOX_STATE:/home/sandbox/.claude" \
+  -v "$SANDBOX_STATE/.claude.json:/home/sandbox/.claude.json" \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  "$IMAGE" \
+  claude --dangerously-skip-permissions "$@"

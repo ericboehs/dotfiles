@@ -1,0 +1,19 @@
+#!/bin/bash
+# CCC - Claude Cerebras Client
+# Starts Claude with the cerebras workspace environment variables
+
+# Set the cerebras workspace environment variables
+export ANTHROPIC_BASE_URL="http://localhost:8082"
+export ANTHROPIC_AUTH_TOKEN="dummy"
+
+# Tell Claude Code which models to use (prevents API validation calls)
+export ANTHROPIC_MODEL="zai-glm-4.6"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="zai-glm-4.6"
+export ANTHROPIC_SMALL_FAST_MODEL="zai-glm-4.6"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="zai-glm-4.6"
+
+export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+# Start Claude with any additional arguments
+exec claude "$@"

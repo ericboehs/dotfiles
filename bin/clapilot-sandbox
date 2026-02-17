@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SANDBOX_ENV="${CLAUDE_SANDBOX_ENV:-$HOME/.config/claude-sandbox/env}"
+IMAGE="${CLAUDE_SANDBOX_IMAGE:-claude-sandbox:latest}"
+SANDBOX_STATE="${CLAUDE_SANDBOX_STATE:-$HOME/.config/claude-sandbox/state}"
+
+if [[ ! -f "$SANDBOX_ENV" ]]; then
+  echo "Missing env file: $SANDBOX_ENV"
+  echo "Create it with your scoped credentials. See ~/.config/claude-sandbox/env.example"
+  exit 1
+fi
+
+# Persistent state dir for Claude settings (theme, bypass acceptance, etc.)
+mkdir -p "$SANDBOX_STATE"
+
+# Seed settings from host if not yet initialized
+if [[ ! -f "$SANDBOX_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
+  cp "$HOME/.claude.json" "$SANDBOX_STATE/.claude.json"
+  # Container uses npm install, not native
+  if command -v python3 &>/dev/null; then
+    python3 -c "
+import json, sys
+with open('$SANDBOX_STATE/.claude.json') as f: d = json.load(f)
+d['installMethod'] = 'npm'
+with open('$SANDBOX_STATE/.claude.json', 'w') as f: json.dump(d, f, indent=2)
+"
+  fi
+fi
+
+exec docker run -it --rm \
+  --env-file "$SANDBOX_ENV" \
+  -e ANTHROPIC_BASE_URL=http://host.docker.internal:4141 \
+  -e ANTHROPIC_AUTH_TOKEN=dummy \
+  -e ANTHROPIC_MODEL=claude-opus-4.6 \
+  -e ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4.5 \
+  -e ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4.5 \
+  -e ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4.5 \
+  -e DISABLE_NON_ESSENTIAL_MODEL_CALLS=1 \
+  -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+  --add-host=host.docker.internal:host-gateway \
+  -v "$SANDBOX_STATE:/home/sandbox/.claude" \
+  -v "$SANDBOX_STATE/.claude.json:/home/sandbox/.claude.json" \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  "$IMAGE" \
+  claude --dangerously-skip-permissions "$@"
