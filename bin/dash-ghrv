@@ -1,0 +1,14 @@
+GHWR_URL=$(gh pr checks | grep fail | head -1 | awk '{print $NF}');
+GHWR_ID=$(echo $GHWR_URL | ggrep -oP 'runs/\K\d+');
+GH_PAGER=cat gh run view --log-failed $GHWR_ID
+
+tmux copy-mode
+while true; do
+    pane_in_mode=$(tmux display-message -p -t . -F "#{pane_in_mode}")
+
+    if [[ $pane_in_mode == "1" ]]; then
+        sleep 1
+    else
+        break
+    fi
+done

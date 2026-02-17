@@ -1,0 +1,45 @@
+#! /usr/bin/env ruby
+
+# Interface with workflows using `gh` CLI for the current branch
+class GitHubProject
+  PROJECT = ENV.fetch 'GHP_PROJECT', 'department-of-veterans-affairs/927'
+
+
+  # Lists all issues in the project.
+  def list
+    system %{CLICOLOR_FORCE=1 gh issue list -S "project:#{PROJECT}" #{extra_args}}
+  end
+
+  # Returns each method in the defined order and the comment before its definition.
+  def help
+    file = File.readlines __FILE__
+    methods = self.class.instance_methods false
+    methods_with_line_numbers_sorted = methods.map { |m| [method(m).source_location.last, m] }.sort_by(&:first)
+    longest_method_length = methods.max_by(&:length).length
+
+    methods_with_line_numbers_sorted.map do |line_number, m|
+      comment = file[line_number - 2].split('#').last
+      method_name_left_justified_for_alignment = m.to_s.ljust longest_method_length
+
+      [method_name_left_justified_for_alignment, comment].join "\t"
+    end
+  end
+
+  private
+
+  def extra_args
+    ARGV[1..-1].join ' '
+  end
+end
+
+Signal.trap('SIGINT') { exit 1 }
+
+begin
+  command = ARGV[0]&.gsub '-', '_'
+  output = GitHubProject.new.send command || 'help'
+  puts output unless output == true
+  exit $?&.exitstatus || 0
+rescue => e
+  $stderr.puts e.message
+  exit 1
+end

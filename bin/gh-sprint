@@ -1,0 +1,89 @@
+#!/bin/bash
+# Query EERT Board issues by Sprint number
+
+set -e
+
+SPRINT="${1:-4}"
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  echo "Usage: gh-sprint [SPRINT_NUMBER]"
+  echo ""
+  echo "List issues from the EERT Board for a given sprint."
+  echo ""
+  echo "Arguments:"
+  echo "  SPRINT_NUMBER  Sprint number to filter by (default: 4)"
+  echo ""
+  echo "Examples:"
+  echo "  gh-sprint        # List Sprint 4 issues"
+  echo "  gh-sprint 5      # List Sprint 5 issues"
+  echo "  gh-sprint @current  # List current sprint issues"
+  exit 0
+fi
+
+# Handle @current to get the current sprint based on today's date
+if [[ "$SPRINT" == "@current" ]]; then
+  # Sprint 4 starts 2025-12-04, each sprint is 14 days
+  # Calculate which sprint we're in
+  SPRINT_0_START="2025-10-06"
+  TODAY=$(date +%Y-%m-%d)
+
+  # Days since Sprint 0 start
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    DAYS_SINCE=$(( ($(date -j -f "%Y-%m-%d" "$TODAY" +%s) - $(date -j -f "%Y-%m-%d" "$SPRINT_0_START" +%s)) / 86400 ))
+  else
+    DAYS_SINCE=$(( ($(date -d "$TODAY" +%s) - $(date -d "$SPRINT_0_START" +%s)) / 86400 ))
+  fi
+
+  # Sprint 0 was 17 days, then 14 days each after
+  if [[ $DAYS_SINCE -lt 17 ]]; then
+    SPRINT=0
+  else
+    SPRINT=$(( (DAYS_SINCE - 17) / 14 + 1 ))
+  fi
+  echo "Current sprint: Sprint $SPRINT"
+fi
+
+GH_HOST=va.ghe.com gh api graphql -f query='
+query {
+  organization(login: "software") {
+    projectV2(number: 20) {
+      items(first: 100) {
+        nodes {
+          content {
+            ... on Issue {
+              number
+              title
+              state
+              assignees(first: 5) {
+                nodes {
+                  login
+                }
+              }
+            }
+          }
+          fieldValueByName(name: "Sprint") {
+            ... on ProjectV2ItemFieldIterationValue {
+              title
+            }
+          }
+          status: fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue {
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}' | jq -r --arg sprint "Sprint $SPRINT" '
+  .data.organization.projectV2.items.nodes[]
+  | select(.fieldValueByName.title == $sprint)
+  | select(.content.number != null)
+  | [
+      "#\(.content.number)",
+      (.status.name // "-"),
+      ((.content.assignees.nodes | map(.login) | join(",")) | if . == "" then "-" else . end),
+      .content.title
+    ]
+  | @tsv
+' | column -t -s $'\t'

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# gbzp - Interactive Git Branch Checkout with fZf Preview
+# ---------------------------------------------------
+# This script lists local git branches (excluding "master" and "main"),
+# sorted by last commit date with colored formatting.
+# It then lets you interactively select a branch via fzf, showing a preview
+# of the branch’s log (using your custom "git lg" alias) and diff against your
+# base branch, before checking out the chosen branch.
+#
+# Requirements:
+#   - git
+#   - grep
+#   - awk
+#   - fzf
+#
+# Usage:
+#   1. Save this script as ~/bin/gbzp.
+#   2. Make it executable: chmod +x ~/bin/gbzp
+#   3. Run it inside a git repository: gbzp
+#
+# Optionally, set the environment variable GIT_MASTER_BRANCH if your primary branch
+# is named something other than "master". It defaults to "master".
+
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    echo "Error: Not inside a git repository." >&2
+    exit 1
+fi
+
+: "${GIT_MASTER_BRANCH:=master}"
+
+git for-each-ref --sort=-committerdate refs/heads/ --format='%(committerdate:format:%Y-%m-%d %H:%M:%S) %(refname:short)' | \
+    grep -v 'master' | grep -v 'main' | \
+    awk '{printf "\033[33m%s %s\033[0m %s\n", $1, $2, substr($0, index($0,$3))}' | \
+    fzf --ansi --height 15 --info=inline --reverse --preview 'git lg --color=always origin/$GIT_MASTER_BRANCH..$(echo {} | awk "{print \$3}") --stat; git diff --color=always origin/$GIT_MASTER_BRANCH..$(echo {} | awk "{print \$3}")' | \
+    awk '{print $3}' | \
+    xargs git checkout

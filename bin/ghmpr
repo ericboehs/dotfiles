@@ -1,0 +1,175 @@
+#! /usr/bin/env bash
+
+# Ensure GitHub CLI and jq are installed
+if ! command -v gh &> /dev/null || ! command -v jq &> /dev/null; then
+    echo "Error: This script requires the GitHub CLI (gh) and jq to be installed."
+    exit 1
+fi
+
+# Optional: Define GIT_DEFAULT_BRANCH if not set in the environment
+if [ -z "$GIT_DEFAULT_BRANCH" ]; then
+  GIT_DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef -q '.defaultBranchRef.name')"
+fi
+
+# Set pr_id from argument if provided
+pr_id=$1
+
+# Checkout a PR from dependabot using fzf to select
+# pr_id=$(gh pr list --search "is:open is:pr author:app/dependabot" | fzf | awk '{print $1}')
+if [ -z "$pr_id" ]; then
+  pr_id=$(gh pr list --search "is:pr is:open draft:false review-requested:@me review:required NOT WIP in:title" | fzf | awk '{print $1}')
+  if [ -z "$pr_id" ]; then
+      echo "No PR selected or available. Exiting."
+      exit 1
+  fi
+fi
+
+gh pr checkout $pr_id
+if [ $? -ne 0 ]; then
+    echo "Failed to checkout PR $pr_id"
+    exit 1
+fi
+
+# View PR comments
+gh pr view $pr_id --comments
+
+# Fetch latest changes quietly
+git fetch -q
+
+# Check if mergable
+gh pr view $pr_id --json mergeable | grep -q MERGEABLE
+
+if [ $? -ne 0 ]; then
+  echo "⚠️  PR is not mergable."
+  gh pr view $pr_id --json mergeable
+  read -p "Do you want to continue the review? y/[n] " continue_review_answer </dev/tty
+  continue_review_answer=${continue_review_answer:-n}  # Default to "n" if no input is given
+  if [[ $continue_review_answer == "n" ]]; then
+    exit 1
+  fi
+fi
+
+# Check if branch is out of date
+out_of_date=$(git rev-list --left-right --count origin/$GIT_DEFAULT_BRANCH...HEAD | awk '{print $1}')
+if [ "$out_of_date" -gt 10 ]; then
+  echo "⚠️  Branch is $out_of_date commits out of date with $GIT_DEFAULT_BRANCH."
+  read -p "Do you want to merge in $GIT_DEFAULT_BRANCH? y/[n] " merge_master_answer </dev/tty
+  merge_master_answer=${merge_master_answer:-n}  # Default to "y" if no input is given
+  if [[ $merge_master_answer == "y" ]]; then
+    # git fetch origin/$GIT_DEFAULT_BRANCH and merge into current branch
+    git fetch origin $GIT_DEFAULT_BRANCH
+    git merge origin/$GIT_DEFAULT_BRANCH
+    if [ $? -ne 0 ]; then
+      echo "Failed to merge $GIT_DEFAULT_BRANCH into current branch."
+      exit 1
+    fi
+
+    # Prompt to Push changes to remote
+    read -p "Do you want to push the changes to the remote? y/[n] " push_answer </dev/tty
+    push_answer=${push_answer:-n}  # Default to "n" if no input is given
+    if [[ $push_answer == "y" ]]; then
+      git push --set-upstream
+      if [ $? -ne 0 ]; then
+        echo "Failed to push changes to remote."
+        exit 1
+      fi
+      echo "Waiting 10 seconds for the checks to start..."
+      sleep 10
+    fi
+  fi
+fi
+
+# Display PR checks and diff
+gh pr checks $pr_id
+
+# Check for pending checks
+pending_checks=$(gh pr checks $pr_id | grep -w 'pending')
+num_pending=$(echo "$pending_checks" | grep -c 'pending')
+
+if [ "$num_pending" -gt 0 ]; then
+  echo "There are $num_pending pending checks."
+  read -p "Do you want to watch the pending checks? [y]/n " watch_answer </dev/tty
+  watch_answer=${watch_answer:-y}  # Default to "y" if no input is given
+  if [[ $watch_answer == "y" ]]; then
+    gh pr checks $pr_id --watch
+  fi
+else
+  echo "No pending checks."
+fi
+
+failed_checks=$(gh pr checks $pr_id | grep -w 'fail')
+num_failed=$(echo "$failed_checks" | grep -c 'fail')
+
+if [ "$num_failed" -gt 0 ]; then
+  echo "There are $num_failed failed checks."
+
+  # Write failed checks to a temporary file
+  echo "$failed_checks" > /tmp/failed_checks.tmp
+
+  while IFS= read -r line; do
+    # Use awk to capture the entire check name by excluding the last three fields (status, duration, URL)
+    check_name=$(echo "$line" | awk '{$(NF-2)=$(NF-1)=$NF=""; print $0}' | sed 's/[[:space:]]*$//')
+    
+    # Extract the run_id directly from the URL using ggrep -oP to look for digits following "runs/"
+    run_id=$(echo "$line" | ggrep -oP 'runs/\K\d+')
+
+    read -p "\"$check_name\" Failed. Do you want to view the logs? [y]/n " answer </dev/tty
+    answer=${answer:-y}  # Default to "y" if no input is given
+    if [[ $answer == "y" ]]; then
+      gh run view --log-failed $run_id
+    fi
+
+    read -p "Do you want to rerun? [y]/n " rerun_answer </dev/tty
+    answer=${rerun_answer:-y}  # Default to "y" if no input is given
+    if [[ $rerun_answer == "y" ]]; then
+      gh run rerun $run_id
+      break
+    fi
+  done < /tmp/failed_checks.tmp
+
+  # Clean up
+  rm /tmp/failed_checks.tmp
+fi
+
+# Display diffstat
+git diff --stat origin/$GIT_DEFAULT_BRANCH... | awk '
+BEGIN {
+    RED="\033[1;31m";
+    GREEN="\033[1;32m";
+    NC="\033[0m"; # No Color
+}
+{
+    if ($0 ~ /files? changed/) {
+        split($0, parts, ", ");
+        gsub(/\)/, "", parts[2]);
+        gsub(/\)/, "", parts[3]);
+        split(parts[2], adds, " ");
+        split(parts[3], dels, " ");
+        adds[1] = GREEN adds[1] NC;
+        dels[1] = RED dels[1] NC;
+        printf "%s +%s -%s\n", parts[1], adds[1], dels[1];
+    }
+}'
+sleep 1
+
+gh pr diff $pr_id
+
+# Review PR process
+echo -n "[approve] or request-changes? "
+read review
+gh pr review $pr_id --${review:-approve}
+
+# Show additional reviews required
+reviewRequests=$(gh pr view $pr_id --json "reviewRequests" | jq -r ".reviewRequests[].name")
+
+if [ -z "$reviewRequests" ]; then
+  echo "No additional reviews required."
+else
+  echo "Additional Reviews Required from:"
+  echo "$reviewRequests"
+fi
+
+# Merge PR process
+echo -n "[merge] or abort? "
+read merge_action
+gh pr ${merge_action:-merge} --squash $pr_id

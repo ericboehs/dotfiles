@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options] <github-actions-job-url>
+
+Options:
+  --only-links     Only print the job links
+  --only-job-ids   Only print the job IDs
+  --help           Show this help message
+
+Examples:
+  $(basename "$0") https://github.com/org/repo/actions/runs/123456789/job/987654321
+  $(basename "$0") --only-links https://github.com/org/repo/actions/runs/123456789/job/987654321
+  $(basename "$0") --only-job-ids https://github.com/org/repo/actions/runs/123456789/job/987654321
+EOF
+  exit 0
+}
+
+# ---- Parse flags ----
+
+ONLY_LINKS=false
+ONLY_JOB_IDS=false
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+if [[ "$1" == "--help" ]]; then
+  usage
+fi
+
+if [[ $# -eq 2 ]]; then
+  case "$1" in
+    --only-links) ONLY_LINKS=true ;;
+    --only-job-ids) ONLY_JOB_IDS=true ;;
+    *) usage ;;
+  esac
+  INPUT_URL="$2"
+elif [[ $# -eq 1 ]]; then
+  INPUT_URL="$1"
+else
+  usage
+fi
+
+# ---- Check for GNU grep ----
+
+if command -v ggrep >/dev/null 2>&1; then
+  GREP="ggrep"
+elif grep --version 2>&1 | grep -q "GNU"; then
+  GREP="grep"
+else
+  echo "❌ GNU grep (supporting -P) is required. Install 'ggrep' (e.g., via 'brew install grep') or use a system with GNU grep."
+  exit 1
+fi
+
+# ---- Parse components ----
+
+OWNER=$(echo "$INPUT_URL" | "$GREP" -oP 'github\.com/\K[^/]+')
+REPO=$(echo "$INPUT_URL" | "$GREP" -oP 'github\.com/[^/]+/\K[^/]+')
+RUN_ID=$(echo "$INPUT_URL" | "$GREP" -oP 'runs/\K[0-9]+')
+JOB_ID=$(echo "$INPUT_URL" | "$GREP" -oP 'job/\K[0-9]+')
+
+if [[ -z "$OWNER" || -z "$REPO" || -z "$RUN_ID" ]]; then
+  echo "❌ Failed to parse owner/repo/run_id from URL."
+  exit 1
+fi
+
+if [[ -z "$JOB_ID" ]]; then
+  echo "❌ No job ID found in the URL."
+  echo ""
+  echo "Please provide a URL to a specific job, like:"
+  echo "  https://github.com/org/repo/actions/runs/<run_id>/job/<job_id>"
+  echo ""
+  echo "Tip: Click into a job step inside GitHub Actions to get the correct URL."
+  exit 1
+fi
+
+# ---- Fetch job name dynamically ----
+
+# Safely capture gh output even if it fails
+JOB_JSON="$( { gh api "repos/${OWNER}/${REPO}/actions/jobs/${JOB_ID}" 2>/dev/null; } || true )"
+
+if [[ -z "$JOB_JSON" || "$JOB_JSON" == "null" ]]; then
+  echo "❌ Failed to fetch job data for job ID $JOB_ID."
+  echo ""
+  echo "This usually means:"
+  echo "- The job ID does not exist."
+  echo "- The job ID is not accessible with your GitHub token."
+  echo "- The URL you provided was not to a specific job."
+  echo ""
+  echo "Tip: Make sure the URL has '/job/<job_id>' in it."
+  exit 1
+fi
+
+# Now extract the job name safely
+JOB_NAME=$(echo "$JOB_JSON" | jq -r '.name // empty')
+
+if [[ -z "$JOB_NAME" ]]; then
+  echo "❌ Could not extract job name from GitHub API response."
+  exit 1
+fi
+
+# ---- Fetch latest attempt ----
+
+LATEST_ATTEMPT=$(gh api "repos/${OWNER}/${REPO}/actions/runs/${RUN_ID}" --jq '.run_attempt')
+
+# ---- Functions ----
+
+fetch_job_attempt() {
+  local owner=$1
+  local repo=$2
+  local run_id=$3
+  local attempt=$4
+  local path=$5
+  local job_name=$6
+
+  gh api "repos/${owner}/${repo}/actions/runs/${run_id}${path}/jobs" | jq -r --arg job_name "$job_name" --arg attempt "$attempt" '
+    .jobs[]? 
+    | select(.name == $job_name) 
+    | {
+        id: .id,
+        url: .html_url,
+        conclusion: .conclusion,
+        status: .status
+      }
+    | if . == null then
+        "\($attempt)\t❓ No Job\t-\t-"
+      elif .status != "completed" then
+        "\($attempt)\t\(.status | ascii_downcase | gsub("_"; " "))\t\(.url)\t\(.id)"
+      else
+        if .conclusion == null then
+          "\($attempt)\t⏳ In Progress\t\(.url)\t\(.id)"
+        else
+          "\($attempt)\t\(.conclusion | ascii_downcase | if test("success") then "✅ Passed" else "❌ Failed" end)\t\(.url)\t\(.id)"
+        end
+      end
+  ' 2>/dev/null
+}
+
+# ---- Fetch previous attempts ----
+
+ATTEMPTS_JSON=$(curl -s "https://github.com/${OWNER}/${REPO}/actions/runs/${RUN_ID}/new_attempts?current_attempt_number=${LATEST_ATTEMPT}&retry_blankstate=false" \
+  -H "X-Requested-With: XMLHttpRequest" \
+  -H "Accept: text/html" |
+  pup 'a json{}')
+
+if [[ -z "$ATTEMPTS_JSON" ]]; then
+  echo "❌ Failed to fetch attempt data."
+  exit 1
+fi
+
+ATTEMPTS=$(echo "$ATTEMPTS_JSON" | jq -r '.[].children[1].children[0].text | capture("Attempt #(?<n>\\d+)").n')
+ATTEMPTS=$(echo -e "$LATEST_ATTEMPT\n$ATTEMPTS" | sort -nr | uniq)
+
+# ---- Fetch + print attempts immediately ----
+
+for ATTEMPT in $ATTEMPTS; do
+  if [[ "$ATTEMPT" == "$LATEST_ATTEMPT" ]]; then
+    path=""
+  else
+    path="/attempts/$ATTEMPT"
+  fi
+
+  line=$(fetch_job_attempt "$OWNER" "$REPO" "$RUN_ID" "$ATTEMPT" "$path" "$JOB_NAME")
+
+  if [[ "$ONLY_LINKS" == true ]]; then
+    echo "$line" | awk -F'\t' '{print $3}' | grep -v '^-$'
+  elif [[ "$ONLY_JOB_IDS" == true ]]; then
+    echo "$line" | awk -F'\t' '{print $4}' | grep -v '^-$'
+  else
+    echo "$line" | awk -F'\t' '{printf "%2s  %-10s  %s\n", $1, $2, $3}'
+  fi
+done

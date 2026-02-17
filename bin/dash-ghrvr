@@ -1,0 +1,15 @@
+GHWR_URL=$(gh pr checks | grep fail | head -1 | awk '{print $NF}');
+GHWR_ID=$(echo $GHWR_URL | ggrep -oP 'runs/\K\d+');
+gh run view --log-failed $GHWR_ID | perl -ne 'print if /Failures:/../Finished/'
+gh run view --log-failed $GHWR_ID | grep -E "rspec [']?\./"
+
+tmux copy-mode
+while true; do
+    pane_in_mode=$(tmux display-message -p -t . -F "#{pane_in_mode}")
+
+    if [[ $pane_in_mode == "1" ]]; then
+        sleep 1
+    else
+        break
+    fi
+done
