@@ -1,0 +1,7 @@
+#!/bin/bash
+start=$(date +%s)
+while true; do
+  elapsed=$(( $(date +%s) - start ))
+  printf "\r%02d:%02d:%02d" $((elapsed/3600)) $((elapsed/60%60)) $((elapsed%60))
+  sleep 1
+done

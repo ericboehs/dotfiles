@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Required parameters:
+# @raycast.schemaVersion 1
+# @raycast.title Copy Recent ~/tmp Path
+# @raycast.mode silent
+
+# Optional parameters:
+# @raycast.icon 🤖
+
+# Documentation:
+# @raycast.author Eric Boehs
+# @raycast.authorURL boehs.com
+
+# Get the most recently added file in ~/tmp
+recent_file=$(ls -t ~/tmp | head -n 1)
+
+if [ -z "$recent_file" ]; then
+    echo "No files found in ~/tmp"
+    exit 1
+fi
+
+# Create the full path and escape it
+full_path="~/tmp/$recent_file"
+escaped_path=$(printf '%q' "$full_path")
+
+# Copy to clipboard
+echo "$escaped_path" | pbcopy
+
+echo "Copied escaped path to clipboard: $escaped_path"

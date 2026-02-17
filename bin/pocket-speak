@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""
+Stream pocket-tts output directly to speakers.
+
+Usage:
+    pocket-speak "Hello world"           # One-shot mode
+    pocket-speak                          # Interactive REPL mode
+    echo "Hello" | pocket-speak           # Pipe mode
+
+Options:
+    --voice NAME    Voice preset or path (default: fantine)
+    --list-voices   Show available voice presets
+    --no-daemon     Don't use/start the daemon, load model directly
+    --stop-daemon   Stop the running daemon
+
+Environment:
+    POCKET_SPEAK_TIMEOUT  Daemon idle timeout in minutes (default: 30)
+"""
+import http.server
+import json
+import os
+import signal
+import socketserver
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.request
+import urllib.error
+
+DAEMON_PORT = 19923
+DAEMON_URL = f"http://127.0.0.1:{DAEMON_PORT}"
+CACHE_DIR = os.path.expanduser("~/.cache/pocket-speak")
+PIDFILE = os.path.join(CACHE_DIR, "daemon.pid")
+LOGFILE = os.path.join(CACHE_DIR, "daemon.log")
+TIMEOUT_MINUTES = int(os.environ.get("POCKET_SPEAK_TIMEOUT", 30))
+
+# Built-in voices (no HuggingFace auth required)
+VOICES = {
+    "alba": "alba",
+    "marius": "marius",
+    "javert": "javert",
+    "jean": "jean",
+    "fantine": "fantine",
+    "cosette": "cosette",
+    "eponine": "eponine",
+    "azelma": "azelma",
+}
+
+
+# =============================================================================
+# Daemon Mode
+# =============================================================================
+
+class TTSDaemon:
+    def __init__(self):
+        self.model = None
+        self.voice_states = {}
+        self.last_activity = time.time()
+        self.lock = threading.Lock()
+
+    def load_model(self):
+        from pocket_tts import TTSModel
+        self.model = TTSModel.load_model()
+
+    def get_voice_state(self, voice):
+        with self.lock:
+            if voice not in self.voice_states:
+                self.voice_states[voice] = self.model.get_state_for_audio_prompt(voice)
+            return self.voice_states[voice]
+
+    def generate(self, text, voice="fantine"):
+        self.last_activity = time.time()
+        voice_state = self.get_voice_state(voice)
+        return self.model.generate_audio(voice_state, text), self.model.sample_rate
+
+
+daemon = None
+
+
+class TTSHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path == "/speak":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode()
+            params = json.loads(body)
+
+            text = params.get("text", "")
+            voice = params.get("voice", "fantine")
+
+            if not text:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "No text provided"}).encode())
+                return
+
+            try:
+                import scipy.io.wavfile
+                audio, sample_rate = daemon.generate(text, voice)
+
+                fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                scipy.io.wavfile.write(tmp_path, sample_rate, audio.numpy())
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"wav_path": tmp_path}).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def timeout_checker():
+    """Check for inactivity and shutdown if idle too long."""
+    while True:
+        time.sleep(60)
+        idle_time = time.time() - daemon.last_activity
+        if idle_time > TIMEOUT_MINUTES * 60:
+            os.kill(os.getpid(), signal.SIGTERM)
+            break
+
+
+def run_daemon():
+    """Run as daemon process."""
+    global daemon
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    # Redirect output to log file
+    log = open(LOGFILE, "a")
+    sys.stdout = log
+    sys.stderr = log
+
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Daemon starting...", flush=True)
+
+    daemon = TTSDaemon()
+    daemon.load_model()
+    daemon.get_voice_state("fantine")  # Pre-load default voice
+
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Model loaded", flush=True)
+
+    # Write PID file
+    with open(PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    # Start timeout checker
+    checker = threading.Thread(target=timeout_checker, daemon=True)
+    checker.start()
+
+    # Setup signal handlers
+    def shutdown(signum, frame):
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Shutting down", flush=True)
+        try:
+            os.unlink(PIDFILE)
+        except FileNotFoundError:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    # Start server
+    with socketserver.TCPServer(("127.0.0.1", DAEMON_PORT), TTSHandler) as httpd:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Listening on port {DAEMON_PORT}", flush=True)
+        httpd.serve_forever()
+
+
+# =============================================================================
+# Client Mode
+# =============================================================================
+
+def daemon_is_running():
+    """Check if daemon is running and responsive."""
+    try:
+        req = urllib.request.Request(f"{DAEMON_URL}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+
+def start_daemon():
+    """Start daemon in background using subprocess."""
+    print("Starting TTS daemon...", file=sys.stderr)
+
+    # Start self with --_daemon flag
+    subprocess.Popen(
+        [sys.executable, __file__, "--_daemon"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    # Wait for daemon to be ready
+    for _ in range(60):
+        time.sleep(1)
+        if daemon_is_running():
+            print("Daemon ready!", file=sys.stderr)
+            return True
+
+    print("Failed to start daemon", file=sys.stderr)
+    return False
+
+
+def stop_daemon():
+    """Stop the running daemon."""
+    if os.path.exists(PIDFILE):
+        with open(PIDFILE) as f:
+            pid = int(f.read().strip())
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print(f"Stopped daemon (PID {pid})", file=sys.stderr)
+        except ProcessLookupError:
+            print("Daemon was not running", file=sys.stderr)
+        try:
+            os.unlink(PIDFILE)
+        except FileNotFoundError:
+            pass
+    else:
+        print("Daemon is not running", file=sys.stderr)
+
+
+def speak_via_daemon(text, voice="fantine"):
+    """Send text to daemon for TTS."""
+    data = json.dumps({"text": text, "voice": voice}).encode()
+    req = urllib.request.Request(
+        f"{DAEMON_URL}/speak",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        result = json.loads(resp.read().decode())
+
+    if "error" in result:
+        print(f"Error: {result['error']}", file=sys.stderr)
+        return False
+
+    wav_path = result["wav_path"]
+    subprocess.run(["afplay", wav_path], check=True)
+    os.unlink(wav_path)
+    return True
+
+
+def play_audio_direct(audio, sample_rate):
+    """Play audio using afplay (macOS) via temp file."""
+    import scipy.io.wavfile
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    scipy.io.wavfile.write(tmp_path, sample_rate, audio.numpy())
+    subprocess.run(["afplay", tmp_path], check=True)
+    os.unlink(tmp_path)
+
+
+def speak_direct(tts_model, voice_state, text):
+    """Generate and play speech directly (no daemon)."""
+    text = text.strip()
+    if not text:
+        return
+    audio = tts_model.generate_audio(voice_state, text)
+    play_audio_direct(audio, tts_model.sample_rate)
+
+
+def interactive_mode_daemon(voice):
+    """Run interactive REPL using daemon."""
+    print("TTS ready. Type text to speak (Ctrl+D or 'quit' to exit):")
+    while True:
+        try:
+            text = input("> ")
+            if text.lower() in ("quit", "exit", "q"):
+                break
+            if text.strip():
+                speak_via_daemon(text, voice)
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            print()
+            break
+
+
+def interactive_mode_direct(tts_model, voice_state):
+    """Run interactive REPL - model stays loaded between utterances."""
+    print("TTS ready. Type text to speak (Ctrl+D or 'quit' to exit):")
+    while True:
+        try:
+            text = input("> ")
+            if text.lower() in ("quit", "exit", "q"):
+                break
+            speak_direct(tts_model, voice_state, text)
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            print()
+            break
+
+
+def main():
+    args = sys.argv[1:]
+
+    # Internal flag to run as daemon
+    if "--_daemon" in args:
+        run_daemon()
+        return
+
+    # Handle special commands
+    if "--stop-daemon" in args:
+        stop_daemon()
+        sys.exit(0)
+
+    # Handle --list-voices
+    if "--list-voices" in args:
+        print("Available voices:")
+        for name in VOICES:
+            print(f"  {name}")
+        print("\nVoice cloning requires HuggingFace auth (uvx hf auth login)")
+        sys.exit(0)
+
+    # Parse --no-daemon option
+    use_daemon = True
+    if "--no-daemon" in args:
+        use_daemon = False
+        args.remove("--no-daemon")
+
+    # Parse --voice option
+    voice = "fantine"
+    if "--voice" in args:
+        idx = args.index("--voice")
+        if idx + 1 < len(args):
+            voice = args[idx + 1]
+            args = args[:idx] + args[idx + 2:]
+        else:
+            print("Error: --voice requires a value", file=sys.stderr)
+            sys.exit(1)
+
+    # Resolve voice
+    voice_name = VOICES.get(voice, voice)
+
+    # Determine text from args
+    text_from_args = " ".join(args)
+
+    # Try daemon mode first
+    if use_daemon:
+        if not daemon_is_running():
+            start_daemon()
+
+        if daemon_is_running():
+            if text_from_args:
+                speak_via_daemon(text_from_args, voice_name)
+            elif not sys.stdin.isatty():
+                text = sys.stdin.read().strip()
+                if text:
+                    speak_via_daemon(text, voice_name)
+                else:
+                    print("Error: No text provided", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                interactive_mode_daemon(voice_name)
+            return
+
+    # Fallback to direct mode
+    print("Loading model...", file=sys.stderr)
+    from pocket_tts import TTSModel
+    tts_model = TTSModel.load_model()
+    voice_state = tts_model.get_state_for_audio_prompt(voice_name)
+    print("Ready!", file=sys.stderr)
+
+    if text_from_args:
+        speak_direct(tts_model, voice_state, text_from_args)
+    elif not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+        if text:
+            speak_direct(tts_model, voice_state, text)
+        else:
+            print("Error: No text provided", file=sys.stderr)
+            sys.exit(1)
+    else:
+        interactive_mode_direct(tts_model, voice_state)
+
+
+if __name__ == "__main__":
+    main()

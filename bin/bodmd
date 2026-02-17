@@ -1,0 +1,147 @@
+#! /usr/bin/env ruby
+
+# Run `bundle outdated --strict --parseable > file_name` to generate a file
+# Usage: bodmd <file_name>
+
+require 'net/http'
+require 'json'
+require 'time'
+require 'pry' #TODO: Remove
+
+class OudatedGemCollection
+  attr_reader :file_name, :gems
+
+  def initialize(file_name:)
+    @file_name = file_name
+  end
+
+  # Sorry it's messy; GH Copilot wrote most of this
+  def to_md
+    output = "| Gem | Installed | Newest |\n"
+    output += "| --- | --- | --- |\n"
+    output += gems.map do |gem|
+      "| [#{gem[:name]}](https://rubygems.org/gems/#{gem[:name]}) | [#{gem[:installed_version]}](https://rubygems.org/gems/#{gem[:name]}/versions/#{gem[:installed_version]}) | [#{gem[:newest_version]}](https://rubygems.org/gems/#{gem[:name]}/versions/#{gem[:newest_version]}) |"
+    end.join("\n")  
+    # Pad columns to make them align by finding max length of each columns
+    output = output.split("\n").map do |line|
+      line.split('|').map(&:strip)
+    end
+    max_lengths = output.transpose.map do |column|
+      column.map(&:length).max
+    end
+    output = output.map do |line|
+      line_out = line.map.with_index do |column, index|
+        column.ljust(max_lengths[index])
+      end.join(' | ') + ' |'
+      if line_out.include? ' | ---'
+        line_out.gsub!(/ /, '-')
+        line_out.sub!(/-/, ' ')
+      end
+      line_out.sub!(/ /, '')
+      line_out.sub!(/ \|\z/, '|')
+      line_out
+    end.join("\n") + "\n"
+
+    gems.each do |info|
+      title = "#{info[:name]} #{info[:installed_version]} - released #{info[:days_since_installed_release]} days ago"
+      notices = []
+      notices << "**PROJECT STALE FOR #{info[:days_since_last_release]} DAYS**" if info[:days_since_last_release] > 365
+      notices << "**MAJOR VERSIONS BEHIND: #{info[:newest_version].split('.')[0].to_i - info[:installed_version].split('.')[0].to_i}**" if info[:newest_version].split('.')[0].to_i > info[:installed_version].split('.')[0].to_i
+      info_short = info[:info][0..200] + (info[:info].length > 200 ? '…' : '')
+      installed_version_md = "[#{info[:installed_version]}](#{info[:installed_version_link]})"
+      installed_version_date_md = "[#{Time.parse(info[:installed_version_created_at]).strftime('%b %d, %Y')}](https://rubygems.org/gems/#{info[:name]}/versions)"
+      newest_version_md = "[#{info[:newest_version]}](#{info[:newest_version_link]})"
+      newest_version_date_md = "[#{Time.parse(info[:newest_version_created_at]).strftime('%b %d, %Y')}](https://rubygems.org/gems/#{info[:name]}/versions)"
+
+      output += <<~MD.gsub(/\n\n\n/, "\n\n") # Removes extra newlines
+      ## #{title}
+      #{"\n" + notices.join("\n") if notices.any?}
+
+      #{info_short.gsub(/^ +/, '').gsub(/^>/, '').gsub(/\n/, ' ').strip}
+
+      **Installed:** #{installed_version_md} (#{installed_version_date_md}) **Newest:** #{newest_version_md} (#{newest_version_date_md})
+
+      [RubyGems](https://rubygems.org/gems/#{info[:name]}) | [Homepage](#{info[:homepage_uri]})#{" | [Changelog](#{info[:changelog_uri]})" if info[:changelog_uri]}
+
+      MD
+    end
+
+    output
+  end
+
+  def gems
+    @gems ||= (
+      file = File.readlines file_name, chomp: true
+
+      file.map do |line|
+        next if line.empty?
+
+        line = line[0..-2] # Remove closing paranthesis
+        line.gsub! /(newest|installed)/, ''
+        gem_name, gem_info = line.split ' ( '
+        new_version, installed_version = gem_info.split ', '
+        installed_version = installed_version.strip
+        resp = Net::HTTP.get(URI("https://rubygems.org/api/v1/gems/#{gem_name}.json"))
+        next if resp.include? 'This rubygem could not be found.'
+        json = JSON.parse(resp)
+
+        installed_version_created_at = versions.find { |v| v['number'] == installed_version }['created_at'] rescue "1970-01-01"
+        days_since_last_release = ((Time.now - Time.parse(json['version_created_at'])) / 60 / 60 / 24).round
+        days_since_installed_release = ((Time.now - Time.parse(installed_version_created_at)) / 60 / 60 / 24).round
+
+        { 
+          name: json['name'],
+          info: json['info'],
+          newest_version: json['version'],
+          newest_version_link: "https://rubygems.org/gems/#{json['name']}/versions/#{json['version']}",
+          newest_version_created_at: json['version_created_at'],
+          days_since_last_release: days_since_last_release,
+          installed_version: installed_version,
+          installed_version_link: "https://rubygems.org/gems/#{json['name']}/versions/#{installed_version}",
+          installed_version_created_at: installed_version_created_at,
+          days_since_installed_release: days_since_installed_release,
+          homepage_uri: json['homepage_uri'],
+          changelog_uri: json['changelog_uri'],
+        }
+      end.compact
+    )
+  end
+
+  def versions
+    resp = Net::HTTP.get(URI("https://rubygems.org/api/v1/versions/#{name}.json"))
+    JSON.parse(resp)
+  end
+end
+
+if ARGV[0].nil?
+  puts 'Usage: bodmd <file_name>'
+  exit 1
+end
+
+if ENV['RUN_TESTS']
+  require 'minitest/autorun'
+
+  class TestOudatedGemCollection < Minitest::Test
+    def test_to_md
+      file_name = 'bodmd-test.txt'
+      File.write file_name, <<~FILE
+      webrick (newest 1.8.1, installed 1.7.0)
+      will_paginate (newest 4.0.0, installed 3.3.1)
+      yard (newest 0.9.34, installed 0.9.28)
+      FILE
+
+      assert_equal <<~MD, OudatedGemCollection.new(file_name: file_name).to_md
+      | Gem           | Installed | Newest|
+      |---------------|-----------|--------|
+      | webrick       | 1.7.0     | 1.8.1 |
+      | will_paginate | 3.3.1     | 4.0.0 |
+      | yard          | 0.9.28    | 0.9.34|
+      MD
+
+      File.delete file_name
+    end
+  end
+else
+  ogc = OudatedGemCollection.new(file_name: ARGV[0])
+  puts ogc.to_md + "\n"
+end

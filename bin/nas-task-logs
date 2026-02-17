@@ -1,0 +1,3 @@
+#!/bin/bash
+# Tail Synology Task Scheduler logs and Put.io sync logs in real-time
+ssh 10.0.1.3 "tail -f /volume1/@tmp/synoscheduler/logs/@*/output.log /volume1/@tmp/putio_sync.log 2>/dev/null"

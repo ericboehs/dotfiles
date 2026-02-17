@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pbcopy-decrypt - Decrypt age-encrypted clipboard contents
+
+usage() {
+    cat >&2 <<EOF
+Usage: pbcopy-decrypt [OPTIONS]
+
+Decrypt age-encrypted clipboard contents using an SSH private key.
+
+Options:
+  -i, --identity PATH      Path to SSH private key (default: ~/.ssh/id_ed25519 or ~/.ssh/id_rsa)
+  --stdout                 Output to stdout instead of clipboard
+  -h, --help               Show this help message
+
+Examples:
+  pbcopy-decrypt
+  pbcopy-decrypt -i ~/.ssh/my_key
+  pbcopy-decrypt --stdout > decrypted.txt
+EOF
+}
+
+die() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+# Check for age
+if ! command -v age &>/dev/null; then
+    die "age is not installed. Install it with: brew install age"
+fi
+
+# Parse arguments
+identity=""
+use_stdout=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -i|--identity)
+            [[ -n "${2:-}" ]] || die "Option $1 requires an argument"
+            identity="$2"
+            shift 2
+            ;;
+        --stdout)
+            use_stdout=true
+            shift
+            ;;
+        *)
+            die "Unknown option: $1"
+            ;;
+    esac
+done
+
+# Determine identity file
+if [[ -z "$identity" ]]; then
+    # Try default paths in order
+    if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
+        identity="$HOME/.ssh/id_ed25519"
+    elif [[ -f "$HOME/.ssh/id_rsa" ]]; then
+        identity="$HOME/.ssh/id_rsa"
+    else
+        die "No default SSH key found at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa. Please specify one with -i."
+    fi
+fi
+
+# Verify identity file exists
+if [[ ! -f "$identity" ]]; then
+    die "Identity file not found: $identity"
+fi
+
+# Get ciphertext from clipboard
+ciphertext="$(pbpaste)"
+if [[ -z "$ciphertext" ]]; then
+    die "Clipboard is empty"
+fi
+
+# Decrypt data
+decrypt_data() {
+    echo "$ciphertext" | age -d -i "$identity"
+}
+
+# Perform decryption and handle output
+if [[ "$use_stdout" == true ]]; then
+    decrypt_data
+else
+    plaintext="$(decrypt_data)"
+    echo "$plaintext" | pbcopy
+    echo "Clipboard decrypted with age." >&2
+fi

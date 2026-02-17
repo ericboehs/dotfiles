@@ -1,0 +1,3 @@
+#! /usr/bin/env bash
+
+ping google.com >> /Users/ericboehs/tmp/constant_ping.log 2>&1 

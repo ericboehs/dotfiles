@@ -1,0 +1,2760 @@
+#!/usr/bin/env ruby
+
+require 'bundler/inline'
+
+gemfile do
+  source 'https://rubygems.org'
+  gem 'puppeteer-ruby'
+  gem 'json'
+  gem 'fileutils'
+  gem 'sinatra'
+  gem 'erb'
+  gem 'rackup'
+  gem 'puma'
+  gem 'rack-mini-profiler'
+  gem 'memory_profiler'
+  gem 'flamegraph'
+  gem 'stackprof'
+end
+
+require 'puppeteer'
+require 'json'
+require 'fileutils'
+require 'sinatra'
+require 'erb'
+require 'rack-mini-profiler'
+require 'memory_profiler'
+require 'flamegraph'
+require 'stackprof'
+
+# Shared configuration for data directories and paths
+module TailwindPlusConfig
+  # Configurable data directory - defaults to XDG data directory
+  def self.data_dir
+    @data_dir ||= ENV['TAILWIND_PLUS_DATA_DIR'] || File.join(ENV['XDG_DATA_HOME'] || File.expand_path('~/.local/share'), 'tailwind-plus-offline')
+  end
+
+  def self.index_file
+    File.join(data_dir, 'components-index.json')
+  end
+
+  def self.collections_dir
+    File.join(data_dir, 'collections')
+  end
+
+  def self.browser_profile_path
+    File.join(data_dir, 'browser')
+  end
+end
+
+class TailwindPlusScraper
+  BASE_URL = 'https://tailwindcss.com'
+  LOGIN_URL = "#{BASE_URL}/login"
+  MAIN_URL = "#{BASE_URL}/plus/ui-blocks"
+
+  # Use shared configuration
+  def self.data_dir; TailwindPlusConfig.data_dir; end
+  def self.index_file; TailwindPlusConfig.index_file; end
+  def self.collections_dir; TailwindPlusConfig.collections_dir; end
+  def self.browser_profile_path; TailwindPlusConfig.browser_profile_path; end
+
+  def initialize
+    @credentials = load_credentials
+    ensure_directories
+  end
+
+  def login
+    puts "Checking access to Tailwind UI Plus..."
+
+    browser = get_browser
+    page = browser.pages.first || browser.new_page
+    page.viewport = Puppeteer::Viewport.new(width: 1920, height: 1080)
+
+    # Try to access UI blocks directly first
+    page.goto("#{BASE_URL}/plus/ui-blocks")
+    page.wait_for_timeout(2000)
+
+    # Check if we need to sign in by looking for "Sign in" in header
+    sign_in_needed = page.evaluate(<<~JAVASCRIPT)
+      () => {
+        const signInElements = document.querySelectorAll('a, button');
+        return Array.from(signInElements).some(elem => 
+          elem.textContent.trim() === 'Sign in'
+        );
+      }
+    JAVASCRIPT
+
+    # Check if we're already logged in
+    if page.url.include?('/plus/ui-blocks') && !sign_in_needed
+      puts "✅ Already logged in!"
+      return true
+    end
+
+    puts "🔑 Login required... (Sign in detected in header)"
+
+    # Use environment credentials if available
+    if @credentials['email'].empty? || @credentials['password'].empty?
+      puts "❌ No credentials available. Please set TAILWINDPLUS_USER and TAILWINDPLUS_PASS environment variables."
+      return false
+    end
+
+    puts "📧 Using credentials for: #{@credentials['email']}"
+
+    # Find the actual sign-in URL from the page
+    signin_url = page.evaluate(<<~JAVASCRIPT)
+      () => {
+        const signInLink = Array.from(document.querySelectorAll('a'))
+          .find(elem => elem.textContent.trim() === 'Sign in');
+        return signInLink?.href || null;
+      }
+    JAVASCRIPT
+
+    if signin_url.nil?
+      signin_url = "#{BASE_URL}/login"  # fallback
+    end
+
+    puts "🔗 Navigating to: #{signin_url}"
+    page.goto(signin_url)
+    page.wait_for_timeout(3000)
+
+    # Fill login form automatically
+    begin
+      # Wait for form to load and try different selectors
+      page.wait_for_timeout(1000)
+
+      email_selector = page.evaluate(<<~JAVASCRIPT)
+        () => {
+          const inputs = document.querySelectorAll('input[type="email"], input[name="email"], input[id*="email"], input[placeholder*="mail"], input[placeholder*="Email"]');
+          const firstInput = inputs[0];
+          if (!firstInput) return null;
+          
+          const tagName = firstInput.tagName.toLowerCase();
+          const attr = firstInput.type ? `type="${firstInput.type}"` :
+                      firstInput.name ? `name="${firstInput.name}"` :
+                      `id="${firstInput.id}"`;
+          return `${tagName}[${attr}]`;
+        }
+      JAVASCRIPT
+
+      password_selector = page.evaluate(<<~JAVASCRIPT)
+        () => {
+          const inputs = document.querySelectorAll('input[type="password"], input[name="password"], input[id*="password"], input[placeholder*="password"], input[placeholder*="Password"]');
+          const firstInput = inputs[0];
+          if (!firstInput) return null;
+          
+          const tagName = firstInput.tagName.toLowerCase();
+          const attr = firstInput.type ? `type="${firstInput.type}"` :
+                      firstInput.name ? `name="${firstInput.name}"` :
+                      `id="${firstInput.id}"`;
+          return `${tagName}[${attr}]`;
+        }
+      JAVASCRIPT
+
+      if email_selector && password_selector
+        puts "🔍 Found email field: #{email_selector}"
+        puts "🔍 Found password field: #{password_selector}"
+
+        # Clear and fill email field character by character
+        page.click(email_selector)
+        page.keyboard.down('Meta')
+        page.keyboard.press('a')
+        page.keyboard.up('Meta')
+        page.keyboard.press('Backspace')
+
+        @credentials['email'].each_char do |char|
+          page.keyboard.press(char)
+          page.wait_for_timeout(50)
+        end
+        page.wait_for_timeout(500)
+
+        # Clear and fill password field character by character
+        page.click(password_selector)
+        page.keyboard.down('Meta')
+        page.keyboard.press('a')
+        page.keyboard.up('Meta')
+        page.keyboard.press('Backspace')
+
+        @credentials['password'].each_char do |char|
+          page.keyboard.press(char)
+          page.wait_for_timeout(50)
+        end
+        page.wait_for_timeout(1000)
+
+        # Submit form by pressing Enter key
+        puts "🔄 Submitting form by pressing Enter..."
+        page.keyboard.press('Enter')
+
+        # Wait for response
+        puts "⏳ Waiting for login response..."
+        page.wait_for_timeout(5000)
+
+        puts "🔍 Current URL after submission: #{page.url}"
+
+      else
+        puts "❌ Could not find email/password fields"
+      end
+    rescue => e
+      puts "⚠️  Error during form submission: #{e.message}"
+    end
+
+    # Check if login was successful
+    page.goto("#{BASE_URL}/plus/ui-blocks")
+    page.wait_for_timeout(2000)
+
+    still_needs_signin = page.evaluate(<<~JAVASCRIPT)
+      () => {
+        const signInElements = document.querySelectorAll('a, button');
+        return Array.from(signInElements).some(elem => 
+          elem.textContent.trim() === 'Sign in'
+        );
+      }
+    JAVASCRIPT
+
+    current_url = page.url
+    if current_url.include?('/plus/ui-blocks') && !still_needs_signin
+      puts "✅ Login successful! Current URL: #{current_url}"
+      return true
+    else
+      puts "❌ Login failed. Current URL: #{current_url}"
+      return false
+    end
+  end
+
+  def scrape(target = 'all')
+    return unless login
+
+    browser = get_browser
+    page = browser.pages.first || browser.new_page
+
+    if target == 'all'
+      scrape_all_categories(page)
+    else
+      scrape_specific_subcategory(page, target)
+    end
+
+    puts "✅ Scraping completed!"
+  end
+
+  private
+
+  def scrape_all_categories(page)
+    puts "📂 Extracting structure from main UI blocks page..."
+
+    # Go to main UI blocks page
+    page.goto(MAIN_URL)
+    page.wait_for_timeout(3000)
+
+    # Extract the complete structure using the simplified JavaScript
+    structure = page.evaluate(<<~JAVASCRIPT)
+      function() {
+        const origin = window.location.origin;
+        const allResults = [];
+
+        document.querySelectorAll('main section.isolate').forEach(section => {
+          const category = section.querySelector('h2')?.textContent.trim() || "";
+
+          // Each subcategory section under this main section
+          section.querySelectorAll('section').forEach(subsection => {
+            const subcategory = subsection.querySelector('h3')?.textContent.trim() || "";
+
+            // Each item in the subcategory
+            subsection.querySelectorAll('ul > li a').forEach(a => {
+              const url = a.href;
+              const img = a.querySelector('img');
+              const image_url = img ? (img.src.startsWith('/') ? origin + img.src : img.src) : "";
+
+              // Grabbing all <p>s for title and count
+              const infoDiv = a.querySelector('div.px-4, div.sm\\\\:px-2');
+              const ps = infoDiv ? infoDiv.querySelectorAll('p') : a.querySelectorAll('p');
+              let title = "", component_count = "";
+
+              ps.forEach(p => {
+                if (p.classList.contains('font-medium')) {
+                  title = p.textContent.trim();
+                } else if (p.textContent.match(/(\\d+)\\s+(components|examples)/i)) {
+                  component_count = parseInt(p.textContent, 10);
+                }
+              });
+
+              allResults.push({
+                category,
+                subcategory,
+                title,
+                component_count,
+                image_url,
+                url,
+                components: [] // Will be filled in during scraping
+              });
+            });
+          });
+        });
+
+        return allResults;
+      }
+    JAVASCRIPT
+
+    puts "📊 Found #{structure.length} subcategories to scrape"
+
+    # Load existing data if available to resume scraping
+    existing_structure = []
+    if File.exist?(self.class.index_file)
+      begin
+        existing_structure = JSON.parse(File.read(self.class.index_file))
+        puts "📂 Loaded existing data with #{existing_structure.length} subcategories"
+      rescue JSON::ParserError
+        puts "⚠️  Could not parse existing file, starting fresh"
+      end
+    end
+
+    # Merge existing data with new structure
+    merged_structure = structure.map do |new_item|
+      existing_item = existing_structure.find { |e| e['url'] == new_item['url'] }
+      if existing_item && existing_item['components'] && !existing_item['components'].empty?
+        puts "⏭️  Skipping #{new_item['title']} (already scraped #{existing_item['components'].length} components)"
+        existing_item
+      else
+        new_item
+      end
+    end
+
+    # Now scrape each subcategory page for components
+    merged_structure.each_with_index do |item, index|
+      # Skip if already has components
+      if item['components'] && !item['components'].empty?
+        next
+      end
+
+      progress = "[#{index + 1}/#{merged_structure.length}]"
+      category_subcategory = "#{item['category']} > #{item['subcategory']} > #{item['title']}"
+      puts "📄 #{progress} Scraping #{category_subcategory}..."
+
+      begin
+        components = scrape_components_from_url(page, item['url'], progress)
+        item['components'] = components
+        puts "  ✅ #{progress} Found #{components.length} components in #{item['title']}"
+
+        # Save to new split format
+        save_collection_and_update_index(item, merged_structure)
+        puts "  💾 #{progress} Saved to collections and updated index"
+
+      rescue => e
+        puts "  ⚠️  #{progress} Failed scraping #{item['title']}: #{e.message}"
+        item['components'] = []
+
+        # Save even failed attempts to avoid re-trying
+        save_collection_and_update_index(item, merged_structure)
+        puts "  💾 #{progress} Saved progress (with failure) to collections and index"
+      end
+
+      sleep(2) # Be respectful to the server
+    end
+
+    puts "🎉 Complete! Saved all data to index and #{merged_structure.length} collection files"
+  end
+
+  def scrape_components_from_url(page, url, progress = "")
+    puts "  🌐 #{progress} Loading #{url}..." if !progress.empty?
+    page.goto(url)
+    page.wait_for_timeout(3000)
+
+    # Use the improved component detection logic
+    component_sections = page.evaluate(<<~JAVASCRIPT)
+      () => {
+        const sections = [];
+
+        // First, find containers that have code buttons to identify component areas
+        const codeButtons = Array.from(document.querySelectorAll('button'))
+          .filter(button => {
+            const btnText = button.textContent.trim();
+            return ['Code', 'View code', 'Show code'].includes(btnText);
+          });
+
+        const componentContainers = codeButtons
+          .map(button => {
+            // Find the component container for this code button
+            let container = button;
+            for (let level = 0; level < 10 && container; level++) {
+              container = container.parentElement;
+              // Look for a container that likely holds the component
+              if (container?.id || container?.querySelector('h2, h3, h4')) {
+                return container;
+              }
+            }
+            return null;
+          })
+          .filter(container => container !== null);
+
+        // Now look for headings within these component containers
+        componentContainers.forEach(container => {
+          const headings = container.querySelectorAll('h2, h3, h4');
+          const meaningfulHeading = Array.from(headings).find(heading => {
+            const title = heading.textContent.trim();
+            // Only include meaningful titles (not empty, not too short, not just numbers)
+            return title.length > 2 && !/^\\d+$/.test(title);
+          });
+
+          if (meaningfulHeading) {
+            sections.push({
+              title: meaningfulHeading.textContent.trim(),
+              hasCodeButton: true
+            });
+          }
+        });
+
+        return sections;
+      }
+    JAVASCRIPT
+
+    puts "  🔍 #{progress} Found #{component_sections.length} components to extract..." if !progress.empty?
+
+    # Extract all components individually with proper waiting
+    components_data = []
+
+    component_sections.each_with_index do |component_info, index|
+      component_progress = "#{progress} (#{index + 1}/#{component_sections.length})"
+      puts "    📝 #{component_progress} Extracting '#{component_info['title']}'..." if !progress.empty?
+
+      # Extract each component individually to ensure proper loading
+      comp_data = page.evaluate(<<~JAVASCRIPT)
+        () => {
+          const title = #{component_info['title'].to_json};
+          const headings = document.querySelectorAll('h2, h3, h4');
+
+          const targetHeading = Array.from(headings)
+            .find(heading => heading.textContent.trim() === title);
+          
+          if (!targetHeading) return null;
+
+          const container = targetHeading.parentElement;
+
+          // Look for the section with an ID that contains this component
+          let tempContainer = container;
+          let sectionWithId = null;
+          for (let s = 0; s < 10 && tempContainer; s++) {
+            if (tempContainer.tagName === 'SECTION' && tempContainer.id) {
+              sectionWithId = tempContainer;
+              break;
+            }
+            tempContainer = tempContainer.parentElement;
+          }
+
+          // Look for Code button in this component
+          let currentContainer = container;
+          for (let j = 0; j < 8 && currentContainer; j++) {
+            const codeButton = Array.from(currentContainer.querySelectorAll('button'))
+              .find(btn => {
+                const btnText = btn.textContent.trim();
+                return ['Code', 'View code', 'Show code'].includes(btnText);
+              });
+            
+            if (codeButton) {
+              codeButton.click();
+              return {
+                clicked: true,
+                title: title,
+                index: #{index},
+                anchor_id: sectionWithId?.id || null
+              };
+            }
+            currentContainer = currentContainer.parentElement;
+          }
+
+          return { clicked: false, title: title, index: #{index}, anchor_id: null };
+        }
+      JAVASCRIPT
+
+      if comp_data['clicked']
+        # Wait for content to load after clicking
+        page.wait_for_timeout(800)
+
+        # Extract HTML content by clicking HTML tab and getting from pre.language-html
+        html_content = page.evaluate(<<~JAVASCRIPT)
+          () => {
+            const title = #{component_info['title'].to_json};
+            const targetHeading = Array.from(document.querySelectorAll('h2, h3, h4'))
+              .find(heading => heading.textContent.trim() === title);
+            
+            if (!targetHeading) return false;
+
+            let container = targetHeading.parentElement;
+
+            // Look for HTML tab and click it
+            for (let j = 0; j < 10 && container; j++) {
+              const htmlButton = Array.from(container.querySelectorAll('button'))
+                .find(btn => btn.textContent.trim() === 'HTML');
+              
+              if (htmlButton) {
+                htmlButton.click();
+                return true; // Return success, we'll extract after waiting
+              }
+              container = container.parentElement;
+            }
+            return false;
+          }
+        JAVASCRIPT
+
+        if html_content
+          page.wait_for_timeout(500) # Wait for tab content to load
+          html_content = page.evaluate(<<~JAVASCRIPT)
+            () => {
+              const title = #{component_info['title'].to_json};
+              const targetHeading = Array.from(document.querySelectorAll('h2, h3, h4'))
+                .find(heading => heading.textContent.trim() === title);
+              
+              if (!targetHeading) return '';
+
+              let container = targetHeading.parentElement;
+
+              // Look for code content within this specific component's container
+              for (let j = 0; j < 10 && container; j++) {
+                const htmlPre = container.querySelector('pre.language-html code');
+                if (htmlPre) {
+                  return htmlPre.textContent || htmlPre.innerText || '';
+                }
+                container = container.parentElement;
+              }
+              return '';
+            }
+          JAVASCRIPT
+        else
+          html_content = ''
+        end
+
+        # Try to extract React code
+        react_content = ''
+        begin
+          react_clicked = page.evaluate(<<~JAVASCRIPT)
+            () => {
+              const title = #{component_info['title'].to_json};
+              const targetHeading = Array.from(document.querySelectorAll('h2, h3, h4'))
+                .find(heading => heading.textContent.trim() === title);
+              
+              if (!targetHeading) return false;
+
+              let container = targetHeading.parentElement;
+
+              // Look for React tab and click it
+              for (let j = 0; j < 10 && container; j++) {
+                const reactButton = Array.from(container.querySelectorAll('button'))
+                  .find(btn => btn.textContent.trim() === 'React');
+                
+                if (reactButton) {
+                  reactButton.click();
+                  return true;
+                }
+                container = container.parentElement;
+              }
+              return false;
+            }
+          JAVASCRIPT
+
+          if react_clicked
+            page.wait_for_timeout(500) # Wait for tab content to load
+            react_content = page.evaluate(<<~JAVASCRIPT)
+              function() {
+                var title = #{component_info['title'].to_json};
+                var headings = document.querySelectorAll('h2, h3, h4');
+
+                for (var i = 0; i < headings.length; i++) {
+                  var heading = headings[i];
+                  if (heading.textContent.trim() === title) {
+                    var container = heading.parentElement;
+
+                    // Look for React code content within this specific component's container
+                    for (var j = 0; j < 10 && container; j++) {
+                      var reactPre = container.querySelector('pre.language-jsx code');
+                      if (reactPre) {
+                        return reactPre.textContent || reactPre.innerText || '';
+                      }
+                      container = container.parentElement;
+                    }
+                    break;
+                  }
+                }
+                return '';
+              }
+            JAVASCRIPT
+          end
+        rescue => e
+          puts "    ⚠️  #{component_progress} React extraction failed: #{e.message}" if !progress.empty?
+        end
+
+        # Try to extract Vue code
+        vue_content = ''
+        begin
+          vue_clicked = page.evaluate(<<~JAVASCRIPT)
+            function() {
+              var title = #{component_info['title'].to_json};
+              var headings = document.querySelectorAll('h2, h3, h4');
+
+              for (var i = 0; i < headings.length; i++) {
+                var heading = headings[i];
+                if (heading.textContent.trim() === title) {
+                  var container = heading.parentElement;
+
+                  // Look for Vue tab and click it
+                  for (var j = 0; j < 10 && container; j++) {
+                    var buttons = container.querySelectorAll('button');
+                    for (var k = 0; k < buttons.length; k++) {
+                      var btn = buttons[k];
+                      var btnText = btn.textContent.trim();
+                      if (btnText === 'Vue') {
+                        btn.click();
+                        return true;
+                      }
+                    }
+                    container = container.parentElement;
+                  }
+                  break;
+                }
+              }
+              return false;
+            }
+          JAVASCRIPT
+
+          if vue_clicked
+            page.wait_for_timeout(500) # Wait for tab content to load
+            vue_content = page.evaluate(<<~JAVASCRIPT)
+              function() {
+                var title = #{component_info['title'].to_json};
+                var headings = document.querySelectorAll('h2, h3, h4');
+
+                for (var i = 0; i < headings.length; i++) {
+                  var heading = headings[i];
+                  if (heading.textContent.trim() === title) {
+                    var container = heading.parentElement;
+
+                    // Look for Vue code content within this specific component's container
+                    for (var j = 0; j < 10 && container; j++) {
+                      var vuePre = container.querySelector('pre.language-html code');
+                      if (vuePre) {
+                        var content = vuePre.textContent || vuePre.innerText || '';
+                        // Only return if it contains Vue template syntax
+                        if (content.indexOf('<template>') !== -1 || content.indexOf('<script setup>') !== -1) {
+                          return content;
+                        }
+                      }
+                      container = container.parentElement;
+                    }
+                    break;
+                  }
+                }
+                return '';
+              }
+            JAVASCRIPT
+          end
+        rescue => e
+          puts "    ⚠️  #{component_progress} Vue extraction failed: #{e.message}" if !progress.empty?
+        end
+
+        components_data << {
+          'title' => component_info['title'],
+          'html' => html_content,
+          'react' => react_content,
+          'vue' => vue_content,
+          'index' => index,
+          'anchor_id' => comp_data['anchor_id']
+        }
+      else
+        puts "    ❌ #{component_progress} Could not find Code button for '#{component_info['title']}'" if !progress.empty?
+        components_data << {
+          'title' => component_info['title'],
+          'html' => '',
+          'react' => '',
+          'vue' => '',
+          'index' => index,
+          'anchor_id' => comp_data['anchor_id']
+        }
+      end
+    end
+
+    components = []
+    components_data.each do |comp_data|
+      component_progress = "#{progress} (#{comp_data['index'] + 1}/#{component_sections.length})"
+      puts "    📝 #{component_progress} Processing '#{comp_data['title']}'..." if !progress.empty?
+
+      component_id = "#{comp_data['title'].downcase.gsub(/[^a-z0-9]+/, '-')}-#{Time.now.to_i}-#{comp_data['index']}"
+
+      has_content = !comp_data['html'].empty? || !comp_data['react'].empty? || !comp_data['vue'].empty?
+
+      components << {
+        'id' => component_id,
+        'title' => comp_data['title'],
+        'html' => comp_data['html'],
+        'react' => comp_data['react'],
+        'vue' => comp_data['vue'],
+        'url' => url,
+        'anchor_id' => comp_data['anchor_id'],
+        'scraped_at' => Time.now.iso8601
+      }
+
+      if has_content
+        content_types = []
+        content_types << 'HTML' unless comp_data['html'].empty?
+        content_types << 'React' unless comp_data['react'].empty?
+        content_types << 'Vue' unless comp_data['vue'].empty?
+        puts "    ✅ #{component_progress} Extracted '#{comp_data['title']}' (#{content_types.join(', ')})" if !progress.empty?
+      else
+        puts "    ⚠️  #{component_progress} No content for '#{comp_data['title']}'" if !progress.empty?
+      end
+    end
+
+    components
+  end
+
+  # This method is no longer used - keeping for backwards compatibility
+  def extract_component_html_simple(page, title, url, index)
+    # Deprecated - use batch extraction in scrape_components_from_url instead
+    {}
+  end
+
+  def scrape_specific_subcategory(page, target)
+    # Load the structure file and find matching subcategory
+    return unless File.exist?(self.class.index_file)
+
+    structure = JSON.parse(File.read(self.class.index_file))
+    found_item = structure.find { |item|
+      item['title'].downcase.include?(target.downcase) ||
+      item['url'].include?(target)
+    }
+
+    if found_item
+      progress = "[1/1]"
+      category_subcategory = "#{found_item['category']} > #{found_item['subcategory']} > #{found_item['title']}"
+      puts "📄 #{progress} Scraping #{category_subcategory}..."
+
+      components = scrape_components_from_url(page, found_item['url'], progress)
+      found_item['components'] = components
+
+      # Save to new split format
+      save_collection_and_update_index(found_item, structure)
+      puts "✅ #{progress} Updated #{found_item['title']} with #{components.length} components"
+    else
+      puts "❌ Could not find subcategory matching '#{target}'"
+    end
+  end
+
+  def ensure_directories
+    FileUtils.mkdir_p(self.class.data_dir)
+    FileUtils.mkdir_p(File.dirname(self.class.index_file))
+    FileUtils.mkdir_p(self.class.collections_dir)
+  end
+
+  def save_collection_and_update_index(subcategory_item, full_structure)
+    # Generate collection filename
+    if subcategory_item['url'] && subcategory_item['url'].include?('/plus/ui-blocks/')
+      path = subcategory_item['url'].split('/plus/ui-blocks/').last
+      collection_filename = "#{path.gsub('/', '_')}.json"
+    else
+      # Fallback filename
+      title_slug = subcategory_item['title'].downcase.gsub(/[^a-z0-9]/, '_').gsub(/_+/, '_')
+      collection_filename = "#{title_slug}.json"
+    end
+
+    # Save individual collection file
+    collection_data = {
+      'category' => subcategory_item['category'],
+      'title' => subcategory_item['title'],
+      'url' => subcategory_item['url'],
+      'components' => subcategory_item['components'] || []
+    }
+
+    collection_path = File.join(self.class.collections_dir, collection_filename)
+    File.write(collection_path, JSON.pretty_generate(collection_data))
+
+    # Build and save updated index
+    index = []
+    full_structure.each do |item|
+      # Generate collection filename for this item
+      if item['url'] && item['url'].include?('/plus/ui-blocks/')
+        item_path = item['url'].split('/plus/ui-blocks/').last
+        item_collection_filename = "#{item_path.gsub('/', '_')}.json"
+      else
+        item_title_slug = item['title'].downcase.gsub(/[^a-z0-9]/, '_').gsub(/_+/, '_')
+        item_collection_filename = "#{item_title_slug}.json"
+      end
+
+      index_entry = {
+        'category' => item['category'],
+        'title' => item['title'],
+        'url' => item['url'],
+        'component_count' => (item['components'] || []).length,
+        'collection_file' => item_collection_filename
+      }
+      index << index_entry
+    end
+
+    File.write(self.class.index_file, JSON.pretty_generate(index))
+  end
+
+  def get_browser
+    @browser ||= begin
+      FileUtils.mkdir_p(self.class.browser_profile_path)
+      browser = Puppeteer.launch(
+        headless: true,
+        user_data_dir: self.class.browser_profile_path,
+        args: ['--no-sandbox', '--disable-dev-shm-usage', '--start-maximized']
+      )
+      # Set a larger viewport for all pages
+      browser.pages.each do |page|
+        page.viewport = Puppeteer::Viewport.new(width: 1920, height: 1080)
+      end
+      browser
+    end
+  end
+
+  def load_credentials
+    # Use environment variables instead of JSON file
+    if ENV['TAILWINDPLUS_USER'] && ENV['TAILWINDPLUS_PASS']
+      return {
+        'email' => ENV['TAILWINDPLUS_USER'],
+        'password' => ENV['TAILWINDPLUS_PASS']
+      }
+    else
+      { 'email' => '', 'password' => '' }
+    end
+  end
+end
+
+class TailwindPlusServer < Sinatra::Base
+  # Use shared configuration
+  def self.data_dir; TailwindPlusConfig.data_dir; end
+  def self.index_file; TailwindPlusConfig.index_file; end
+  def self.collections_dir; TailwindPlusConfig.collections_dir; end
+
+  UI_BLOCKS_PATH = File.join(data_dir, 'ui-blocks')
+  SCREENSHOTS_PATH = File.join(data_dir, 'screenshots')
+  configure do
+    set :port, 4567
+    set :bind, '0.0.0.0'
+    set :public_folder, nil
+    set :static, false
+    set :server, 'puma'
+
+    # Enable rack-mini-profiler only if PROFILE env var is set
+    if ENV['PROFILE']
+      use Rack::MiniProfiler
+
+      # Configure flamegraph support
+      Rack::MiniProfiler.config.enable_advanced_debugging_tools = true
+      Rack::MiniProfiler.config.flamegraph_sample_rate = 0.5
+    end
+  end
+
+  get '/' do
+    components = load_components
+    main_categories = infer_main_categories(components)
+    subcategory_groups = build_subcategory_groups_with_metadata(components)
+    erb :index, locals: { subcategory_groups: subcategory_groups, main_categories: main_categories }, layout: :layout
+  end
+
+  # Dynamic route handler for all UI blocks
+  get '/ui-blocks/*' do
+    path = params['splat'].first
+    render_subcategory_page_from_file(path)
+  end
+
+  get '/api/components' do
+    content_type :json
+    load_components.to_json
+  end
+
+  get '/screenshot/:category' do
+    category = params[:category]
+    screenshot_path = get_or_generate_screenshot(category)
+
+    if screenshot_path && File.exist?(screenshot_path)
+      content_type 'image/png'
+      send_file screenshot_path
+    else
+      halt 404, "Screenshot not found"
+    end
+  end
+
+  # Section screenshots - for individual sections like hero-sections, feature-sections, etc.
+  get '/screenshot/section/*' do
+    section_path = params['splat'].first
+    screenshot_path = get_or_generate_section_screenshot(section_path)
+
+    if screenshot_path && File.exist?(screenshot_path)
+      content_type 'image/png'
+      send_file screenshot_path
+    else
+      halt 404, "Section screenshot not found"
+    end
+  end
+
+  private
+
+  def load_components
+    components = []
+    return components unless File.exist?(self.class.index_file)
+
+    # Build components from index and load actual component names
+    index = load_components_index
+
+    index.each do |index_entry|
+      # Load the actual collection to get component names
+      collection = load_collection(index_entry['collection_file'])
+      next unless collection && collection['components']
+
+      collection['components'].each_with_index do |component_data, i|
+        component = {
+          'category' => index_entry['category'],
+          'subcategory' => extract_subcategory_name_from_url(index_entry['url']),
+          'subcategory_title' => index_entry['title'],
+          'parent_category' => index_entry['category'].downcase.gsub(' ', '_'),
+          'parent_category_title' => index_entry['category'],
+          'parent_category_order' => get_category_order(index_entry['category']),
+          'subcategory_order' => get_subcategory_order(index_entry),
+          'collection_file' => index_entry['collection_file'],
+          'title' => component_data['title'] || "Component #{i + 1}",
+          'url' => index_entry['url'],
+          'component_index' => i
+        }
+        components << component
+      end
+    end
+
+    components
+  end
+
+  def load_components_index
+    # Load lightweight index without component code
+    return [] unless File.exist?(self.class.index_file)
+
+    begin
+      JSON.parse(File.read(self.class.index_file))
+    rescue JSON::ParserError => e
+      puts "Warning: Could not parse components-index.json: #{e.message}"
+      []
+    end
+  end
+
+  def load_collection(collection_file)
+    # Load specific collection with component code
+    collection_path = File.join(self.class.collections_dir, collection_file)
+    return nil unless File.exist?(collection_path)
+
+    begin
+      JSON.parse(File.read(collection_path))
+    rescue JSON::ParserError => e
+      puts "Warning: Could not parse #{collection_file}: #{e.message}"
+      nil
+    end
+  end
+
+  def extract_subcategory_name_from_url(url)
+    # Extract the last segment of the URL as the subcategory name
+    url.split('/').last
+  end
+
+  def get_category_order(category_name)
+    case category_name.downcase
+    when 'marketing' then 1
+    when 'application ui' then 2
+    when 'ecommerce' then 3
+    else 999
+    end
+  end
+
+  def get_subcategory_order(subcategory_item)
+    # We could implement ordering logic here based on URL or other factors
+    # For now, just return a default
+    999
+  end
+
+  def infer_main_categories(components)
+    categories = {}
+
+    # Only get categories from components that actually exist
+    components.each do |component|
+      parent_key = component['parent_category']
+      parent_title = component['parent_category_title']
+      parent_order = component['parent_category_order']
+
+      next unless parent_key
+
+      categories[parent_key] ||= {
+        title: parent_title || parent_key.split('-').map(&:capitalize).join(' '),
+        order: parent_order || 999,
+        description: get_category_description(parent_key)
+      }
+    end
+
+    # Sort categories by order
+    categories.sort_by { |key, info| info[:order] }.to_h
+  end
+
+  def get_category_description(category_key)
+    case category_key
+    when 'marketing'
+      'Heroes, feature sections, newsletter sign up forms — everything you need to build beautiful marketing websites.'
+    when 'application-ui'
+      'Form layouts, tables, modal dialogs — everything you need to build beautiful responsive web applications.'
+    when 'ecommerce'
+      'Checkout forms, shopping carts, product views — everything you need to build your next ecommerce front-end.'
+    else
+      'UI components and templates.'
+    end
+  end
+
+  def render_subcategory_page(subcategory_name)
+    components = load_components
+    subcategory_components = components.select { |c| c['subcategory'] == subcategory_name }
+
+    halt 404, "Subcategory not found" if subcategory_components.empty?
+
+    subcategory_title = subcategory_components.first['subcategory_title'] || subcategory_name.gsub('-', ' ').split.map(&:capitalize).join(' ')
+    parent_category = subcategory_components.first['parent_category']
+
+    erb :subcategory, locals: {
+      subcategory_name: subcategory_name,
+      subcategory_title: subcategory_title,
+      parent_category: parent_category,
+      components: subcategory_components
+    }, layout: :layout
+  end
+
+  def render_subcategory_page_from_file(path)
+    halt 404, "Components index not found" unless File.exist?(self.class.index_file)
+
+    # Find the matching index entry
+    index = load_components_index
+    index_entry = index.find do |item|
+      if item['url'] && item['url'].include?('/plus/ui-blocks/')
+        item_path = item['url'].split('/plus/ui-blocks/').last
+        item_path == path
+      else
+        false
+      end
+    end
+
+    halt 404, "Subcategory not found for path: #{path}" unless index_entry
+
+    # Load the actual collection with component code
+    collection = load_collection(index_entry['collection_file'])
+    halt 500, "Collection file not found" unless collection
+
+    subcategory_name = extract_subcategory_name_from_url(collection['url'])
+
+    # Only show pages that have actual scraped components
+    components = collection['components'] || []
+    halt 404, "No components available for this subcategory" if components.empty?
+
+    # Add metadata to components for template compatibility
+    components = components.map do |component|
+      component.merge({
+        'subcategory' => subcategory_name,
+        'subcategory_title' => collection['title'],
+        'parent_category' => collection['category'].downcase.gsub(' ', '_'),
+        'parent_category_title' => collection['category']
+      })
+    end
+
+    erb :subcategory, locals: {
+      subcategory_name: subcategory_name,
+      subcategory_title: collection['title'],
+      parent_category: collection['category'].downcase.gsub(' ', '_'),
+      components: components
+    }, layout: :layout
+  end
+
+  def generate_subcategory_url(category_key, subcategory_name)
+    # Get the URL structure from the index data
+    return "/subcategory/#{subcategory_name}" unless File.exist?(self.class.index_file)
+
+    begin
+      index = load_components_index
+
+      # Find the index entry that matches our category and subcategory
+      index_entry = index.find do |item|
+        item_category = normalize_category(item['category'].downcase.gsub(' ', '_'))
+        item_subcategory = extract_subcategory_name_from_url(item['url'])
+        item_category == category_key && item_subcategory == subcategory_name
+      end
+
+      if index_entry && index_entry['url']
+        # Extract the path from the original URL and create local equivalent
+        if index_entry['url'].include?('/plus/ui-blocks/')
+          path = index_entry['url'].split('/plus/ui-blocks/').last
+          return "/ui-blocks/#{path}"
+        end
+      end
+    rescue JSON::ParserError => e
+      puts "Warning: Could not parse components-index.json: #{e.message}"
+    end
+
+    # Fallback if not found in index
+    "/subcategory/#{subcategory_name}"
+  end
+
+  def generate_component_url_with_anchor(component)
+    return '#' unless component && component['url']
+
+    # Use the captured anchor_id if available, otherwise fall back to title-based slug
+    if component['anchor_id'] && !component['anchor_id'].empty?
+      anchor_id = component['anchor_id']
+    elsif component['title']
+      anchor_id = component['title'].downcase.gsub(/[^a-z0-9\s]/, '').gsub(/\s+/, '-')
+    else
+      return component['url']
+    end
+
+    "#{component['url']}##{anchor_id}"
+  end
+
+  def generate_local_component_url_with_anchor(component)
+    return '#' unless component && component['url']
+
+    # Extract the path from the original URL and create local equivalent
+    if component['url'].include?('/plus/ui-blocks/')
+      path = component['url'].split('/plus/ui-blocks/').last
+      local_url = "/ui-blocks/#{path}"
+    else
+      return '#'
+    end
+
+    # Use the captured anchor_id if available
+    if component['anchor_id'] && !component['anchor_id'].empty?
+      anchor_id = component['anchor_id']
+    elsif component['title']
+      anchor_id = component['title'].downcase.gsub(/[^a-z0-9\s]/, '').gsub(/\s+/, '-')
+    else
+      return local_url
+    end
+
+    "#{local_url}##{anchor_id}"
+  end
+
+  def generate_breadcrumbs(parent_category, subcategory_title)
+    # Get the parent category title
+    parent_title = case parent_category
+                  when 'marketing' then 'Marketing'
+                  when 'application_ui' then 'Application UI'
+                  when 'ecommerce' then 'Ecommerce'
+                  else parent_category.gsub('_', ' ').split.map(&:capitalize).join(' ')
+                  end
+
+    breadcrumbs = [
+      { title: 'UI Blocks', url: '/' },
+      { title: parent_title, url: nil },
+      { title: subcategory_title, url: nil }
+    ]
+
+    breadcrumbs
+  end
+
+  def get_section_path(category_key, subcategory_name)
+    # Get the section path from the index data for screenshot purposes
+    return subcategory_name unless File.exist?(self.class.index_file)
+
+    begin
+      index = load_components_index
+
+      # Find the index entry that matches our category and subcategory
+      index_entry = index.find do |item|
+        item_category = normalize_category(item['category'].downcase.gsub(' ', '_'))
+        item_subcategory = extract_subcategory_name_from_url(item['url'])
+        item_category == category_key && item_subcategory == subcategory_name
+      end
+
+      if index_entry && index_entry['url']
+        # Extract the path from the original URL for screenshot naming
+        if index_entry['url'].include?('/plus/ui-blocks/')
+          path = index_entry['url'].split('/plus/ui-blocks/').last
+          return path
+        end
+      end
+    rescue JSON::ParserError => e
+      puts "Warning: Could not parse components-index.json: #{e.message}"
+    end
+
+    # Fallback if not found in index
+    subcategory_name
+  end
+
+  def build_subcategory_groups(components)
+    # Group components by parent category and subcategory
+    subcategory_groups = {}
+
+    components.each do |component|
+      parent = normalize_category(component['parent_category'])
+      subcategory = component['subcategory']
+      subcategory_title = component['subcategory_title'] || subcategory.gsub('-', ' ').split.map(&:capitalize).join(' ')
+      subcategory_order = component['subcategory_order'] || 999 # Default high number for unordered items
+
+      subcategory_groups[parent] ||= {}
+      subcategory_groups[parent][subcategory] ||= {
+        title: subcategory_title,
+        count: 0,
+        name: subcategory,
+        order: subcategory_order
+      }
+      subcategory_groups[parent][subcategory][:count] += 1
+    end
+
+    # Sort each category's subcategories by order
+    subcategory_groups.each do |parent, subcategories|
+      subcategory_groups[parent] = subcategories.sort_by { |name, info| info[:order] }.to_h
+    end
+
+    subcategory_groups
+  end
+
+  def build_subcategory_groups_with_metadata(components)
+    # Only use the component-based groups - don't add subcategories without scraped components
+    subcategory_groups = build_subcategory_groups(components)
+
+    # Filter out any subcategories that have 0 components
+    subcategory_groups.each do |parent, subcategories|
+      subcategory_groups[parent] = subcategories.select { |name, info| info[:count] > 0 }
+    end
+
+    # Remove any parent categories that have no subcategories left
+    subcategory_groups.select! { |parent, subcategories| !subcategories.empty? }
+
+    subcategory_groups
+  end
+
+  def group_components_by_category(components)
+    grouped = {}
+
+    components.each do |component|
+      parent = normalize_category(component['parent_category'])
+      category = component['category']
+      subcategory = component['subcategory']
+
+      grouped[parent] ||= {}
+      grouped[parent][category] ||= {}
+      grouped[parent][category][subcategory] ||= []
+      grouped[parent][category][subcategory] << component
+    end
+
+    grouped
+  end
+
+  def normalize_category(category)
+    case category.to_s.downcase
+    when 'marketing' then 'marketing'
+    when 'application_ui', 'application-ui' then 'application_ui'
+    when 'ecommerce', 'e-commerce' then 'ecommerce'
+    else category
+    end
+  end
+
+  def get_or_generate_screenshot(category)
+    FileUtils.mkdir_p(SCREENSHOTS_PATH) unless Dir.exist?(SCREENSHOTS_PATH)
+
+    screenshot_file = File.join(SCREENSHOTS_PATH, "#{category}.png")
+    cache_key_file = File.join(SCREENSHOTS_PATH, "#{category}.cache_key")
+
+    # Generate a cache key based on category info
+    cache_key = Digest::MD5.hexdigest(category.to_s)
+
+    # Check if we have a valid cached screenshot
+    if File.exist?(screenshot_file) && File.exist?(cache_key_file)
+      stored_key = File.read(cache_key_file).strip
+      return screenshot_file if stored_key == cache_key
+    end
+
+    # Generate new screenshot
+    begin
+      generate_category_screenshot(category, screenshot_file)
+      File.write(cache_key_file, cache_key)
+      screenshot_file
+    rescue => e
+      puts "Error generating screenshot: #{e.message}"
+      nil
+    end
+  end
+
+  def generate_category_screenshot(category, output_path)
+    # For now, we don't generate category screenshots - only section screenshots
+    # This method can be removed or simplified to return nil
+    nil
+  end
+
+  def get_or_generate_section_screenshot(section_path)
+    FileUtils.mkdir_p(SCREENSHOTS_PATH) unless Dir.exist?(SCREENSHOTS_PATH)
+
+    # Create safe filename from section path
+    safe_filename = section_path.gsub('/', '_')
+    screenshot_file = File.join(SCREENSHOTS_PATH, "section_#{safe_filename}.png")
+    cache_key_file = File.join(SCREENSHOTS_PATH, "section_#{safe_filename}.cache_key")
+
+    # Generate a cache key based on section path
+    cache_key = Digest::MD5.hexdigest(section_path.to_s)
+
+    # Check if we have a valid cached screenshot
+    if File.exist?(screenshot_file) && File.exist?(cache_key_file)
+      stored_key = File.read(cache_key_file).strip
+      return screenshot_file if stored_key == cache_key
+    end
+
+    # Generate new screenshot
+    begin
+      generate_section_screenshot(section_path, screenshot_file)
+      File.write(cache_key_file, cache_key)
+      screenshot_file
+    rescue => e
+      puts "Error generating section screenshot: #{e.message}"
+      nil
+    end
+  end
+
+  def generate_section_screenshot(section_path, output_path)
+    # Try to use the official Tailwind CSS preview image first
+    section_name = File.basename(section_path)
+    category = section_path.split('/').first
+
+    # Convert section path to preview image URL
+    preview_url = "https://tailwindcss.com/plus-assets/img/ui-blocks/#{category}/#{section_name}.png"
+
+    begin
+      # Try to download the official preview image
+      require 'net/http'
+      require 'uri'
+
+      uri = URI(preview_url)
+      Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
+        request = Net::HTTP::Get.new(uri)
+        response = http.request(request)
+
+        if response.code == '200'
+          File.open(output_path, 'wb') do |file|
+            file.write(response.body)
+          end
+          puts "Downloaded preview image for #{section_path}"
+          return
+        end
+      end
+    rescue => e
+      puts "Could not download preview image for #{section_path}: #{e.message}"
+    end
+  end
+
+  # Templates
+  template :layout do
+    <<~HTML
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Tailwind UI Plus - Offline Browser</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://play.tailwindcss.com/cdn.js"></script>
+        <script src="https://unpkg.com/prismjs@1.29.0/components/prism-core.min.js"></script>
+        <script src="https://unpkg.com/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+        <style>
+          :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f9fafb;
+            --bg-tertiary: #f3f4f6;
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --text-tertiary: #9ca3af;
+            --border-primary: #e5e7eb;
+            --border-secondary: #d1d5db;
+            --accent-primary: #3b82f6;
+            --accent-hover: #2563eb;
+            --shadow: rgba(0, 0, 0, 0.1);
+          }
+
+          [data-theme="dark"] {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #2d3748;
+            --text-primary: #ffffff;
+            --text-secondary: #e2e8f0;
+            --text-tertiary: #cbd5e1;
+            --border-primary: #4a5568;
+            --border-secondary: #718096;
+            --accent-primary: #60a5fa;
+            --accent-hover: #3b82f6;
+            --shadow: rgba(0, 0, 0, 0.5);
+          }
+
+          /* Dark mode screenshot dimming */
+          [data-theme="dark"] img {
+            opacity: 0.7;
+            transition: opacity 0.3s ease;
+          }
+
+          [data-theme="dark"] img:hover,
+          [data-theme="dark"] .group:hover img {
+            opacity: 1;
+          }
+
+          /* Backdrop blur support */
+          .backdrop-blur-sm {
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+          }
+
+          /* Fallback for browsers without backdrop-filter support */
+          @supports not (backdrop-filter: blur()) {
+            .backdrop-blur-sm {
+              background-color: rgba(0, 0, 0, 0.85) !important;
+            }
+          }
+
+          .component-preview {
+            background: linear-gradient(45deg, var(--bg-tertiary) 25%, transparent 25%),
+                        linear-gradient(-45deg, var(--bg-tertiary) 25%, transparent 25%),
+                        linear-gradient(45deg, transparent 75%, var(--bg-tertiary) 75%),
+                        linear-gradient(-45deg, transparent 75%, var(--bg-tertiary) 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+          }
+
+          /* Custom Tailwind Plus inspired syntax highlighting */
+          pre[class*="language-"] {
+            margin: 0;
+            border-radius: 0.5rem;
+            background: #1f2937 !important;
+            color: #f3f4f6;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            line-height: 1.6;
+          }
+
+          code[class*="language-"] {
+            color: #f3f4f6;
+            background: none;
+            font-family: inherit;
+          }
+
+          /* HTML Tags */
+          .token.tag {
+            color: #f472b6 !important; /* Pink like Tailwind Plus */
+          }
+
+          .token.tag .token.punctuation {
+            color: #f472b6 !important; /* Pink brackets */
+          }
+
+          /* Attributes */
+          .token.attr-name {
+            color: #60a5fa !important; /* Blue attributes */
+          }
+
+          /* Attribute values and strings */
+          .token.attr-value,
+          .token.string {
+            color: #34d399 !important; /* Green strings */
+          }
+
+          /* Punctuation in strings */
+          .token.attr-value .token.punctuation,
+          .token.string .token.punctuation {
+            color: #34d399 !important;
+          }
+
+          /* Comments */
+          .token.comment {
+            color: #6b7280 !important;
+            font-style: italic;
+          }
+
+          /* Other tokens */
+          .token.punctuation {
+            color: #d1d5db !important;
+          }
+
+          .token.operator {
+            color: #f59e0b !important;
+          }
+
+          .token.number {
+            color: #fb7185 !important;
+          }
+
+          .token.boolean {
+            color: #fbbf24 !important;
+          }
+          .copy-button {
+            transition: all 0.2s;
+          }
+          .copy-button:hover {
+            background-color: #374151;
+          }
+          .copy-success {
+            background-color: #10b981 !important;
+          }
+          .accordion-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+          }
+          .accordion-content.expanded {
+            max-height: none;
+            transition: max-height 0.5s ease-in;
+          }
+          .accordion-arrow {
+            transition: transform 0.3s ease;
+          }
+          .accordion-arrow.rotated {
+            transform: rotate(180deg);
+          }
+          /* Aspect ratio classes */
+          .aspect-w-4 {
+            position: relative;
+            padding-bottom: calc(3 / 4 * 100%);
+          }
+          .aspect-w-4 > * {
+            position: absolute;
+            height: 100%;
+            width: 100%;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+          }
+          .aspect-w-10 {
+            position: relative;
+            padding-bottom: calc(7 / 10 * 100%);
+          }
+          .aspect-w-10 > * {
+            position: absolute;
+            height: 100%;
+            width: 100%;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+          }
+          .component-preview-container {
+            height: 200px;
+            overflow: hidden;
+            position: relative;
+          }
+          .component-preview-container iframe {
+            transform: scale(0.5);
+            transform-origin: top left;
+            width: 200%;
+            height: 200%;
+            border: none;
+          }
+        </style>
+      </head>
+      <body style="background-color: var(--bg-secondary); color: var(--text-primary);" class="transition-colors duration-300">
+        <!-- Search Modal -->
+        <div id="searchModal" class="fixed inset-0 z-50 hidden">
+          <div class="fixed inset-0 bg-black bg-opacity-75 backdrop-blur-sm" onclick="closeSearch()"></div>
+          <div class="relative mx-auto mt-20 max-w-2xl px-4">
+            <div class="rounded-lg shadow-2xl ring-1 ring-white/10" style="background-color: var(--bg-primary);">
+              <div class="flex items-center px-4" style="border-bottom: 1px solid var(--border-primary);">
+                <svg class="w-5 h-5" style="color: var(--text-tertiary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+                <input
+                  id="searchInput"
+                  type="text"
+                  placeholder="Search components..."
+                  class="w-full px-4 py-4 text-lg focus:outline-none"
+                  style="background-color: var(--bg-primary); color: var(--text-primary);"
+                  autocomplete="off"
+                >
+                <kbd class="hidden sm:block text-xs px-2 py-1 rounded" style="color: var(--text-tertiary); background-color: var(--bg-tertiary);">esc</kbd>
+              </div>
+              <div id="searchResults" class="max-h-96 overflow-y-auto">
+                <!-- Search results will be populated here -->
+              </div>
+              <div class="px-4 py-2 text-xs" style="border-top: 1px solid var(--border-primary); color: var(--text-tertiary);">
+                <span class="hidden sm:inline">Press <kbd class="px-1 py-0.5 rounded" style="background-color: var(--bg-tertiary);">↵</kbd> to open locally, <kbd class="px-1 py-0.5 rounded" style="background-color: var(--bg-tertiary);">T</kbd> for Tailwind Plus</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Expand Preview Modal -->
+        <div id="expandModal" class="fixed inset-0 z-50 hidden">
+          <div class="fixed inset-0 bg-gray-900 bg-opacity-75" onclick="closeExpandModal()"></div>
+          <div class="relative w-full h-full flex items-center justify-center p-4">
+            <div class="rounded-lg shadow-xl w-full h-full max-w-7xl max-h-[90vh] flex flex-col" style="background-color: var(--bg-primary);">
+              <div class="flex items-center justify-between p-4" style="border-bottom: 1px solid var(--border-primary);">
+                <h3 id="expandModalTitle" class="text-lg font-semibold" style="color: var(--text-primary);">Component Preview</h3>
+                <button
+                  onclick="closeExpandModal()"
+                  class="p-2 rounded-md transition-colors"
+                  style="color: var(--text-tertiary);"
+                  onmouseover="this.style.backgroundColor='var(--bg-tertiary)';"
+                  onmouseout="this.style.backgroundColor='transparent';"
+                >
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div class="flex-1 overflow-hidden">
+                <iframe
+                  id="expandModalFrame"
+                  class="w-full h-full border-0"
+                  sandbox="allow-scripts"
+                ></iframe>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <%= yield %>
+
+        <script>
+          // Copy to clipboard functionality
+          function copyToClipboard(text, button) {
+            // Show checkmark immediately for better UX
+            const originalHTML = button.innerHTML;
+            button.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>';
+            button.classList.add('copy-success');
+
+            // Try to copy to clipboard
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).catch(error => {
+                console.error('Copy failed:', error);
+              });
+            } else {
+              // Fallback for older browsers
+              const textArea = document.createElement('textarea');
+              textArea.value = text;
+              document.body.appendChild(textArea);
+              textArea.select();
+              try {
+                document.execCommand('copy');
+              } catch (err) {
+                console.error('Fallback copy failed:', err);
+              }
+              document.body.removeChild(textArea);
+            }
+
+            // Restore button after delay
+            setTimeout(() => {
+              button.innerHTML = originalHTML;
+              button.classList.remove('copy-success');
+            }, 1500);
+          }
+
+          // Accordion functionality
+          function toggleAccordion(categoryId) {
+            const content = document.getElementById('content-' + categoryId);
+            const arrow = document.getElementById('arrow-' + categoryId);
+
+            content.classList.toggle('expanded');
+            arrow.classList.toggle('rotated');
+          }
+
+          // Code tab functionality
+          function switchCodeTab(componentId, format) {
+            // Hide all code content for this component
+            const allContents = document.querySelectorAll('[id^="code-' + componentId + '-"]');
+            allContents.forEach(content => content.classList.add('hidden'));
+
+            // Reset all tab buttons for this component
+            const allTabs = document.querySelectorAll('[data-component="' + componentId + '"]');
+            allTabs.forEach(tab => {
+              const activeClass = tab.dataset.activeClass;
+              tab.className = tab.className.replace(activeClass, 'text-gray-600 hover:text-gray-800');
+            });
+
+            // Show selected content
+            const selectedContent = document.getElementById('code-' + componentId + '-' + format);
+            if (selectedContent) {
+              selectedContent.classList.remove('hidden');
+            }
+
+            // Activate selected tab
+            const selectedTab = document.querySelector('[data-component="' + componentId + '"][data-format="' + format + '"]');
+            if (selectedTab) {
+              const activeClass = selectedTab.dataset.activeClass;
+              selectedTab.className = selectedTab.className.replace('text-gray-600 hover:text-gray-800', activeClass);
+            }
+          }
+
+          // Copy current visible code
+          function copyCurrentCode(componentId, button) {
+            // Find the currently visible code content
+            const visibleContent = document.querySelector('[id^="code-' + componentId + '-"]:not(.hidden)');
+            if (visibleContent) {
+              const code = visibleContent.dataset.code;
+              if (code && code.trim()) {
+                copyToClipboard(code, button);
+              } else {
+                const originalHTML = button.innerHTML;
+                button.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>';
+                setTimeout(() => {
+                  button.innerHTML = originalHTML;
+                }, 1500);
+              }
+            }
+          }
+
+          // Search functionality
+          let searchData = [];
+          let searchModal = null;
+          let searchInput = null;
+          let searchResults = null;
+
+          // Initialize search on page load
+          document.addEventListener('DOMContentLoaded', function() {
+            searchModal = document.getElementById('searchModal');
+            searchInput = document.getElementById('searchInput');
+            searchResults = document.getElementById('searchResults');
+
+            // Load search data
+            fetch('/api/components')
+              .then(response => response.json())
+              .then(data => {
+                searchData = data;
+              });
+
+            // Keyboard shortcut (Cmd+K or Ctrl+K)
+            document.addEventListener('keydown', function(e) {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                e.preventDefault();
+                openSearch();
+              }
+              if (e.key === 'Escape' && searchModal && !searchModal.classList.contains('hidden')) {
+                closeSearch();
+              }
+            });
+
+            // Search input handler
+            if (searchInput) {
+              searchInput.addEventListener('input', function(e) {
+                performSearch(e.target.value);
+              });
+
+              // Keyboard navigation
+              searchInput.addEventListener('keydown', function(e) {
+                const items = searchResults.querySelectorAll('a');
+                const currentIndex = Array.from(items).findIndex(item => item.classList.contains('bg-gray-100'));
+
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  const nextIndex = currentIndex + 1 < items.length ? currentIndex + 1 : 0;
+                  highlightSearchItem(items, nextIndex);
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+                  highlightSearchItem(items, prevIndex);
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  // Enter: Navigate to local page
+                  if (currentIndex >= 0 && items[currentIndex]) {
+                    items[currentIndex].click();
+                  } else if (items.length > 0) {
+                    items[0].click();
+                  }
+                } else if (e.key === 't' || e.key === 'T') {
+                  e.preventDefault();
+                  // T: Open original Tailwind Plus page
+                  if (currentIndex >= 0 && items[currentIndex]) {
+                    const originalUrl = items[currentIndex].dataset.originalUrl;
+                    if (originalUrl && originalUrl !== '#') {
+                      window.open(originalUrl, '_blank');
+                    }
+                  } else if (items.length > 0) {
+                    const originalUrl = items[0].dataset.originalUrl;
+                    if (originalUrl && originalUrl !== '#') {
+                      window.open(originalUrl, '_blank');
+                    }
+                  }
+                }
+              });
+            }
+          });
+
+          function openSearch() {
+            if (searchModal) {
+              searchModal.classList.remove('hidden');
+              searchInput.focus();
+              searchInput.value = '';
+              performSearch('');
+            }
+          }
+
+          function closeSearch() {
+            if (searchModal) {
+              searchModal.classList.add('hidden');
+              searchInput.value = '';
+              searchResults.innerHTML = '';
+            }
+          }
+
+          function performSearch(query) {
+            if (!searchResults) return;
+
+            if (!query.trim()) {
+              // Show all categories when no query
+              const categories = {};
+              searchData.forEach(component => {
+                const key = component.subcategory || 'other';
+                if (!categories[key]) {
+                  categories[key] = {
+                    title: component.subcategory_title || key,
+                    parent: component.parent_category,
+                    items: []
+                  };
+                }
+                categories[key].items.push(component);
+              });
+
+              let html = '<div class="py-2">';
+              Object.keys(categories).sort().forEach(key => {
+                const cat = categories[key];
+                html += `
+                  <div class="px-4 py-2">
+                    <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary);">
+                      ${cat.title}
+                    </div>
+                    <div class="space-y-1">
+                `;
+                cat.items.slice(0, 3).forEach(item => {
+                  const url = generateComponentUrl(item);
+                  const originalUrl = generateOriginalComponentUrl(item);
+                  html += `
+                    <a href="${url}" data-original-url="${originalUrl}" class="block px-2 py-1 text-sm rounded transition-colors" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
+                      ${item.title}
+                    </a>
+                  `;
+                });
+                if (cat.items.length > 3) {
+                  html += `<div class="px-2 py-1 text-xs" style="color: var(--text-tertiary);">+${cat.items.length - 3} more</div>`;
+                }
+                html += '</div></div>';
+              });
+              html += '</div>';
+              searchResults.innerHTML = html;
+              return;
+            }
+
+            // Perform search
+            const lowerQuery = query.toLowerCase();
+            const results = searchData.filter(component => {
+              return component.title.toLowerCase().includes(lowerQuery) ||
+                    (component.subcategory_title && component.subcategory_title.toLowerCase().includes(lowerQuery)) ||
+                    (component.parent_category_title && component.parent_category_title.toLowerCase().includes(lowerQuery));
+            });
+
+            if (results.length === 0) {
+              searchResults.innerHTML = '<div class="px-4 py-8 text-center" style="color: var(--text-tertiary);">No results found</div>';
+              return;
+            }
+
+            // Group results by subcategory
+            const grouped = {};
+            results.forEach(component => {
+              const key = component.subcategory || 'other';
+              if (!grouped[key]) {
+                grouped[key] = {
+                  title: component.subcategory_title || key,
+                  parent: component.parent_category,
+                  items: []
+                };
+              }
+              grouped[key].items.push(component);
+            });
+
+            let html = '<div class="py-2">';
+            Object.keys(grouped).forEach(key => {
+              const group = grouped[key];
+              html += `
+                <div style="border-bottom: 1px solid var(--border-primary);" class="last:border-0">
+                  <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">
+                    ${group.title}
+                  </div>
+              `;
+              group.items.forEach(item => {
+                const url = generateComponentUrl(item);
+                const originalUrl = generateOriginalComponentUrl(item);
+                html += `
+                  <a href="${url}" data-original-url="${originalUrl}" class="block px-4 py-3 transition-colors" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
+                    <div class="text-sm font-medium" style="color: var(--text-primary);">${highlightMatch(item.title, query)}</div>
+                    <div class="text-xs mt-1" style="color: var(--text-secondary);">${item.parent_category_title} › ${item.subcategory_title}</div>
+                  </a>
+                `;
+              });
+              html += '</div>';
+            });
+            html += '</div>';
+
+            searchResults.innerHTML = html;
+          }
+
+          function generateComponentUrl(component) {
+            // Use the component's original URL to determine the local URL structure
+            if (component.url && component.url.includes('/plus/ui-blocks/')) {
+              const path = component.url.split('/plus/ui-blocks/').pop();
+              let localUrl = `/ui-blocks/${path}`;
+
+              // Add component index as anchor if available
+              if (component.component_index !== undefined) {
+                return localUrl + '#component-' + component.component_index;
+              }
+
+              // Add anchor if available
+              if (component.anchor_id && component.anchor_id.trim() !== '') {
+                return localUrl + '#' + component.anchor_id;
+              }
+
+              return localUrl;
+            }
+
+            // Fallback: build URL from category and subcategory
+            const parent = component.parent_category || '';
+            const subcategory = component.subcategory || '';
+
+            if (!parent || !subcategory) return '#';
+
+            let localUrl = `/ui-blocks/${parent}/${subcategory}`;
+
+            // Add anchor if available
+            if (component.anchor_id && component.anchor_id.trim() !== '') {
+              return localUrl + '#' + component.anchor_id;
+            }
+
+            return localUrl;
+          }
+
+          function generateOriginalComponentUrl(component) {
+            if (!component || !component.url) return '#';
+
+            // Use the captured anchor_id if available, otherwise fall back to title-based slug
+            let anchor_id = '';
+            if (component.anchor_id && component.anchor_id.trim() !== '') {
+              anchor_id = component.anchor_id;
+            } else if (component.title) {
+              anchor_id = component.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+            } else {
+              return component.url;
+            }
+
+            return component.url + '#' + anchor_id;
+          }
+
+          function highlightMatch(text, query) {
+            if (!query) return text;
+            const regex = new RegExp(`(${query})`, 'gi');
+            return text.replace(regex, '<span class="font-semibold text-indigo-600">$1</span>');
+          }
+
+          function highlightSearchItem(items, index) {
+            items.forEach((item, i) => {
+              if (i === index) {
+                item.style.backgroundColor = 'var(--bg-tertiary)';
+                // Scroll into view if needed
+                item.scrollIntoView({ block: 'nearest' });
+              } else {
+                item.style.backgroundColor = 'transparent';
+              }
+            });
+          }
+
+          // Expand preview functionality
+          function expandPreview(componentId) {
+            const modal = document.getElementById('expandModal');
+            const modalTitle = document.getElementById('expandModalTitle');
+            const modalFrame = document.getElementById('expandModalFrame');
+
+            // Find the component's HTML content
+            const visibleContent = document.querySelector('[id^="code-' + componentId + '-"]:not(.hidden)');
+            let htmlContent = '';
+
+            if (visibleContent && visibleContent.dataset.code) {
+              htmlContent = visibleContent.dataset.code;
+            } else {
+              // Fallback: try to find HTML content specifically
+              const previewContent = document.querySelector('[id="code-' + componentId + '-preview"]');
+              if (previewContent && previewContent.dataset.code) {
+                htmlContent = previewContent.dataset.code;
+              }
+            }
+
+            if (htmlContent) {
+              const fullPage = '<!DOCTYPE html><html><head><meta name=\\'viewport\\' content=\\'width=device-width, initial-scale=1\\'>' + '<scrip' + 't src=\\'https://cdn.tailwindcss.com\\'></scrip' + 't>' + '<style>body { margin: 0; padding: 20px; overflow-x: hidden; min-height: 100vh; } html { overflow-x: hidden; }</style></head><body>' + htmlContent + '</body></html>';
+              modalFrame.srcdoc = fullPage;
+
+              // Set modal title
+              const componentTitle = document.querySelector('#' + componentId + ' h2')?.textContent || 'Component Preview';
+              modalTitle.textContent = componentTitle;
+
+              modal.classList.remove('hidden');
+              document.body.style.overflow = 'hidden';
+            }
+          }
+
+          function closeExpandModal() {
+            const modal = document.getElementById('expandModal');
+            const modalFrame = document.getElementById('expandModalFrame');
+
+            modal.classList.add('hidden');
+            modalFrame.srcdoc = '';
+            document.body.style.overflow = '';
+          }
+
+          // Close modal with Escape key
+          document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+              const expandModal = document.getElementById('expandModal');
+              if (expandModal && !expandModal.classList.contains('hidden')) {
+                closeExpandModal();
+              }
+            }
+          });
+
+          // Dark mode functionality - follows system preferences
+          function updateTheme() {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            if (prefersDark) {
+              document.documentElement.setAttribute('data-theme', 'dark');
+            } else {
+              document.documentElement.removeAttribute('data-theme');
+            }
+          }
+
+          // Initialize dark mode from system preferences
+          document.addEventListener('DOMContentLoaded', function() {
+            updateTheme();
+
+            // Listen for system theme changes
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+
+            // Remove any stored theme preference to ensure we follow system
+            localStorage.removeItem('theme');
+
+            // Lazy load images
+            const lazyImages = document.querySelectorAll('img.lazy');
+            const imageObserver = new IntersectionObserver((entries, observer) => {
+              entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                  const img = entry.target;
+                  img.src = img.dataset.src;
+                  img.classList.remove('lazy');
+                  observer.unobserve(img);
+                }
+              });
+            });
+            lazyImages.forEach(img => imageObserver.observe(img));
+          });
+
+        </script>
+      </body>
+      </html>
+    HTML
+  end
+
+  template :index do
+    <<~HTML
+      <div class="min-h-screen" style="background-color: var(--bg-secondary);">
+        <!-- Header -->
+        <header class="shadow-sm" style="background-color: var(--bg-primary); border-bottom: 1px solid var(--border-primary);">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+              <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                  <!-- Tailwind Plus Logo -->
+                  <a href="/" class="flex items-center gap-3 no-underline">
+                    <svg width="32" height="32" viewBox="0 0 64 64" class="flex-shrink-0">
+                      <defs>
+                        <linearGradient id="tailwind-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
+                          <stop offset="100%" style="stop-color:#0ea5e9;stop-opacity:1" />
+                        </linearGradient>
+                      </defs>
+                      <path d="M16 25.6c2.133-8.533 7.467-12.8 16-12.8 12.8 0 14.4 9.6 20.8 11.2 4.267 1.067 7.467-1.067 9.6-6.4C59.467 26.133 54.133 30.4 45.6 30.4c-12.8 0-14.4-9.6-20.8-11.2C20.533 17.867 17.333 20 16 25.6zM0 44.8C2.133 36.267 7.467 32 16 32c12.8 0 14.4 9.6 20.8 11.2 4.267 1.067 7.467-1.067 9.6-6.4C43.467 45.333 38.133 49.6 29.6 49.6c-12.8 0-14.4-9.6-20.8-11.2C4.533 37.067 1.333 39.2 0 44.8z" fill="url(#tailwind-gradient)"/>
+                    </svg>
+                    <h1 class="text-2xl font-bold" style="color: var(--text-primary);">
+                      <span style="color: var(--text-primary);">tailwind</span><span class="text-sky-500">PLUS</span>
+                      <span class="ml-2 px-2 py-1 text-xs font-medium rounded" style="background-color: var(--bg-tertiary); color: var(--text-secondary);">offline</span>
+                    </h1>
+                  </a>
+                </div>
+                <p class="text-sm" style="color: var(--text-secondary);">
+                  Over 500+ professionally designed, fully responsive, expertly crafted component examples you can drop into your Tailwind projects and customize to your heart's content.
+                </p>
+              </div>
+              <div class="ml-6">
+                <button
+                  onclick="openSearch()"
+                  class="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition-colors"
+                  style="color: var(--text-secondary); background-color: var(--bg-tertiary);"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                  </svg>
+                  <span class="hidden sm:inline">Search</span>
+                  <kbd class="hidden sm:inline ml-1 text-xs px-1.5 py-0.5 rounded border" style="background-color: var(--bg-primary); border-color: var(--border-primary);">⌘K</kbd>
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+
+        <!-- Category Accordions -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-12">
+          <% if main_categories.empty? %>
+            <!-- Empty State -->
+            <div class="text-center py-16">
+              <svg class="mx-auto h-24 w-24 mb-6" style="color: var(--text-tertiary);" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <h2 class="text-2xl font-semibold mb-4" style="color: var(--text-primary);">No Components Found</h2>
+              <p class="text-lg mb-6" style="color: var(--text-secondary);">You haven't scraped any Tailwind Plus components yet.</p>
+              <div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-6 max-w-md mx-auto" style="background-color: var(--bg-tertiary);">
+                <h3 class="font-semibold mb-3" style="color: var(--text-primary);">Get Started:</h3>
+                <div class="text-left space-y-2 text-sm" style="color: var(--text-secondary);">
+                  <p><strong>1.</strong> Set your credentials:</p>
+                  <code class="block bg-gray-100 dark:bg-gray-700 p-2 rounded text-xs" style="background-color: var(--bg-primary); color: var(--text-primary);">export TAILWINDPLUS_USER="your@email.com"<br>export TAILWINDPLUS_PASS="your_password"</code>
+                  <p><strong>2.</strong> Run the scraper:</p>
+                  <code class="block bg-gray-100 dark:bg-gray-700 p-2 rounded text-xs" style="background-color: var(--bg-primary); color: var(--text-primary);">bin/tailwind-plus scrape</code>
+                </div>
+              </div>
+            </div>
+          <% else %>
+          <% main_categories.each do |key, category_info| %>
+            <% subcategories_in_category = subcategory_groups[key] || {} %>
+            <% total_components = subcategories_in_category.values.sum { |info| info[:count] } %>
+
+            <div class="mb-8">
+              <!-- Category Header -->
+              <button
+                onclick="toggleAccordion('<%= key %>')"
+                class="w-full px-6 py-6 flex items-center justify-between transition-colors rounded-lg"
+                style="background-color: var(--bg-primary);"
+                onmouseover="this.style.backgroundColor='var(--bg-tertiary)';"
+                onmouseout="this.style.backgroundColor='var(--bg-primary)';"
+              >
+                <div class="flex items-center space-x-4">
+                  <div class="flex-shrink-0">
+                    <img
+                      src="/screenshot/<%= key %>"
+                      alt="<%= category_info[:title] %> preview"
+                      class="w-32 h-20 object-cover rounded-md shadow-sm"
+                      onerror="this.style.display='none'"
+                    >
+                  </div>
+                  <div class="text-left">
+                    <h2 class="text-xl font-semibold" style="color: var(--text-primary);"><%= category_info[:title] %></h2>
+                    <p class="text-sm mt-1" style="color: var(--text-secondary);"><%= category_info[:description] %></p>
+                    <p class="text-xs mt-2" style="color: var(--text-tertiary);"><%= total_components %> components in <%= subcategories_in_category.length %> collections</p>
+                  </div>
+                </div>
+                <svg
+                  id="arrow-<%= key %>"
+                  class="accordion-arrow rotated w-5 h-5"
+                  style="color: var(--text-tertiary);"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              <!-- Category Content -->
+              <div id="content-<%= key %>" class="accordion-content expanded">
+                <div class="py-8">
+                  <% if subcategories_in_category.empty? %>
+                    <p class="text-center py-8" style="color: var(--text-tertiary);">No components scraped yet for this category.</p>
+                  <% else %>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <% subcategories_in_category.each do |subcategory_name, info| %>
+                        <% section_path = get_section_path(key, subcategory_name) %>
+                        <a
+                          href="<%= generate_subcategory_url(key, subcategory_name) %>"
+                          class="subcategory-card group relative rounded-lg shadow-sm hover:shadow-md transition-shadow overflow-hidden"
+                          style="border: 1px solid var(--border-primary); background-color: var(--bg-primary);"
+                        >
+                          <div class="aspect-w-4 aspect-h-3">
+                            <img
+                              data-src="/screenshot/section/<%= section_path %>"
+                              alt="<%= info[:title] %> preview"
+                              class="lazy w-full h-full object-cover rounded-md"
+                              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"
+                            >
+                            <div class="hidden w-full h-full items-center justify-center rounded-md" style="background-color: var(--bg-tertiary);">
+                              <svg class="w-8 h-8" style="color: var(--text-tertiary);" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                              </svg>
+                            </div>
+                          </div>
+                          <div class="px-4 py-3">
+                            <p class="text-sm font-medium group-hover:text-indigo-600" style="color: var(--text-primary);">
+                              <%= info[:title] %>
+                            </p>
+                            <p class="text-sm" style="color: var(--text-tertiary);">
+                              <%= info[:count] %> components
+                            </p>
+                          </div>
+                        </a>
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+          <% end %>
+          <% end %>
+        </div>
+      </div>
+    HTML
+  end
+
+  template :subcategory do
+    <<~HTML
+      <div class="min-h-screen" style="background-color: var(--bg-secondary);">
+        <!-- Header -->
+        <header class="shadow-sm" style="background-color: var(--bg-primary); border-bottom: 1px solid var(--border-primary);">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <!-- Tailwind Plus Logo -->
+                <a href="/" class="flex items-center gap-3 no-underline">
+                  <svg width="32" height="32" viewBox="0 0 64 64" class="flex-shrink-0">
+                    <defs>
+                      <linearGradient id="tailwind-gradient-sub" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#0ea5e9;stop-opacity:1" />
+                      </linearGradient>
+                    </defs>
+                    <path d="M16 25.6c2.133-8.533 7.467-12.8 16-12.8 12.8 0 14.4 9.6 20.8 11.2 4.267 1.067 7.467-1.067 9.6-6.4C59.467 26.133 54.133 30.4 45.6 30.4c-12.8 0-14.4-9.6-20.8-11.2C20.533 17.867 17.333 20 16 25.6zM0 44.8C2.133 36.267 7.467 32 16 32c12.8 0 14.4 9.6 20.8 11.2 4.267 1.067 7.467-1.067 9.6-6.4C43.467 45.333 38.133 49.6 29.6 49.6c-12.8 0-14.4-9.6-20.8-11.2C4.533 37.067 1.333 39.2 0 44.8z" fill="url(#tailwind-gradient-sub)"/>
+                  </svg>
+                  <span class="text-lg font-medium" style="color: var(--text-secondary);">
+                    <span style="color: var(--text-primary);">tailwind</span><span class="text-sky-500">PLUS</span>
+                    <span class="ml-2 px-1.5 py-0.5 text-xs font-medium rounded" style="background-color: var(--bg-tertiary); color: var(--text-secondary);">offline</span>
+                  </span>
+                </a>
+              </div>
+              <div>
+                <button
+                  onclick="openSearch()"
+                  class="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition-colors"
+                  style="color: var(--text-secondary); background-color: var(--bg-tertiary);"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                  </svg>
+                  <span class="hidden sm:inline">Search</span>
+                  <kbd class="hidden sm:inline ml-1 text-xs px-1.5 py-0.5 rounded border" style="background-color: var(--bg-primary); border-color: var(--border-primary);">⌘K</kbd>
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <!-- Breadcrumbs -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4" style="border-bottom: 1px solid var(--border-primary);">
+          <nav class="flex" aria-label="Breadcrumb">
+            <ol class="flex items-center space-x-4">
+              <% breadcrumbs = generate_breadcrumbs(parent_category, subcategory_title) %>
+              <% breadcrumbs.each_with_index do |crumb, index| %>
+                <li class="flex">
+                  <% if index > 0 %>
+                    <svg class="w-5 h-5 mr-4" style="color: var(--text-tertiary);" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                    </svg>
+                  <% end %>
+                  <% if crumb[:url] %>
+                    <a href="<%= crumb[:url] %>" class="text-sm font-medium transition-colors" style="color: var(--text-secondary);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-secondary)'">
+                      <%= crumb[:title] %>
+                    </a>
+                  <% else %>
+                    <span class="text-sm font-medium" style="color: var(--text-primary);">
+                      <%= crumb[:title] %>
+                    </span>
+                  <% end %>
+                </li>
+              <% end %>
+            </ol>
+          </nav>
+        </div>
+
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div class="space-y-12">
+            <% components.each_with_index do |component, index| %>
+              <div id="<%= component['anchor_id'] || component['id'] %>" class="pb-12 <%= 'border-b-0 pb-0' if index == components.length - 1 %>" style="<%= 'border-bottom: 1px solid var(--border-primary);' unless index == components.length - 1 %>">
+                <!-- Component Header -->
+                <div class="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 class="text-xl font-semibold">
+                      <a href="<%= generate_local_component_url_with_anchor(component) %>" class="hover:text-indigo-600 transition-colors" style="color: var(--text-primary);">
+                        <%= component['title'] %>
+                      </a>
+                    </h2>
+                    <p class="text-sm mt-1" style="color: var(--text-secondary);">
+                      Scraped <%= Time.parse(component['scraped_at']).strftime('%B %d, %Y') %> •
+                      <a href="<%= generate_component_url_with_anchor(component) %>" target="_blank" class="text-indigo-600 hover:text-indigo-800">
+                        View Original
+                      </a>
+                    </p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button
+                      onclick="expandPreview('<%= component['id'] %>')"
+                      class="expand-button p-2 rounded-md transition-colors"
+                      style="background-color: var(--bg-tertiary); color: var(--text-secondary);"
+                      onmouseover="this.style.backgroundColor='var(--border-secondary)';"
+                      onmouseout="this.style.backgroundColor='var(--bg-tertiary)';"
+                      title="Expand preview"
+                    >
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                      </svg>
+                    </button>
+                    <button
+                      onclick="copyCurrentCode('<%= component['id'] %>', this)"
+                      class="copy-button p-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+                      title="Copy code"
+                    >
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Code Tabs -->
+                <div class="mb-4">
+                  <nav class="flex space-x-1 rounded-lg p-1" style="background-color: var(--bg-tertiary);">
+                    <% available_formats = [] %>
+                    <% available_formats << ['preview', 'Preview', 'text-purple-600 bg-white'] %>
+                    <% available_formats << ['html', 'HTML', 'text-indigo-600 bg-white'] if component['html'] && !component['html'].empty? %>
+                    <% available_formats << ['react', 'React', 'text-blue-600 bg-white'] if component['react'] && !component['react'].empty? %>
+                    <% available_formats << ['vue', 'Vue', 'text-green-600 bg-white'] if component['vue'] && !component['vue'].empty? %>
+
+                    <% available_formats.each_with_index do |(format, label, active_class), index| %>
+                      <button
+                        onclick="switchCodeTab('<%= component['id'] %>', '<%= format %>')"
+                        class="code-tab flex-1 px-3 py-2 text-sm font-medium rounded-md transition-colors <%= index == 0 ? active_class : '' %>"
+                        style="<%= index == 0 ? '' : 'color: var(--text-secondary);' %>"
+                        data-component="<%= component['id'] %>"
+                        data-format="<%= format %>"
+                        data-active-class="<%= active_class %>"
+                      >
+                        <%= label %>
+                      </button>
+                    <% end %>
+                  </nav>
+                </div>
+
+                <!-- Code Content -->
+                <div class="relative bg-gray-900 rounded-lg overflow-hidden">
+                  <% available_formats.each_with_index do |(format, label, _), index| %>
+                    <% if format == 'preview' %>
+                      <div
+                        id="code-<%= component['id'] %>-<%= format %>"
+                        class="code-content <%= index == 0 ? '' : 'hidden' %>"
+                        data-code="<%= ERB::Util.html_escape(component['html']) %>"
+                      >
+                        <div class="p-4" style="background-color: var(--bg-primary);">
+                          <% if component['html'] && !component['html'].empty? %>
+                            <iframe
+                              srcdoc="<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>&lt;script src='https://cdn.tailwindcss.com'&gt;&lt;/script&gt;<style>body { margin: 0; padding: 0; overflow-x: hidden; min-height: 100vh; } html { overflow-x: hidden; } @media (max-width: 768px) { body { font-size: 14px; } }</style></head><body><%= component['html'].gsub('"', '&quot;') %></body></html>"
+                              class="w-full h-96 sm:h-96 md:h-96 border-0 rounded"
+                              sandbox="allow-scripts"
+                              loading="lazy"
+                              style="min-height: 384px;"
+                            ></iframe>
+                          <% else %>
+                            <div class="h-96 flex items-center justify-center rounded" style="color: var(--text-tertiary); border: 2px dashed var(--border-secondary);">
+                              No HTML available for preview
+                            </div>
+                          <% end %>
+                        </div>
+                      </div>
+                    <% else %>
+                      <div
+                        id="code-<%= component['id'] %>-<%= format %>"
+                        class="code-content <%= index == 0 ? '' : 'hidden' %>"
+                        data-code="<%= ERB::Util.html_escape(component[format]) %>"
+                      >
+                        <pre class="language-<%= format == 'html' ? 'html' : 'javascript' %> p-4 max-h-96 overflow-y-auto"><code class="language-<%= format == 'html' ? 'html' : 'javascript' %> text-sm"><%= ERB::Util.html_escape(component[format]) %></code></pre>
+                      </div>
+                    <% end %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    HTML
+  end
+end
+
+def start_server(port = 4567)
+  puts "🚀 Starting Tailwind Plus UI server on http://localhost:#{port}"
+  puts "📂 Serving components from #{TailwindPlusConfig.index_file} + collections"
+  puts "⚡ Press Ctrl+C to stop"
+
+  TailwindPlusServer.set :port, port
+  TailwindPlusServer.run!
+end
+
+def search_components(query, options = {})
+  # Use shared configuration
+  index_file = TailwindPlusConfig.index_file
+  collections_dir = TailwindPlusConfig.collections_dir
+
+  unless File.exist?(index_file)
+    if options[:json]
+      puts JSON.pretty_generate({ error: "Components index not found. Run 'tailwind-plus scrape' first." })
+    else
+      puts "❌ Components index not found. Run 'tailwind-plus scrape' first."
+    end
+    exit 1
+  end
+
+  begin
+    index = JSON.parse(File.read(index_file))
+  rescue JSON::ParserError => e
+    if options[:json]
+      puts JSON.pretty_generate({ error: "Error parsing components index: #{e.message}" })
+    else
+      puts "❌ Error parsing components index: #{e.message}"
+    end
+    exit 1
+  end
+
+  results = []
+  query_lower = query.downcase
+
+  # Get server port from environment or default
+  server_port = ENV['TAILWIND_PLUS_PORT'] || '4567'
+
+  # Search through index and collections
+  index.each do |index_entry|
+    # Load the collection to get individual components
+    collection_path = File.join(collections_dir, index_entry['collection_file'])
+    next unless File.exist?(collection_path)
+
+    begin
+      collection = JSON.parse(File.read(collection_path))
+      components = collection['components'] || []
+
+      components.each_with_index do |component, idx|
+        # Check if component title, category, or subcategory matches
+        if (component['title']&.downcase&.include?(query_lower)) ||
+          (index_entry['category'].downcase.include?(query_lower)) ||
+          (index_entry['title'].downcase.include?(query_lower))
+
+          # Generate a unique ID for this component
+          collection_name = index_entry['collection_file'].gsub('.json', '')
+          component_id = "#{collection_name}:#{idx}"
+
+          # Generate local URL for web UI
+          local_path = index_entry['url'].split('/plus/ui-blocks/').last if index_entry['url']
+          local_url = local_path ? "http://localhost:#{server_port}/ui-blocks/#{local_path}#component-#{idx}" : nil
+
+          results << {
+            component: component,
+            category: index_entry['category'],
+            subcategory_title: index_entry['title'],
+            url: index_entry['url'],
+            local_url: local_url,
+            index: idx,
+            id: component_id
+          }
+        end
+      end
+    rescue JSON::ParserError => e
+      unless options[:json]
+        puts "⚠️  Warning: Could not parse #{index_entry['collection_file']}: #{e.message}"
+      end
+    end
+  end
+
+  if options[:json]
+    # Machine-readable JSON output
+    output = {
+      query: query,
+      results_count: results.length,
+      server_port: server_port,
+      results: results.map do |result|
+        {
+          id: result[:id],
+          title: result[:component]['title'],
+          category: result[:category],
+          subcategory: result[:subcategory_title],
+          original_url: result[:url],
+          local_url: result[:local_url]
+        }
+      end
+    }
+    puts JSON.pretty_generate(output)
+    return
+  end
+
+  # Human-readable output
+  if results.empty?
+    puts "❌ No components found matching '#{query}'"
+    return
+  end
+
+  puts "🔍 Searching for: '#{query}'"
+  puts ""
+  puts "✅ Found #{results.length} component(s):"
+  puts ""
+
+  results.each_with_index do |result, i|
+    component = result[:component]
+    puts "#{i + 1}. #{component['title']}"
+    puts "   📂 #{result[:category]} › #{result[:subcategory_title]}"
+    puts "   🆔 #{result[:id]}"
+    puts "   🔗 #{result[:url]}"
+    if result[:local_url]
+      puts "   🌐 #{result[:local_url]}"
+    end
+    puts ""
+  end
+
+  puts "💡 Use 'tailwind-plus view <id>' to see component code"
+  puts "   Example: tailwind-plus view #{results.first[:id]} --format react"
+  puts ""
+  puts "💡 Set TAILWIND_PLUS_PORT environment variable to customize server port (current: #{server_port})"
+end
+
+def view_component(component_id, options = {})
+  # Use shared configuration
+  index_file = TailwindPlusConfig.index_file
+  collections_dir = TailwindPlusConfig.collections_dir
+
+  unless File.exist?(index_file)
+    error_msg = "Components index not found. Run 'tailwind-plus scrape' first."
+    if options[:json]
+      puts JSON.pretty_generate({ error: error_msg })
+    else
+      puts "❌ #{error_msg}"
+    end
+    exit 1
+  end
+
+  # Parse component ID (format: collection_name:index)
+  unless component_id.include?(':')
+    error_msg = "Invalid component ID format. Use format from search results."
+    if options[:json]
+      puts JSON.pretty_generate({ error: error_msg })
+    else
+      puts "❌ #{error_msg}"
+    end
+    exit 1
+  end
+
+  collection_name, index_str = component_id.split(':', 2)
+  component_index = index_str.to_i
+
+  # Load the specific collection
+  collection_path = File.join(collections_dir, "#{collection_name}.json")
+  unless File.exist?(collection_path)
+    error_msg = "Collection not found: #{collection_name}"
+    if options[:json]
+      puts JSON.pretty_generate({ error: error_msg })
+    else
+      puts "❌ #{error_msg}"
+    end
+    exit 1
+  end
+
+  begin
+    collection = JSON.parse(File.read(collection_path))
+  rescue JSON::ParserError => e
+    error_msg = "Error parsing collection: #{e.message}"
+    if options[:json]
+      puts JSON.pretty_generate({ error: error_msg })
+    else
+      puts "❌ #{error_msg}"
+    end
+    exit 1
+  end
+
+  components = collection['components'] || []
+  if component_index >= components.length
+    error_msg = "Component index #{component_index} not found in collection"
+    if options[:json]
+      puts JSON.pretty_generate({ error: error_msg })
+    else
+      puts "❌ #{error_msg}"
+    end
+    exit 1
+  end
+
+  component = components[component_index]
+
+  # Get server port from environment or default
+  server_port = ENV['TAILWIND_PLUS_PORT'] || '4567'
+  local_path = collection['url'].split('/plus/ui-blocks/').last if collection['url']
+  local_url = local_path ? "http://localhost:#{server_port}/ui-blocks/#{local_path}#component-#{component_index}" : nil
+
+  if options[:json]
+    # Machine-readable JSON output
+    format = options[:format] || 'all'
+
+    code = {}
+    if format == 'all' || format == 'html'
+      code['html'] = component['html']
+    end
+    if format == 'all' || format == 'react'
+      code['react'] = component['react']
+    end
+    if format == 'all' || format == 'vue'
+      code['vue'] = component['vue']
+    end
+
+    output = {
+      id: component_id,
+      title: component['title'],
+      category: collection['category'],
+      subcategory: collection['title'],
+      original_url: collection['url'],
+      local_url: local_url,
+      server_port: server_port,
+      code: code
+    }
+
+    puts JSON.pretty_generate(output)
+    return
+  end
+
+  # Human-readable output
+  puts "📖 #{component['title']}"
+  puts "📂 #{collection['category']} › #{collection['title']}"
+  puts "🔗 #{collection['url']}"
+  if local_url
+    puts "🌐 #{local_url}"
+  end
+  puts ""
+
+  format = options[:format] || 'all'
+
+  if format == 'all' || format == 'html'
+    if component['html']
+      puts "🌐 HTML:"
+      puts "─" * 60
+      puts component['html']
+      puts ""
+    else
+      puts "❌ HTML code not available for this component" if format == 'html'
+    end
+  end
+
+  if format == 'all' || format == 'react'
+    if component['react']
+      puts "⚛️  React:"
+      puts "─" * 60
+      puts component['react']
+      puts ""
+    else
+      puts "❌ React code not available for this component" if format == 'react'
+    end
+  end
+
+  if format == 'all' || format == 'vue'
+    if component['vue']
+      puts "💚 Vue:"
+      puts "─" * 60
+      puts component['vue']
+      puts ""
+    else
+      puts "❌ Vue code not available for this component" if format == 'vue'
+    end
+  end
+end
+
+def main
+  scraper = TailwindPlusScraper.new
+
+  command = ARGV[0]&.downcase
+
+  case command
+  when 'login'
+    if scraper.login
+      puts "✅ Login successful!"
+    else
+      puts "❌ Login failed!"
+      exit 1
+    end
+  when 'scrape'
+    target = ARGV[1] || 'all'
+    scraper.scrape(target)
+  when 'serve'
+    port = ARGV[1] ? ARGV[1].to_i : 4567
+    start_server(port)
+  when 'search'
+    query = ARGV[1]
+    unless query
+      puts "❌ Please provide a search query"
+      puts "Usage: #{$0} search <query> [--json]"
+      exit 1
+    end
+
+    options = {}
+    options[:json] = ARGV.include?('--json')
+
+    search_components(query, options)
+  when 'view'
+    component_id = ARGV[1]
+    unless component_id
+      puts "❌ Please provide a component ID"
+      puts "Usage: #{$0} view <component-id> [--format html|react|vue] [--json]"
+      exit 1
+    end
+
+    options = {}
+    options[:json] = ARGV.include?('--json')
+
+    # Parse format flag
+    if format_idx = ARGV.index('--format')
+      if ARGV[format_idx + 1]
+        format = ARGV[format_idx + 1].downcase
+        if ['html', 'react', 'vue'].include?(format)
+          options[:format] = format
+        else
+          puts "❌ Invalid format. Use: html, react, or vue"
+          exit 1
+        end
+      end
+    end
+
+    view_component(component_id, options)
+  else
+    puts <<~HELP
+      Usage: #{$0} <command> [options]
+
+      Commands:
+        login              Test login to Tailwind UI Plus
+        scrape [target]    Scrape components (default: all)
+        serve [port]       Start local server to browse components (default: 4567)
+        search <query>     Search components offline
+        view <id>          View component code
+
+      Search Options:
+        --json             Output machine-readable JSON
+
+      View Options:
+        --format <type>    Show specific format: html, react, or vue (default: all)
+        --json             Output machine-readable JSON
+
+      Environment Variables:
+        TAILWIND_PLUS_PORT Set custom server port (default: 4567)
+
+      Examples:
+        #{$0} login
+        #{$0} scrape
+        #{$0} scrape heroes
+        #{$0} serve
+        #{$0} serve 8080
+        #{$0} search hero
+        #{$0} search button --json
+        #{$0} view marketing_sections_heroes:0
+        #{$0} view marketing_sections_heroes:0 --format react
+        #{$0} view marketing_sections_heroes:0 --json
+        TAILWIND_PLUS_PORT=3000 #{$0} search hero
+    HELP
+  end
+end
+
+if __FILE__ == $0
+  main
+end

@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pbpaste-enc - Encrypt clipboard contents with age
+
+usage() {
+    cat >&2 <<EOF
+Usage: pbpaste-enc [OPTIONS]
+
+Encrypt clipboard contents with age using SSH public keys.
+
+Options:
+  -u, --github-users USER  Fetch SSH public keys from GitHub (repeatable, comma-separated)
+  -k, --pubkey KEY         Use a single SSH public key string
+  -f, --file FILE          Use a file containing SSH public keys
+  --stdout                 Output to stdout instead of clipboard
+  --clippy                 Copy as file reference (for uploading to Slack, etc.)
+  -h, --help               Show this help message
+
+Environment:
+  GH_HOST                  GitHub Enterprise hostname (optional)
+                           If not set, uses github.com
+
+Examples:
+  pbpaste-enc -u octocat
+  pbpaste-enc -u octocat -u defunkt
+  pbpaste-enc -u octocat,defunkt,mojombo
+  pbpaste-enc -k "ssh-ed25519 AAAAC3... user@host"
+  pbpaste-enc -f ~/.ssh/authorized_keys
+  pbpaste-enc -u octocat --stdout > encrypted.txt
+  pbpaste-enc -u octocat --clippy  # Copy as file, paste to upload
+EOF
+}
+
+die() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+# Check for age
+if ! command -v age &>/dev/null; then
+    die "age is not installed. Install it with: brew install age"
+fi
+
+# Check for curl (needed for GitHub user mode)
+check_curl() {
+    if ! command -v curl &>/dev/null; then
+        die "curl is not installed but required for GitHub user mode"
+    fi
+}
+
+# Check for clippy (needed for --clippy mode)
+check_clippy() {
+    if ! command -v clippy &>/dev/null; then
+        die "clippy is not installed but required for --clippy mode"
+    fi
+}
+
+# Parse arguments
+github_users=()
+pubkey=""
+keyfile=""
+use_stdout=false
+use_clippy=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -u|--github-users)
+            [[ -n "${2:-}" ]] || die "Option $1 requires an argument"
+            # Split by comma and add each user to the array
+            IFS=',' read -ra users <<< "$2"
+            for user in "${users[@]}"; do
+                # Trim whitespace
+                user="${user#"${user%%[![:space:]]*}"}"
+                user="${user%"${user##*[![:space:]]}"}"
+                [[ -n "$user" ]] && github_users+=("$user")
+            done
+            shift 2
+            ;;
+        -k|--pubkey)
+            [[ -n "${2:-}" ]] || die "Option $1 requires an argument"
+            pubkey="$2"
+            shift 2
+            ;;
+        -f|--file)
+            [[ -n "${2:-}" ]] || die "Option $1 requires an argument"
+            keyfile="$2"
+            shift 2
+            ;;
+        --stdout)
+            use_stdout=true
+            shift
+            ;;
+        --clippy)
+            use_clippy=true
+            shift
+            ;;
+        *)
+            die "Unknown option: $1"
+            ;;
+    esac
+done
+
+# Validate output mode - can only use one
+if [[ "$use_stdout" == true && "$use_clippy" == true ]]; then
+    die "Cannot use --stdout and --clippy together"
+fi
+
+# Validate that exactly one recipient method is provided
+recipient_count=0
+[[ ${#github_users[@]} -gt 0 ]] && ((recipient_count++)) || true
+[[ -n "$pubkey" ]] && ((recipient_count++)) || true
+[[ -n "$keyfile" ]] && ((recipient_count++)) || true
+
+if [[ $recipient_count -eq 0 ]]; then
+    echo "Error: No recipient specified. Use -u, -k, or -f." >&2
+    echo >&2
+    usage
+    exit 1
+fi
+
+if [[ $recipient_count -gt 1 ]]; then
+    die "Only one recipient method can be used at a time (-u, -k, or -f)"
+fi
+
+# Get plaintext from clipboard
+plaintext="$(pbpaste)"
+if [[ -z "$plaintext" ]]; then
+    die "Clipboard is empty"
+fi
+
+# Encrypt based on recipient method
+encrypt_data() {
+    if [[ ${#github_users[@]} -gt 0 ]]; then
+        check_curl
+
+        # Collect all keys from all users
+        all_keys=""
+        for github_user in "${github_users[@]}"; do
+            # Determine GitHub host
+            if [[ -n "${GH_HOST:-}" ]]; then
+                keys_url="https://${GH_HOST}/${github_user}.keys"
+            else
+                keys_url="https://github.com/${github_user}.keys"
+            fi
+
+            # Fetch keys and verify we got something
+            keys="$(curl -fsSL "$keys_url" 2>/dev/null)" || die "Failed to fetch SSH keys from $keys_url"
+
+            if [[ -z "$keys" ]]; then
+                die "No SSH keys found for user '$github_user' at $keys_url"
+            fi
+
+            all_keys+="$keys"$'\n'
+        done
+
+        # Encrypt using process substitution for recipients
+        echo "$plaintext" | age -a -R <(echo "$all_keys")
+
+    elif [[ -n "$pubkey" ]]; then
+        # Encrypt using the provided public key via process substitution
+        echo "$plaintext" | age -a -R <(echo "$pubkey")
+
+    elif [[ -n "$keyfile" ]]; then
+        # Verify file exists
+        if [[ ! -f "$keyfile" ]]; then
+            die "Key file not found: $keyfile"
+        fi
+
+        # Encrypt using the key file
+        echo "$plaintext" | age -a -R "$keyfile"
+    fi
+}
+
+# Perform encryption and handle output
+if [[ "$use_stdout" == true ]]; then
+    encrypt_data
+elif [[ "$use_clippy" == true ]]; then
+    check_clippy
+    # Create temp file with timestamp (persists for pasting)
+    tmpfile="/tmp/encrypted-$(date +%Y%m%d-%H%M%S).age"
+    encrypt_data > "$tmpfile"
+    clippy "$tmpfile"
+    echo "Encrypted file copied to clipboard (paste to upload)." >&2
+else
+    ciphertext="$(encrypt_data)"
+    echo "$ciphertext" | pbcopy
+    echo "Clipboard encrypted with age." >&2
+fi
