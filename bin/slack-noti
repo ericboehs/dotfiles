@@ -1,0 +1,5 @@
+#! /usr/bin/env bash
+
+# Properly escape message for JSON using jq
+json_payload=$(jq -nc --arg text "${1:-Done}" '{text: $text}')
+curl -s -X POST -H 'Content-type: application/json' --data "$json_payload" $BOEHS_SLACK_NOTI_HOOK
