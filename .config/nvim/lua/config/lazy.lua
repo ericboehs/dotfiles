@@ -14,6 +14,9 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
+-- Set maplocalleader before loading lazy
+vim.g.maplocalleader = "\\"
+
 require("lazy").setup({
   spec = {
     -- add LazyVim and import its plugins
