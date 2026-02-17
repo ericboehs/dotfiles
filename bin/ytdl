@@ -1,0 +1,20 @@
+#! /usr/bin/env bash
+
+if [ -z "$1" ]; then
+  echo "Usage: ytdl \"<url>\""
+  exit 1
+fi
+
+if [ -n "$2" ]; then
+  echo "Usage: ytdl \"<url>\""
+  exit 1
+fi
+
+# Download video with embeded subs/thumb
+pushd ~/Downloads/YouTube
+# yt-dlp --sponsorblock-mark all --embed-metadata --embed-subs --embed-thumbnail --merge-output-format mp4 -o "%(channel)s - %(title)s" "$1"
+# yt-dlp --embed-chapters --embed-subs --embed-thumbnail --merge-output-format mp4 -o "%(channel)s - %(title)s" "$1"
+popd
+
+# Download video with subtitles, thumbnail, and metadata files
+yt-dlp --sponsorblock-mark all --write-info-json --write-subs --write-auto-subs --sub-format srt --convert-subs srt --write-thumbnail --convert-thumbnails jpg --add-metadata --embed-subs --embed-thumbnail --merge-output-format mp4 -o "%(channel)s - %(title)s" "$1"

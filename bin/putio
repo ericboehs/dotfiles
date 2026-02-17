@@ -1,0 +1,310 @@
+#!/bin/bash
+# put.io CLI - Manage files and transfers
+# Requires PUTIO_TOKEN environment variable
+
+set -e
+
+: "${PUTIO_TOKEN:?PUTIO_TOKEN environment variable required}"
+
+API_BASE="https://api.put.io/v2"
+
+# Helper: API call with token
+api() {
+  local endpoint="$1"
+  shift
+  curl -s "${API_BASE}${endpoint}$( [[ "$endpoint" == *"?"* ]] && echo "&" || echo "?" )oauth_token=${PUTIO_TOKEN}" "$@"
+}
+
+# Helper: Format bytes to human readable
+human_size() {
+  local bytes=$1
+  if (( bytes >= 1073741824 )); then
+    echo "$(echo "scale=2; $bytes / 1073741824" | bc)G"
+  elif (( bytes >= 1048576 )); then
+    echo "$(echo "scale=2; $bytes / 1048576" | bc)M"
+  elif (( bytes >= 1024 )); then
+    echo "$(echo "scale=2; $bytes / 1024" | bc)K"
+  else
+    echo "${bytes}B"
+  fi
+}
+
+cmd_files() {
+  local parent_id="${1:-0}"
+
+  # If arg is a name, try to find the folder ID
+  if [[ "$parent_id" =~ ^[A-Za-z] ]]; then
+    local folder_name="$parent_id"
+    parent_id=$(api "/files/list?parent_id=0" | jq -r ".files[] | select(.name | ascii_downcase == \"$(echo "$folder_name" | tr '[:upper:]' '[:lower:]')\") | .id")
+    if [[ -z "$parent_id" ]]; then
+      echo "Folder '$folder_name' not found"
+      exit 1
+    fi
+  fi
+
+  api "/files/list?parent_id=${parent_id}" | jq -r '
+    .files[] |
+    [.file_type, (.size | tostring), .name] |
+    @tsv
+  ' | while IFS=$'\t' read -r type size name; do
+    if [[ "$type" == "FOLDER" ]]; then
+      printf "📁 %-60s\n" "$name"
+    else
+      printf "📄 %-60s %s\n" "$name" "$(human_size "$size")"
+    fi
+  done
+}
+
+cmd_transfers() {
+  local filter="${1:-all}"
+
+  api "/transfers/list" | jq -r --arg filter "$filter" '
+    .transfers[] |
+    select($filter == "all" or .status == ($filter | ascii_upcase)) |
+    [.status, (.percent_done | tostring), .name] |
+    @tsv
+  ' | while IFS=$'\t' read -r status percent name; do
+    local icon
+    case "$status" in
+      COMPLETED) icon="✅" ;;
+      SEEDING) icon="🌱" ;;
+      DOWNLOADING) icon="⬇️" ;;
+      WAITING) icon="⏳" ;;
+      ERROR) icon="❌" ;;
+      *) icon="❓" ;;
+    esac
+    if [[ "$status" == "DOWNLOADING" ]]; then
+      printf "%s %-12s %3.0f%% %s\n" "$icon" "$status" "$percent" "$name"
+    else
+      printf "%s %-12s      %s\n" "$icon" "$status" "$name"
+    fi
+  done
+}
+
+cmd_search() {
+  local query="$1"
+  if [[ -z "$query" ]]; then
+    echo "Usage: putio search <query>"
+    exit 1
+  fi
+
+  api "/files/search/${query}" | jq -r '
+    .files[] |
+    [.file_type, (.size | tostring), .name, .id] |
+    @tsv
+  ' | while IFS=$'\t' read -r type size name id; do
+    if [[ "$type" == "FOLDER" ]]; then
+      printf "📁 [%s] %s\n" "$id" "$name"
+    else
+      printf "📄 [%s] %-50s %s\n" "$id" "$name" "$(human_size "$size")"
+    fi
+  done
+}
+
+cmd_add() {
+  local url="$1"
+  local parent_id="${2:-0}"
+
+  if [[ -z "$url" ]]; then
+    echo "Usage: putio add <magnet-or-url> [parent_id]"
+    exit 1
+  fi
+
+  api "/transfers/add" -X POST -d "url=${url}&save_parent_id=${parent_id}" | jq -r '
+    if .transfer then
+      "Added: \(.transfer.name)\nStatus: \(.transfer.status)"
+    else
+      "Error: \(.error_message // "Unknown error")"
+    end
+  '
+}
+
+cmd_delete() {
+  local file_id="$1"
+
+  if [[ -z "$file_id" ]]; then
+    echo "Usage: putio delete <file_id>"
+    exit 1
+  fi
+
+  api "/files/delete" -X POST -d "file_ids=${file_id}" | jq -r '
+    if .status == "OK" then "Deleted successfully"
+    else "Error: \(.error_message // "Unknown error")"
+    end
+  '
+}
+
+cmd_cancel() {
+  local transfer_id="$1"
+
+  if [[ -z "$transfer_id" ]]; then
+    echo "Usage: putio cancel <transfer_id>"
+    exit 1
+  fi
+
+  api "/transfers/cancel" -X POST -d "transfer_ids=${transfer_id}" | jq -r '
+    if .status == "OK" then "Cancelled successfully"
+    else "Error: \(.error_message // "Unknown error")"
+    end
+  '
+}
+
+cmd_retry() {
+  local transfer_id="$1"
+
+  if [[ -z "$transfer_id" ]]; then
+    echo "Usage: putio retry <transfer_id>"
+    exit 1
+  fi
+
+  api "/transfers/retry" -X POST -d "id=${transfer_id}" | jq -r '
+    if .transfer then "Retrying: \(.transfer.name)"
+    else "Error: \(.error_message // "Unknown error")"
+    end
+  '
+}
+
+cmd_open() {
+  local path="${1:-}"
+  local url="https://app.put.io"
+
+  case "$path" in
+    transfers|t) url="https://app.put.io/transfers" ;;
+    files|f) url="https://app.put.io/files" ;;
+    settings|s) url="https://app.put.io/settings" ;;
+    *) [[ -n "$path" ]] && url="https://app.put.io/files/$path" ;;
+  esac
+
+  open "$url"
+  echo "Opened: $url"
+}
+
+cmd_clean() {
+  api "/transfers/clean" -X POST | jq -r '
+    if .status == "OK" then "Cleaned completed transfers"
+    else "Error: \(.error_message // "Unknown error")"
+    end
+  '
+}
+
+cmd_account() {
+  api "/account/info" | jq -r '
+    .info |
+    "Username: \(.username)",
+    "Email: \(.mail)",
+    "Disk Used: \(.disk.used / 1073741824 | . * 100 | floor / 100)G / \(.disk.size / 1073741824 | floor)G",
+    "Available: \(.disk.avail / 1073741824 | . * 100 | floor / 100)G"
+  '
+}
+
+cmd_help() {
+  cat <<EOF
+put.io CLI
+
+Usage: putio <command> [args]
+
+Commands:
+  files [folder]      List files (folder name or ID, default: root)
+  transfers [filter]  List transfers (all, downloading, completed, seeding)
+  search <query>      Search for files
+  add <url> [parent]  Add a transfer (magnet link or URL)
+  delete <file_id>    Delete a file
+  cancel <id>         Cancel a transfer
+  retry <id>          Retry a failed transfer
+  clean               Remove completed transfers from list
+  account             Show account info
+  open [page]         Open put.io in browser (transfers, files, settings)
+
+Examples:
+  putio files                    # List root folder
+  putio files Downloads          # List Downloads folder
+  putio transfers                # Show all transfers
+  putio transfers downloading    # Show only active downloads
+  putio search "christmas"       # Search for files
+  putio add "magnet:?xt=..."     # Add a magnet link
+  putio clean                    # Clear completed transfers
+  putio open                     # Open put.io in browser
+  putio open transfers           # Open transfers page
+EOF
+}
+
+cmd_summary() {
+  echo "═══ put.io ═══"
+  echo ""
+
+  # Account/Disk
+  api "/account/info" | jq -r '.info | "💾 Disk: \(.disk.used / 1073741824 | . * 100 | floor / 100)G / \(.disk.size / 1073741824 | floor)G available"'
+  echo ""
+
+  # Active transfers - prioritize in-progress
+  local transfers_json
+  transfers_json=$(api "/transfers/list")
+
+  # Count by status
+  local downloading seeding completed waiting
+  downloading=$(echo "$transfers_json" | jq '[.transfers[] | select(.status == "DOWNLOADING")] | length')
+  seeding=$(echo "$transfers_json" | jq '[.transfers[] | select(.status == "SEEDING")] | length')
+  completed=$(echo "$transfers_json" | jq '[.transfers[] | select(.status == "COMPLETED")] | length')
+  waiting=$(echo "$transfers_json" | jq '[.transfers[] | select(.status == "WAITING")] | length')
+
+  echo "📡 Transfers: ⬇️ $downloading  🌱 $seeding  ✅ $completed  ⏳ $waiting"
+  echo ""
+
+  # Show downloading first with progress bars
+  echo "$transfers_json" | jq -r '
+    .transfers | sort_by(if .status == "DOWNLOADING" then 0 elif .status == "WAITING" then 1 elif .status == "SEEDING" then 2 else 3 end)[:10][] |
+    [.status, (.percent_done | tostring), (.downloaded // 0 | tostring), (.size // 0 | tostring), .name] |
+    @tsv
+  ' | while IFS=$'\t' read -r status percent downloaded size name; do
+    local icon
+    case "$status" in
+      COMPLETED) icon="✅" ;;
+      SEEDING) icon="🌱" ;;
+      DOWNLOADING) icon="⬇️" ;;
+      WAITING) icon="⏳" ;;
+      ERROR) icon="❌" ;;
+      *) icon="❓" ;;
+    esac
+
+    # Truncate name for display
+    local short_name="${name:0:50}"
+    [[ ${#name} -gt 50 ]] && short_name="${short_name}..."
+
+    if [[ "$status" == "DOWNLOADING" ]]; then
+      # Show progress bar
+      local pct_int=${percent%.*}
+      local filled=$((pct_int / 5))
+      local empty=$((20 - filled))
+      local bar=$(printf '█%.0s' $(seq 1 $filled 2>/dev/null) ; printf '░%.0s' $(seq 1 $empty 2>/dev/null))
+      printf "   %s %3.0f%% [%s] %s\n" "$icon" "$percent" "$bar" "$short_name"
+    elif [[ "$status" == "WAITING" ]]; then
+      printf "   %s waiting %s\n" "$icon" "$short_name"
+    else
+      printf "   %s %s\n" "$icon" "$short_name"
+    fi
+  done
+  echo ""
+
+  echo "Run 'putio help' for all commands"
+}
+
+# Main
+case "${1:-summary}" in
+  files|ls)      shift; cmd_files "$@" ;;
+  transfers|t)   shift; cmd_transfers "$@" ;;
+  search|s)      shift; cmd_search "$@" ;;
+  add|a)         shift; cmd_add "$@" ;;
+  delete|rm)     shift; cmd_delete "$@" ;;
+  cancel)        shift; cmd_cancel "$@" ;;
+  retry)         shift; cmd_retry "$@" ;;
+  clean)         shift; cmd_clean "$@" ;;
+  account|info)  shift; cmd_account "$@" ;;
+  open|o)        shift; cmd_open "$@" ;;
+  summary)       cmd_summary ;;
+  help|--help|-h) cmd_help ;;
+  *)
+    echo "Unknown command: $1"
+    cmd_help
+    exit 1
+    ;;
+esac
