@@ -1,4 +1,4 @@
 #! /usr/bin/env bash
 
 open -a iTerm
-tmux switch-client -t 📝
+tmux switch-client -t notes || (tmux new -d -s notes; tmux send-keys -t notes:1.0 "nvim +'lua require(\"lazy\").load({plugins={\"vimwiki\"}})' +VimwikiIndex" C-m; sleep 1; tmux switch-client -t notes)

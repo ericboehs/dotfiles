@@ -70,7 +70,7 @@ abbrevs+=(
 abbrevs+=(
   "ta"    "tmux -u attach"
   # "tan"   "tmux -u attach || (tmux -u new -d -s 👨🏼‍💻 -n editor; tmux new -d -s 📝; tmux send-keys -t 📝:1.0 'nvim -c :VimwikiIndex' C-m; tmux new -d -s 📻; tmux send-keys -t 📻:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t 👨🏼‍💻)"
-  "tan"   "tmux -u attach || (tmux -u new -d -s 0; tmux new -d -s 1; tmux send-keys -t 1:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t 0)"
+  "tan"   "tmux -u attach || (tmux -u new -d -s code; tmux new -d -s notes; tmux send-keys -t notes:1.0 'cd ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Vault; nvim +\"lua require(\\\"lazy\\\").load({plugins={\\\"vimwiki\\\"}})\" +VimwikiIndex' C-m; tmux new -d -s music; tmux send-keys -t music:1.0 'ncmpcpp' C-m; sleep 1; tmux -u attach -t code)"
   "tda"   "tmux detach -a"
   "tsw"   "tmux split-window"
   "tswrc" "tmux split-window rails c"

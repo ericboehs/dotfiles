@@ -83,3 +83,19 @@ case ":$PATH:" in
   *) export PATH="$PNPM_HOME:$PATH" ;;
 esac
 # pnpm end
+
+# Added by Antigravity
+export PATH="/Users/ericboehs/.antigravity/antigravity/bin:$PATH"
+
+# bun completions
+[ -s "/Users/ericboehs/.bun/_bun" ] && source "/Users/ericboehs/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+eval "$(mise activate zsh)"
+export ENABLE_LSP_TOOL=1
+
+# OpenClaw Completion (cached to avoid slow bedrock discovery)
+[[ -f ~/.openclaw/completion.zsh ]] && source ~/.openclaw/completion.zsh
