@@ -9,3 +9,6 @@ CLAUDE.md
 .claude
 TODO.md
 .opencode
+.gh-pm.yml
+.playwright-mcp/
+.sidecar/

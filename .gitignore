@@ -9,3 +9,6 @@
 !.config/nvim/
 .config/nvim/lazy-lock.json
 channel.xml
+bin/oversee*
+bin/slack
+bin/claude-dashboard
