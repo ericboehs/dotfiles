@@ -173,8 +173,8 @@ show_ci_status() {
 }
 
 # Initial display
-show_ci_status
-if [ $? -eq 2 ]; then
+show_ci_status; rc=$?
+if [ $rc -eq 2 ]; then
   # All checks already passed on initial check
   exit 0
 fi
@@ -182,8 +182,8 @@ fi
 # Watch loop
 while true; do
   sleep $INTERVAL
-  show_ci_status
-  case $? in
+  show_ci_status; rc=$?
+  case $rc in
     2)
       # All checks passed, exit successfully
       exit 0
