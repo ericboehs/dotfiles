@@ -1,7 +1,7 @@
 [include]
   path = ~/.gitconfig.private
 
-[includeIf "gitdir:~/Code/department-of-veterans-affairs-ghec-us/**"]
+[includeIf "gitdir:~/Code/va.ghe.com/**"]
   path = ~/.gitconfig.va-ghe
 
 [core]
