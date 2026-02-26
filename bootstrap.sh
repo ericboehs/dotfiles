@@ -108,10 +108,13 @@ for f in $dotfiles; do
   fi
 done
 
-# Symlink neovim config
+# Symlink .config directories
 mkdir -p ~/.config
 echo "-----> Linking neovim config"
 ln -fns $PWD/.config/nvim ~/.config/nvim
+echo "-----> Linking mise config"
+mkdir -p ~/.config/mise
+ln -fs $PWD/.config/mise/config.toml ~/.config/mise/config.toml
 
 # Install TPM (Tmux Plugin Manager) and plugins
 if [ ! -d ~/.tmux/plugins/tpm ]; then

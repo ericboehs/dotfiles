@@ -1,0 +1,8 @@
+[settings]
+ruby.compile = false
+
+[tools]
+python = "3.12"
+bun = "latest"
+node = "24"
+ruby = "4"
