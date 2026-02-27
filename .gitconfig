@@ -38,6 +38,9 @@
   gpgsign = true
 	verbose = true
 
+[tag]
+  gpgsign = true
+
 [credential]
   helper = cache --timeout=600
 
