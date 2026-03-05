@@ -1,10 +1,5 @@
 return {
-  -- Use local development version
-  dir = "/Users/ericboehs/Code/pwntester/octo.nvim",
-
-  -- Original config (comment out dir above to use this)
-  -- "pwntester/octo.nvim",
-
+  "pwntester/octo.nvim",
   dependencies = {
     "nvim-lua/plenary.nvim",
     "nvim-telescope/telescope.nvim",
