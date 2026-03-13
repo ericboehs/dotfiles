@@ -1,44 +1,56 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Script to watch CI status for the current branch
-# Usage: bin/watch-ci [interval_seconds]
+# Usage: watch-ci [-h|--help] [interval_seconds]
+# Default interval: 10s (minimum: 5s)
 
-set -e
+if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: $(basename "$0") [interval_seconds]"
+  echo ""
+  echo "Watch GitHub Actions CI status for the current branch."
+  echo "Polls until all checks pass or fail, then exits."
+  echo ""
+  echo "  interval_seconds  Polling interval in seconds (default: 10, minimum: 5)"
+  exit 0
+fi
 
-# Default interval (in seconds)
 INTERVAL=${1:-10}
 
-# Colors for output
+if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then
+  echo "❌ Error: interval must be a positive integer, got '$INTERVAL'"
+  exit 1
+fi
+
+if [ "$INTERVAL" -lt 5 ]; then
+  echo "⚠️  Interval too low ($INTERVAL), using minimum of 5 seconds"
+  INTERVAL=5
+fi
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Clear screen function
 clear_screen() {
   printf "\033[2J\033[H"
 }
 
-# Check if we're in a git repository
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
   echo "❌ Not in a git repository"
   exit 1
 fi
 
-# Check if gh CLI is available
 if ! command -v gh >/dev/null 2>&1; then
   echo "❌ GitHub CLI (gh) not found. Install with: brew install gh"
   exit 1
 fi
 
-# Check if jq is available
 if ! command -v jq >/dev/null 2>&1; then
   echo "❌ jq not found. Install with: brew install jq"
   exit 1
 fi
 
-# Get current branch
 BRANCH=$(git branch --show-current)
 if [ -z "$BRANCH" ]; then
   echo "❌ Not on a branch (detached HEAD)"
@@ -49,7 +61,7 @@ echo -e "🔍 Watching CI for branch: ${BLUE}$BRANCH${NC}"
 echo "⏱️  Refresh interval: ${INTERVAL}s (press Ctrl+C to stop)"
 echo ""
 
-# Function to display CI status
+# Returns: 0 = checks still running, 1 = failure detected, 2 = all checks passed
 show_ci_status() {
   local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
 
@@ -59,41 +71,53 @@ show_ci_status() {
   echo "📝 Press Ctrl+C to stop watching"
   echo ""
 
-  # Try to get PR checks first
-  PR_CHECKS=$(gh pr checks 2>/dev/null) || true
-  if [ -n "$PR_CHECKS" ]; then
+  # Try to get PR checks first (use JSON for reliable parsing)
+  local pr_json
+  pr_json=$(gh pr checks --json name,state,completedAt,detailsUrl 2>/dev/null) || true
+  if [ -n "$pr_json" ] && [ "$pr_json" != "[]" ]; then
     echo "📊 CI Check Results:"
     echo "===================="
 
-    # Parse and colorize the output
-    while IFS=$'\t' read -r name status duration url; do
-      case "$status" in
-        "pass")
-          echo -e "✅ ${GREEN}$name${NC} - ${duration}"
+    echo "$pr_json" | jq -r '.[] | "\(.name)\t\(.state)\t\(.detailsUrl // "")"' | while IFS=$'\t' read -r name state url; do
+      case "$state" in
+        "SUCCESS")
+          echo -e "✅ ${GREEN}$name${NC}"
           ;;
-        "fail")
-          echo -e "❌ ${RED}$name${NC} - ${duration}"
-          echo -e "   📋 ${BLUE}$url${NC}"
+        "FAILURE"|"ERROR")
+          echo -e "❌ ${RED}$name${NC}"
+          if [ -n "$url" ]; then
+            echo -e "   📋 ${BLUE}$url${NC}"
+          fi
           ;;
-        "pending")
+        "PENDING"|"QUEUED"|"IN_PROGRESS"|"WAITING"|"REQUESTED"|"STARTUP_FAILURE")
           echo -e "⏳ ${YELLOW}$name${NC} - running..."
           ;;
+        "NEUTRAL"|"SKIPPED"|"STALE")
+          echo -e "⏭️  ${YELLOW}$name${NC} - $state"
+          ;;
         *)
-          echo -e "❓ ${YELLOW}$name${NC} - $status"
+          echo -e "❓ ${YELLOW}$name${NC} - $state"
           ;;
       esac
-    done <<< "$PR_CHECKS"
+    done
 
-    # Check if all passed
-    if echo "$PR_CHECKS" | grep -q "fail"; then
+    local has_fail has_pending
+    has_fail=$(echo "$pr_json" | jq '[.[] | select(.state == "FAILURE" or .state == "ERROR")] | length')
+    has_pending=$(echo "$pr_json" | jq '[.[] | select(.state == "PENDING" or .state == "QUEUED" or .state == "IN_PROGRESS" or .state == "WAITING" or .state == "REQUESTED")] | length')
+
+    if [ "$has_fail" -gt 0 ] && [ "$has_pending" -eq 0 ]; then
       echo ""
       echo -e "${RED}❌ Some checks failed${NC}"
       echo ""
       echo "📋 Failure logs:"
       echo "==============="
-      gh run view --log-failed
+      local fail_run_id
+      fail_run_id=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null) || true
+      if [ -n "$fail_run_id" ]; then
+        gh run view "$fail_run_id" --log-failed 2>/dev/null || true
+      fi
       return 1
-    elif echo "$PR_CHECKS" | grep -q "pending"; then
+    elif [ "$has_pending" -gt 0 ]; then
       echo ""
       echo -e "${YELLOW}⏳ Checks still running...${NC}"
       return 0
@@ -108,8 +132,7 @@ show_ci_status() {
     echo "📊 CI Workflow Status (latest run on $BRANCH):"
     echo "=============================================="
 
-    # Get the latest workflow run for this branch
-    RUN_ID=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+    RUN_ID=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null) || true
 
     if [ -z "$RUN_ID" ]; then
       echo "❓ No CI runs found for branch $BRANCH"
@@ -117,12 +140,15 @@ show_ci_status() {
       return 0
     fi
 
-    # Get run status and jobs
-    RUN_INFO=$(gh run view "$RUN_ID" --json status,conclusion,jobs 2>/dev/null)
+    RUN_INFO=$(gh run view "$RUN_ID" --json status,conclusion,jobs 2>/dev/null) || true
+    if [ -z "$RUN_INFO" ]; then
+      echo "Could not fetch run info"
+      return 0
+    fi
+
     RUN_STATUS=$(echo "$RUN_INFO" | jq -r '.status')
     RUN_CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
 
-    # Display each job
     echo "$RUN_INFO" | jq -r '.jobs[] | "\(.name)\t\(.status)\t\(.conclusion)"' | while IFS=$'\t' read -r name status conclusion; do
       if [ "$status" = "completed" ]; then
         case "$conclusion" in
@@ -144,7 +170,6 @@ show_ci_status() {
       fi
     done
 
-    # Overall status
     echo ""
     if [ "$RUN_STATUS" = "completed" ]; then
       if [ "$RUN_CONCLUSION" = "success" ]; then
@@ -156,7 +181,7 @@ show_ci_status() {
         echo ""
         echo "📋 Failure logs:"
         echo "==============="
-        gh run view "$RUN_ID" --log-failed
+        gh run view "$RUN_ID" --log-failed 2>/dev/null || true
         return 1
       fi
     else
@@ -164,32 +189,27 @@ show_ci_status() {
       return 0
     fi
   fi
-
-  echo ""
-  echo "🛠️  Quick commands:"
-  echo "   gh pr view    - View PR details"
-  echo "   gh pr checks  - Show detailed check status"
-  echo "   gh run list   - List recent runs"
 }
 
 # Initial display
 show_ci_status && rc=$? || rc=$?
 if [ $rc -eq 2 ]; then
-  # All checks already passed on initial check
   exit 0
+fi
+if [ $rc -eq 1 ]; then
+  exit 1
 fi
 
 # Watch loop
 while true; do
-  sleep $INTERVAL
+  sleep "$INTERVAL"
   show_ci_status && rc=$? || rc=$?
   case $rc in
     2)
-      # All checks passed, exit successfully
       exit 0
       ;;
     1)
-      # Some checks failed, continue watching
+      exit 1
       ;;
     0)
       # Checks still running, continue watching

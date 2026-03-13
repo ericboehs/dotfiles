@@ -12,9 +12,6 @@ font-size = 20
 window-padding-x = 10
 window-padding-y = 10
 
-# Window shadow (may help with macOS focus issues)
-macos-window-shadow = true
-
 # Image support
 image-storage-limit = 320000000
 
