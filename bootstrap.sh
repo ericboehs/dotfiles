@@ -81,6 +81,11 @@ for f in $dotfiles; do
     continue
   fi
 
+  if [ $f = ".gitconfig.va-ghe.example" ]; then
+    [[ $USER = "ericboehs" ]] && ln -fs $source_file ~/.gitconfig.va-ghe
+    continue
+  fi
+
   if [ $f = ".gitignore.global" ]; then
     ln -fs $source_file ~/.gitignore
     continue
