@@ -43,40 +43,74 @@ if [[ "$SPRINT" == "@current" ]]; then
   echo "Current sprint: Sprint $SPRINT"
 fi
 
-GH_HOST=va.ghe.com gh api graphql -f query='
-query {
-  organization(login: "software") {
-    projectV2(number: 20) {
-      items(first: 100) {
-        nodes {
-          content {
-            ... on Issue {
-              number
-              title
-              state
-              assignees(first: 5) {
-                nodes {
-                  login
+# Paginate through all project items (max 100 per page)
+ALL_ITEMS="[]"
+CURSOR=""
+
+while true; do
+  if [[ -z "$CURSOR" ]]; then
+    AFTER_ARG=""
+  else
+    AFTER_ARG=", after: \"$CURSOR\""
+  fi
+
+  RESPONSE=$(GH_HOST=va.ghe.com gh api graphql -f query="
+  query {
+    organization(login: \"software\") {
+      projectV2(number: 20) {
+        items(first: 100${AFTER_ARG}) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            content {
+              ... on Issue {
+                number
+                title
+                state
+                assignees(first: 5) {
+                  nodes {
+                    login
+                  }
                 }
               }
             }
-          }
-          fieldValueByName(name: "Sprint") {
-            ... on ProjectV2ItemFieldIterationValue {
-              title
+            fieldValueByName(name: \"Sprint\") {
+              ... on ProjectV2ItemFieldIterationValue {
+                title
+              }
             }
-          }
-          status: fieldValueByName(name: "Status") {
-            ... on ProjectV2ItemFieldSingleSelectValue {
-              name
+            status: fieldValueByName(name: \"Status\") {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+              }
             }
           }
         }
       }
     }
-  }
-}' | jq -r --arg sprint "Sprint $SPRINT" '
-  .data.organization.projectV2.items.nodes[]
+  }")
+
+  # Append nodes to ALL_ITEMS
+  PAGE_ITEMS=$(echo "$RESPONSE" | jq '.data.organization.projectV2.items.nodes')
+  ALL_ITEMS=$(echo "$ALL_ITEMS $PAGE_ITEMS" | jq -s 'add')
+
+  # Check for next page
+  HAS_NEXT=$(echo "$RESPONSE" | jq -r '.data.organization.projectV2.items.pageInfo.hasNextPage')
+  if [[ "$HAS_NEXT" != "true" ]]; then
+    break
+  fi
+
+  CURSOR=$(echo "$RESPONSE" | jq -r '.data.organization.projectV2.items.pageInfo.endCursor')
+
+  # Rate limit: brief pause between pages
+  sleep 0.5
+done
+
+# Filter and display
+echo "$ALL_ITEMS" | jq -r --arg sprint "Sprint $SPRINT" '
+  .[]
   | select(.fieldValueByName.title == $sprint)
   | select(.content.number != null)
   | [
