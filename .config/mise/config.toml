@@ -1,3 +1,12 @@
+[env]
+BAT_THEME = "ansi"
+DISABLE_SPRING = "true"
+DOCKER_SCAN_SUGGEST = "false"
+VTK_DISABLE_ANALYTICS = "true"
+CLAUDE_NOTIFY_SLACK = "false"
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY = "YES"
+GITLEAKS_CONFIG = "{{env.HOME}}/.config/gitleaks/config.toml"
+
 [settings]
 ruby.compile = false
 
