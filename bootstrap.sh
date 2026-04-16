@@ -147,9 +147,13 @@ mkdir -p ~/.config/mise
 ln -fs $PWD/.config/mise/config.toml ~/.config/mise/config.toml
 
 # Trust the symlinked mise config so activations don't error on every shell.
-if command -v mise >/dev/null; then
+# PATH may not yet include ~/.local/bin during bootstrap, so fall back to the
+# absolute path mise.run installs to.
+MISE_BIN="$(command -v mise || true)"
+[ -z "$MISE_BIN" ] && [ -x "$HOME/.local/bin/mise" ] && MISE_BIN="$HOME/.local/bin/mise"
+if [ -x "$MISE_BIN" ]; then
   echo "-----> Trusting mise config"
-  mise trust ~/.config/mise/config.toml >/dev/null
+  "$MISE_BIN" trust ~/.config/mise/config.toml >/dev/null
 fi
 
 # Install TPM (Tmux Plugin Manager) and plugins
