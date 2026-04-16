@@ -146,6 +146,12 @@ echo "-----> Linking mise config"
 mkdir -p ~/.config/mise
 ln -fs $PWD/.config/mise/config.toml ~/.config/mise/config.toml
 
+# Trust the symlinked mise config so activations don't error on every shell.
+if command -v mise >/dev/null; then
+  echo "-----> Trusting mise config"
+  mise trust ~/.config/mise/config.toml >/dev/null
+fi
+
 # Install TPM (Tmux Plugin Manager) and plugins
 if [ ! -d ~/.tmux/plugins/tpm ]; then
   echo "-----> Installing TPM (Tmux Plugin Manager)"
