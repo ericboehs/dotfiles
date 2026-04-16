@@ -3,10 +3,15 @@
 
 set -e # Exit on any error
 
-# Checkout dotfiles repo and cd (pushd) to it
-mkdir -p ~/Code/ericboehs/
-[[ -e ~/Code/ericboehs/dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/Code/ericboehs/dotfiles
-pushd ~/Code/ericboehs/dotfiles > /dev/null
+# Resolve the repo location: if this script lives in a git checkout, use it;
+# otherwise (curl-install case) clone into ~/Code/github.com/ericboehs/dotfiles.
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [[ ! -d "$DOTFILES_DIR/.git" ]]; then
+  DOTFILES_DIR="$HOME/Code/github.com/ericboehs/dotfiles"
+  mkdir -p "$(dirname "$DOTFILES_DIR")"
+  [[ -e "$DOTFILES_DIR" ]] || git clone https://github.com/ericboehs/dotfiles "$DOTFILES_DIR"
+fi
+pushd "$DOTFILES_DIR" > /dev/null
 mkdir -p ~/.ssh
 
 # Make sure we're on the latest master and have the correct submodule versions
@@ -87,7 +92,7 @@ fi
 dotfiles="$(ls -a) .ssh/config"
 for f in $dotfiles; do
   overwrite=false
-  source_file=~/Code/ericboehs/dotfiles/$f
+  source_file="$DOTFILES_DIR/$f"
   target_file=~/$(dirname $f)/$(basename $f)
 
   # Skip these files
@@ -117,7 +122,7 @@ for f in $dotfiles; do
   fi
 
   if [ -e ~/$f ]; then
-    test $(readlink $source_file) = $(readlink ~/Code/ericboehs/dotfiles/$f) && continue
+    test $(readlink $source_file) = $(readlink "$DOTFILES_DIR/$f") && continue
 
     if [ "$FORCE_OVERWRITE" == "true" ]; then
       overwrite=true
@@ -141,10 +146,10 @@ done
 # Symlink .config directories
 mkdir -p ~/.config
 echo "-----> Linking neovim config"
-ln -fns $PWD/.config/nvim ~/.config/nvim
+ln -fns "$DOTFILES_DIR/.config"/nvim ~/.config/nvim
 echo "-----> Linking mise config"
 mkdir -p ~/.config/mise
-ln -fs $PWD/.config/mise/config.toml ~/.config/mise/config.toml
+ln -fs "$DOTFILES_DIR/.config"/mise/config.toml ~/.config/mise/config.toml
 
 # Trust the symlinked mise config so activations don't error on every shell.
 # PATH may not yet include ~/.local/bin during bootstrap, so fall back to the
