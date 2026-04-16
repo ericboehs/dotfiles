@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Installation script adopted from https://gist.github.com/sonots/4239842
 
 set -e # Exit on any error
@@ -57,6 +57,30 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
   else
     echo "-----> Catppuccin Mocha color scheme already imported"
   fi
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  echo "-----> Installing Linux dependencies via apt"
+  # apt packages: equivalents to the brew list on macOS.
+  # fd is fd-find (binary: fdfind), bat is bat (binary: batcat) — we create
+  # ~/.local/bin shims further down.
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    zsh neovim direnv lsd starship zoxide fzf zsh-autosuggestions \
+    gnupg tmux ripgrep fd-find bat lua5.4 gh git-delta
+
+  echo "-----> Installing mise"
+  if ! command -v mise >/dev/null; then
+    curl -fsSL https://mise.run | sh
+  fi
+
+  echo "-----> Linking ~/.local/bin shims for fd and bat"
+  mkdir -p "$HOME/.local/bin"
+  [ -x /usr/bin/fdfind ]  && ln -sf /usr/bin/fdfind  "$HOME/.local/bin/fd"
+  [ -x /usr/bin/batcat ]  && ln -sf /usr/bin/batcat  "$HOME/.local/bin/bat"
+
+  echo "-----> Setting zsh as the default shell"
+  if [ "$SHELL" != "$(command -v zsh)" ]; then
+    sudo chsh -s "$(command -v zsh)" "$USER"
+  fi
 fi
 
 # symlink all dotfiles into ~ (skip if they exist)
@@ -73,6 +97,7 @@ for f in $dotfiles; do
   [ $f = ".git" ]         && continue
   [ $f = ".gitignore" ]   && continue
   [ $f = ".gitmodules" ]  && continue
+  [ $f = ".config" ]      && continue
   [ $f = "bootstrap.sh" ] && continue
   [ $f = "README.md" ]    && continue
 
