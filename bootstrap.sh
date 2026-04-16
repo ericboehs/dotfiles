@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installation script adopted from https://gist.github.com/sonots/4239842
 
-set -e # Exit on any error
+set -eo pipefail # Exit on any error; catch failures in piped commands (curl | sh)
 
 # Resolve the repo location: if this script lives in a git checkout, use it;
 # otherwise (curl-install case) clone into ~/Code/github.com/ericboehs/dotfiles.
@@ -122,7 +122,7 @@ for f in $dotfiles; do
   fi
 
   if [ -e ~/$f ]; then
-    test $(readlink $source_file) = $(readlink "$DOTFILES_DIR/$f") && continue
+    [ "$(readlink "$HOME/$f")" = "$DOTFILES_DIR/$f" ] && continue
 
     if [ "$FORCE_OVERWRITE" == "true" ]; then
       overwrite=true
