@@ -1,12 +1,17 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Installation script adopted from https://gist.github.com/sonots/4239842
 
-set -e # Exit on any error
+set -eo pipefail # Exit on any error; catch failures in piped commands (curl | sh)
 
-# Checkout dotfiles repo and cd (pushd) to it
-mkdir -p ~/Code/ericboehs/
-[[ -e ~/Code/ericboehs/dotfiles ]] || git clone https://github.com/ericboehs/dotfiles ~/Code/ericboehs/dotfiles
-pushd ~/Code/ericboehs/dotfiles > /dev/null
+# Resolve the repo location: if this script lives in a git checkout, use it;
+# otherwise (curl-install case) clone into ~/Code/github.com/ericboehs/dotfiles.
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [[ ! -d "$DOTFILES_DIR/.git" ]]; then
+  DOTFILES_DIR="$HOME/Code/github.com/ericboehs/dotfiles"
+  mkdir -p "$(dirname "$DOTFILES_DIR")"
+  [[ -e "$DOTFILES_DIR" ]] || git clone https://github.com/ericboehs/dotfiles "$DOTFILES_DIR"
+fi
+pushd "$DOTFILES_DIR" > /dev/null
 mkdir -p ~/.ssh
 
 # Make sure we're on the latest master and have the correct submodule versions
@@ -57,13 +62,37 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
   else
     echo "-----> Catppuccin Mocha color scheme already imported"
   fi
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  echo "-----> Installing Linux dependencies via apt"
+  # apt packages: equivalents to the brew list on macOS.
+  # fd is fd-find (binary: fdfind), bat is bat (binary: batcat) — we create
+  # ~/.local/bin shims further down.
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    zsh neovim direnv lsd starship zoxide fzf zsh-autosuggestions \
+    gnupg tmux ripgrep fd-find bat lua5.4 gh git-delta
+
+  echo "-----> Installing mise"
+  if ! command -v mise >/dev/null; then
+    curl -fsSL https://mise.run | sh
+  fi
+
+  echo "-----> Linking ~/.local/bin shims for fd and bat"
+  mkdir -p "$HOME/.local/bin"
+  [ -x /usr/bin/fdfind ]  && ln -sf /usr/bin/fdfind  "$HOME/.local/bin/fd"
+  [ -x /usr/bin/batcat ]  && ln -sf /usr/bin/batcat  "$HOME/.local/bin/bat"
+
+  echo "-----> Setting zsh as the default shell"
+  if [ "$SHELL" != "$(command -v zsh)" ]; then
+    sudo chsh -s "$(command -v zsh)" "$USER"
+  fi
 fi
 
 # symlink all dotfiles into ~ (skip if they exist)
 dotfiles="$(ls -a) .ssh/config"
 for f in $dotfiles; do
   overwrite=false
-  source_file=~/Code/ericboehs/dotfiles/$f
+  source_file="$DOTFILES_DIR/$f"
   target_file=~/$(dirname $f)/$(basename $f)
 
   # Skip these files
@@ -73,6 +102,7 @@ for f in $dotfiles; do
   [ $f = ".git" ]         && continue
   [ $f = ".gitignore" ]   && continue
   [ $f = ".gitmodules" ]  && continue
+  [ $f = ".config" ]      && continue
   [ $f = "bootstrap.sh" ] && continue
   [ $f = "README.md" ]    && continue
 
@@ -92,7 +122,7 @@ for f in $dotfiles; do
   fi
 
   if [ -e ~/$f ]; then
-    test $(readlink $source_file) = $(readlink ~/Code/ericboehs/dotfiles/$f) && continue
+    [ "$(readlink "$HOME/$f")" = "$DOTFILES_DIR/$f" ] && continue
 
     if [ "$FORCE_OVERWRITE" == "true" ]; then
       overwrite=true
@@ -116,10 +146,20 @@ done
 # Symlink .config directories
 mkdir -p ~/.config
 echo "-----> Linking neovim config"
-ln -fns $PWD/.config/nvim ~/.config/nvim
+ln -fns "$DOTFILES_DIR/.config"/nvim ~/.config/nvim
 echo "-----> Linking mise config"
 mkdir -p ~/.config/mise
-ln -fs $PWD/.config/mise/config.toml ~/.config/mise/config.toml
+ln -fs "$DOTFILES_DIR/.config"/mise/config.toml ~/.config/mise/config.toml
+
+# Trust the symlinked mise config so activations don't error on every shell.
+# PATH may not yet include ~/.local/bin during bootstrap, so fall back to the
+# absolute path mise.run installs to.
+MISE_BIN="$(command -v mise || true)"
+[ -z "$MISE_BIN" ] && [ -x "$HOME/.local/bin/mise" ] && MISE_BIN="$HOME/.local/bin/mise"
+if [ -x "$MISE_BIN" ]; then
+  echo "-----> Trusting mise config"
+  "$MISE_BIN" trust ~/.config/mise/config.toml >/dev/null
+fi
 
 # Install TPM (Tmux Plugin Manager) and plugins
 if [ ! -d ~/.tmux/plugins/tpm ]; then

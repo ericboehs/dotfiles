@@ -9,6 +9,7 @@
 !.config/nvim/
 !.config/mise/
 !.config/ghostty/
+.config/mise/config.local.toml
 .config/nvim/lazy-lock.json
 channel.xml
 bin/oversee*

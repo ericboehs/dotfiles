@@ -15,7 +15,8 @@ source "$HOME/.zsh/abbreviations.zsh"
 source "$HOME/.zsh/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
 source "$HOME/.zsh/fzf.zsh"
 source "$HOME/.zsh/auto-notify.plugin.zsh"
-source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[[ -f /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 
 # Inlcude a private/local zshrc for ENV secrets and customizations
 [[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
@@ -28,7 +29,7 @@ opsi() {
 }
 
 mfa() {
-  source ~/Code/department-of-veterans-affairs/devops/utilities/issue_mfa.sh Eric.Boehs $1
+  source ~/Code/github.com/department-of-veterans-affairs/devops/utilities/issue_mfa.sh Eric.Boehs $1
   sed -i '' '/export AWS_/d' ~/.zshrc.local
   env | grep AWS_ | sed -e 's/^/export /' >> ~/.zshrc.local
 }
@@ -62,9 +63,11 @@ alias weelog='cd /Users/ericboehs/.local/share/weechat/logs && rg'
 # Search oddball slack emojis
 alias ose='ranger ~/Code/oddballteam/slack-emojis/'
 
-export PATH="/opt/homebrew/opt/libxml2/bin:$PATH"
-export PATH="/Users/ericboehs/Code/ggerganov/whisper.cpp:$PATH"
-export OPENSSL_DIR="$(brew --prefix openssl)"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  export PATH="/opt/homebrew/opt/libxml2/bin:$PATH"
+  export PATH="/Users/ericboehs/Code/ggerganov/whisper.cpp:$PATH"
+  export OPENSSL_DIR="$(brew --prefix openssl)"
+fi
 
 # Zoxide (cd replacement)
 # Only initialize in interactive shells to avoid issues with Claude Code
@@ -72,6 +75,8 @@ export OPENSSL_DIR="$(brew --prefix openssl)"
 
 eval "$(starship init zsh)"
 eval "$(mise activate zsh)"
+# DISABLED: fnox activate causes infinite fork bomb via mise shim recursion (jdx/fnox#TBD)
+# eval "$(fnox activate zsh)"
 
 # Added by LM Studio CLI (lms)
 export PATH="$PATH:/Users/ericboehs/.cache/lm-studio/bin"
