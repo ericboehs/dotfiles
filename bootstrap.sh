@@ -47,6 +47,19 @@ resolve_dotfiles_dir() {
 install_deps() {
   [[ -n "${SKIP_DEPS:-}" ]] && { skip "package deps"; return; }
   if [[ "$OSTYPE" == darwin* ]]; then
+    # SSH non-interactive sessions don't load ~/.zprofile, so brew may not be
+    # on PATH yet. Find it at the standard Apple Silicon / Intel locations.
+    if ! command -v brew >/dev/null; then
+      for p in /opt/homebrew/bin /usr/local/bin; do
+        [[ -x "$p/brew" ]] && export PATH="$p:$PATH" && break
+      done
+    fi
+    if ! command -v brew >/dev/null; then
+      log "Homebrew not found; installing"
+      $DRY_RUN && printf "    \033[2;37m[dry] /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\033[0m\n"
+      $DRY_RUN || NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      [[ -x /opt/homebrew/bin/brew ]] && export PATH="/opt/homebrew/bin:$PATH"
+    fi
     log "Installing Homebrew dependencies"
     run brew install mise neovim git direnv lsd starship zoxide fzf \
       zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier delta
