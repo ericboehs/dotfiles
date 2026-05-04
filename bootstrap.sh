@@ -267,3 +267,19 @@ install_tpm
 install_nvim_plugins
 
 log "All done. Enjoy your shell."
+
+# Surface manual steps that bootstrap can't do for you. Skipped under
+# --dry-run so the dry-run output still looks like a single dry-run.
+if ! $DRY_RUN; then
+  needs=()
+  command -v gh >/dev/null && ! gh auth status >/dev/null 2>&1 && \
+    needs+=("gh auth login         # octo.nvim, gh CLI")
+  command -v op >/dev/null || \
+    needs+=("brew install --cask 1password-cli  # for fnox + secrets")
+  if [[ ${#needs[@]} -gt 0 ]]; then
+    log "Manual steps still needed:"
+    for n in "${needs[@]}"; do printf "    %s\n" "$n"; done
+  fi
+  log "Note: nvim-treesitter installs more parsers on demand the first time"
+  log "      you open files of new types — that's expected, not a bug."
+fi
