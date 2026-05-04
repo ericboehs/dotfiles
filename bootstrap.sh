@@ -53,9 +53,17 @@ install_deps() {
   elif [[ "$OSTYPE" == linux-gnu* ]]; then
     log "Installing apt dependencies"
     run sudo apt-get update -qq
+    # starship isn't in Ubuntu's apt repos; install via its official script
+    # below. lsd is in universe on 22.04+ but missing on minimal images, so
+    # fall back to cargo if apt fails — for CI, apt is sufficient.
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      zsh neovim direnv lsd starship zoxide fzf zsh-autosuggestions \
+      zsh neovim direnv lsd zoxide fzf zsh-autosuggestions \
       gnupg tmux ripgrep fd-find bat lua5.4 gh git-delta
+    if ! command -v starship >/dev/null; then
+      log "Installing starship via official installer"
+      $DRY_RUN && printf "    \033[2;37m[dry] curl -sS https://starship.rs/install.sh | sh -s -- -y\033[0m\n"
+      $DRY_RUN || curl -sS https://starship.rs/install.sh | sh -s -- -y
+    fi
     if ! command -v mise >/dev/null; then
       log "Installing mise"
       $DRY_RUN && printf "    \033[2;37m[dry] curl -fsSL https://mise.run | sh\033[0m\n"
