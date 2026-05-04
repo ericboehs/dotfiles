@@ -18,6 +18,8 @@ jobs:
           FORCE_OVERWRITE: "1"
           SKIP_TPM: "1"
           SKIP_DEFAULTS: "1"
+          SKIP_NVIM: "1"
+          SKIP_MISE: "1"
         run: bash bootstrap.sh
 
       - name: Verify dotfiles symlinked

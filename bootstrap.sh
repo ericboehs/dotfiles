@@ -11,8 +11,9 @@
 #   SKIP_ITERM     — Catppuccin Mocha import (macOS only)
 #   SKIP_DEFAULTS  — defaults.sh (macOS only)
 #   SKIP_LINK      — symlink dotfiles into $HOME
-#   SKIP_MISE      — mise trust on the symlinked config
+#   SKIP_MISE      — mise trust + install runtime versions
 #   SKIP_TPM       — tmux plugin manager + plugin install
+#   SKIP_NVIM      — Lazy.nvim plugin sync
 #
 # FORCE_OVERWRITE=1 auto-yes on existing-file overwrite prompts.
 
@@ -207,23 +208,34 @@ link_dotfiles() {
 }
 
 trust_mise_config() {
-  [[ -n "${SKIP_MISE:-}" ]] && { skip "mise trust"; return; }
+  [[ -n "${SKIP_MISE:-}" ]] && { skip "mise trust + install"; return; }
   local mise_bin
   mise_bin="$(command -v mise || true)"
   [[ -z "$mise_bin" && -x "$HOME/.local/bin/mise" ]] && mise_bin="$HOME/.local/bin/mise"
   [[ ! -x "$mise_bin" ]] && return
   log "Trusting mise config"
   run "$mise_bin" trust ~/.config/mise/config.toml
+  log "Installing mise runtimes (this may take a while)"
+  run "$mise_bin" install
 }
 
 install_tpm() {
   [[ -n "${SKIP_TPM:-}" ]] && { skip "TPM"; return; }
-  if [[ -d ~/.tmux/plugins/tpm ]]; then
-    skip "TPM (already installed)"; return
+  if [[ ! -d ~/.tmux/plugins/tpm ]]; then
+    log "Installing TPM"
+    run git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
   fi
-  log "Installing TPM and plugins"
-  run git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+  log "Installing tmux plugins"
   run ~/.tmux/plugins/tpm/bin/install_plugins
+}
+
+install_nvim_plugins() {
+  [[ -n "${SKIP_NVIM:-}" ]] && { skip "nvim plugins"; return; }
+  command -v nvim >/dev/null || { skip "nvim plugins (nvim not installed)"; return; }
+  log "Syncing Lazy.nvim plugins (headless)"
+  # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
+  # during first install (treesitter parsers compiling); keep it visible.
+  run nvim --headless "+Lazy! sync" +qa
 }
 
 # ---- main ----
@@ -244,5 +256,6 @@ link_dotfiles
 trust_mise_config
 apply_macos_defaults
 install_tpm
+install_nvim_plugins
 
 log "All done. Enjoy your shell."
