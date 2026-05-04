@@ -323,6 +323,24 @@ abbrevs+=(
   "ghadmins" "REPO_PATH=\$(git remote get-url origin | sed 's|https://github.com/||') __CURSOR__; gh api /repos/\$REPO_PATH/collaborators --jq '.[] | select(.permissions.admin == true) | .html_url'; gh api /repos/\$REPO_PATH/teams --jq '.[] | select(.permissions.admin == true) | .html_url' "
 )
 
+# Claude Code
+abbrevs+=(
+  "cl"    "claude"
+  "cld"   "claude --dangerously-skip-permissions"
+  "clr"   "claude --resume"
+  "cldr"  "claude --dangerously-skip-permissions --resume"
+  "cldfr" "claude --dangerously-skip-permissions --fork-session --resume"
+  "clu"   'claude "/usage"'
+)
+
+# Claude (Copilot proxy)
+abbrevs+=(
+  "clap"   "clapilot"
+  "clapd"  "clapilot --dangerously-skip-permissions"
+  "clapr"  "clapilot --resume"
+  "clapdr" "clapilot --dangerously-skip-permissions --resume"
+)
+
 for abbr in ${(k)abbrevs}; do
   alias $abbr="${abbrevs[$abbr]}"
 done

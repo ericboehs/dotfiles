@@ -1,0 +1,27 @@
+#!/bin/bash
+# Qwen3-Coder-Next via llama-server with persistent KV cache
+# 80B params, 3B active (MoE) — fast prefill, good tool calling
+# Slot persistence keeps system prompt warm across sessions
+
+MODEL="$HOME/.cache/llama-models/Qwen3-Coder-Next-UD-IQ4_XS.gguf"
+CACHE_DIR="$HOME/.cache/llama-kv-cache"
+PORT="${LLAMA_PORT:-8090}"
+
+if [ ! -f "$MODEL" ]; then
+  echo "Model not found at $MODEL"
+  echo "Download with: huggingface-cli download unsloth/Qwen3-Coder-Next-GGUF Qwen3-Coder-Next-UD-IQ4_XS.gguf --local-dir ~/.cache/llama-models"
+  exit 1
+fi
+
+exec llama-server \
+  --model "$MODEL" \
+  --port "$PORT" \
+  --ctx-size 32768 \
+  --parallel 2 \
+  --slots \
+  --slot-save-path "$CACHE_DIR" \
+  --slot-prompt-similarity 0.10 \
+  --flash-attn \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --temp 0.0

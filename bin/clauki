@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Claude Code via Fireworks FirePass (Kimi K2.5 Turbo)
+# Requires: FIREWORKS_API_KEY in fnox (Keychain)
+
+MODEL="accounts/fireworks/routers/kimi-k2p5-turbo"
+
+export ANTHROPIC_BASE_URL="https://api.fireworks.ai/inference"
+# Use direct binary path — mise shim causes infinite recursion (fnox → shim → mise → fnox → ...)
+export ANTHROPIC_AUTH_TOKEN="$("$(mise where fnox)/fnox" get FIREWORKS_API_KEY)"
+export ANTHROPIC_MODEL="${MODEL}"
+export ANTHROPIC_SMALL_FAST_MODEL="${MODEL}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${MODEL}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${MODEL}"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="${MODEL}"
+export ANTHROPIC_CUSTOM_MODEL_OPTION="${MODEL}"
+export ANTHROPIC_CUSTOM_MODEL_OPTION_NAME="Kimi K2.5 Turbo (FirePass)"
+export ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION="Fireworks FirePass — flat-rate Kimi K2.5 Turbo"
+export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+exec claude --mcp-config ~/.claude/mcp-brave.json "$@"

@@ -56,10 +56,15 @@ function _auto_notify_message() {
         fi
         notify-send "$title" "$body" --app-name=zsh "--urgency=$urgency" "--expire-time=$AUTO_NOTIFY_EXPIRE_TIME"
     elif [[ "$platform" == "Darwin" ]]; then
-        # Only send notification if iTerm2 is not the frontmost application
+        # Skip notification if the terminal app is already frontmost
         local frontmost_app=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
-        if [[ "$frontmost_app" != "iTerm2" ]]; then
-            terminal-notifier -title "$title" -message "$body"
+        if [[ "$frontmost_app" != "iTerm2" && "$frontmost_app" != "Ghostty" && "$frontmost_app" != "Terminal" ]]; then
+            # Use osascript instead of terminal-notifier — its bundle id isn't
+            # registered with NotificationCenter on recent macOS, which causes
+            # "no running NotificationCenter instance" errors.
+            local escaped_title="${title//\"/\\\"}"
+            local escaped_body="${body//\"/\\\"}"
+            osascript -e "display notification \"$escaped_body\" with title \"$escaped_title\"" >/dev/null 2>&1
         fi
     else
         printf "Unknown platform for sending notifications: $platform\n"

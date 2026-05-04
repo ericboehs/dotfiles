@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PATH setup (mise shims, homebrew, ~/bin)
+export PATH="$HOME/bin:$HOME/.local/share/mise/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+
+# Ensure Claude home dir exists
+mkdir -p "$HOME/.config/earl/claude-home"
+
+cd "$HOME/.local/share/earl"
+# Secrets + prod config loaded from fnox.toml (production profile, keychain provider).
+# Call fnox via direct binary path — `fnox` by name hits the mise shim, which
+# causes infinite recursion when fnox internally re-invokes itself.
+exec "$(mise where fnox)/fnox" exec -P production -- ruby exe/earl "$@"

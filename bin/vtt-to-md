@@ -1,0 +1,150 @@
+#!/usr/bin/env ruby
+# Convert WebVTT to anchored markdown with HH:MM:SS audio-fragment links.
+
+require 'optparse'
+require 'stringio'
+
+VERSION = '0.1.1'
+
+options = { audio: nil, output: nil, title: nil, no_audio: false, force: false }
+
+parser = OptionParser.new do |opts|
+  opts.banner = <<~BANNER
+    Usage: vtt-to-md [options] <input.vtt>
+
+    Converts a WebVTT transcript to markdown with per-utterance HTML anchors
+    (`<a id="tHHMMSS"></a>`) and timestamps that link to the corresponding
+    moment in the audio file via HTML5 media-fragment URIs (`audio.m4a#t=Xs`).
+    Consecutive cues from the same speaker are merged.
+
+    By default the audio sibling (same basename, .m4a) is auto-discovered and
+    output is written to the matching .md next to the .vtt.
+  BANNER
+
+  opts.separator ''
+  opts.separator 'Options:'
+
+  opts.on('-a', '--audio PATH', 'Audio file basename to link to (default: sibling .m4a)') { |v| options[:audio] = v }
+  opts.on('--no-audio', 'Skip audio linking even if a sibling .m4a exists') { options[:no_audio] = true }
+  opts.on('-o', '--output PATH', 'Output path; use - for stdout (default: sibling .md)') { |v| options[:output] = v }
+  opts.on('-t', '--title TITLE', 'Human title (default: Title-Cased filename without date)') { |v| options[:title] = v }
+  opts.on('-f', '--force', 'Overwrite an existing output file (default: refuse)') { options[:force] = true }
+  opts.on('-h', '--help', 'Show this help') { puts opts; exit 0 }
+  opts.on('-v', '--version', 'Show version') { puts "vtt-to-md #{VERSION}"; exit 0 }
+end
+
+parser.parse!
+
+if ARGV.empty?
+  puts parser
+  exit 1
+end
+
+input = ARGV[0]
+abort "vtt-to-md: input not found: #{input}"  unless File.exist?(input)
+abort "vtt-to-md: input not readable: #{input}" unless File.readable?(input)
+
+if options[:audio] && options[:no_audio]
+  abort 'vtt-to-md: --audio and --no-audio are mutually exclusive'
+end
+
+dir  = File.dirname(input)
+stem = File.basename(input, '.vtt')
+
+audio = options[:audio]
+if !audio && !options[:no_audio]
+  candidate = File.join(dir, "#{stem}.m4a")
+  if File.exist?(candidate)
+    audio = "#{stem}.m4a"
+  else
+    warn "vtt-to-md: no sibling audio at #{candidate} -- emitting timestamps without audio links (use --audio PATH or --no-audio to silence)"
+  end
+end
+
+title = options[:title] || stem.sub(/^\d{4}-\d{2}-\d{2}-/, '').gsub('-', ' ').split.map(&:capitalize).join(' ')
+
+output_path = options[:output] || File.join(dir, "#{stem}.md")
+if output_path != '-' && File.exist?(output_path) && !options[:force]
+  abort "vtt-to-md: refusing to overwrite #{output_path} (pass --force to clobber)"
+end
+
+vtt  = File.read(input, mode: 'r:bom|utf-8')
+vtt  = vtt.gsub("\r\n", "\n")
+date = File.basename(input)[/^\d{4}-\d{2}-\d{2}/] || 'unknown date'
+
+buf = StringIO.new
+buf.puts "# #{date} — #{title}"
+buf.puts
+buf.puts "> Source: Microsoft Teams meeting transcript (`.vtt`). Generated from `#{File.basename(input)}`."
+if audio
+  buf.puts ">"
+  buf.puts "> Each timestamp links to the corresponding moment in the meeting audio (`#{audio}`). If the audio is committed via Git LFS, run `git lfs pull` to materialize it; the links will then jump directly to the timestamp in IINA / VLC / Safari."
+end
+buf.puts
+buf.puts '---'
+buf.puts
+
+cues = []
+skipped = 0
+vtt.split(/\n\n+/).each do |block|
+  lines = block.strip.split("\n")
+  next if lines.empty?
+  next if lines.first.sub(/\A﻿/, '') == 'WEBVTT'
+  lines.shift if lines.first =~ /^\d+$/
+  ts_line = lines.first
+  unless ts_line =~ /^(?:(\d{1,3}):)?(\d{1,2}):(\d{2})\.\d{3}\s+-->/
+    skipped += 1 if ts_line && !ts_line.empty?
+    next
+  end
+  h = ($1 || '0').to_i
+  m = $2.to_i
+  s = $3.to_i
+  text = lines[1..].join(' ').strip
+  speaker = nil
+  # Accept <v Name>...</v> or <v Name>... (Teams sometimes omits closing tag).
+  if text =~ /\A<v\s*([^>]*)>(.*?)(?:<\/v>)?\z/m
+    raw = $1.strip
+    speaker = raw.empty? ? nil : raw
+    text = $2.strip
+    text = text.sub(/<\/v>\s*\z/, '')
+  end
+  next if text.empty?
+  cues << {
+    anchor:  format('t%02d%02d%02d', h, m, s),
+    label:   format('%02d:%02d:%02d', h, m, s),
+    seconds: h * 3600 + m * 60 + s,
+    speaker: speaker,
+    text:    text
+  }
+end
+
+abort 'vtt-to-md: no cues parsed from input -- is this a WebVTT file?' if cues.empty?
+warn "vtt-to-md: skipped #{skipped} unparseable block(s)" if skipped > 0
+
+merged = cues.each_with_object([]) do |c, acc|
+  if !acc.empty? && c[:speaker] && acc.last[:speaker] == c[:speaker]
+    acc.last[:text] += ' ' + c[:text]
+  else
+    acc << c.dup
+  end
+end
+
+merged.each do |c|
+  buf.puts %(<a id="#{c[:anchor]}"></a>)
+  ts = audio ? "[#{c[:label]}](#{audio}#t=#{c[:seconds]})" : c[:label]
+  header = "**#{ts}"
+  header += " — #{c[:speaker]}" if c[:speaker]
+  buf.puts "#{header}**"
+  buf.puts
+  buf.puts "> #{c[:text]}"
+  buf.puts
+end
+
+if output_path == '-'
+  $stdout.write(buf.string)
+else
+  tmp = "#{output_path}.tmp"
+  File.write(tmp, buf.string)
+  File.rename(tmp, output_path)
+  warn "vtt-to-md: wrote #{cues.size} cue(s) to #{output_path}"
+end

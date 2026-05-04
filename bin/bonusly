@@ -1,0 +1,158 @@
+#!/bin/bash
+# Bonusly CLI — send/check Bonusly bonuses from the terminal.
+#
+# Usage:
+#   bonusly balance                                 # show giving balance
+#   bonusly users [query]                           # search/list users
+#   bonusly send <amount> <user> <message> [#tag]   # send bonus (confirms)
+#   bonusly history [limit]                         # recent bonuses you received
+#
+# Token: read from $BONUSLY_API_TOKEN; falls back to `fnox get BONUSLY_API_TOKEN`.
+
+set -euo pipefail
+
+API="https://bonus.ly/api/v1"
+
+# Oddball core values — these are the only hashtags that should appear on
+# bonuses (per #kudos channel usage). Default to #great-teams (most common).
+CORE_VALUES=("#great-teams" "#own-it" "#big-picture" "#growth-oriented" "#client-first")
+DEFAULT_HASHTAG="#great-teams"
+
+# Resolve a user-supplied tag (e.g. "own", "own-it", "#own-it") to a full
+# core value. Case-insensitive prefix match. Falls back to whatever the user
+# typed if no match — Bonusly will accept any tag, just won't be a core value.
+resolve_hashtag() {
+  local input="${1#\#}" lower
+  lower=$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')
+  for tag in "${CORE_VALUES[@]}"; do
+    if [[ "${tag#\#}" == "$lower"* ]]; then
+      printf '%s' "$tag"
+      return
+    fi
+  done
+  printf '#%s' "$input"
+}
+
+token() {
+  if [[ -n "${BONUSLY_API_TOKEN:-}" ]]; then
+    printf '%s' "$BONUSLY_API_TOKEN"
+  elif command -v fnox >/dev/null 2>&1; then
+    fnox get BONUSLY_API_TOKEN | tr -d '\n'
+  else
+    echo "error: BONUSLY_API_TOKEN not set and fnox not on PATH" >&2
+    exit 1
+  fi
+}
+
+api() {
+  local method="$1" path="$2" body="${3:-}"
+  local tok; tok=$(token)
+  if [[ -n "$body" ]]; then
+    curl -sS -X "$method" "$API$path" \
+      -H "Authorization: Bearer $tok" \
+      -H "Content-Type: application/json" \
+      -d "$body"
+  else
+    curl -sS -X "$method" "$API$path" \
+      -H "Authorization: Bearer $tok"
+  fi
+}
+
+cmd_balance() {
+  api GET /users/me | jq -r '
+    .result |
+    "giving:   \(.giving_balance) points (resets month-end)
+earning:  \(.earning_balance) points
+lifetime: \(.lifetime_earnings_with_currency)"'
+}
+
+cmd_users() {
+  local query="${1:-}" skip=0 limit=100
+  while :; do
+    local page; page=$(api GET "/users?limit=$limit&skip=$skip")
+    local count; count=$(echo "$page" | jq '.result | length')
+    [[ "$count" -eq 0 ]] && break
+    if [[ -n "$query" ]]; then
+      echo "$page" | jq -r --arg q "$query" '
+        .result[] | select(
+          (.full_name // "" | ascii_downcase | contains($q | ascii_downcase)) or
+          (.email     // "" | ascii_downcase | contains($q | ascii_downcase)) or
+          (.username  // "" | ascii_downcase | contains($q | ascii_downcase))
+        ) | "\(.username)\t\(.full_name)"'
+    else
+      echo "$page" | jq -r '.result[] | "\(.username)\t\(.full_name)"'
+    fi
+    [[ "$count" -lt "$limit" ]] && break
+    skip=$(( skip + limit ))
+  done
+}
+
+cmd_send() {
+  if [[ $# -lt 3 ]]; then
+    echo "usage: bonusly send <amount> <user> <message> [#tag]" >&2
+    exit 1
+  fi
+  local amount="$1" user="$2" message="$3" tag_input="${4:-$DEFAULT_HASHTAG}"
+  local hashtag; hashtag=$(resolve_hashtag "$tag_input")
+  user="${user#@}"  # strip leading @ if present
+
+  local reason="+$amount @$user $message $hashtag"
+  echo "About to post:"
+  echo "  $reason"
+  read -r -p "Send? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { echo "cancelled."; exit 1; }
+
+  local body; body=$(jq -nc --arg r "$reason" '{reason: $r}')
+  local resp; resp=$(api POST /bonuses "$body")
+  if echo "$resp" | jq -e '.success' >/dev/null; then
+    echo "$resp" | jq -r '
+      .result |
+      "sent: +\(.amount) to @\(.receiver.username)
+remaining giving balance: \(.giver.giving_balance)"'
+  else
+    echo "error:" >&2
+    echo "$resp" | jq -r '.message // .' >&2
+    exit 1
+  fi
+}
+
+cmd_history() {
+  local limit="${1:-10}"
+  # /users/me first so we know our own email; needed because /bonuses
+  # `user_email=` filter ALSO matches @-mentions in someone else's reason,
+  # so we filter client-side to only bonuses where we're giver or receiver.
+  local me_email; me_email=$(api GET /users/me | jq -r '.result.email')
+  api GET "/bonuses?limit=$(( limit * 3 ))&user_email=$me_email" | jq -r --arg me "$me_email" '
+    .result[]
+    | select(.giver.email == $me or .receiver.email == $me)
+    | (if .giver.email == $me
+        then "→ to   @" + .receiver.username
+        else "← from @" + .giver.username end) as $dir
+    | "\(.created_at[0:10])  +\(.amount | tostring | (if length < 4 then "   "[length:] + . else . end))  \($dir): \(.reason | gsub("\\s*#[a-z0-9-]+"; "") | gsub("^\\s*\\+\\d+\\s*"; "") | gsub("@\\S+\\s*"; "") | .[0:80])"
+  ' | head -n "$limit"
+}
+
+usage() {
+  cat <<EOF
+bonusly — send/check Bonusly from the terminal.
+
+  bonusly balance
+  bonusly users [query]
+  bonusly send <amount> <user> <message> [tag]
+  bonusly history [limit]
+
+Tags (Oddball core values, prefix-matched, default #great-teams):
+  great-teams, own-it, big-picture, growth-oriented, client-first
+
+Token: \$BONUSLY_API_TOKEN (auto-loaded by fnox).
+EOF
+}
+
+case "${1:-}" in
+  balance|bal) shift; cmd_balance "$@" ;;
+  users|u)     shift; cmd_users "$@" ;;
+  send|s)      shift; cmd_send "$@" ;;
+  history|h)   shift; cmd_history "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "unknown subcommand: $1" >&2; usage; exit 1 ;;
+esac

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# tmux-claude-restore - Restore tmux session from saved Claude session state
+#
+# Recreates tmux windows and launches Claude with --resume for each saved session.
+#
+# Usage: tmux-claude-restore [SESSION_NAME] [OPTIONS]
+#   SESSION_NAME defaults to "future"
+#   --dry-run    Show what would be done without executing
+#   --list       List saved sessions
+
+set -euo pipefail
+
+SESSION_NAME=""
+DRY_RUN=false
+LIST_MODE=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --dry-run|-n) DRY_RUN=true; shift ;;
+    --list|-l) LIST_MODE=true; shift ;;
+    --help|-h)
+      echo "Usage: tmux-claude-restore [SESSION_NAME] [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --dry-run, -n   Show what would be done"
+      echo "  --list, -l      List saved sessions"
+      echo "  --help, -h      Show this help"
+      exit 0
+      ;;
+    *) SESSION_NAME="$1"; shift ;;
+  esac
+done
+
+SAVE_DIR="$HOME/.config/tmux-claude"
+
+if $LIST_MODE; then
+  echo "Saved tmux-claude sessions:"
+  for f in "$SAVE_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f" .json)
+    saved_at=$(python3 -c "import json; print(json.load(open('$f'))['saved_at'])" 2>/dev/null)
+    count=$(python3 -c "import json; print(len(json.load(open('$f'))['windows']))" 2>/dev/null)
+    echo "  $name  ($count windows, saved $saved_at)"
+  done
+  exit 0
+fi
+
+SESSION_NAME="${SESSION_NAME:-future}"
+SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
+
+if [ ! -f "$SAVE_FILE" ]; then
+  echo "Error: No saved state for session '$SESSION_NAME'" >&2
+  echo "Run 'tmux-claude-restore --list' to see available saves" >&2
+  exit 1
+fi
+
+echo "Restoring tmux session: $SESSION_NAME"
+echo ""
+
+# Check if session already exists
+session_exists=false
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+  session_exists=true
+  echo "Warning: tmux session '$SESSION_NAME' already exists"
+  if ! $DRY_RUN; then
+    echo "  Creating windows inside existing session"
+  fi
+  echo ""
+fi
+
+# Parse and restore each window
+python3 -c "
+import json, subprocess, sys, shlex
+
+dry_run = $( $DRY_RUN && echo True || echo False )
+session = '$SESSION_NAME'
+session_exists = $( $session_exists && echo True || echo False )
+
+with open('$SAVE_FILE') as f:
+    state = json.load(f)
+
+windows = state['windows']
+print(f'Saved at: {state[\"saved_at\"]}')
+print(f'Windows to restore: {len(windows)}')
+print()
+
+for i, win in enumerate(windows):
+    idx = win['window_index']
+    cwd = win['cwd']
+    session_id = win['session_id']
+    skip_perms = win['dangerously_skip_permissions']
+    method = win['detection_method']
+
+    # Build claude command
+    claude_args = ['claude']
+    if skip_perms:
+        claude_args.append('--dangerously-skip-permissions')
+    if session_id:
+        claude_args.extend(['--resume', session_id])
+
+    claude_cmd = ' '.join(claude_args)
+
+    # Confidence indicator
+    confidence = '★' if method == 'command_args' else '●' if method == 'birthtime_match' else '○'
+
+    print(f'  {confidence} Window {idx}: cd {shlex.quote(cwd)} && {claude_cmd}')
+
+    if dry_run:
+        continue
+
+    if i == 0 and not session_exists:
+        # Create the session with the first window
+        subprocess.run([
+            'tmux', 'new-session', '-d',
+            '-s', session,
+            '-c', cwd,
+            '-x', '200', '-y', '50'
+        ], check=True)
+        # Send the claude command
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session}:1',
+            claude_cmd, 'Enter'
+        ], check=True)
+    else:
+        # Create a new window
+        subprocess.run([
+            'tmux', 'new-window', '-t', session,
+            '-c', cwd
+        ], check=True)
+        # Get the new window's target
+        result = subprocess.run(
+            ['tmux', 'display-message', '-t', f'{session}:', '-p', '#{window_index}'],
+            capture_output=True, text=True, check=True
+        )
+        new_win_idx = result.stdout.strip()
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session}:{new_win_idx}',
+            claude_cmd, 'Enter'
+        ], check=True)
+
+print()
+if dry_run:
+    print('(dry run — no changes made)')
+    print()
+    print('Legend: ★ = from command args, ● = birthtime match, ○ = fallback guess')
+else:
+    print(f'Session \"{session}\" restored! Attach with: tmux attach -t {session}')
+"

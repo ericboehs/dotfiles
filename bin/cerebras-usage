@@ -15,7 +15,7 @@ tmpfile=$(mktemp)
 curl -sS -D "$tmpfile" --max-time 30 'https://api.cerebras.ai/v1/chat/completions' \
   -H "Authorization: Bearer $CEREBRAS_API_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"zai-glm-4.6","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
+  -d '{"model":"zai-glm-4.7","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
   -o /dev/null 2>/dev/null
 response=$(cat "$tmpfile")
 rm -f "$tmpfile"
@@ -42,7 +42,7 @@ req_day_pct=$((req_day_used * 100 / REQ_DAY_LIMIT))
 tok_day_used=$((TOK_DAY_LIMIT - tok_day_remaining))
 tok_day_pct=$((tok_day_used * 100 / TOK_DAY_LIMIT))
 
-echo "📊 Cerebras Usage (GLM 4.6 - Code Pro)"
+echo "📊 Cerebras Usage (GLM 4.7 - Code Pro)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 printf "Daily Requests: %'d / %'d (%d%% used)\n" "$req_day_used" "$REQ_DAY_LIMIT" "$req_day_pct"
 printf "Daily Tokens:   %'d / %'d (%d%% used)\n" "$tok_day_used" "$TOK_DAY_LIMIT" "$tok_day_pct"

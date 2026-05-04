@@ -1,4 +1,12 @@
-autoload -Uz compinit; compinit # Expand directory path shorthand (e.g. cd Co/eri/tm/cach/a<Tab>)
+# compinit: skip insecure-dir audit + only rebuild .zcompdump once per day.
+# Saves ~75ms on shell startup. -C skips compaudit; the mtime check rebuilds
+# .zcompdump if it's older than 24h so new completions still get picked up.
+autoload -Uz compinit
+if [[ -n ~/.zcompdump(#qNmh-24) ]]; then
+  compinit -C
+else
+  compinit
+fi
 setopt interactivecomments      # Allow comments after commands
 setopt autocd                   # cd to directories without typing cd
 setopt extendedglob             # Expand file expression (e.g. **/file)
@@ -75,9 +83,7 @@ fi
 [[ $- == *i* ]] && [ -z "$DISABLE_ZOXIDE" ] && eval "$(zoxide init --cmd cd zsh)"
 
 eval "$(starship init zsh)"
-eval "$(mise activate zsh)"
-# DISABLED: fnox activate causes infinite fork bomb via mise shim recursion (jdx/fnox#TBD)
-# eval "$(fnox activate zsh)"
+alias fsh='fnox exec -- zsh'
 
 # Added by LM Studio CLI (lms)
 export PATH="$PATH:/Users/ericboehs/.cache/lm-studio/bin"
@@ -96,6 +102,15 @@ esac
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
-export PATH="$HOME/.local/share/mise/shims:$PATH"
 eval "$(mise activate zsh)"
+
+# fnox: load AFTER mise (fnox is mise-installed). Drop the precmd hook so
+# secrets only refresh on `cd`, not on every prompt — keeps op:// reads from
+# pile-up when 1Password session is stale. --if-missing ignore so a single
+# missing secret doesn't error the whole shell.
+export FNOX_SHELL_OUTPUT=none
+eval "$(fnox activate zsh --if-missing ignore)"
+precmd_functions=( ${precmd_functions[@]:#_fnox_hook} )
+_fnox_hook  # initial load (chpwd-only hook won't fire on shell start)
+
 export ENABLE_LSP_TOOL=1

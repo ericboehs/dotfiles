@@ -5,6 +5,7 @@ DOCKER_SCAN_SUGGEST = "false"
 VTK_DISABLE_ANALYTICS = "true"
 CLAUDE_NOTIFY_SLACK = "false"
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY = "YES"
+OP_BIOMETRIC_UNLOCK_ENABLED = "true"
 GITLEAKS_CONFIG = "{{env.HOME}}/.config/gitleaks/config.toml"
 
 [settings]
@@ -15,3 +16,4 @@ python = "3.12"
 bun = "latest"
 node = "24"
 ruby = "4"
+fnox = "latest"

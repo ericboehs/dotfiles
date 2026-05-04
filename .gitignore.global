@@ -5,6 +5,8 @@
 .obsidian/
 .aider*
 .mise.toml
+mise.toml
+fnox.toml
 CLAUDE.md
 .claude
 TODO.md

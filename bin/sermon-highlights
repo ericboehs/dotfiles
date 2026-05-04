@@ -1,0 +1,534 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# sermon-highlights - Extract ProPresenter screen items from a sermon document
+#
+# Accepts .pages or .docx files. For .pages files, Pages.app is used to
+# convert to .docx automatically. Parses yellow-highlighted text (scriptures,
+# pull quotes, graphics) intended for display on screen. Bible version tags
+# like (NKJV) immediately after highlighted scripture references are
+# automatically captured. Rich text formatting (bold, italic, underline) is
+# preserved when using --copy mode.
+#
+# Usage: sermon-highlights sermon.pages
+#        sermon-highlights sermon.docx
+#        sermon-highlights sermon.pages --copy
+
+require "rexml/document"
+require "tmpdir"
+require "fileutils"
+
+YELLOW_HIGHLIGHT_VALUES = %w[yellow].freeze
+YELLOW_SHADING_FILLS = %w[FFFF00 ffff00 FEFB00 fefb00 FFD966 ffd966 FFF2CC fff2cc FFFF99 ffff99].freeze
+SCRIPTURE_PATTERN = /\d+:\d+/.freeze
+RECENT_DAYS = 14
+DEFAULT_SEARCH_PATH = File.join(Dir.home, "Downloads")
+
+Run = Struct.new(:text, :highlighted, :bold, :italic, :underline, :superscript, :point_number, keyword_init: true)
+
+def convert_pages_to_docx(pages_path)
+  docx_path = File.join(Dir.mktmpdir("sermon-highlights"), "converted.docx")
+  script = <<~APPLESCRIPT
+    tell application "System Events"
+      set wasRunning to (name of processes) contains "Pages"
+    end tell
+    tell application "Pages"
+      set existingNames to name of every document
+      open POSIX file "#{pages_path}"
+      delay 2
+      set theDoc to front document
+      set docName to name of theDoc
+      export theDoc to POSIX file "#{docx_path}" as Microsoft Word
+      if existingNames does not contain docName then close theDoc saving no
+      if not wasRunning then quit
+    end tell
+  APPLESCRIPT
+
+  $stderr.puts "Converting .pages to .docx via Pages.app..."
+  unless system("osascript", "-e", script)
+    abort("Failed to convert .pages file. Is Pages.app installed?")
+  end
+
+  abort("Conversion produced no output") unless File.exist?(docx_path)
+  docx_path
+end
+
+def extract_docx(path)
+  dir = Dir.mktmpdir("sermon-highlights")
+  system("unzip", "-q", "-o", path, "-d", dir) || abort("Failed to extract .docx")
+  dir
+end
+
+def element_enabled?(parent, name)
+  el = parent.elements[name]
+  return false unless el
+
+  val = el.attributes["w:val"]
+  val.nil? || (val != "0" && val != "false" && val != "none")
+end
+
+def parse_run_formatting(run)
+  rpr = run.elements["w:rPr"]
+  return [false, false, false] unless rpr
+
+  # Pages exports its "Highlight" character style with bogus bold/italic.
+  # The style definition says b=0, i=0 but each run gets <w:b/> anyway.
+  # Ignore bold/italic on runs using that style.
+  rstyle = rpr.elements["w:rStyle"]
+  pages_highlight = rstyle && rstyle.attributes["w:val"] == "Highlight"
+
+  bold = !pages_highlight && element_enabled?(rpr, "w:b")
+  italic = !pages_highlight && element_enabled?(rpr, "w:i")
+  underline = element_enabled?(rpr, "w:u")
+  [bold, italic, underline]
+end
+
+def parse_numbered_styles(docx_dir)
+  num_path = File.join(docx_dir, "word", "numbering.xml")
+  return [] unless File.exist?(num_path)
+
+  num_doc = REXML::Document.new(File.read(num_path))
+  numbered_abstract_ids = []
+
+  num_doc.elements.each("//w:abstractNum") do |abstract|
+    aid = abstract.attributes["w:abstractNumId"]
+    # Detect decimal numbered lists via numStyleLink or explicit numFmt
+    style_link = abstract.elements["w:numStyleLink"]
+    if style_link && style_link.attributes["w:val"] =~ /number/i
+      numbered_abstract_ids << aid
+      next
+    end
+    lvl = abstract.elements["w:lvl[@w:ilvl='0']"]
+    next unless lvl
+
+    fmt = lvl.elements["w:numFmt"]
+    numbered_abstract_ids << aid if fmt && fmt.attributes["w:val"] == "decimal"
+  end
+
+  numbered_num_ids = []
+  num_doc.elements.each("//w:num") do |num|
+    nid = num.attributes["w:numId"]
+    abstract = num.elements["w:abstractNumId"]
+    aid = abstract.attributes["w:val"] if abstract
+    numbered_num_ids << nid if numbered_abstract_ids.include?(aid)
+  end
+
+  numbered_num_ids
+end
+
+def sermon_point?(para, numbered_num_ids)
+  ppr = para.elements["w:pPr"]
+  return false unless ppr
+
+  num_pr = ppr.elements["w:numPr"]
+  return false unless num_pr
+
+  ilvl = num_pr.elements["w:ilvl"]
+  return false unless ilvl && ilvl.attributes["w:val"] == "0"
+
+  num_id = num_pr.elements["w:numId"]
+  return false unless num_id && numbered_num_ids.include?(num_id.attributes["w:val"])
+
+  true
+end
+
+def parse_document(xml_path, docx_dir)
+  doc = REXML::Document.new(File.read(xml_path))
+  numbered_num_ids = parse_numbered_styles(docx_dir)
+  paragraphs = []
+  point_counter = 0
+
+  doc.elements.each("//w:p") do |para|
+    runs = []
+    para.elements.each("w:r") do |run|
+      texts = []
+      run.elements.each("w:t") { |t| texts << t.text.to_s }
+      text = texts.join
+      next if text.empty?
+
+      bold, italic, underline = parse_run_formatting(run)
+      runs << Run.new(
+        text: text,
+        highlighted: yellow_highlighted?(run),
+        bold: bold,
+        italic: italic,
+        underline: underline
+      )
+    end
+    next if runs.empty?
+
+    has_highlight = runs.any?(&:highlighted)
+    is_point = sermon_point?(para, numbered_num_ids) && runs.all?(&:bold) && !has_highlight
+    next unless has_highlight || is_point
+
+    if is_point
+      point_counter += 1
+      runs.first.point_number = point_counter
+    end
+
+    paragraphs << runs
+  end
+
+  paragraphs
+end
+
+def yellow_highlighted?(run)
+  rpr = run.elements["w:rPr"]
+  return false unless rpr
+
+  highlight = rpr.elements["w:highlight"]
+  if highlight
+    val = highlight.attributes["w:val"].to_s.downcase
+    return true if YELLOW_HIGHLIGHT_VALUES.include?(val)
+  end
+
+  shd = rpr.elements["w:shd"]
+  if shd
+    fill = shd.attributes["w:fill"].to_s
+    return true if YELLOW_SHADING_FILLS.include?(fill)
+  end
+
+  false
+end
+
+def append_version_runs(highlight_runs, all_runs)
+  highlight_text = highlight_runs.map(&:text).join.strip
+  return highlight_runs unless highlight_text.match?(SCRIPTURE_PATTERN)
+
+  trailing = []
+  past_highlight = false
+  all_runs.each do |run|
+    if run.highlighted
+      past_highlight = true
+      trailing.clear
+      next
+    end
+    next unless past_highlight
+
+    trailing << run
+  end
+
+  after = trailing.map(&:text).join
+  paren_match = after.match(/\A\s*\(([A-Z]{2,5})\)/)
+  paren_match ||= after.match(/\A\s*\(([A-Z]{2,5})\s*\)/)
+
+  if paren_match
+    version_run = Run.new(
+      text: " (#{paren_match[1]})",
+      highlighted: false, bold: false, italic: false, underline: false
+    )
+    highlight_runs + [version_run]
+  else
+    highlight_runs
+  end
+end
+
+Highlight = Struct.new(:display_runs, :copy_runs, keyword_init: true)
+
+def numbered_runs(runs)
+  point_num = runs.first&.point_number
+  return runs unless point_num
+
+  prefix = Run.new(
+    text: "#{point_num}. ",
+    highlighted: false, bold: runs.first.bold, italic: false, underline: false
+  )
+  [prefix] + runs
+end
+
+def build_highlight(runs)
+  highlight_runs = runs.select(&:highlighted)
+
+  # Sermon point (bold, numbered, no highlight) — use all runs as-is
+  if highlight_runs.empty?
+    copy_runs = numbered_runs(runs)
+    return Highlight.new(display_runs: copy_runs, copy_runs: copy_runs)
+  end
+
+  highlight_text = highlight_runs.map(&:text).join
+  copy_runs = append_version_runs(highlight_runs, runs)
+
+  if highlight_text.match?(SCRIPTURE_PATTERN)
+    Highlight.new(display_runs: runs, copy_runs: copy_runs)
+  else
+    Highlight.new(display_runs: highlight_runs, copy_runs: copy_runs)
+  end
+end
+
+VERSE_NUM_PATTERN = /\A\s*\((\d+)\)\s*\z/.freeze
+OPEN_QUOTE_PATTERN = /\A["\u201C]\z/.freeze
+CLOSE_QUOTE_PATTERN = /["\u201D]\z/.freeze
+
+# Split scripture display runs into individual verses.
+# Returns an array of run-arrays, one per verse.
+def split_verses(runs)
+  # Find where the verse text starts (after the opening quote)
+  verse_start = nil
+  runs.each_with_index do |run, i|
+    next if run.highlighted
+    if run.text.strip.match?(OPEN_QUOTE_PATTERN)
+      verse_start = i + 1
+      break
+    end
+  end
+
+  return [runs] unless verse_start
+
+  # Split remaining runs on (N) verse markers, capturing verse number
+  verses = []
+  current_verse = []
+  (verse_start...runs.length).each do |i|
+    run = runs[i]
+    verse_match = run.text.strip.match(VERSE_NUM_PATTERN)
+    if verse_match
+      verses << current_verse unless current_verse.empty?
+      current_verse = [Run.new(text: verse_match[1], highlighted: false, bold: false, italic: false,
+                               underline: false, superscript: true)]
+    else
+      current_verse << run
+    end
+  end
+  verses << current_verse unless current_verse.empty?
+
+  # Strip trailing close quote from last verse
+  strip_trailing_quote(verses) if verses.any?
+
+  verses
+end
+
+def strip_trailing_quote(verses)
+  last_run = verses.last.last
+  return unless last_run&.text&.match?(CLOSE_QUOTE_PATTERN)
+
+  cleaned = last_run.text.sub(CLOSE_QUOTE_PATTERN, "")
+  if cleaned.empty?
+    verses.last.pop
+  else
+    verses.last[-1] = Run.new(
+      text: cleaned, highlighted: last_run.highlighted,
+      bold: last_run.bold, italic: last_run.italic, underline: last_run.underline
+    )
+  end
+end
+
+def plain_text(highlight_runs)
+  highlight_runs.map(&:text).join.strip
+end
+
+def rtf_escape(text)
+  text.each_char.map do |ch|
+    if ch.ord > 127
+      "\\u#{ch.ord}?"
+    elsif ch == "\\"
+      "\\\\"
+    elsif ch == "{"
+      "\\{"
+    elsif ch == "}"
+      "\\}"
+    else
+      ch
+    end
+  end.join
+end
+
+def runs_to_rtf(highlight_runs)
+  parts = ['{\\rtf1\\ansi\\deff0 {\\fonttbl{\\f0 CMG Sans Medium;}}\\f0\\fs110 ']
+  highlight_runs.each do |run|
+    open_tags = ""
+    close_tags = ""
+    open_tags += "\\b " if run.bold
+    open_tags += "\\i " if run.italic
+    open_tags += "\\ul " if run.underline
+    open_tags += "\\up24 " if run.superscript
+    close_tags += "\\b0" if run.bold
+    close_tags += "\\i0" if run.italic
+    close_tags += "\\ulnone" if run.underline
+    close_tags += "\\up0" if run.superscript
+
+    if open_tags.empty?
+      parts << rtf_escape(run.text)
+    else
+      parts << "{#{open_tags}#{rtf_escape(run.text)}#{close_tags}}"
+    end
+  end
+  parts << "}"
+  parts.join
+end
+
+def ansi_preview(highlight_runs)
+  highlight_runs.map do |run|
+    codes = []
+    codes << "1" if run.bold
+    codes << "3" if run.italic
+    codes << "4" if run.underline
+    if codes.empty?
+      run.text
+    else
+      "\e[#{codes.join(';')}m#{run.text}\e[0m"
+    end
+  end.join.strip
+end
+
+def pbcopy_rtf(rtf_string, plain_string)
+  tmpdir = Dir.mktmpdir("sermon-rtf")
+  rtf_path = File.join(tmpdir, "clip.rtf")
+  txt_path = File.join(tmpdir, "clip.txt")
+  File.write(rtf_path, rtf_string)
+  File.write(txt_path, plain_string)
+  jxa = <<~JS
+    ObjC.import("AppKit")
+    var pb = $.NSPasteboard.generalPasteboard
+    var rtfData = $.NSData.dataWithContentsOfFile("#{rtf_path}")
+    var plainData = $.NSData.dataWithContentsOfFile("#{txt_path}")
+    pb.clearContents
+    pb.setDataForType(rtfData, $.NSPasteboardTypeRTF)
+    pb.setDataForType(plainData, $.NSPasteboardTypeString)
+  JS
+  system("osascript", "-l", "JavaScript", "-e", jxa)
+  FileUtils.rm_rf(tmpdir)
+end
+
+def pbcopy_plain(text)
+  IO.popen("pbcopy", "w") { |io| io.write(text) }
+end
+
+def copy_and_show(runs, plain)
+  if plain
+    pbcopy_plain(plain_text(runs))
+  else
+    pbcopy_rtf(runs_to_rtf(runs), plain_text(runs))
+  end
+  plain ? plain_text(runs) : ansi_preview(runs)
+end
+
+def wait_for_enter
+  $stderr.print "Press Enter for next (q to quit)> "
+  input = $stdin.gets
+  return :quit if input.nil? || input.strip.downcase == "q"
+
+  :continue
+end
+
+def interactive_copy(highlights, plain: false)
+  total = highlights.length
+  highlights.each_with_index do |hl, idx|
+    is_scripture = (hl.display_runs != hl.copy_runs)
+
+    # Copy the reference/header line
+    preview = copy_and_show(hl.copy_runs, plain)
+    $stderr.puts "\e[32m[#{idx + 1}/#{total}] Copied:\e[0m #{preview}"
+
+    # For scriptures, step through each verse
+    if is_scripture
+      verses = split_verses(hl.display_runs)
+      verses.each_with_index do |verse_runs, vidx|
+        break if wait_for_enter == :quit
+
+        verse_preview = copy_and_show(verse_runs, plain)
+        $stderr.puts "    \e[36m[v#{vidx + 1}/#{verses.length}]\e[0m #{verse_preview}"
+      end
+    end
+
+    break if idx == total - 1
+    break if wait_for_enter == :quit
+  end
+end
+
+def find_recent_files(search_path)
+  cutoff = Time.now - (RECENT_DAYS * 86_400)
+  Dir.glob(File.join(search_path, "*.{pages,docx}"))
+     .select { |f| File.file?(f) && File.mtime(f) > cutoff }
+     .sort_by { |f| -File.mtime(f).to_i }
+end
+
+def prompt_file_selection(files)
+  $stderr.puts "Recent sermon files:"
+  $stderr.puts ""
+  files.each_with_index do |f, idx|
+    age = ((Time.now - File.mtime(f)) / 86_400).round
+    label = age.zero? ? "today" : "#{age}d ago"
+    $stderr.puts "  #{idx + 1}) #{File.basename(f)}  (#{label})"
+  end
+  $stderr.puts ""
+  $stderr.print "Select file [1]: "
+  input = $stdin.gets
+  return nil if input.nil?
+
+  choice = input.strip
+  choice = "1" if choice.empty?
+  return nil unless choice.match?(/\A\d+\z/)
+
+  idx = choice.to_i - 1
+  return nil if idx < 0 || idx >= files.length
+
+  files[idx]
+end
+
+# --- Main ---
+
+if ARGV.include?("--help") || ARGV.include?("-h")
+  warn "Usage: sermon-highlights [file.pages|file.docx] [--copy] [--plain] [--path DIR]"
+  warn ""
+  warn "Extracts yellow-highlighted text from a .pages or .docx sermon file."
+  warn "Captures scriptures (with Bible version), key points, and graphics."
+  warn "Preserves bold, italic, and underline formatting in --copy mode."
+  warn ""
+  warn "When run without a file, searches ~/Downloads for recent .pages/.docx files."
+  warn ""
+  warn "Options:"
+  warn "  --copy       Copy highlights as rich text, one at a time (press Enter to advance)"
+  warn "  --copy --plain  Same as --copy but copies plain text instead of rich text"
+  warn "  --path DIR   Directory to search for recent files (default: ~/Downloads)"
+  exit 1
+end
+
+copy_mode = ARGV.delete("--copy")
+plain_mode = ARGV.delete("--plain")
+path_idx = ARGV.index("--path")
+if path_idx
+  ARGV.delete_at(path_idx)
+  search_path = ARGV.delete_at(path_idx) || abort("--path requires a directory")
+else
+  search_path = DEFAULT_SEARCH_PATH
+end
+
+file = ARGV[0]
+converted_docx = nil
+
+unless file
+  recent = find_recent_files(search_path)
+  if recent.empty?
+    abort("No .pages or .docx files found in #{search_path} from the last #{RECENT_DAYS} days")
+  end
+  file = prompt_file_selection(recent)
+  abort("No file selected") unless file
+end
+
+abort("File not found: #{file}") unless File.exist?(file)
+
+if file.end_with?(".pages")
+  converted_docx = convert_pages_to_docx(File.expand_path(file))
+  docx_file = converted_docx
+elsif file.end_with?(".docx")
+  docx_file = file
+else
+  abort("Unsupported file type. Use .pages or .docx")
+end
+
+dir = extract_docx(docx_file)
+xml_path = File.join(dir, "word", "document.xml")
+abort("No word/document.xml found in .docx") unless File.exist?(xml_path)
+
+paragraphs = parse_document(xml_path, dir)
+highlights = paragraphs.map { |runs| build_highlight(runs) }
+
+if copy_mode
+  interactive_copy(highlights, plain: plain_mode)
+elsif plain_mode
+  highlights.each { |hl| puts plain_text(hl.display_runs) }
+else
+  highlights.each { |hl| puts ansi_preview(hl.display_runs) }
+end
+
+FileUtils.rm_rf(dir)
+FileUtils.rm_rf(File.dirname(converted_docx)) if converted_docx

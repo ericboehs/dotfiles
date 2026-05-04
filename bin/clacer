@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Claude Code via Cerebras (GLM 4.7 through claude-code-proxy)
+
+PROXY_PORT=8083
+PROXY_URL="http://localhost:${PROXY_PORT}"
+TMUX_SESSION="claude-proxy-cerebras"
+
+# Start proxy pointed at Cerebras if not already running on this port
+if ! curl -sf "${PROXY_URL}/health" >/dev/null 2>&1; then
+  PROXY_DIR=$(mktemp -d)
+  cat > "${PROXY_DIR}/.env" <<EOF
+OPENAI_BASE_URL=https://api.cerebras.ai/v1
+OPENAI_API_KEY=${CEREBRAS_API_KEY:?Set CEREBRAS_API_KEY in ~/.zshrc.local}
+ANTHROPIC_DEFAULT_OPUS_MODEL=zai-glm-4.7
+ANTHROPIC_DEFAULT_SONNET_MODEL=zai-glm-4.7
+ANTHROPIC_DEFAULT_HAIKU_MODEL=zai-glm-4.7
+PORT=${PROXY_PORT}
+EOF
+
+  tmux new-session -d -s "${TMUX_SESSION}" "cd ${PROXY_DIR} && claude-code-proxy -s"
+
+  for i in {1..10}; do
+    curl -sf "${PROXY_URL}/health" >/dev/null 2>&1 && break
+    [ "$i" -eq 10 ] && { echo "Failed to start proxy"; exit 1; }
+    sleep 0.5
+  done
+  echo "Proxy running in tmux session '${TMUX_SESSION}'"
+fi
+
+export ANTHROPIC_BASE_URL="${PROXY_URL}"
+export ANTHROPIC_AUTH_TOKEN=dummy
+export ANTHROPIC_CUSTOM_MODEL_OPTION="zai-glm-4.7"
+export ANTHROPIC_CUSTOM_MODEL_OPTION_NAME="GLM 4.7 (Cerebras)"
+export ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION="Cerebras GLM 4.7 at ~1000 tk/s"
+export ANTHROPIC_MODEL=zai-glm-4.7
+export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50
+export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+exec claude --mcp-config ~/.claude/mcp-brave.json "$@"

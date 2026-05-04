@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Converts a Claude Desktop JSX artifact into a standalone HTML file
+# that runs directly in the browser via CDN-loaded React + Babel.
+#
+# Usage: claude-jsx-to-html input.jsx [output.html]
+#   If output is omitted, writes to input.html alongside the .jsx file.
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: claude-jsx-to-html input.jsx [output.html]"
+  exit 1
+fi
+
+INPUT="$1"
+if [[ ! -f "$INPUT" ]]; then
+  echo "Error: File not found: $INPUT"
+  exit 1
+fi
+
+OUTPUT="${2:-${INPUT%.jsx}.html}"
+
+# Extract the default export component name
+COMPONENT=$(grep -oE 'export default function ([A-Za-z_][A-Za-z0-9_]*)' "$INPUT" | head -1 | awk '{print $NF}')
+if [[ -z "$COMPONENT" ]]; then
+  # Try: export default ComponentName (at end of file)
+  COMPONENT=$(grep -oE 'export default ([A-Z][A-Za-z0-9_]*)' "$INPUT" | head -1 | awk '{print $NF}')
+fi
+if [[ -z "$COMPONENT" ]]; then
+  echo "Error: Could not find 'export default function ComponentName' in $INPUT"
+  exit 1
+fi
+
+# Extract the title from the component name (add spaces before capitals)
+TITLE=$(echo "$COMPONENT" | sed 's/\([a-z]\)\([A-Z]\)/\1 \2/g')
+
+# Collect all imported package names (excluding react/react-dom)
+PACKAGES=()
+while IFS= read -r pkg; do
+  [[ "$pkg" == "react" || "$pkg" == "react-dom" || "$pkg" == "react-dom/client" ]] && continue
+  PACKAGES+=("$pkg")
+done < <(grep "^import " "$INPUT" | grep -oE "from '[^']+'" | sed "s/from '//;s/'//")
+
+# Build importmap entries for third-party packages
+IMPORTMAP_EXTRAS=""
+for pkg in "${PACKAGES[@]}"; do
+  IMPORTMAP_EXTRAS+="$(printf '\n      "%s": "https://esm.sh/%s?external=react",' "$pkg" "$pkg")"
+done
+# Remove trailing comma
+IMPORTMAP_EXTRAS="${IMPORTMAP_EXTRAS%,}"
+
+# Process the JSX: strip imports, fix export default
+JSX_BODY=$(sed \
+  -e '/^import .* from /d' \
+  -e 's/^export default function /function /' \
+  -e 's/^export default //' \
+  "$INPUT")
+
+cat > "$OUTPUT" << 'HTMLHEAD'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+HTMLHEAD
+
+echo "  <title>${TITLE}</title>" >> "$OUTPUT"
+
+cat >> "$OUTPUT" << HTMLIMPORTMAP
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client"${IMPORTMAP_EXTRAS:+,$IMPORTMAP_EXTRAS}
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    html, body, #root { margin: 0; padding: 0; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+    import { createRoot } from 'react-dom/client';
+HTMLIMPORTMAP
+
+# Re-add the non-react import lines so the module imports resolve
+grep "^import " "$INPUT" | grep -v "from 'react'" | grep -v "from 'react-dom" >> "$OUTPUT" || true
+
+# Write the processed JSX body
+echo "" >> "$OUTPUT"
+echo "$JSX_BODY" >> "$OUTPUT"
+
+cat >> "$OUTPUT" << HTMLFOOT
+
+// Mount the app
+const root = createRoot(document.getElementById('root'));
+root.render(<${COMPONENT} />);
+  </script>
+</body>
+</html>
+HTMLFOOT
+
+echo "Created: $OUTPUT"
+echo "Component: $COMPONENT"
+echo "Packages: ${PACKAGES[*]:-none}"

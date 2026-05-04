@@ -118,3 +118,6 @@
 	helper = !/opt/homebrew/bin/gh auth git-credential
 [http]
 	postBuffer = 524288000
+[hook "gitleaks"]
+	event = pre-commit
+	command = gitleaks git --staged --redact --no-banner -c ~/.config/gitleaks/config.toml

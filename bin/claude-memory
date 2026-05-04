@@ -1,0 +1,463 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Claude Code Memory Browser — browse, search, and view the auto-memory
+# markdown files stored under ~/.claude/projects/*/memory/
+
+require 'bundler/inline'
+
+gemfile do
+  source 'https://rubygems.org'
+  gem 'sinatra'
+  gem 'puma'
+  gem 'rackup'
+  gem 'redcarpet'
+end
+
+require 'sinatra'
+require 'redcarpet'
+
+MEMORY_ROOT = File.expand_path('~/.claude/projects')
+END_OF_FILE = defined?(DATA) ? DATA.pos.freeze : 0
+
+MARKDOWN = Redcarpet::Markdown.new(
+  Redcarpet::Render::HTML.new(hard_wrap: false, link_attributes: { target: '_blank', rel: 'noopener' }),
+  autolink: true,
+  tables: true,
+  fenced_code_blocks: true,
+  strikethrough: true,
+  space_after_headers: true,
+  no_intra_emphasis: true
+)
+
+def load_templates
+  return @templates if @templates
+
+  DATA.pos = END_OF_FILE
+  raw = DATA.read.force_encoding('UTF-8')
+  parts = raw.split(/^@@(\w+)\s*\n/)
+  parts.shift # leading empty string before first @@
+  @templates = {}
+  parts.each_slice(2) { |name, body| @templates[name] = body }
+  @templates
+end
+
+def template(name)
+  load_templates.fetch(name.to_s) { raise "Unknown template: #{name}" }
+end
+
+helpers do
+  def h(text)
+    Rack::Utils.escape_html(text.to_s)
+  end
+
+  def render_page(name, locals = {})
+    locals.each { |k, v| instance_variable_set("@#{k}", v) }
+    @_title = locals[:title] || 'Claude Memory'
+    @_content = ERB.new(template(name)).result(binding)
+    ERB.new(template('layout')).result(binding)
+  end
+
+  def md(text, link_prefix: nil)
+    html = MARKDOWN.render(text.to_s)
+    return html unless link_prefix
+
+    html.gsub(/href="([^"]+)"/) do |orig|
+      url = Regexp.last_match(1)
+      if url.start_with?('http://', 'https://', '/', '#', 'mailto:')
+        orig
+      else
+        %(href="#{link_prefix}/#{url}")
+      end
+    end
+  end
+
+  def decode_path(encoded)
+    @_decode_cache ||= {}
+    @_decode_cache[encoded] ||= resolve_encoded_path(encoded)
+  end
+
+  def encode_name(name)
+    name.gsub(%r{[/.\s]}, '-')
+  end
+
+  def resolve_encoded_path(encoded)
+    remaining = encoded.sub(/^-/, '')
+    current = '/'
+    until remaining.empty?
+      children = begin
+        Dir.children(current).select { |c| File.directory?(File.join(current, c)) }
+      rescue StandardError
+        []
+      end
+      best = children
+             .select { |c| enc = encode_name(c); remaining == enc || remaining.start_with?("#{enc}-") }
+             .max_by(&:length)
+      break unless best
+
+      current = File.join(current, best)
+      enc = encode_name(best)
+      remaining = remaining == enc ? '' : remaining[(enc.length + 1)..]
+    end
+    return encoded unless remaining.empty? && File.directory?(current)
+
+    home = Dir.home
+    current == home || current.start_with?("#{home}/") ? current.sub(home, '~') : current
+  end
+
+  def parse_frontmatter(content)
+    return [{}, content] unless content.start_with?("---\n")
+
+    _, fm, body = content.split(/^---\n/, 3)
+    meta = {}
+    fm.to_s.each_line do |line|
+      meta[Regexp.last_match(1)] = Regexp.last_match(2).strip if line =~ /^(\w+):\s*(.*)$/
+    end
+    [meta, body.to_s]
+  end
+
+  def type_color(type)
+    {
+      'user' => 'bg-blue-500/15 text-blue-300 ring-blue-500/30',
+      'feedback' => 'bg-amber-500/15 text-amber-300 ring-amber-500/30',
+      'project' => 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30',
+      'reference' => 'bg-violet-500/15 text-violet-300 ring-violet-500/30'
+    }[type.to_s] || 'bg-zinc-500/15 text-zinc-300 ring-zinc-500/30'
+  end
+
+  def relative_time(time)
+    secs = Time.now - time
+    case secs
+    when 0..60 then 'just now'
+    when 60..3600 then "#{(secs / 60).to_i}m ago"
+    when 3600..86_400 then "#{(secs / 3600).to_i}h ago"
+    when 86_400..(86_400 * 30) then "#{(secs / 86_400).to_i}d ago"
+    else time.strftime('%Y-%m-%d')
+    end
+  end
+
+  def project_summary(encoded)
+    dir = File.join(MEMORY_ROOT, encoded, 'memory')
+    files = Dir.glob("#{dir}/*.md")
+    return nil if files.empty?
+
+    memories = files.reject { |f| File.basename(f) == 'MEMORY.md' }
+    mtime = files.map { |f| File.mtime(f) }.max
+    {
+      encoded: encoded,
+      decoded: decode_path(encoded),
+      count: memories.size,
+      has_index: files.any? { |f| File.basename(f) == 'MEMORY.md' },
+      mtime: mtime
+    }
+  end
+
+  def projects
+    Dir.children(MEMORY_ROOT).sort.filter_map do |entry|
+      next unless File.directory?(File.join(MEMORY_ROOT, entry, 'memory'))
+
+      project_summary(entry)
+    end.compact.sort_by { |p| -p[:mtime].to_i }
+  end
+
+  def project_files(encoded)
+    dir = File.join(MEMORY_ROOT, encoded, 'memory')
+    return [] unless File.directory?(dir)
+
+    Dir.glob("#{dir}/*.md").sort.map do |path|
+      content = File.read(path)
+      meta, _body = parse_frontmatter(content)
+      {
+        name: File.basename(path),
+        path: path,
+        mtime: File.mtime(path),
+        content: content,
+        meta: meta
+      }
+    end
+  end
+
+  def extract_preview(content, query)
+    idx = content.downcase.index(query.downcase)
+    return content[0, 200].to_s unless idx
+
+    start = [0, idx - 80].max
+    stop = [content.length, idx + 200].min
+    prefix = start.positive? ? '…' : ''
+    suffix = stop < content.length ? '…' : ''
+    "#{prefix}#{content[start...stop]}#{suffix}"
+  end
+
+  def highlight(text, query)
+    return h(text) if query.to_s.empty?
+
+    escaped = h(text)
+    pattern = Regexp.new(Regexp.escape(h(query)), Regexp::IGNORECASE)
+    escaped.gsub(pattern) { |m| "<mark class=\"bg-yellow-400/40 text-yellow-100 rounded px-0.5\">#{m}</mark>" }
+  end
+end
+
+set :environment, ENV['RACK_ENV'] || :production
+set :bind, '127.0.0.1'
+set :port, ENV['PORT'] || 4823
+set :protection, host_authorization: { permitted_hosts: [] }
+
+get '/' do
+  @projects = projects
+  render_page :index, projects: @projects, title: 'Claude Memory'
+end
+
+get '/p/:encoded' do
+  encoded = params[:encoded]
+  summary = project_summary(encoded)
+  halt 404, 'project not found' unless summary
+
+  files = project_files(encoded)
+  index_file = files.find { |f| f[:name] == 'MEMORY.md' }
+  memories = files.reject { |f| f[:name] == 'MEMORY.md' }
+  render_page :project,
+              encoded: encoded,
+              summary: summary,
+              index_file: index_file,
+              memories: memories,
+              title: summary[:decoded]
+end
+
+get '/p/:encoded/:file' do
+  encoded = params[:encoded]
+  file = params[:file]
+  halt 400, 'bad filename' if file.include?('/') || file.include?('..')
+
+  path = File.join(MEMORY_ROOT, encoded, 'memory', file)
+  halt 404, 'not found' unless File.exist?(path) && path.start_with?(MEMORY_ROOT)
+
+  content = File.read(path)
+  meta, body = parse_frontmatter(content)
+  render_page :file,
+              encoded: encoded,
+              decoded: decode_path(encoded),
+              file: file,
+              path: path,
+              mtime: File.mtime(path),
+              meta: meta,
+              body: body,
+              raw: content,
+              title: meta['name'] || file
+end
+
+get '/search' do
+  query = params[:q].to_s.strip
+  results = []
+  if query.length >= 2
+    Dir.glob("#{MEMORY_ROOT}/*/memory/*.md").each do |path|
+      content = File.read(path)
+      next unless content.match?(/#{Regexp.escape(query)}/i)
+
+      encoded = File.basename(File.dirname(File.dirname(path)))
+      results << {
+        encoded: encoded,
+        decoded: decode_path(encoded),
+        name: File.basename(path),
+        path: path,
+        preview: extract_preview(content, query),
+        mtime: File.mtime(path)
+      }
+    end
+    results.sort_by! { |r| -r[:mtime].to_i }
+  end
+  render_page :search, query: query, results: results, title: "Search: #{query}"
+end
+
+Sinatra::Application.run!
+
+__END__
+
+@@layout
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= h(@_title) %></title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23d97706'%3E%3Cpath d='M10 2a6 6 0 00-6 6c0 1.887.89 3.56 2.27 4.63L6 18l4-2 4 2-.27-5.37A5.99 5.99 0 0016 8a6 6 0 00-6-6z'/%3E%3C/svg%3E" type="image/svg+xml">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style type="text/tailwindcss">
+    @layer base {
+      .prose-memory h1 { @apply text-2xl font-semibold text-zinc-100 mt-6 mb-3; }
+      .prose-memory h2 { @apply text-xl font-semibold text-zinc-100 mt-5 mb-2; }
+      .prose-memory h3 { @apply text-lg font-semibold text-zinc-200 mt-4 mb-2; }
+      .prose-memory p  { @apply text-zinc-300 leading-relaxed my-3; }
+      .prose-memory a  { @apply text-amber-400 hover:text-amber-300 underline underline-offset-2; }
+      .prose-memory ul { @apply list-disc list-outside ml-6 my-3 space-y-1 text-zinc-300; }
+      .prose-memory ol { @apply list-decimal list-outside ml-6 my-3 space-y-1 text-zinc-300; }
+      .prose-memory li { @apply text-zinc-300; }
+      .prose-memory code { @apply bg-zinc-800 text-amber-200 px-1.5 py-0.5 rounded text-sm; }
+      .prose-memory pre { @apply bg-zinc-900/70 border border-zinc-800 rounded-lg p-4 my-4 overflow-x-auto text-sm; }
+      .prose-memory pre code { @apply bg-transparent p-0 text-zinc-200; }
+      .prose-memory blockquote { @apply border-l-2 border-amber-500/40 pl-4 italic text-zinc-400 my-4; }
+      .prose-memory hr { @apply border-zinc-800 my-6; }
+      .prose-memory strong { @apply text-zinc-100 font-semibold; }
+      .prose-memory table { @apply w-full border-collapse my-4; }
+      .prose-memory th { @apply text-left text-zinc-200 font-semibold border-b border-zinc-700 px-3 py-2; }
+      .prose-memory td { @apply border-b border-zinc-800 px-3 py-2 text-zinc-300; }
+    }
+  </style>
+</head>
+<body class="h-full bg-zinc-950 text-zinc-100 antialiased">
+  <header class="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center gap-4">
+      <a href="/" class="flex items-center gap-2 font-semibold text-amber-400 hover:text-amber-300">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5"><path d="M10 2a6 6 0 00-6 6c0 1.887.89 3.56 2.27 4.63L6 18l4-2 4 2-.27-5.37A5.99 5.99 0 0016 8a6 6 0 00-6-6z"/></svg>
+        Claude Memory
+      </a>
+      <form action="/search" method="get" class="flex-1 max-w-lg ml-auto">
+        <div class="relative">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 absolute left-3 top-2.5 text-zinc-500"><path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd"/></svg>
+          <input type="search" name="q" value="<%= h(@query) %>" placeholder="Search memories…" autocomplete="off"
+                 class="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500/40">
+        </div>
+      </form>
+    </div>
+  </header>
+  <main class="max-w-5xl mx-auto px-4 py-6">
+    <%= @_content %>
+  </main>
+  <footer class="max-w-5xl mx-auto px-4 py-8 text-xs text-zinc-600">
+    <code class="text-zinc-500"><%= h(MEMORY_ROOT.sub(Dir.home, '~')) %></code>
+  </footer>
+</body>
+</html>
+
+@@index
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-zinc-100">Projects with memory</h1>
+  <p class="text-sm text-zinc-400 mt-1"><%= @projects.size %> project<%= 's' if @projects.size != 1 %> · sorted by most recently updated</p>
+</div>
+<% if @projects.empty? %>
+  <div class="text-zinc-400 text-sm border border-zinc-800 rounded-lg p-6">No memory directories found under <code><%= h(MEMORY_ROOT) %></code>.</div>
+<% else %>
+  <ul class="space-y-2">
+    <% @projects.each do |p| %>
+      <li>
+        <a href="/p/<%= h(p[:encoded]) %>" class="block rounded-lg border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900 hover:border-zinc-700 p-4 transition">
+          <div class="flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <div class="font-medium text-zinc-100 truncate"><%= h(p[:decoded]) %></div>
+              <div class="text-xs text-zinc-500 mt-0.5 truncate font-mono"><%= h(p[:encoded]) %></div>
+            </div>
+            <div class="flex items-center gap-3 text-xs text-zinc-400 shrink-0">
+              <span class="tabular-nums"><%= p[:count] %> memor<%= p[:count] == 1 ? 'y' : 'ies' %></span>
+              <% unless p[:has_index] %><span class="text-zinc-600">no index</span><% end %>
+              <span class="tabular-nums text-zinc-500"><%= relative_time(p[:mtime]) %></span>
+            </div>
+          </div>
+        </a>
+      </li>
+    <% end %>
+  </ul>
+<% end %>
+
+@@project
+<nav class="text-xs text-zinc-500 mb-4"><a href="/" class="hover:text-zinc-300">← All projects</a></nav>
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-zinc-100 break-all"><%= h(@summary[:decoded]) %></h1>
+  <div class="text-xs text-zinc-500 mt-1 font-mono break-all"><%= h(@summary[:encoded]) %></div>
+</div>
+
+<% if @index_file %>
+  <section class="mb-8 rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wide">MEMORY.md</h2>
+      <a href="/p/<%= h(@encoded) %>/MEMORY.md" class="text-xs text-amber-400 hover:text-amber-300">view raw →</a>
+    </div>
+    <div class="prose-memory"><%= md(parse_frontmatter(@index_file[:content])[1], link_prefix: "/p/#{@encoded}") %></div>
+  </section>
+<% end %>
+
+<h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wide mb-3">Memories (<%= @memories.size %>)</h2>
+<% if @memories.empty? %>
+  <div class="text-zinc-500 text-sm">No individual memory files.</div>
+<% else %>
+  <ul class="space-y-2">
+    <% @memories.each do |m| %>
+      <li>
+        <a href="/p/<%= h(@encoded) %>/<%= h(m[:name]) %>" class="block rounded-lg border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900 hover:border-zinc-700 p-4 transition">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-medium text-zinc-100"><%= h(m[:meta]['name'] || m[:name]) %></span>
+                <% if m[:meta]['type'] %>
+                  <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset <%= type_color(m[:meta]['type']) %>"><%= h(m[:meta]['type']) %></span>
+                <% end %>
+              </div>
+              <% if m[:meta]['description'] && !m[:meta]['description'].empty? %>
+                <div class="text-sm text-zinc-400 mt-1"><%= h(m[:meta]['description']) %></div>
+              <% end %>
+              <div class="text-xs text-zinc-600 mt-1 font-mono"><%= h(m[:name]) %></div>
+            </div>
+            <div class="text-xs text-zinc-500 shrink-0 tabular-nums"><%= relative_time(m[:mtime]) %></div>
+          </div>
+        </a>
+      </li>
+    <% end %>
+  </ul>
+<% end %>
+
+@@file
+<nav class="text-xs text-zinc-500 mb-4">
+  <a href="/" class="hover:text-zinc-300">All projects</a>
+  <span class="mx-1 text-zinc-700">/</span>
+  <a href="/p/<%= h(@encoded) %>" class="hover:text-zinc-300"><%= h(@decoded) %></a>
+</nav>
+<div class="mb-6">
+  <div class="flex items-center gap-2 flex-wrap">
+    <h1 class="text-2xl font-semibold text-zinc-100"><%= h(@meta['name'] || @file) %></h1>
+    <% if @meta['type'] %>
+      <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset <%= type_color(@meta['type']) %>"><%= h(@meta['type']) %></span>
+    <% end %>
+  </div>
+  <% if @meta['description'] && !@meta['description'].empty? %>
+    <p class="text-zinc-400 mt-2"><%= h(@meta['description']) %></p>
+  <% end %>
+  <div class="flex items-center gap-3 text-xs text-zinc-500 mt-3 font-mono">
+    <span><%= h(@file) %></span>
+    <span>·</span>
+    <span><%= relative_time(@mtime) %></span>
+  </div>
+</div>
+<article class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-6">
+  <div class="prose-memory"><%= md(@body, link_prefix: "/p/#{@encoded}") %></div>
+</article>
+<details class="mt-4">
+  <summary class="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300">raw source</summary>
+  <pre class="mt-2 bg-zinc-900 border border-zinc-800 rounded-lg p-4 overflow-x-auto text-xs text-zinc-300"><%= h(@raw) %></pre>
+</details>
+<div class="mt-4 text-xs text-zinc-600 font-mono break-all"><%= h(@path.sub(Dir.home, '~')) %></div>
+
+@@search
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-zinc-100">Search</h1>
+  <% if @query.empty? %>
+    <p class="text-sm text-zinc-400 mt-1">Type a query in the search box above.</p>
+  <% else %>
+    <p class="text-sm text-zinc-400 mt-1"><%= @results.size %> result<%= 's' if @results.size != 1 %> for <span class="text-zinc-200">"<%= h(@query) %>"</span></p>
+  <% end %>
+</div>
+<% if @results.any? %>
+  <ul class="space-y-3">
+    <% @results.each do |r| %>
+      <li>
+        <a href="/p/<%= h(r[:encoded]) %>/<%= h(r[:name]) %>" class="block rounded-lg border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900 hover:border-zinc-700 p-4 transition">
+          <div class="flex items-center justify-between gap-3 mb-1">
+            <div class="font-medium text-zinc-100 truncate"><%= h(r[:name]) %></div>
+            <span class="text-xs text-zinc-500 shrink-0 tabular-nums"><%= relative_time(r[:mtime]) %></span>
+          </div>
+          <div class="text-xs text-zinc-500 truncate mb-2"><%= h(r[:decoded]) %></div>
+          <div class="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap break-words"><%= highlight(r[:preview], @query) %></div>
+        </a>
+      </li>
+    <% end %>
+  </ul>
+<% elsif !@query.empty? %>
+  <div class="text-zinc-500 text-sm">No matches.</div>
+<% end %>

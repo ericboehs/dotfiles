@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# daily-ai-sessions - Browse and resume Claude sessions from daily notes
+#
+# Usage: daily-ai-sessions [--list]
+#   Scans all daily notes from the past year for Claude Sessions.
+
+set -euo pipefail
+
+list_only=false
+[[ "${1:-}" == "--list" ]] && list_only=true
+
+notes_dir="$HOME/Documents/Wiki/daily"
+cutoff=$(date -v-1y +%Y-%m-%d)
+
+# grep finds files with sessions, sort orders newest first, perl parses in one pass
+formatted=$(grep -l "## Claude Sessions" "$notes_dir"/????-??-??.md 2>/dev/null | sort -r | \
+  xargs perl -ne '
+    BEGIN { $cutoff = shift @ARGV }
+    if ($ARGV ne $prev_file) {
+      $prev_file = $ARGV;
+      ($date) = $ARGV =~ m{(\d{4}-\d{2}-\d{2})\.md$};
+      $skip = ($date lt $cutoff);
+      $in_sec = 0;
+      $summary = "";
+    }
+    next if $skip;
+    $in_sec = 1, next if /^## Claude Sessions/;
+    $in_sec = 0 if $in_sec && /^## / && !/^## Claude/;
+    if ($in_sec && /^- \*\*(\d{2}:\d{2})\*\* — (.*)/) {
+      $summary = "$1  $2";
+    }
+    if ($in_sec && $summary && /`(cd [^`]+)`/) {
+      print "$date $summary|$1\n";
+      $summary = "";
+    }
+  ' "$cutoff")
+
+if [[ -z "$formatted" ]]; then
+  echo "No Claude Sessions found" >&2
+  exit 1
+fi
+
+if $list_only; then
+  echo "$formatted" | cut -d'|' -f1
+  exit 0
+fi
+
+selected=$(echo "$formatted" | cut -d'|' -f1 | \
+  fzf --no-sort --header="Claude Sessions (enter to resume)" --reverse) || exit 0
+
+[[ -z "$selected" ]] && exit 0
+
+cmd=$(echo "$formatted" | grep -F "$selected" | head -1 | cut -d'|' -f2)
+echo "Resuming: $selected"
+exec bash -c "$cmd"

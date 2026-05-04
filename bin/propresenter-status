@@ -1,0 +1,531 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# propresenter-status - Read-only ProPresenter status tool
+#
+# Queries the ProPresenter REST API to show current slide, playlist, and
+# presentation details. Includes service timing info.
+#
+# Usage: propresenter-status status
+#        propresenter-status playlist
+#        propresenter-status slides
+#        propresenter-status slides <presentation_uuid>
+
+require "net/http"
+require "json"
+require "uri"
+require "stringio"
+
+PP_HOST = ENV.fetch("PROPRESENTER_HOST", "localhost")
+PP_PORT = ENV.fetch("PROPRESENTER_PORT", "49556")
+BASE_URL = "http://#{PP_HOST}:#{PP_PORT}"
+
+SERVICES = [
+  { start: [8, 30],  end_time: [9, 30] },
+  { start: [10, 0],  end_time: [11, 5] },
+  { start: [11, 45], end_time: [12, 50] }
+].freeze
+
+# Section offsets from service start (in minutes)
+SECTIONS = [
+  { name: "Opener",        offset: 0,    duration: 1 },
+  { name: "Worship",       offset: 1,    duration: 20 },
+  { name: "Landing/Break", offset: 21,   duration: 3 },
+  { name: "Offering/Ann.", offset: 24,   duration: 2.5 },
+  { name: "Message",       offset: 26.5, duration: nil }
+].freeze
+
+MESSAGE_NAMES = ["message", "message special"].freeze
+IDLE_NAMES = ["preservice"].freeze
+SECTION_TIMERS = %w[Opener Worship Landing Break Offering Baptism Communion].freeze
+
+def api_get(path)
+  uri = URI("#{BASE_URL}#{path}")
+  response = Net::HTTP.get_response(uri)
+  abort("API error: #{response.code} #{response.message} for #{path}") unless response.is_a?(Net::HTTPSuccess)
+  JSON.parse(response.body)
+rescue Errno::ECONNREFUSED
+  abort("Cannot connect to ProPresenter at #{BASE_URL}. Is it running with the API enabled?")
+rescue Net::HTTPBadResponse, Net::OpenTimeout, Net::ReadTimeout, Errno::ETIMEDOUT
+  nil
+end
+
+SERVICE_PLAYLIST_NAMES = ["sunday service"].freeze
+
+def active_playlist_info
+  api_get("/v1/playlist/active")
+rescue StandardError
+  nil
+end
+
+def service_playlist_active?(active_data)
+  playlist_name = active_data&.dig("presentation", "playlist", "name").to_s.downcase
+  SERVICE_PLAYLIST_NAMES.any? { |n| playlist_name.include?(n) }
+end
+
+def idle_item_active?(active_data)
+  item_name = active_data&.dig("presentation", "item", "name").to_s.downcase
+  IDLE_NAMES.any? { |n| item_name.include?(n) }
+end
+
+def current_service
+  now = Time.now
+  now_minutes = now.hour * 60 + now.min
+  active_data = active_playlist_info
+  playlist_active = service_playlist_active?(active_data)
+
+  # No active service if we're on idle/preservice slides
+  return nil if idle_item_active?(active_data)
+
+  # Find the best matching service
+  # First try: time-based match (within window or up to 15 min before)
+  SERVICES.each do |svc|
+    start_min = svc[:start][0] * 60 + svc[:start][1]
+    end_min = svc[:end_time][0] * 60 + svc[:end_time][1]
+
+    if now_minutes >= (start_min - 15) && now_minutes <= end_min
+      return svc
+    end
+
+    # Past end time but service playlist is still active — service is running long
+    if playlist_active && now_minutes > end_min && now_minutes < (end_min + 30)
+      return svc
+    end
+  end
+
+  # Fallback: if service playlist is active, use the nearest past service
+  if playlist_active
+    SERVICES.reverse.each do |svc|
+      start_min = svc[:start][0] * 60 + svc[:start][1]
+      return svc if now_minutes >= start_min
+    end
+  end
+
+  nil
+end
+
+def format_time(hours, minutes)
+  h = hours > 12 ? hours - 12 : hours
+  h = 12 if h.zero?
+  period = hours >= 12 ? "p" : "a"
+  if minutes.zero?
+    "#{h}#{period}"
+  else
+    "#{h}:%02d#{period}" % minutes
+  end
+end
+
+def current_section(elapsed_min)
+  SECTIONS.each_with_index do |sec, idx|
+    next_offset = SECTIONS[idx + 1] ? SECTIONS[idx + 1][:offset] : Float::INFINITY
+    return sec if elapsed_min >= sec[:offset] && elapsed_min < next_offset
+  end
+  SECTIONS.last
+end
+
+def fetch_timers
+  api_get("/v1/timers/current")
+rescue StandardError
+  []
+end
+
+def parse_timer_time(time_str)
+  return 0.0 if time_str.nil? || time_str.empty?
+
+  parts = time_str.split(":").map(&:to_f)
+  case parts.length
+  when 3 then parts[0] * 60 + parts[1] + (parts[2] / 60.0) # HH:MM:SS -> minutes
+  when 2 then parts[0] + (parts[1] / 60.0)                  # MM:SS -> minutes
+  else 0.0
+  end
+end
+
+def active_section_from_timers(timers)
+  running = timers.select { |t| t["state"] == "running" }
+  return nil if running.empty?
+
+  # Prefer a named section timer (Worship, Opener, etc.) over Message
+  section = running.find { |t| SECTION_TIMERS.include?(t.dig("id", "name")) }
+  timer = section || running.find { |t| t.dig("id", "name") == "Message" }
+  return nil unless timer
+
+  { name: timer.dig("id", "name"), remaining_min: parse_timer_time(timer["time"]) }
+end
+
+def message_time_color(remaining_min)
+  if remaining_min < 5
+    "\e[31m"
+  elsif remaining_min < 10
+    "\e[33m"
+  else
+    "\e[0m"
+  end
+end
+
+def message_pace(message_start_min, end_min, now_minutes)
+  # Check if the active presentation is a message
+  active = api_get("/v1/playlist/active")
+  item_name = active&.dig("presentation", "item", "name").to_s.downcase
+  return nil unless MESSAGE_NAMES.any? { |n| item_name.include?(n) }
+
+  # Get current slide index
+  slide_data = api_get("/v1/presentation/slide_index")
+  current_slide = slide_data&.dig("presentation_index", "index")
+  return nil unless current_slide
+
+  # Get total slides from the active presentation
+  pres_data = api_get("/v1/presentation/active")
+  groups = pres_data&.dig("presentation", "groups") || []
+  total_slides = groups.sum { |g| (g["slides"] || []).length }
+  return nil if total_slides.zero?
+
+  total_message_time = end_min - message_start_min
+  elapsed_message = now_minutes - message_start_min
+  return nil if total_message_time <= 0 || elapsed_message < 0
+
+  # Where we should be vs where we are
+  time_progress = elapsed_message / total_message_time
+  slide_progress = (current_slide + 1).to_f / total_slides
+
+  # Convert progress difference to minutes
+  diff_minutes = ((slide_progress - time_progress) * total_message_time).round
+
+  if diff_minutes > 0
+    "\e[32m#{diff_minutes}m ahead\e[0m (slide #{current_slide + 1}/#{total_slides})"
+  elsif diff_minutes < 0
+    "\e[31m#{diff_minutes.abs}m behind\e[0m (slide #{current_slide + 1}/#{total_slides})"
+  else
+    "on pace (slide #{current_slide + 1}/#{total_slides})"
+  end
+rescue StandardError
+  nil
+end
+
+def timing_header
+  svc = current_service
+  unless svc
+    puts "\e[90mNo active service\e[0m"
+    puts ""
+    return
+  end
+
+  start_min = svc[:start][0] * 60 + svc[:start][1]
+  end_min = svc[:end_time][0] * 60 + svc[:end_time][1]
+  now = Time.now
+  now_minutes = now.hour * 60 + now.min + (now.sec / 60.0)
+  elapsed = now_minutes - start_min
+  remaining = end_min - now_minutes
+
+  service_label = format_time(svc[:start][0], svc[:start][1])
+  end_label = format_time(svc[:end_time][0], svc[:end_time][1])
+
+  if remaining < 0
+    color = "\e[31m"
+    time_str = "#{remaining.abs.round}m over"
+  elsif remaining < 5
+    color = "\e[31m"
+    time_str = "#{remaining.round}m left"
+  elsif remaining < 10
+    color = "\e[33m"
+    time_str = "#{remaining.round}m left"
+  else
+    color = "\e[32m"
+    time_str = "#{remaining.round}m left"
+  end
+
+  puts "#{color}#{service_label} service\e[0m | #{elapsed.round}m in | ends #{end_label} (#{color}#{time_str}\e[0m)"
+
+  # Use ProPresenter timers for real-time section detection
+  section = active_section_from_timers(fetch_timers)
+
+  if section.nil?
+    fallback = current_section(elapsed)
+    puts "Section: \e[1m#{fallback[:name]}\e[0m"
+  elsif section[:name] == "Worship"
+    display_worship_section(section[:remaining_min])
+  elsif section[:name] == "Message"
+    display_message_section(section[:remaining_min], start_min, end_min, now_minutes)
+  else
+    puts "Section: \e[1m#{section[:name]}\e[0m | #{format_timer_remaining(section[:remaining_min])} remaining"
+  end
+
+  media = media_now_playing
+  puts "\e[36m#{media[:app]}:\e[0m #{media[:track]}" if media
+
+  puts ""
+end
+
+def format_timer_remaining(total_minutes)
+  mins = total_minutes.to_i
+  secs = ((total_minutes - mins) * 60).round
+  if mins >= 60
+    "%d:%02d:%02d" % [mins / 60, mins % 60, secs]
+  else
+    "%d:%02d" % [mins, secs]
+  end
+end
+
+MEDIA_APPS = %w[Spotify Music].freeze
+
+def media_now_playing
+  MEDIA_APPS.each do |app|
+    result = `osascript \
+      -e 'if application "#{app}" is running then' \
+      -e '  tell application "#{app}"' \
+      -e '    if player state is playing then' \
+      -e '      return (name of current track) & " — " & (artist of current track)' \
+      -e '    end if' \
+      -e '  end tell' \
+      -e 'end if' \
+      -e 'return ""' 2>/dev/null`.strip
+    return { app: app, track: result } unless result.empty?
+  end
+  nil
+rescue StandardError
+  nil
+end
+
+def display_worship_section(remaining_min)
+  song_name = active_playlist_info&.dig("presentation", "item", "name")
+  song_str = song_name ? " | \u266a #{song_name}" : ""
+  puts "Section: \e[1mWorship\e[0m | #{format_timer_remaining(remaining_min)} remaining#{song_str}"
+end
+
+def display_message_section(remaining_min, start_min, end_min, now_minutes)
+  color = message_time_color(remaining_min)
+  time_str = remaining_min < 0 ? "#{format_timer_remaining(remaining_min.abs)} over" : "#{format_timer_remaining(remaining_min)} remaining"
+  message_start = start_min + SECTIONS.last[:offset]
+  pace = message_pace(message_start, end_min, now_minutes)
+  pace_str = pace ? " | #{pace}" : ""
+  puts "Section: \e[1mMessage\e[0m | #{color}#{time_str}\e[0m#{pace_str}"
+end
+
+def slide_label(slide)
+  label = slide["label"].to_s.strip
+  text = slide["text"].to_s.strip
+  return label unless label.empty?
+  return "(blank)" if text.empty?
+
+  format_slide_text(text)
+end
+
+def status_slide_label(slide)
+  label = slide["label"].to_s.strip
+  text = slide["text"].to_s.strip
+  formatted_text = text.empty? ? nil : format_slide_text(text)
+
+  if label.empty?
+    formatted_text || "(blank)"
+  elsif formatted_text
+    "#{label}  \e[90m#{formatted_text}\e[0m"
+  else
+    label
+  end
+end
+
+def cmd_status
+  timing_header
+
+  # Use presentation data for labels when available
+  slide_data = api_get("/v1/presentation/slide_index")
+  current_index = slide_data&.dig("presentation_index", "index")
+
+  pres = api_get("/v1/presentation/active")&.dig("presentation")
+  if pres && current_index
+    all_slides = (pres["groups"] || []).flat_map { |g| g["slides"] || [] }
+    current_slide = all_slides[current_index]
+    next_slide = all_slides[current_index + 1]
+    after_slide = all_slides[current_index + 2]
+
+    puts "\e[32mNow:\e[0m        #{status_slide_label(current_slide)}" if current_slide
+    puts "\e[33mNext:\e[0m       #{status_slide_label(next_slide)}" if next_slide
+    puts "\e[90mNext Next:  #{status_slide_label(after_slide)}\e[0m" if after_slide
+  else
+    data = api_get("/v1/status/slide")
+    if data
+      puts "\e[32mNow:\e[0m  #{format_slide_text(data.dig('current', 'text'))}"
+      puts "\e[33mNext:\e[0m #{format_slide_text(data.dig('next', 'text'))}" if data["next"]
+    end
+  end
+end
+
+def cmd_playlist
+  timing_header
+
+  active = api_get("/v1/playlist/active")
+  playlist_info = active&.dig("presentation", "playlist")
+  current_item = active&.dig("presentation", "item")
+
+  unless playlist_info
+    puts "No active playlist"
+    return
+  end
+
+  playlist = api_get("/v1/playlist/#{playlist_info['uuid']}")
+  items = playlist&.dig("items") || []
+
+  puts "\e[1m#{playlist_info['name']}\e[0m"
+  puts ""
+
+  items.each do |item|
+    name = item.dig("id", "name")
+    index = item.dig("id", "index")
+    is_current = current_item && current_item["uuid"] == item.dig("id", "uuid")
+    marker = is_current ? "\e[32m> " : "  "
+    reset = is_current ? "\e[0m" : ""
+
+    puts "#{marker}#{index}. #{name}#{reset}"
+  end
+end
+
+def cmd_slides(presentation_uuid = nil)
+  if presentation_uuid
+    data = api_get("/v1/presentation/#{presentation_uuid}")
+  else
+    data = api_get("/v1/presentation/active")
+  end
+
+  presentation = data&.dig("presentation")
+  unless presentation
+    puts "No active presentation"
+    return
+  end
+
+  current_index = api_get("/v1/presentation/slide_index")&.dig("presentation_index", "index")
+
+  name = presentation.dig("id", "name")
+  puts "\e[1m#{name}\e[0m"
+  puts ""
+
+  slide_num = 0
+  (presentation["groups"] || []).each do |group|
+    group_name = group["name"]
+    puts "\e[36m[#{group_name}]\e[0m" unless group_name.to_s.empty?
+
+    (group["slides"] || []).each do |slide|
+      display = slide_label(slide)
+      display = display[0, 80] + "..." if display.length > 80
+
+      is_current = slide_num == current_index
+      marker = is_current ? "\e[32m> " : "  "
+      reset = is_current ? "\e[0m" : ""
+
+      puts "#{marker}#{slide_num}. #{display}#{reset}"
+      slide_num += 1
+    end
+  end
+end
+
+def format_slide_text(text)
+  return "(blank)" if text.to_s.strip.empty?
+
+  text.gsub("\n", " / ").gsub("\r", " | ")
+end
+
+def cmd_timers(running_only: false)
+  timers = fetch_timers
+  timers = timers.select { |t| t["state"] == "running" } if running_only
+
+  if timers.empty?
+    puts running_only ? "No running timers" : "No timers found"
+    return
+  end
+
+  timers.each do |timer|
+    name = timer.dig("id", "name")
+    time = timer["time"]
+    state = timer["state"]
+
+    if state == "running"
+      puts "\e[32m> #{name}\e[0m  #{time}"
+    else
+      puts "  \e[90m#{name}  #{time}\e[0m"
+    end
+  end
+end
+
+def run_command(command, args)
+  case command
+  when "status"
+    cmd_status
+  when "playlist"
+    cmd_playlist
+  when "slides"
+    cmd_slides(args.first)
+  when "timers"
+    cmd_timers(running_only: args.include?("--running"))
+  else
+    warn "Unknown command: #{command}"
+    usage
+  end
+end
+
+def capture_output
+  old_stdout = $stdout
+  $stdout = StringIO.new
+  yield
+  $stdout.string
+ensure
+  $stdout = old_stdout
+end
+
+def watch(command, args, interval)
+  print "\e[?25l" # hide cursor
+  loop do
+    output = capture_output { run_command(command, args) }
+    print "\e[H\e[2J"
+    print output
+    puts ""
+    puts "\e[90mRefreshing every #{interval}s — Ctrl-C to quit\e[0m"
+    sleep interval
+  end
+rescue Interrupt
+  # clean exit on Ctrl-C
+ensure
+  print "\e[?25h" # restore cursor
+  puts ""
+end
+
+def usage
+  warn "Usage: propresenter-status <command> [--watch [SECONDS]]"
+  warn ""
+  warn "Commands:"
+  warn "  status     Current and next slide text + service timing"
+  warn "  playlist   List items in the active playlist with timing"
+  warn "  slides     Show all slides in the active presentation"
+  warn "  slides <uuid>  Show slides for a specific presentation"
+  warn "  timers     Show all ProPresenter timers"
+  warn "  timers --running  Show only running timers"
+  warn ""
+  warn "Options:"
+  warn "  --watch [N]  Refresh every N seconds (default: 2)"
+  warn ""
+  warn "Environment:"
+  warn "  PROPRESENTER_HOST  ProPresenter host (default: localhost)"
+  warn "  PROPRESENTER_PORT  ProPresenter port (default: 49556)"
+  exit 1
+end
+
+# --- Main ---
+
+watch_mode = false
+watch_interval = 2
+args = ARGV.dup
+
+if (watch_idx = args.index("--watch"))
+  watch_mode = true
+  args.delete_at(watch_idx)
+  # Check if next arg is a number (interval)
+  if args[watch_idx] && args[watch_idx].match?(/\A\d+\z/)
+    watch_interval = args.delete_at(watch_idx).to_i
+  end
+end
+
+command = args.shift
+usage if command.nil? || %w[--help -h].include?(command)
+
+if watch_mode
+  watch(command, args, watch_interval)
+else
+  run_command(command, args)
+end
