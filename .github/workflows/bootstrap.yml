@@ -1,0 +1,59 @@
+name: bootstrap
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run bootstrap
+        env:
+          FORCE_OVERWRITE: "1"
+          SKIP_TPM: "1"
+          SKIP_DEFAULTS: "1"
+        run: bash bootstrap.sh
+
+      - name: Verify dotfiles symlinked
+        run: |
+          set -e
+          for f in .zshrc .gitconfig .tmux.conf .fzf.zsh; do
+            test -L "$HOME/$f" || { echo "missing symlink: ~/$f"; exit 1; }
+          done
+          test -L "$HOME/.gitignore"
+          test -L "$HOME/.config/nvim"
+          test -L "$HOME/.config/mise/config.toml"
+          test -L "$HOME/.tmux/loadavg.sh"
+
+      - name: Verify CLI tools installed
+        run: |
+          set -e
+          for cmd in zsh nvim direnv lsd starship zoxide fzf tmux rg gh delta; do
+            command -v "$cmd" >/dev/null || { echo "missing: $cmd"; exit 1; }
+          done
+          test -x "$HOME/.local/bin/fd"
+          test -x "$HOME/.local/bin/bat"
+
+      - name: Verify dry-run is a no-op
+        run: |
+          set -e
+          before=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
+          bash bootstrap.sh --dry-run > /dev/null
+          after=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
+          [[ "$before" == "$after" ]] || { echo "dry-run modified state"; exit 1; }
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck bootstrap.sh defaults.sh
