@@ -188,6 +188,16 @@ link_dotfiles() {
   log "Linking mise config"
   run mkdir -p ~/.config/mise
   run ln -fs "$DOTFILES_DIR/.config/mise/config.toml" ~/.config/mise/config.toml
+  # lsd writes colors.yaml into ~/.config/lsd/ at runtime (theme switcher),
+  # so we link individual files rather than the whole directory.
+  log "Linking lsd themes"
+  run mkdir -p ~/.config/lsd
+  run ln -fs "$DOTFILES_DIR/.config/lsd/colors-dark.yaml" ~/.config/lsd/colors-dark.yaml
+  run ln -fs "$DOTFILES_DIR/.config/lsd/colors-light.yaml" ~/.config/lsd/colors-light.yaml
+  if [[ "$OSTYPE" == darwin* ]]; then
+    log "Linking ghostty config"
+    run ln -fns "$DOTFILES_DIR/.config/ghostty" ~/.config/ghostty
+  fi
 
   # ~/.tmux/ is shared with TPM (~/.tmux/plugins/), so we link individual
   # helper scripts rather than the whole directory.
