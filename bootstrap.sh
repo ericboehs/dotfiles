@@ -63,7 +63,8 @@ install_deps() {
     fi
     log "Installing Homebrew dependencies"
     run brew install mise neovim git direnv lsd starship zoxide fzf \
-      zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier delta
+      zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier delta \
+      tree-sitter
   elif [[ "$OSTYPE" == linux-gnu* ]]; then
     log "Installing apt dependencies"
     run sudo apt-get update -qq
