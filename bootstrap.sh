@@ -156,7 +156,7 @@ link_dotfiles() {
   files="$(git ls-files -z | tr '\0' '\n' | awk -F/ '/^\./ {print $1}' | sort -u) .ssh/config"
   for f in $files; do
     case "$f" in
-      .|..|.git|.gitignore|.gitmodules|.config|.ssh|bootstrap.sh|defaults.sh|README.md|.github|.tmux)
+      .|..|.git|.gitignore|.gitmodules|.config|.ssh|bootstrap.sh|defaults.sh|README.md|.github|.tmux|.gem)
         continue ;;
     esac
     source_file="$DOTFILES_DIR/$f"
@@ -199,6 +199,11 @@ link_dotfiles() {
   log "Linking gitleaks config"
   run mkdir -p ~/.config/gitleaks
   run ln -fs "$DOTFILES_DIR/.config/gitleaks/config.toml" ~/.config/gitleaks/config.toml
+  # ~/.gem/ is runtime state for `gem` (it writes credentials here on push),
+  # so symlink only the placeholder file rather than the whole directory.
+  log "Linking gem credentials placeholder"
+  run mkdir -p ~/.gem
+  run ln -fs "$DOTFILES_DIR/.gem/credentials" ~/.gem/credentials
   if [[ "$OSTYPE" == darwin* ]]; then
     log "Linking ghostty config"
     run ln -fns "$DOTFILES_DIR/.config/ghostty" ~/.config/ghostty

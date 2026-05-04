@@ -25,9 +25,10 @@ jobs:
       - name: Verify dotfiles symlinked
         run: |
           set -e
-          for f in .zshrc .gitconfig .tmux.conf .fzf.zsh; do
+          for f in .zshrc .gitconfig .tmux.conf .fzf.zsh .npmrc; do
             test -L "$HOME/$f" || { echo "missing symlink: ~/$f"; exit 1; }
           done
+          test -L "$HOME/.gem/credentials"
           test -L "$HOME/.gitignore"
           test -L "$HOME/.config/nvim"
           test -L "$HOME/.config/mise/config.toml"
