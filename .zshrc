@@ -106,10 +106,13 @@ eval "$(mise activate zsh)"
 # fnox: load AFTER mise (fnox is mise-installed). Drop the precmd hook so
 # secrets only refresh on `cd`, not on every prompt — keeps op:// reads from
 # pile-up when 1Password session is stale. --if-missing ignore so a single
-# missing secret doesn't error the whole shell.
-export FNOX_SHELL_OUTPUT=none
-eval "$(fnox activate zsh --if-missing ignore)"
-precmd_functions=( ${precmd_functions[@]:#_fnox_hook} )
-_fnox_hook  # initial load (chpwd-only hook won't fire on shell start)
+# missing secret doesn't error the whole shell. Skip silently on hosts that
+# don't have fnox yet (fresh VMs, CI, etc.).
+if command -v fnox >/dev/null 2>&1; then
+  export FNOX_SHELL_OUTPUT=none
+  eval "$(fnox activate zsh --if-missing ignore)"
+  precmd_functions=( ${precmd_functions[@]:#_fnox_hook} )
+  _fnox_hook  # initial load (chpwd-only hook won't fire on shell start)
+fi
 
 export ENABLE_LSP_TOOL=1
