@@ -113,6 +113,9 @@ install_fonts() {
 import_iterm_theme() {
   [[ "$OSTYPE" != darwin* ]] && return
   [[ -n "${SKIP_ITERM:-}" ]] && { skip "iTerm2 theme"; return; }
+  if [[ ! -d /Applications/iTerm.app && ! -d "$HOME/Applications/iTerm.app" ]]; then
+    skip "iTerm2 not installed"; return
+  fi
   if plutil -extract 'Custom Color Presets.Catppuccin Mocha' xml1 -o - \
        ~/Library/Preferences/com.googlecode.iterm2.plist >/dev/null 2>&1; then
     skip "Catppuccin Mocha (already imported)"; return
