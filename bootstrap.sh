@@ -199,10 +199,15 @@ link_dotfiles() {
   fi
 
   # ~/.tmux/ is shared with TPM (~/.tmux/plugins/), so we link individual
-  # helper scripts rather than the whole directory.
+  # helper scripts rather than the whole directory. extrakto is a submodule
+  # — link the whole subdir.
   run mkdir -p ~/.tmux
   log "Linking tmux helpers"
   run ln -fs "$DOTFILES_DIR/.tmux/loadavg.sh" ~/.tmux/loadavg.sh
+  run ln -fs "$DOTFILES_DIR/.tmux/theme-sync.sh" ~/.tmux/theme-sync.sh
+  run ln -fs "$DOTFILES_DIR/.tmux/tmuxline.dark.conf" ~/.tmux/tmuxline.dark.conf
+  run ln -fs "$DOTFILES_DIR/.tmux/tmuxline.light.conf" ~/.tmux/tmuxline.light.conf
+  run ln -fns "$DOTFILES_DIR/.tmux/extrakto" ~/.tmux/extrakto
 
   popd > /dev/null
 }

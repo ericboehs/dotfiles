@@ -33,6 +33,10 @@ jobs:
           test -L "$HOME/.config/mise/config.toml"
           test -L "$HOME/.config/lsd/colors.yaml"
           test -L "$HOME/.tmux/loadavg.sh"
+          test -L "$HOME/.tmux/theme-sync.sh"
+          test -L "$HOME/.tmux/tmuxline.dark.conf"
+          test -L "$HOME/.tmux/tmuxline.light.conf"
+          test -L "$HOME/.tmux/extrakto"
 
       - name: Verify CLI tools installed
         run: |
