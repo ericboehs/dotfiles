@@ -188,9 +188,10 @@ link_dotfiles() {
   log "Linking mise config"
   run mkdir -p ~/.config/mise
   run ln -fs "$DOTFILES_DIR/.config/mise/config.toml" ~/.config/mise/config.toml
-  log "Linking lsd colors"
+  log "Linking lsd config"
   run mkdir -p ~/.config/lsd
   run ln -fs "$DOTFILES_DIR/.config/lsd/colors.yaml" ~/.config/lsd/colors.yaml
+  run ln -fs "$DOTFILES_DIR/.config/lsd/config.yaml" ~/.config/lsd/config.yaml
   if [[ "$OSTYPE" == darwin* ]]; then
     log "Linking ghostty config"
     run ln -fns "$DOTFILES_DIR/.config/ghostty" ~/.config/ghostty
