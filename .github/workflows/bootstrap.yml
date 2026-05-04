@@ -29,8 +29,7 @@ jobs:
           test -L "$HOME/.gitignore"
           test -L "$HOME/.config/nvim"
           test -L "$HOME/.config/mise/config.toml"
-          test -L "$HOME/.config/lsd/colors-dark.yaml"
-          test -L "$HOME/.config/lsd/colors-light.yaml"
+          test -L "$HOME/.config/lsd/colors.yaml"
           test -L "$HOME/.tmux/loadavg.sh"
 
       - name: Verify CLI tools installed

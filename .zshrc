@@ -22,7 +22,6 @@ source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
 source "$HOME/.zsh/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
 source "$HOME/.zsh/fzf.zsh"
-source "$HOME/.zsh/lsd.zsh"
 source "$HOME/.zsh/auto-notify.plugin.zsh"
 [[ -f /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 [[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
