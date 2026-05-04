@@ -244,6 +244,11 @@ install_nvim_plugins() {
   # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
   # during first install (treesitter parsers compiling); keep it visible.
   run nvim --headless "+Lazy! sync" +qa
+  log "Pre-compiling all treesitter parsers (5–10 min on first run)"
+  # Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but
+  # headless never triggers a filetype event), then block on install.
+  run nvim --headless "+Lazy! load nvim-treesitter" \
+    "+lua require('nvim-treesitter').install('all'):wait(600000)" +qa
 }
 
 # ---- main ----
