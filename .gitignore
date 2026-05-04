@@ -10,6 +10,7 @@
 !.config/mise/
 !.config/ghostty/
 !.config/lsd/
+!.config/gitleaks/
 .config/mise/config.local.toml
 .config/nvim/lazy-lock.json
 channel.xml

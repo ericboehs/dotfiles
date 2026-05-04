@@ -17,3 +17,12 @@ bun = "latest"
 node = "24"
 ruby = "4"
 fnox = "latest"
+# Dev-env tooling: gitleaks (pre-commit secret scanning, referenced by
+# the .gitconfig hook), hk (project pre-commit manager, takes hk.pkl),
+# pkl (Apple's config language hk uses), cloc (line-of-code counter for
+# project large-file checks), watchexec (file-watch task runner).
+gitleaks = "latest"
+hk = "latest"
+pkl = "latest"
+"github:aldanial/cloc" = "latest"
+watchexec = "latest"

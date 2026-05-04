@@ -1,0 +1,56 @@
+# Custom gitleaks config — extends default rules with additional patterns
+# for secrets commonly found in shell environments (unquoted KEY=value)
+
+[extend]
+useDefault = true
+
+# Catch unquoted API keys/tokens/passwords in shell exports and env files
+# The default generic-api-key rule requires quoted values; this catches unquoted ones
+[[rules]]
+id = "unquoted-secret-assignment"
+description = "Detected an unquoted secret in a shell/env variable assignment"
+regex = '''(?i)(?:export\s+)?[\w]{0,50}?(?:access|auth|(?-i:[Aa]pi|API)|credential|creds|key|passw(?:or)?d|secret|token|pat|psk|hook)[\w]{0,20}=([a-zA-Z0-9_.+/=-]{16,200})$'''
+entropy = 2.5
+keywords = ["access", "api", "auth", "key", "credential", "creds", "passwd", "password", "secret", "token", "pat", "psk", "hook"]
+
+# Datadog keys using DD_ prefix (default rule only matches "datadog" keyword)
+[[rules]]
+id = "datadog-dd-prefix"
+description = "Detected a Datadog API or App key using DD_ prefix"
+regex = '''(?i)(?:export\s+)?DD_(?:API|APP)_KEY\s*=\s*['"]?([a-z0-9]{32,40})['"]?'''
+keywords = ["dd_api", "dd_app"]
+
+# Devin API keys (apk_user_ prefix)
+[[rules]]
+id = "devin-api-key"
+description = "Detected a Devin API key"
+regex = '''apk_user_[A-Za-z0-9_-]{20,}'''
+keywords = ["apk_user_"]
+
+# GitHub Container Registry PATs (classic PATs without ghp_ prefix)
+[[rules]]
+id = "ghcr-pat"
+description = "Detected a GitHub Container Registry PAT"
+regex = '''(?i)(?:export\s+)?GHCR[\w_]*=\s*['"]?([a-f0-9]{36,})['"]?'''
+keywords = ["ghcr"]
+
+# Catch hyphenated passphrases assigned to password/secret variables
+# (default generic-api-key allowlists word-like patterns)
+# Requires at least 2 hyphens to look like a passphrase (e.g., word-word-word)
+[[rules]]
+id = "passphrase-in-variable"
+description = "Detected a passphrase assigned to a password or secret variable"
+regex = '''(?i)(?:export\s+)?[\w]{0,50}?(?:passw(?:or)?d|secret|psk)[\w]{0,20}=([a-zA-Z][\w]*-[\w]+-[\w-]{3,})'''
+entropy = 3.5
+keywords = ["password", "passwd", "secret", "psk"]
+
+# Allowlist — patterns that look like secrets but aren't
+[allowlist]
+description = "Global false positive allowlist"
+regexTarget = "match"
+regexes = [
+  # Git commit SHAs in log output (e.g., "vets-api : a1b2c3d4...")
+  '''[\w-]+ : [a-f0-9]{40}\.?\\?n?$''',
+  # STATSD validation keys (metric names, not secrets)
+  '''STATSD_\w+_KEY\s*=\s*['"]?api\.''',
+]

@@ -32,6 +32,8 @@ jobs:
           test -L "$HOME/.config/nvim"
           test -L "$HOME/.config/mise/config.toml"
           test -L "$HOME/.config/lsd/colors.yaml"
+          test -L "$HOME/.config/lsd/config.yaml"
+          test -L "$HOME/.config/gitleaks/config.toml"
           test -L "$HOME/.tmux/loadavg.sh"
           test -L "$HOME/.tmux/theme-sync.sh"
           test -L "$HOME/.tmux/tmuxline.dark.conf"
