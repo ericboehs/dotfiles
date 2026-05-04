@@ -15,6 +15,11 @@ window-padding-y = 10
 # Image support
 image-storage-limit = 320000000
 
+# SSH: install ghostty terminfo on the remote on first connect, and fall back
+# to xterm-256color if installation fails. Fixes "unsuitable terminal:
+# xterm-ghostty" on hosts that don't have ghostty's terminfo entry.
+shell-integration-features = ssh-env,ssh-terminfo
+
 # Ensure Escape passes through to applications
 keybind = escape=unbind
 
