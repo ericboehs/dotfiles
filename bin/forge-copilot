@@ -1,0 +1,4 @@
+#!/bin/zsh
+# Launch forge with VA Copilot provider (isolated config, no global mutation)
+export FORGE_CONFIG=~/.forge-copilot
+exec forge
