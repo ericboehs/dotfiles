@@ -360,9 +360,12 @@ magic-abbrev-expand() {
 }
 
 magic-abbrev-expand-and-execute() {
-  magic-abbrev-expand
-  zle backward-delete-char
-  zle accept-line
+  local MATCH
+  LBUFFER=${LBUFFER%%(#m)[_a-zA-Z0-9]#}
+  local command=${abbrevs[$MATCH]}
+  LBUFFER+=${command:-$MATCH}
+  POSTDISPLAY=
+  zle .accept-line
 }
 
 no-magic-abbrev-expand() {
@@ -378,5 +381,4 @@ bindkey "^M" magic-abbrev-expand-and-execute
 bindkey "^x " no-magic-abbrev-expand
 bindkey -M isearch " " self-insert
 
-# Fixes autosuggest not clearing when ENTER (^M) is pressed
-export ZSH_AUTOSUGGEST_CLEAR_WIDGETS=(magic-abbrev-expand-and-execute)
+ZSH_AUTOSUGGEST_CLEAR_WIDGETS+=(magic-abbrev-expand-and-execute)
