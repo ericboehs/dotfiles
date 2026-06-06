@@ -9,6 +9,10 @@ path=(~/bin "$path[@]")
 path=(~/.local/bin "$path[@]")
 path=(/Applications/Postgres.app/Contents/Versions/latest/bin "$path[@]")
 
+# aube: keep global packages + binaries under aube
+export AUBE_HOME="$HOME/.local/share/aube"
+path=("$AUBE_HOME" "$path[@]")
+
 cdpath=(~ ~/Code)
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
