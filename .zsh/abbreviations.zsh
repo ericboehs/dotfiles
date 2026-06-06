@@ -5,7 +5,7 @@ typeset -A abbrevs
 # General aliases
 abbrevs=(
   "lld"  "lsd -altr"
-  "ll"   "lsd -al"
+  # "ll"   "lsd -al"
   "l1"   "lsd -1A"
   "mdc"  "mkdir -p __CURSOR__ && cd \$_"
   "killsshtty" 'kill $(ps auxww | grep ssh | grep tty| awk "{print \$2}")'
@@ -150,7 +150,7 @@ abbrevs+=(
 
 # Vim
 abbrevs+=(
-  "vrcf" 'nvim -c ":RuboCop $(git diff origin/\$GIT_MASTER_BRANCH:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
+  "vrcf" 'nvim -c ":RuboCop $(git diff origin/main:./ --name-only | grep -E .rb$ | paste -sd\  -)"'
   "vi"   'nvim'
   "wix"   'nvim -c "VimwikiIndex"'
   "wid"  'nvim -c "VimwikiDiaryIndex"'
@@ -174,11 +174,11 @@ abbrevs+=(
   "gs"    "git status -s"
   "gsl"   "git status"
   "gg"    "git lg"
-  "ggm"   "git lg origin/\$GIT_MASTER_BRANCH.."
+  "ggm"   "git lg origin/main.."
   "ggh"   "git lg --color | head"
-  "ggmh"  "git lg origin/\$GIT_MASTER_BRANCH.. --color | head"
+  "ggmh"  "git lg origin/main.. --color | head"
   "ggg"   "git ll"
-  "glogmh" "git log --oneline --graph \$GIT_MASTER_BRANCH HEAD"
+  "glogmh" "git log --oneline --graph main HEAD"
 
   "ga"   "git add"
   "gad"  "git add ."
@@ -198,7 +198,7 @@ abbrevs+=(
 
   "gcb"     "git checkout -b"
   "gco"     "git checkout"
-  "gcom"    "git checkout \$GIT_MASTER_BRANCH"
+  "gcom"    "git checkout main"
   "gcoh"    "git checkout HEAD"
   "gcohd"   "git checkout HEAD --"
   "gcohgl"  "git checkout HEAD -- Gemfile.lock"
@@ -217,12 +217,12 @@ abbrevs+=(
   "gbmsc"   "git branch -M \$(git branch --show-current)__CURSOR__"
   "gbsmd"   "git fetch -p && for branch in \$(git branch -vv | grep ': gone]' | awk '{print \$1}'); do git branch -D \$branch; done"
 
-  "gbmd"   'git branch --merged | grep  -v "\*\|master" | xargs -n1 git branch -d'
-  "gbrmd"  'git branch -r --merged | grep origin | grep -v "\->\|master" | cut -d"/" -f2- | xargs git push origin --delete'
+  "gbmd"   'git branch --merged | grep  -v "\*\|main" | xargs -n1 git branch -d'
+  "gbrmd"  'git branch -r --merged | grep origin | grep -v "\->\|main" | cut -d"/" -f2- | xargs git push origin --delete'
 
   "gd"    "git diff"
-  "gdm"   "git diff origin/\$GIT_MASTER_BRANCH.."
-  "gdms"  "git diff origin/\$GIT_MASTER_BRANCH:./"
+  "gdm"   "git diff origin/main.."
+  "gdms"  "git diff origin/main:./"
   "gdc"   "git diff --cached"
   "gdt"   "git difftool"
   "gdh"   "git diff HEAD~1"
@@ -241,7 +241,7 @@ abbrevs+=(
   "gl"    "git pull"
   "glr"   "git pull --rebase"
   "glor"  "git pull origin --rebase"
-  "glomr" "git pull origin \$GIT_MASTER_BRANCH --rebase"
+  "glomr" "git pull origin main --rebase"
 
   "ghrv"  "GHWR_URL=__CURSOR__;
 GHWR_ID=\$(echo \$GHWR_URL | ggrep -oP 'runs/\K\d+')
@@ -284,15 +284,15 @@ gh run rerun \$GHWR_ID"
   "grbi"  "git rebase -i"
   "grba"  "git rebase --abort"
   "grbc"  "git rebase --continue"
-  "grbm"  "git rebase \$GIT_MASTER_BRANCH"
-  "grbom"  "git rebase origin/\$GIT_MASTER_BRANCH"
-  "grbim" "git rebase -i \$GIT_MASTER_BRANCH"
+  "grbm"  "git rebase main"
+  "grbom"  "git rebase origin/main"
+  "grbim" "git rebase -i main"
 
   "grh"   "git reset --hard"
   "grhu"  "git reset --hard @{u}"
-  "grsm"  "git reset --soft \$GIT_MASTER_BRANCH"
+  "grsm"  "git reset --soft main"
 
-  "grlm"  "echo \"behind\\tahead\"; git rev-list --left-right --count \$GIT_MASTER_BRANCH..."
+  "grlm"  "echo \"behind\\tahead\"; git rev-list --left-right --count main..."
 
   "gchp"  "git cherry-pick"
   "gchpc" "git cherry-pick --continue"
@@ -302,7 +302,7 @@ gh run rerun \$GHWR_ID"
   "gshh" "git show HEAD"
 
   "gsu"  "git submodule update --init --recursive"
-  "gsgl" "git submodule -q foreach git pull -q origin \$GIT_MASTER_BRANCH"
+  "gsgl" "git submodule -q foreach git pull -q origin main"
 
   "gst"  "git stash"
   "gstl" "git stash list"

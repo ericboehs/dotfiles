@@ -196,6 +196,8 @@ link_dotfiles() {
   run mkdir -p ~/.config/lsd
   run ln -fs "$DOTFILES_DIR/.config/lsd/colors.yaml" ~/.config/lsd/colors.yaml
   run ln -fs "$DOTFILES_DIR/.config/lsd/config.yaml" ~/.config/lsd/config.yaml
+  log "Linking starship config"
+  run ln -fs "$DOTFILES_DIR/.config/starship.toml" ~/.config/starship.toml
   log "Linking gitleaks config"
   run mkdir -p ~/.config/gitleaks
   run ln -fs "$DOTFILES_DIR/.config/gitleaks/config.toml" ~/.config/gitleaks/config.toml

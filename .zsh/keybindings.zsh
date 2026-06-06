@@ -17,7 +17,6 @@ bindkey -M vicmd v edit-command-line
 # Delete words delimited by / or =
 export WORDCHARS=${WORDCHARS//[\/=]}
 
-
 # Copy current command to clipboard
 function copy-current-command-to-clipboard {
   print -rn -- "$BUFFER" | pbcopy        # $BUFFER = command-line you’re editing

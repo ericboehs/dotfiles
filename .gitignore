@@ -11,6 +11,7 @@
 !.config/ghostty/
 !.config/lsd/
 !.config/gitleaks/
+!.config/starship.toml
 .config/mise/config.local.toml
 .config/nvim/lazy-lock.json
 channel.xml

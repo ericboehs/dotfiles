@@ -13,4 +13,8 @@ export CLAUDE_CODE_AUTO_COMPACT_WINDOW=168000
 export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
-exec claude --mcp-config ~/.claude/mcp-brave.json "$@"
+exec claude \
+  --mcp-config "$HOME/.claude/mcp-brave.json" \
+  --disallowed-tools WebSearch \
+  --append-system-prompt "The built-in WebSearch tool is unavailable in this environment. For any web search, use the Brave Search MCP tools (mcp__brave-search__brave_web_search, mcp__brave-search__brave_local_search) instead." \
+  "$@"

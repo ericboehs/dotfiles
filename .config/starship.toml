@@ -1,0 +1,17 @@
+scan_timeout = 200
+command_timeout = 200
+
+# Only include modules that actually produce output. The default format
+# has ~60 modules; most scan for nothing and waste time (buf 9ms,
+# pulumi 2ms, nodejs 289ms in vets-api). Keep it lean.
+format = "$directory$git_branch$git_commit$git_state$git_status$cmd_duration$time$line_break$jobs$character"
+
+[aws]
+disabled = true
+
+[ruby]
+disabled = true
+
+[time]
+disabled = false
+time_format = '%T CT'
