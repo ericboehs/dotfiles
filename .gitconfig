@@ -4,6 +4,9 @@
 [includeIf "gitdir:~/Code/va.ghe.com/**"]
   path = ~/.gitconfig.va-ghe
 
+[includeIf "gitdir:~/Code/github.ec.va.gov/**"]
+  path = ~/.gitconfig.va-ghe
+
 [core]
   excludesfile = ~/.gitignore
   pager = delta
@@ -121,3 +124,11 @@
 [hook "gitleaks"]
 	event = pre-commit
 	command = gitleaks git --staged --redact --no-banner -c ~/.config/gitleaks/config.toml
+[user]
+	signingkey = ~/.ssh/id_ed25519.pub
+[credential "https://github.ec.va.gov"]
+	helper =
+	helper = !/opt/homebrew/bin/gh auth git-credential
+[credential "https://va.ghe.com"]
+	helper = 
+	helper = !/opt/homebrew/bin/gh auth git-credential
