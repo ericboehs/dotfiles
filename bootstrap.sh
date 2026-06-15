@@ -64,7 +64,7 @@ install_deps() {
     log "Installing Homebrew dependencies"
     # tree-sitter (the lib) and tree-sitter-cli are separate formulas;
     # nvim-treesitter needs the CLI for parser compilation.
-    run brew install mise neovim git lsd zoxide fzf \
+    run brew install mise neovim git lsd zoxide fzf direnv starship \
       zsh-autosuggestions gpg tmux ripgrep fd lua gh terminal-notifier delta \
       tree-sitter-cli
   elif [[ "$OSTYPE" == linux-gnu* ]]; then
@@ -73,8 +73,13 @@ install_deps() {
     # lsd is in universe on 22.04+ but missing on minimal images, so
     # fall back to cargo if apt fails.
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      zsh neovim lsd zoxide fzf zsh-autosuggestions \
+      zsh neovim lsd zoxide fzf direnv zsh-autosuggestions \
       gnupg tmux ripgrep fd-find bat lua5.4 gh git-delta
+    if ! command -v starship >/dev/null; then
+      log "Installing starship"
+      $DRY_RUN && printf "    \033[2;37m[dry] curl -fsSL https://starship.rs/install.sh | sh -s -- -y\033[0m\n"
+      $DRY_RUN || curl -fsSL https://starship.rs/install.sh | sh -s -- -y
+    fi
     if ! command -v mise >/dev/null; then
       log "Installing mise"
       $DRY_RUN && printf "    \033[2;37m[dry] curl -fsSL https://mise.run | sh\033[0m\n"
