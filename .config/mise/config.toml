@@ -10,6 +10,7 @@ GITLEAKS_CONFIG = "{{env.HOME}}/.config/gitleaks/config.toml"
 
 [settings]
 ruby.compile = false
+idiomatic_version_file_enable_tools = ["node"]
 
 [tools]
 python = "3.12"
