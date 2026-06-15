@@ -22,6 +22,11 @@ source "$HOME/.zsh/functions.zsh"
 # Tools
 source "$HOME/.zsh/tools.zsh"
 
+# Aliases
+# Auto-compact bare `claude` at 200k: past ~200-300k tokens usage spikes and
+# large-context recall degrades (https://garrit.xyz/posts/2026-05-06-dont-trust-large-context-windows).
+alias claude='CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100 command claude'
+
 # Prompt
 source "$HOME/.zsh/p10k.zsh"
 
