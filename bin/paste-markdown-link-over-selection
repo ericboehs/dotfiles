@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Required parameters:
+# @raycast.schemaVersion 1
+# @raycast.title Paste Markdown Link Over Selection
+# @raycast.mode silent
+# @raycast.icon 🔗
+# @raycast.packageName Markdown
+# @raycast.description Wrap selected text in a markdown link using the URL on your clipboard.
+# @raycast.author You
+
+osascript <<'APPLESCRIPT'
+tell application "System Events"
+    set frontApp to name of first application process whose frontmost is true
+
+    -- Pass through for Zoom (matching your KM behavior)
+    if frontApp contains "zoom" or frontApp contains "Zoom" then
+        keystroke "v" using {command down, control down}
+        return
+    end if
+
+    -- Save the URL from clipboard
+    try
+        set theLink to the clipboard as text
+    on error
+        display notification "Clipboard doesn't contain text" with title "Paste Markdown Link"
+        return
+    end try
+
+    -- Copy the current selection
+    keystroke "c" using {command down}
+    delay 0.15
+
+    try
+        set theSelection to the clipboard as text
+    on error
+        set theSelection to ""
+    end try
+
+    -- Build and type the markdown link
+    if theSelection is equal to theLink or theSelection is "" then
+        -- Nothing selected; just paste the raw URL
+        keystroke theLink
+    else
+        set markdownLink to "[" & theSelection & "](" & theLink & ")"
+        keystroke markdownLink
+    end if
+
+    -- Restore clipboard to the original URL
+    delay 0.1
+    set the clipboard to theLink
+end tell
+APPLESCRIPT
