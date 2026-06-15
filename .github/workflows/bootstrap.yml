@@ -44,7 +44,7 @@ jobs:
       - name: Verify CLI tools installed
         run: |
           set -e
-          for cmd in zsh nvim direnv lsd starship zoxide fzf tmux rg gh delta; do
+          for cmd in zsh nvim lsd zoxide fzf tmux rg gh delta; do
             command -v "$cmd" >/dev/null || { echo "missing: $cmd"; exit 1; }
           done
           test -x "$HOME/.local/bin/fd"
