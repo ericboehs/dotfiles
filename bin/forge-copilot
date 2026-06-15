@@ -1,4 +1,6 @@
 #!/bin/zsh
 # Launch forge with VA Copilot provider (isolated config, no global mutation)
 export FORGE_CONFIG=~/.forge-copilot
+export FORGE_BANNER=" "
+echo "\033[1;36m🔑 Forge (Copilot)\033[0m"
 exec forge
