@@ -36,3 +36,4 @@ keybind = ctrl+6=text:\x1b[27;5;54~
 keybind = ctrl+7=text:\x1b[27;5;55~
 keybind = ctrl+8=text:\x1b[27;5;56~
 keybind = ctrl+9=text:\x1b[27;5;57~
+macos-titlebar-style = tabs

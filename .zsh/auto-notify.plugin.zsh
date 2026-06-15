@@ -58,7 +58,7 @@ function _auto_notify_message() {
     elif [[ "$platform" == "Darwin" ]]; then
         # Skip notification if the terminal app is already frontmost
         local frontmost_app=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
-        if [[ "$frontmost_app" != "iTerm2" && "$frontmost_app" != "Ghostty" && "$frontmost_app" != "Terminal" ]]; then
+        if [[ "$frontmost_app" != "iTerm2" && "$frontmost_app" != "ghostty" && "$frontmost_app" != "Terminal" ]]; then
             # Use osascript instead of terminal-notifier — its bundle id isn't
             # registered with NotificationCenter on recent macOS, which causes
             # "no running NotificationCenter instance" errors.
