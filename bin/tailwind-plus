@@ -49,7 +49,7 @@ end
 
 class TailwindPlusScraper
   BASE_URL = 'https://tailwindcss.com'
-  LOGIN_URL = "#{BASE_URL}/login"
+  LOGIN_URL = "#{BASE_URL}/plus/login"
   MAIN_URL = "#{BASE_URL}/plus/ui-blocks"
 
   # Use shared configuration
@@ -244,52 +244,51 @@ class TailwindPlusScraper
     page.goto(MAIN_URL)
     page.wait_for_timeout(3000)
 
-    # Extract the complete structure using the simplified JavaScript
+    # Extract the complete structure from the v4.x DOM
+    # Categories are h2, subcategory groups are h3, items in ul > li > a
     structure = page.evaluate(<<~JAVASCRIPT)
-      function() {
-        const origin = window.location.origin;
-        const allResults = [];
+      () => {
+        const results = [];
+        const main = document.querySelector('main');
+        if (!main) return results;
 
-        document.querySelectorAll('main section.isolate').forEach(section => {
-          const category = section.querySelector('h2')?.textContent.trim() || "";
+        let currentCategory = '';
+        let currentSubcategory = '';
 
-          // Each subcategory section under this main section
-          section.querySelectorAll('section').forEach(subsection => {
-            const subcategory = subsection.querySelector('h3')?.textContent.trim() || "";
-
-            // Each item in the subcategory
-            subsection.querySelectorAll('ul > li a').forEach(a => {
-              const url = a.href;
-              const img = a.querySelector('img');
-              const image_url = img ? (img.src.startsWith('/') ? origin + img.src : img.src) : "";
-
-              // Grabbing all <p>s for title and count
-              const infoDiv = a.querySelector('div.px-4, div.sm\\\\:px-2');
-              const ps = infoDiv ? infoDiv.querySelectorAll('p') : a.querySelectorAll('p');
-              let title = "", component_count = "";
-
+        // Walk through all headings and lists in document order
+        const elements = main.querySelectorAll('h2, h3, ul');
+        elements.forEach(el => {
+          if (el.tagName === 'H2') {
+            currentCategory = el.textContent.trim();
+          } else if (el.tagName === 'H3') {
+            currentSubcategory = el.textContent.trim();
+          } else if (el.tagName === 'UL') {
+            el.querySelectorAll(':scope > li > a').forEach(a => {
+              const ps = a.querySelectorAll('p');
+              let title = '', componentCount = 0;
               ps.forEach(p => {
-                if (p.classList.contains('font-medium')) {
-                  title = p.textContent.trim();
-                } else if (p.textContent.match(/(\\d+)\\s+(components|examples)/i)) {
-                  component_count = parseInt(p.textContent, 10);
+                const text = p.textContent.trim();
+                const match = text.match(/(\\d+)\\s+(components?|examples?)/i);
+                if (match) {
+                  componentCount = parseInt(match[1], 10);
+                } else if (!title) {
+                  title = text;
                 }
               });
-
-              allResults.push({
-                category,
-                subcategory,
-                title,
-                component_count,
-                image_url,
-                url,
-                components: [] // Will be filled in during scraping
-              });
+              if (title && a.href) {
+                results.push({
+                  category: currentCategory,
+                  subcategory: currentSubcategory,
+                  title,
+                  component_count: componentCount,
+                  url: a.href,
+                  components: []
+                });
+              }
             });
-          });
+          }
         });
-
-        return allResults;
+        return results;
       }
     JAVASCRIPT
 
@@ -357,355 +356,147 @@ class TailwindPlusScraper
     page.goto(url)
     page.wait_for_timeout(3000)
 
-    # Use the improved component detection logic
+    # Find all component sections by their anchor IDs
     component_sections = page.evaluate(<<~JAVASCRIPT)
       () => {
-        const sections = [];
-
-        // First, find containers that have code buttons to identify component areas
-        const codeButtons = Array.from(document.querySelectorAll('button'))
-          .filter(button => {
-            const btnText = button.textContent.trim();
-            return ['Code', 'View code', 'Show code'].includes(btnText);
-          });
-
-        const componentContainers = codeButtons
-          .map(button => {
-            // Find the component container for this code button
-            let container = button;
-            for (let level = 0; level < 10 && container; level++) {
-              container = container.parentElement;
-              // Look for a container that likely holds the component
-              if (container?.id || container?.querySelector('h2, h3, h4')) {
-                return container;
-              }
-            }
-            return null;
-          })
-          .filter(container => container !== null);
-
-        // Now look for headings within these component containers
-        componentContainers.forEach(container => {
-          const headings = container.querySelectorAll('h2, h3, h4');
-          const meaningfulHeading = Array.from(headings).find(heading => {
-            const title = heading.textContent.trim();
-            // Only include meaningful titles (not empty, not too short, not just numbers)
-            return title.length > 2 && !/^\\d+$/.test(title);
-          });
-
-          if (meaningfulHeading) {
-            sections.push({
-              title: meaningfulHeading.textContent.trim(),
-              hasCodeButton: true
-            });
-          }
-        });
-
-        return sections;
+        return Array.from(document.querySelectorAll('[id^="component-"]')).map(s => ({
+          id: s.id,
+          title: s.querySelector('h2')?.textContent?.trim() || 'Untitled'
+        }));
       }
     JAVASCRIPT
 
     puts "  🔍 #{progress} Found #{component_sections.length} components to extract..." if !progress.empty?
 
-    # Extract all components individually with proper waiting
-    components_data = []
+    # Extract the Tailwind CSS version from the first component's version select
+    # Click Code tab first, then wait for the panel to render
+    page.evaluate(<<~JAVASCRIPT)
+      () => {
+        const section = document.querySelector('[id^="component-"]');
+        if (!section) return;
+        const codeTab = section.querySelector('[role="tab"]:nth-child(2)');
+        if (codeTab) codeTab.click();
+      }
+    JAVASCRIPT
+    page.wait_for_timeout(500)
 
-    component_sections.each_with_index do |component_info, index|
+    tailwind_version = page.evaluate(<<~JAVASCRIPT)
+      () => {
+        const section = document.querySelector('[id^="component-"]');
+        if (!section) return null;
+        const panels = section.querySelectorAll('[role="tabpanel"]');
+        const codePanel = Array.from(panels).find(p => !p.hidden);
+        if (!codePanel) return null;
+        const selects = codePanel.querySelectorAll('select');
+        const versionSelect = Array.from(selects).find(s =>
+          Array.from(s.options).some(o => /^v\\d/.test(o.textContent.trim()))
+        );
+        if (!versionSelect) return null;
+        const selected = versionSelect.options[versionSelect.selectedIndex];
+        return selected ? selected.textContent.trim() : null;
+      }
+    JAVASCRIPT
+    puts "  📦 #{progress} Tailwind CSS version: #{tailwind_version || 'unknown'}" if !progress.empty?
+
+    components = []
+
+    component_sections.each_with_index do |section_info, index|
       component_progress = "#{progress} (#{index + 1}/#{component_sections.length})"
-      puts "    📝 #{component_progress} Extracting '#{component_info['title']}'..." if !progress.empty?
+      puts "    📝 #{component_progress} Extracting '#{section_info['title']}'..." if !progress.empty?
 
-      # Extract each component individually to ensure proper loading
-      comp_data = page.evaluate(<<~JAVASCRIPT)
-        () => {
-          const title = #{component_info['title'].to_json};
-          const headings = document.querySelectorAll('h2, h3, h4');
+      # Extract code for each theme (light/dark) and format (html/react/vue)
+      all_formats = {}
 
-          const targetHeading = Array.from(headings)
-            .find(heading => heading.textContent.trim() === title);
-          
-          if (!targetHeading) return null;
-
-          const container = targetHeading.parentElement;
-
-          // Look for the section with an ID that contains this component
-          let tempContainer = container;
-          let sectionWithId = null;
-          for (let s = 0; s < 10 && tempContainer; s++) {
-            if (tempContainer.tagName === 'SECTION' && tempContainer.id) {
-              sectionWithId = tempContainer;
-              break;
-            }
-            tempContainer = tempContainer.parentElement;
-          }
-
-          // Look for Code button in this component
-          let currentContainer = container;
-          for (let j = 0; j < 8 && currentContainer; j++) {
-            const codeButton = Array.from(currentContainer.querySelectorAll('button'))
-              .find(btn => {
-                const btnText = btn.textContent.trim();
-                return ['Code', 'View code', 'Show code'].includes(btnText);
-              });
-            
-            if (codeButton) {
-              codeButton.click();
-              return {
-                clicked: true,
-                title: title,
-                index: #{index},
-                anchor_id: sectionWithId?.id || null
-              };
-            }
-            currentContainer = currentContainer.parentElement;
-          }
-
-          return { clicked: false, title: title, index: #{index}, anchor_id: null };
-        }
-      JAVASCRIPT
-
-      if comp_data['clicked']
-        # Wait for content to load after clicking
-        page.wait_for_timeout(800)
-
-        # Extract HTML content by clicking HTML tab and getting from pre.language-html
-        html_content = page.evaluate(<<~JAVASCRIPT)
+      ['light', 'dark'].each do |theme|
+        # Switch theme radio
+        page.evaluate(<<~JAVASCRIPT)
           () => {
-            const title = #{component_info['title'].to_json};
-            const targetHeading = Array.from(document.querySelectorAll('h2, h3, h4'))
-              .find(heading => heading.textContent.trim() === title);
-            
-            if (!targetHeading) return false;
-
-            let container = targetHeading.parentElement;
-
-            // Look for HTML tab and click it
-            for (let j = 0; j < 10 && container; j++) {
-              const htmlButton = Array.from(container.querySelectorAll('button'))
-                .find(btn => btn.textContent.trim() === 'HTML');
-              
-              if (htmlButton) {
-                htmlButton.click();
-                return true; // Return success, we'll extract after waiting
-              }
-              container = container.parentElement;
-            }
-            return false;
+            const section = document.getElementById(#{section_info['id'].to_json});
+            if (!section) return;
+            const label = #{theme.to_json} === 'light' ? 'Light theme' : 'Dark theme';
+            const radio = Array.from(section.querySelectorAll('input[type="radio"]'))
+              .find(r => r.getAttribute('aria-label') === label);
+            if (radio) radio.click();
           }
         JAVASCRIPT
 
-        if html_content
-          page.wait_for_timeout(500) # Wait for tab content to load
-          html_content = page.evaluate(<<~JAVASCRIPT)
+        page.wait_for_timeout(300)
+
+        ['html', 'react', 'vue'].each do |format|
+          # Click Code tab and switch format select
+          page.evaluate(<<~JAVASCRIPT)
             () => {
-              const title = #{component_info['title'].to_json};
-              const targetHeading = Array.from(document.querySelectorAll('h2, h3, h4'))
-                .find(heading => heading.textContent.trim() === title);
-              
-              if (!targetHeading) return '';
+              const section = document.getElementById(#{section_info['id'].to_json});
+              if (!section) return;
 
-              let container = targetHeading.parentElement;
+              // Click the Code tab (2nd tab in the HeadlessUI tablist)
+              const codeTab = section.querySelector('[role="tab"]:nth-child(2)');
+              if (codeTab) codeTab.click();
 
-              // Look for code content within this specific component's container
-              for (let j = 0; j < 10 && container; j++) {
-                const htmlPre = container.querySelector('pre.language-html code');
-                if (htmlPre) {
-                  return htmlPre.textContent || htmlPre.innerText || '';
+              // Find the format select (the one with HTML/React/Vue options)
+              const selects = section.querySelectorAll('select');
+              const formatSelect = Array.from(selects).find(s =>
+                Array.from(s.options).some(o => o.textContent.trim().toLowerCase() === 'react')
+              );
+              if (formatSelect) {
+                const option = Array.from(formatSelect.options).find(o =>
+                  o.textContent.trim().toLowerCase() === #{format.to_json}
+                );
+                if (option) {
+                  formatSelect.value = option.value;
+                  formatSelect.dispatchEvent(new Event('change', { bubbles: true }));
                 }
-                container = container.parentElement;
               }
-              return '';
             }
           JAVASCRIPT
-        else
-          html_content = ''
-        end
 
-        # Try to extract React code
-        react_content = ''
-        begin
-          react_clicked = page.evaluate(<<~JAVASCRIPT)
+          page.wait_for_timeout(400)
+
+          # Read the code content after format switch settles
+          code = page.evaluate(<<~JAVASCRIPT)
             () => {
-              const title = #{component_info['title'].to_json};
-              const targetHeading = Array.from(document.querySelectorAll('h2, h3, h4'))
-                .find(heading => heading.textContent.trim() === title);
-              
-              if (!targetHeading) return false;
-
-              let container = targetHeading.parentElement;
-
-              // Look for React tab and click it
-              for (let j = 0; j < 10 && container; j++) {
-                const reactButton = Array.from(container.querySelectorAll('button'))
-                  .find(btn => btn.textContent.trim() === 'React');
-                
-                if (reactButton) {
-                  reactButton.click();
-                  return true;
-                }
-                container = container.parentElement;
-              }
-              return false;
+              const section = document.getElementById(#{section_info['id'].to_json});
+              if (!section) return '';
+              // Get the visible (non-hidden) tabpanel - the Code panel
+              const panels = section.querySelectorAll('[role="tabpanel"]');
+              const codePanel = Array.from(panels).find(p => !p.hidden);
+              return codePanel?.querySelector('code')?.textContent || '';
             }
           JAVASCRIPT
 
-          if react_clicked
-            page.wait_for_timeout(500) # Wait for tab content to load
-            react_content = page.evaluate(<<~JAVASCRIPT)
-              function() {
-                var title = #{component_info['title'].to_json};
-                var headings = document.querySelectorAll('h2, h3, h4');
-
-                for (var i = 0; i < headings.length; i++) {
-                  var heading = headings[i];
-                  if (heading.textContent.trim() === title) {
-                    var container = heading.parentElement;
-
-                    // Look for React code content within this specific component's container
-                    for (var j = 0; j < 10 && container; j++) {
-                      var reactPre = container.querySelector('pre.language-jsx code');
-                      if (reactPre) {
-                        return reactPre.textContent || reactPre.innerText || '';
-                      }
-                      container = container.parentElement;
-                    }
-                    break;
-                  }
-                }
-                return '';
-              }
-            JAVASCRIPT
-          end
-        rescue => e
-          puts "    ⚠️  #{component_progress} React extraction failed: #{e.message}" if !progress.empty?
+          key = theme == 'light' ? format : "#{format}_dark"
+          all_formats[key] = code || ''
         end
-
-        # Try to extract Vue code
-        vue_content = ''
-        begin
-          vue_clicked = page.evaluate(<<~JAVASCRIPT)
-            function() {
-              var title = #{component_info['title'].to_json};
-              var headings = document.querySelectorAll('h2, h3, h4');
-
-              for (var i = 0; i < headings.length; i++) {
-                var heading = headings[i];
-                if (heading.textContent.trim() === title) {
-                  var container = heading.parentElement;
-
-                  // Look for Vue tab and click it
-                  for (var j = 0; j < 10 && container; j++) {
-                    var buttons = container.querySelectorAll('button');
-                    for (var k = 0; k < buttons.length; k++) {
-                      var btn = buttons[k];
-                      var btnText = btn.textContent.trim();
-                      if (btnText === 'Vue') {
-                        btn.click();
-                        return true;
-                      }
-                    }
-                    container = container.parentElement;
-                  }
-                  break;
-                }
-              }
-              return false;
-            }
-          JAVASCRIPT
-
-          if vue_clicked
-            page.wait_for_timeout(500) # Wait for tab content to load
-            vue_content = page.evaluate(<<~JAVASCRIPT)
-              function() {
-                var title = #{component_info['title'].to_json};
-                var headings = document.querySelectorAll('h2, h3, h4');
-
-                for (var i = 0; i < headings.length; i++) {
-                  var heading = headings[i];
-                  if (heading.textContent.trim() === title) {
-                    var container = heading.parentElement;
-
-                    // Look for Vue code content within this specific component's container
-                    for (var j = 0; j < 10 && container; j++) {
-                      var vuePre = container.querySelector('pre.language-html code');
-                      if (vuePre) {
-                        var content = vuePre.textContent || vuePre.innerText || '';
-                        // Only return if it contains Vue template syntax
-                        if (content.indexOf('<template>') !== -1 || content.indexOf('<script setup>') !== -1) {
-                          return content;
-                        }
-                      }
-                      container = container.parentElement;
-                    }
-                    break;
-                  }
-                }
-                return '';
-              }
-            JAVASCRIPT
-          end
-        rescue => e
-          puts "    ⚠️  #{component_progress} Vue extraction failed: #{e.message}" if !progress.empty?
-        end
-
-        components_data << {
-          'title' => component_info['title'],
-          'html' => html_content,
-          'react' => react_content,
-          'vue' => vue_content,
-          'index' => index,
-          'anchor_id' => comp_data['anchor_id']
-        }
-      else
-        puts "    ❌ #{component_progress} Could not find Code button for '#{component_info['title']}'" if !progress.empty?
-        components_data << {
-          'title' => component_info['title'],
-          'html' => '',
-          'react' => '',
-          'vue' => '',
-          'index' => index,
-          'anchor_id' => comp_data['anchor_id']
-        }
       end
-    end
 
-    components = []
-    components_data.each do |comp_data|
-      component_progress = "#{progress} (#{comp_data['index'] + 1}/#{component_sections.length})"
-      puts "    📝 #{component_progress} Processing '#{comp_data['title']}'..." if !progress.empty?
+      component_id = "#{section_info['title'].downcase.gsub(/[^a-z0-9]+/, '-')}-#{Time.now.to_i}-#{index}"
 
-      component_id = "#{comp_data['title'].downcase.gsub(/[^a-z0-9]+/, '-')}-#{Time.now.to_i}-#{comp_data['index']}"
-
-      has_content = !comp_data['html'].empty? || !comp_data['react'].empty? || !comp_data['vue'].empty?
+      has_content = all_formats.values.any? { |v| !v.empty? }
+      if has_content
+        light_types = ['html', 'react', 'vue'].select { |f| !all_formats[f].to_s.empty? }.map(&:capitalize)
+        dark_types = ['html_dark', 'react_dark', 'vue_dark'].select { |f| !all_formats[f].to_s.empty? }.map { |f| f.sub('_dark', '').capitalize }
+        puts "    ✅ #{component_progress} Extracted '#{section_info['title']}' (Light: #{light_types.join(', ')} | Dark: #{dark_types.join(', ')})" if !progress.empty?
+      else
+        puts "    ⚠️  #{component_progress} No content for '#{section_info['title']}'" if !progress.empty?
+      end
 
       components << {
         'id' => component_id,
-        'title' => comp_data['title'],
-        'html' => comp_data['html'],
-        'react' => comp_data['react'],
-        'vue' => comp_data['vue'],
+        'title' => section_info['title'],
+        'html' => all_formats['html'],
+        'react' => all_formats['react'],
+        'vue' => all_formats['vue'],
+        'html_dark' => all_formats['html_dark'],
+        'react_dark' => all_formats['react_dark'],
+        'vue_dark' => all_formats['vue_dark'],
         'url' => url,
-        'anchor_id' => comp_data['anchor_id'],
+        'anchor_id' => section_info['id'],
+        'tailwind_version' => tailwind_version,
         'scraped_at' => Time.now.iso8601
       }
-
-      if has_content
-        content_types = []
-        content_types << 'HTML' unless comp_data['html'].empty?
-        content_types << 'React' unless comp_data['react'].empty?
-        content_types << 'Vue' unless comp_data['vue'].empty?
-        puts "    ✅ #{component_progress} Extracted '#{comp_data['title']}' (#{content_types.join(', ')})" if !progress.empty?
-      else
-        puts "    ⚠️  #{component_progress} No content for '#{comp_data['title']}'" if !progress.empty?
-      end
     end
 
     components
-  end
-
-  # This method is no longer used - keeping for backwards compatibility
-  def extract_component_html_simple(page, title, url, index)
-    # Deprecated - use batch extraction in scrape_components_from_url instead
-    {}
   end
 
   def scrape_specific_subcategory(page, target)
@@ -845,7 +636,8 @@ class TailwindPlusServer < Sinatra::Base
     components = load_components
     main_categories = infer_main_categories(components)
     subcategory_groups = build_subcategory_groups_with_metadata(components)
-    erb :index, locals: { subcategory_groups: subcategory_groups, main_categories: main_categories }, layout: :layout
+    tw_version = detect_tailwind_version
+    erb :index, locals: { subcategory_groups: subcategory_groups, main_categories: main_categories, tailwind_version: tw_version }, layout: :layout
   end
 
   # Dynamic route handler for all UI blocks
@@ -949,6 +741,19 @@ class TailwindPlusServer < Sinatra::Base
     url.split('/').last
   end
 
+  def detect_tailwind_version
+    # Find the tailwind_version from the first collection that has one
+    index = load_components_index
+    index.each do |item|
+      next unless item['collection_file']
+      col = load_collection(item['collection_file'])
+      next unless col
+      ver = col['components']&.find { |c| c['tailwind_version'] }&.dig('tailwind_version')
+      return ver if ver
+    end
+    nil
+  end
+
   def get_category_order(category_name)
     case category_name.downcase
     when 'marketing' then 1
@@ -1012,7 +817,8 @@ class TailwindPlusServer < Sinatra::Base
       subcategory_name: subcategory_name,
       subcategory_title: subcategory_title,
       parent_category: parent_category,
-      components: subcategory_components
+      components: subcategory_components,
+      tailwind_version: subcategory_components.find { |c| c['tailwind_version'] }&.dig('tailwind_version')
     }, layout: :layout
   end
 
@@ -1052,11 +858,14 @@ class TailwindPlusServer < Sinatra::Base
       })
     end
 
+    tw_version = components.find { |c| c['tailwind_version'] }&.dig('tailwind_version')
+
     erb :subcategory, locals: {
       subcategory_name: subcategory_name,
       subcategory_title: collection['title'],
       parent_category: collection['category'].downcase.gsub(' ', '_'),
-      components: components
+      components: components,
+      tailwind_version: tw_version
     }, layout: :layout
   end
 
@@ -1652,8 +1461,10 @@ class TailwindPlusServer < Sinatra::Base
             // Reset all tab buttons for this component
             const allTabs = document.querySelectorAll('[data-component="' + componentId + '"]');
             allTabs.forEach(tab => {
-              const activeClass = tab.dataset.activeClass;
-              tab.className = tab.className.replace(activeClass, 'text-gray-600 hover:text-gray-800');
+              if (tab.dataset.format) {
+                const activeClass = tab.dataset.activeClass;
+                tab.className = tab.className.replace(activeClass, 'text-gray-600 hover:text-gray-800');
+              }
             });
 
             // Show selected content
@@ -1668,6 +1479,45 @@ class TailwindPlusServer < Sinatra::Base
               const activeClass = selectedTab.dataset.activeClass;
               selectedTab.className = selectedTab.className.replace('text-gray-600 hover:text-gray-800', activeClass);
             }
+          }
+
+          function switchTheme(componentId, theme) {
+            // Update toggle button styles
+            const toggles = document.querySelectorAll('.theme-toggle[data-component="' + componentId + '"]');
+            toggles.forEach(btn => {
+              if (btn.dataset.theme === theme) {
+                btn.style.backgroundColor = '#4f46e5';
+                btn.style.color = 'white';
+              } else {
+                btn.style.backgroundColor = 'transparent';
+                btn.style.color = '#374151';
+              }
+            });
+
+            // Swap code content and data-code for all format panels of this component
+            const allPanels = document.querySelectorAll('[id^="code-' + componentId + '-"]');
+            allPanels.forEach(panel => {
+              const lightCode = panel.dataset.codeLight || panel.dataset.code;
+              const darkCode = panel.dataset.codeDark;
+              if (!darkCode) return;
+
+              const newCode = theme === 'dark' ? darkCode : lightCode;
+              panel.dataset.code = newCode;
+
+              // Update displayed code text
+              const codeEl = panel.querySelector('pre code');
+              if (codeEl) {
+                codeEl.textContent = newCode;
+                if (typeof Prism !== 'undefined') Prism.highlightElement(codeEl);
+              }
+
+              // Update preview iframe if present
+              const iframe = panel.querySelector('iframe');
+              if (iframe) {
+                const srcdoc = theme === 'dark' ? iframe.dataset.srcdocDark : iframe.dataset.srcdocLight;
+                if (srcdoc) iframe.srcdoc = srcdoc;
+              }
+            });
           }
 
           // Copy current visible code
@@ -2067,6 +1917,9 @@ class TailwindPlusServer < Sinatra::Base
                     <h1 class="text-2xl font-bold" style="color: var(--text-primary);">
                       <span style="color: var(--text-primary);">tailwind</span><span class="text-sky-500">PLUS</span>
                       <span class="ml-2 px-2 py-1 text-xs font-medium rounded" style="background-color: var(--bg-tertiary); color: var(--text-secondary);">offline</span>
+                      <% if defined?(tailwind_version) && tailwind_version %>
+                        <span class="ml-1 px-2 py-1 text-xs font-medium rounded" style="background-color: #0ea5e9; color: white;"><%= tailwind_version %></span>
+                      <% end %>
                     </h1>
                   </a>
                 </div>
@@ -2224,6 +2077,9 @@ class TailwindPlusServer < Sinatra::Base
                   <span class="text-lg font-medium" style="color: var(--text-secondary);">
                     <span style="color: var(--text-primary);">tailwind</span><span class="text-sky-500">PLUS</span>
                     <span class="ml-2 px-1.5 py-0.5 text-xs font-medium rounded" style="background-color: var(--bg-tertiary); color: var(--text-secondary);">offline</span>
+                    <% if defined?(tailwind_version) && tailwind_version %>
+                      <span class="ml-1 px-1.5 py-0.5 text-xs font-medium rounded" style="background-color: #0ea5e9; color: white;"><%= tailwind_version %></span>
+                    <% end %>
                   </span>
                 </a>
               </div>
@@ -2291,6 +2147,35 @@ class TailwindPlusServer < Sinatra::Base
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
+                    <% has_dark = (component['html_dark'] && !component['html_dark'].empty?) || (component['react_dark'] && !component['react_dark'].empty?) || (component['vue_dark'] && !component['vue_dark'].empty?) %>
+                    <% if has_dark %>
+                      <div class="flex items-center rounded-lg overflow-hidden border" style="border-color: var(--border-primary);">
+                        <button
+                          onclick="switchTheme('<%= component['id'] %>', 'light')"
+                          class="theme-toggle px-3 py-1.5 text-sm font-medium transition-colors"
+                          style="background-color: #4f46e5; color: white;"
+                          data-component="<%= component['id'] %>"
+                          data-theme="light"
+                          title="Light theme"
+                        >
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                          </svg>
+                        </button>
+                        <button
+                          onclick="switchTheme('<%= component['id'] %>', 'dark')"
+                          class="theme-toggle px-3 py-1.5 text-sm font-medium transition-colors"
+                          style="background-color: transparent; color: #374151;"
+                          data-component="<%= component['id'] %>"
+                          data-theme="dark"
+                          title="Dark theme"
+                        >
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                          </svg>
+                        </button>
+                      </div>
+                    <% end %>
                     <button
                       onclick="expandPreview('<%= component['id'] %>')"
                       class="expand-button p-2 rounded-md transition-colors"
@@ -2347,11 +2232,15 @@ class TailwindPlusServer < Sinatra::Base
                         id="code-<%= component['id'] %>-<%= format %>"
                         class="code-content <%= index == 0 ? '' : 'hidden' %>"
                         data-code="<%= ERB::Util.html_escape(component['html']) %>"
+                        data-code-light="<%= ERB::Util.html_escape(component['html']) %>"
+                        data-code-dark="<%= ERB::Util.html_escape(component['html_dark'].to_s) %>"
                       >
                         <div class="p-4" style="background-color: var(--bg-primary);">
                           <% if component['html'] && !component['html'].empty? %>
                             <iframe
                               srcdoc="<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>&lt;script src='https://cdn.tailwindcss.com'&gt;&lt;/script&gt;<style>body { margin: 0; padding: 0; overflow-x: hidden; min-height: 100vh; } html { overflow-x: hidden; } @media (max-width: 768px) { body { font-size: 14px; } }</style></head><body><%= component['html'].gsub('"', '&quot;') %></body></html>"
+                              data-srcdoc-light="<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>&lt;script src='https://cdn.tailwindcss.com'&gt;&lt;/script&gt;<style>body { margin: 0; padding: 0; overflow-x: hidden; min-height: 100vh; } html { overflow-x: hidden; } @media (max-width: 768px) { body { font-size: 14px; } }</style></head><body><%= component['html'].gsub('"', '&quot;') %></body></html>"
+                              data-srcdoc-dark="<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>&lt;script src='https://cdn.tailwindcss.com'&gt;&lt;/script&gt;<style>body { margin: 0; padding: 0; overflow-x: hidden; min-height: 100vh; } html { overflow-x: hidden; } @media (max-width: 768px) { body { font-size: 14px; } }</style></head><body><%= (component['html_dark'] || component['html']).gsub('"', '&quot;') %></body></html>"
                               class="w-full h-96 sm:h-96 md:h-96 border-0 rounded"
                               sandbox="allow-scripts"
                               loading="lazy"
@@ -2369,6 +2258,8 @@ class TailwindPlusServer < Sinatra::Base
                         id="code-<%= component['id'] %>-<%= format %>"
                         class="code-content <%= index == 0 ? '' : 'hidden' %>"
                         data-code="<%= ERB::Util.html_escape(component[format]) %>"
+                        data-code-dark="<%= ERB::Util.html_escape(component[format + '_dark'].to_s) %>"
+                        data-code-light="<%= ERB::Util.html_escape(component[format]) %>"
                       >
                         <pre class="language-<%= format == 'html' ? 'html' : 'javascript' %> p-4 max-h-96 overflow-y-auto"><code class="language-<%= format == 'html' ? 'html' : 'javascript' %> text-sm"><%= ERB::Util.html_escape(component[format]) %></code></pre>
                       </div>
