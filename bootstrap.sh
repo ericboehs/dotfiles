@@ -70,11 +70,22 @@ install_deps() {
   elif [[ "$OSTYPE" == linux-gnu* ]]; then
     log "Installing apt dependencies"
     run sudo apt-get update -qq
-    # lsd is in universe on 22.04+ but missing on minimal images, so
-    # fall back to cargo if apt fails.
     run sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      zsh neovim lsd zoxide fzf direnv zsh-autosuggestions \
+      zsh neovim zoxide fzf direnv zsh-autosuggestions \
       gnupg tmux ripgrep fd-find bat lua5.4 gh git-delta
+    # lsd is in universe on 22.04+ but missing on minimal images;
+    # fall back to the upstream .deb from GitHub releases.
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lsd 2>/dev/null; then
+      log "lsd not in apt; installing from GitHub release"
+      local lsd_tmp; lsd_tmp=$(mktemp -d)
+      $DRY_RUN && printf "    \033[2;37m[dry] install lsd .deb from GitHub\033[0m\n"
+      $DRY_RUN || {
+        curl -fsSL -o "$lsd_tmp/lsd.deb" \
+          "https://github.com/lsd-rs/lsd/releases/latest/download/lsd-musl_$(dpkg --print-architecture).deb"
+        sudo dpkg -i "$lsd_tmp/lsd.deb"
+        rm -rf "$lsd_tmp"
+      }
+    fi
     if ! command -v starship >/dev/null; then
       log "Installing starship"
       $DRY_RUN && printf "    \033[2;37m[dry] curl -fsSL https://starship.rs/install.sh | sh -s -- -y\033[0m\n"
