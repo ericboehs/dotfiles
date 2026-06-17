@@ -31,7 +31,7 @@ _fzf_theme_sync() {
 }
 
 # Update the flag in background (atomic write so readers never see empty file)
-{ defaults read -g AppleInterfaceStyle &>/dev/null && echo dark || echo light } > ~/.cache/dark-mode.tmp && mv ~/.cache/dark-mode.tmp ~/.cache/dark-mode &!
+{ defaults read -g AppleInterfaceStyle &>/dev/null && echo dark || echo light } > ~/.cache/dark-mode.$$ && mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode &!
 
 _fzf_theme_sync
 autoload -Uz add-zsh-hook
