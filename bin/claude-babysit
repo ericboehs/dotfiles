@@ -1,0 +1,121 @@
+#!/bin/zsh
+
+# claude-babysit - Monitor a tmux pane running Claude and auto-recover crashes
+#
+# Behavior:
+#   RUNNING  -> do nothing
+#   CRASHED  -> send message to restart + slack notify
+#   STOPPED  -> slack notify only (don't send keys, it finished normally)
+#
+# Usage: claude-babysit <pane> [message]
+#   pane:    tmux target pane (e.g. code:3.0)
+#   message: text to send on crash recovery (default: "keep going")
+#
+# Examples:
+#   claude-babysit code:3.0
+#   claude-babysit code:3.0 "continue with the reingest"
+#   claude-babysit code:1.0 "keep going" &  # run in background
+
+# NOT `set -e`. This is a babysitter: its whole job is to outlive transient
+# failures (a momentary tmux read, a grep that matches nothing, a pane that
+# blinks out). A non-fatal error inside the loop must skip the iteration, not
+# kill the monitor. We keep -u (catches real bugs like typo'd vars) and
+# pipefail (so guarded pipelines still report failure), but never auto-exit.
+set -uo pipefail
+
+PANE="${1:?Usage: claude-babysit <pane> [message]}"
+MESSAGE="${2:-keep going}"
+CHECK_INTERVAL=60
+
+trap 'echo "\n$(date +%H:%M:%S) Babysitter stopped for $PANE"; exit 0' INT TERM
+
+echo "$(date +%H:%M:%S) Babysitting $PANE every ${CHECK_INTERVAL}s (restart message: \"$MESSAGE\")"
+
+last_state="RUNNING"  # assume it starts active
+last_tokens=-1        # token count from previous check
+
+while true; do
+
+    # Verify pane exists
+    if ! tmux has-session -t "${PANE%%.*}" 2>/dev/null; then
+        echo "$(date +%H:%M:%S) Session gone, exiting"
+        exit 1
+    fi
+
+    content=$(tmux capture-pane -t "$PANE" -p -S -50 2>/dev/null) || continue
+
+    # Detect state using the status line token counter.
+    #
+    # The status line is always at the very bottom and shows:
+    #   "gfe:duckinator copilot opus-4.6 112k/200k ...  113324 tokens"
+    #
+    # Three states based on token count:
+    #   tokens = 0                -> CRASHED (session reset after API error)
+    #   tokens > 0 and changed   -> RUNNING (actively producing output)
+    #   tokens > 0 and unchanged -> STOPPED (finished, waiting for input)
+
+    # `|| true` keeps the pipeline non-fatal even if pipefail is ever paired
+    # with set -e again: a buffer with no "NNN tokens" string (common right
+    # after a crash/reset, before the status line re-renders) makes grep exit
+    # 1. The :-0 default on the next line turns the empty result into 0.
+    tokens=$(echo "$content" | grep -oE '[0-9]+ tokens' | tail -1 | grep -oE '^[0-9]+' || true)
+    tokens=${tokens:-0}
+
+    # Check for activity spinners first (compacting, processing, etc.)
+    # These override the token-based check since tokens may not change
+    # during compaction or long bash commands.
+    # Also check for "until auto-compact" on the status line -- if it's
+    # at 0% or low%, the session is actively compacting.
+    if echo "$content" | grep -qE '(0% until auto-compact|Compacting conversation)'; then
+        state="RUNNING"
+        reason="compacting"
+    elif echo "$content" | grep -qE '^\s*(✽|✻|✢).*\(.*[0-9]+[smh]'; then
+        state="RUNNING"
+        reason="${tokens} tokens (spinner active)"
+    elif (( tokens == 0 )); then
+        # 0 tokens happens after both compaction and crashes.
+        # Check for error text in the buffer to tell them apart.
+        if echo "$content" | grep -qiE 'API Error|socket.*(closed|reset)|EPIPE|ECONNRESET|ETIMEDOUT|fetch failed|AbortError|network error'; then
+            state="CRASHED"
+            reason="session reset (0 tokens + error in buffer)"
+        else
+            state="STOPPED"
+            reason="idle (0 tokens, likely post-compaction)"
+        fi
+    elif (( tokens != last_tokens )); then
+        state="RUNNING"
+        reason="${tokens} tokens"
+    else
+        state="STOPPED"
+        reason="idle (${tokens} tokens, unchanged)"
+    fi
+
+    last_tokens=$tokens
+
+    case "$state" in
+        RUNNING)
+            echo "$(date +%H:%M:%S) $PANE: $reason"
+            ;;
+        CRASHED)
+            # Always retry on crash -- it can crash again right after recovery
+            echo "$(date +%H:%M:%S) $PANE: CRASHED ($reason) -> sending \"$MESSAGE\""
+            # `|| true`: the pane can vanish between the has-session check at
+            # the top of the loop (which only validates the session) and here.
+            # A failed send-keys must not take the babysitter down with it.
+            tmux send-keys -t "$PANE" "$MESSAGE" Enter || true
+            ~/bin/slack-noti "claude-babysit: $PANE CRASHED ($reason) -- sent '$MESSAGE'" 2>/dev/null >/dev/null || true
+            ;;
+        STOPPED)
+            if [[ "$last_state" != "STOPPED" ]]; then
+                echo "$(date +%H:%M:%S) $PANE: STOPPED ($reason) -> notify only"
+                ~/bin/slack-noti "claude-babysit: $PANE finished (idle at prompt)" 2>/dev/null >/dev/null || true
+            else
+                echo "$(date +%H:%M:%S) $PANE: still stopped"
+            fi
+            ;;
+    esac
+
+    last_state="$state"
+
+    sleep "$CHECK_INTERVAL"
+done

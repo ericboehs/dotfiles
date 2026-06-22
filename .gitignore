@@ -15,7 +15,6 @@
 .config/nvim/lazy-lock.json
 channel.xml
 bin/awake
-bin/claude-babysit
 bin/claude-dashboard
 bin/forge-copilot
 bin/md2maildir
