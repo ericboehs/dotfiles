@@ -10,3 +10,9 @@ vim.g.autoformat = false
 
 -- Hide statusline
 vim.opt.laststatus = 0
+
+-- Disable unused providers (~300ms startup savings)
+vim.g.loaded_ruby_provider = 0
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_python3_provider = 0
+vim.g.loaded_node_provider = 0
