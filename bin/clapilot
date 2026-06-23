@@ -18,6 +18,10 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
 export CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-4-8
 export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+# Disable claude.ai MCP connectors (inverted flag: 0/false/no/off = off). They
+# can't work behind the dummy-token proxy anyway, and this silences the boot
+# warning about ANTHROPIC_AUTH_TOKEN taking precedence over the claude.ai login.
+export ENABLE_CLAUDEAI_MCP_SERVERS=0
 
 exec claude \
   --mcp-config "$HOME/.claude/mcp-search.json" \
