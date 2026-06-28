@@ -2,7 +2,7 @@
 # OpenCode workspace launcher - quickly cd to a workspace and run opencode
 
 # Set workspaces directory directly
-WORKSPACES_DIR="$HOME/Code/ericboehs/opencode-config/workspaces"
+WORKSPACES_DIR="$HOME/Code/github.com/ericboehs/opencode-config/workspaces"
 
 show_usage() {
   echo "Usage: wso <workspace>"

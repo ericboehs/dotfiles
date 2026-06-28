@@ -39,7 +39,7 @@ abbrevs=(
 abbrevs+=(
   "cab" "cat ~/.zsh/abbreviations.zsh"
   "vab" "nvim ~/.zsh/abbreviations.zsh"
-  "dof" "cd ~/Code/ericboehs/dotfiles; nvim; zsh; . ~/.zshrc; cd -"
+  "dof" "cd ~/Code/github.com/ericboehs/dotfiles; nvim; zsh; . ~/.zshrc; cd -"
   "dz" '. ~/.zshrc'
   "sase" "set -a; source .env; set +a"
 )
