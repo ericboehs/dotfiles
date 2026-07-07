@@ -21,6 +21,7 @@ bin/md2maildir
 bin/onedrive-index
 bin/outlook
 bin/outlook-README.md
+bin/outlook-calendar-server
 bin/outlook-sync-daemon
 bin/oversee*
 bin/piv_pin
