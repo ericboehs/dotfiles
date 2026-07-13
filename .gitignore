@@ -5,6 +5,12 @@
 .vim/pack/minpac
 .vim/.netrwhist
 .tmux/plugins
+# ~/.claude is ignored by the global gitignore; re-include only what we track
+!/.claude/
+/.claude/*
+!/.claude/scripts/
+/.claude/scripts/*
+!/.claude/scripts/statusline.sh
 .config/*
 !.config/nvim/
 !.config/mise/
