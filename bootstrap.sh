@@ -14,6 +14,7 @@
 #   SKIP_MISE      — mise trust + install runtime versions
 #   SKIP_TPM       — tmux plugin manager + plugin install
 #   SKIP_NVIM      — Lazy.nvim plugin sync
+#   SKIP_GCD       — clone gcd (github.com/ericboehs/gcd; sourced by .zshrc)
 #
 # FORCE_OVERWRITE=1 auto-yes on existing-file overwrite prompts.
 
@@ -245,6 +246,19 @@ trust_mise_config() {
   run "$mise_bin" install
 }
 
+install_gcd() {
+  [[ -n "${SKIP_GCD:-}" ]] && { skip "gcd"; return; }
+  # .zshrc sources gcd from this fixed path; clone it there if missing. Leave an
+  # existing checkout alone (it may be a working copy with local changes).
+  local gcd_dir="$HOME/Code/github.com/ericboehs/gcd"
+  if [[ -d "$gcd_dir/.git" ]]; then
+    skip "gcd (already cloned)"; return
+  fi
+  log "Cloning gcd"
+  run mkdir -p "$(dirname "$gcd_dir")"
+  run git clone https://github.com/ericboehs/gcd "$gcd_dir"
+}
+
 install_tpm() {
   [[ -n "${SKIP_TPM:-}" ]] && { skip "TPM"; return; }
   if [[ ! -d ~/.tmux/plugins/tpm ]]; then
@@ -284,6 +298,7 @@ install_deps
 install_fonts
 import_iterm_theme
 link_dotfiles
+install_gcd
 trust_mise_config
 apply_macos_defaults
 install_tpm
