@@ -349,8 +349,9 @@ magic-abbrev-expand() {
   local MATCH
   LBUFFER=${LBUFFER%%(#m)[_a-zA-Z0-9]#}
   command=${abbrevs[$MATCH]}
-  # gvi␣ -> gvi "|"  so a pasted URL with a # isn't eaten by interactivecomments
-  [[ $MATCH == gvi && -z $command ]] && (( $+functions[gvi] )) && command='gvi "__CURSOR__"'
+  # gcd␣/gvi␣ -> `cmd "|"` so a pasted URL with a # (e.g. #L42, #diff-…) isn't
+  # eaten by interactivecomments.
+  [[ $MATCH == (gcd|gvi) && -z $command ]] && (( $+functions[$MATCH] )) && command="$MATCH \"__CURSOR__\""
   LBUFFER+=${command:-$MATCH}
 
   if [[ "${command}" =~ "__CURSOR__" ]]; then
