@@ -349,6 +349,15 @@ magic-abbrev-expand() {
   local MATCH
   LBUFFER=${LBUFFER%%(#m)[_a-zA-Z0-9]#}
   command=${abbrevs[$MATCH]}
+
+  # gvi: expand from the URL on the clipboard -> "gcd <dir> && nvim +L file"
+  if [[ $MATCH == gvi && -z $command ]] && (( $+functions[gcd] )); then
+    local _clip; _clip=$(_gcd_clip 2>/dev/null)
+    if [[ -n $_clip && $_clip != *[[:space:]]* && ( $_clip == *://* || $_clip == */* ) ]]; then
+      command=$(gcd --print "$_clip" 2>/dev/null)
+    fi
+  fi
+
   LBUFFER+=${command:-$MATCH}
 
   if [[ "${command}" =~ "__CURSOR__" ]]; then
