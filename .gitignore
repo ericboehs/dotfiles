@@ -17,8 +17,11 @@
 !.config/ghostty/
 !.config/lsd/
 !.config/gitleaks/
+!.config/btop/
 .config/mise/config.local.toml
 .config/nvim/lazy-lock.json
+# btop rewrites its config on exit; track only the themes
+.config/btop/btop.conf
 channel.xml
 bin/awake
 bin/claude-dashboard

@@ -205,6 +205,12 @@ link_dotfiles() {
   log "Linking gitleaks config"
   run mkdir -p ~/.config/gitleaks
   run ln -fs "$DOTFILES_DIR/.config/gitleaks/config.toml" ~/.config/gitleaks/config.toml
+  # btop rewrites btop.conf on exit, so link only the themes.
+  log "Linking btop themes"
+  run mkdir -p ~/.config/btop/themes
+  for theme in "$DOTFILES_DIR"/.config/btop/themes/*.theme; do
+    run ln -fs "$theme" ~/.config/btop/themes/"$(basename "$theme")"
+  done
   # ~/.claude/ is Claude Code runtime state, so link individual scripts
   # rather than the whole directory.
   log "Linking Claude Code statusline"
