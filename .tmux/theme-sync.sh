@@ -9,6 +9,7 @@ if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark; then
   tmux set-option -gq pane-active-border-style "fg=#04a5e5"
   tmux set-option -gq @active_fg "#04a5e5"
   tmux set-option -gq @time_fg "#8c8fa1"
+  tmux set-option -gq @clock_fg "#b4befe"
 else
   # Catppuccin Latte
   tmux set-option -gq status-style "bg=default,fg=#4c4f69"
@@ -16,4 +17,5 @@ else
   tmux set-option -gq pane-active-border-style "fg=#04a5e5"
   tmux set-option -gq @active_fg "#04a5e5"
   tmux set-option -gq @time_fg "#8c8fa1"
+  tmux set-option -gq @clock_fg "#7287fd"
 fi
