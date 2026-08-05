@@ -36,4 +36,13 @@ keybind = ctrl+6=text:\x1b[27;5;54~
 keybind = ctrl+7=text:\x1b[27;5;55~
 keybind = ctrl+8=text:\x1b[27;5;56~
 keybind = ctrl+9=text:\x1b[27;5;57~
+
+# Opt-` -> Esc+` (tmux M-` = switch to last session). Needed because Option+`
+# is a dead-key grave accent on the US layout, so it isn't sent as Alt.
+keybind = alt+grave_accent=text:\x1b`
+
+# Opt-Tab / Opt-Shift-Tab -> tmux M-Tab / M-BTab (next/previous window)
+keybind = alt+tab=text:\x1b\x09
+keybind = alt+shift+tab=text:\x1b\x1b[Z
+
 macos-titlebar-style = tabs
