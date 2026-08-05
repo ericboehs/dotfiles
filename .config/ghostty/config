@@ -45,4 +45,18 @@ keybind = alt+grave_accent=text:\x1b`
 keybind = alt+tab=text:\x1b\x09
 keybind = alt+shift+tab=text:\x1b\x1b[Z
 
+# Opt-h/l -> tmux M-h/M-l (previous/next window), Opt-H/L -> M-H/M-L (move the
+# window). These type "˙ ¬ Ó Ò" on the US layout, so send Alt explicitly.
+keybind = alt+h=text:\x1bh
+keybind = alt+l=text:\x1bl
+keybind = alt+shift+h=text:\x1bH
+keybind = alt+shift+l=text:\x1bL
+
+# Opt-j/k -> tmux M-j/M-k (next/previous session), Opt-J/K -> M-J/M-K (take the
+# current window along)
+keybind = alt+j=text:\x1bj
+keybind = alt+k=text:\x1bk
+keybind = alt+shift+j=text:\x1bJ
+keybind = alt+shift+k=text:\x1bK
+
 macos-titlebar-style = tabs
