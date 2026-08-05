@@ -1,25 +1,66 @@
 #!/usr/bin/env bash
-# Sync tmux theme with macOS system appearance.
+# Sync tmux theme with macOS system appearance: Catppuccin Latte / Mocha.
 # Called on tmux startup and re-evaluated via #() in status-format.
+#
+# Two deliberate exceptions to the palettes: the accent stays Latte's sky in
+# both modes (it reads on either background, so the active window is the same
+# color all day), and @time_fg stays Latte's overlay1 for the same reason.
 
 if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark; then
-  # Dark: readable fg on dark bg, but reuse Latte's saturated accents
-  tmux set-option -gq status-style "bg=default,fg=white"
-  tmux set-option -gq pane-border-style "fg=#191923"
-  tmux set-option -gq pane-active-border-style "fg=#04a5e5"
-  tmux set-option -gq @active_fg "#04a5e5"
-  tmux set-option -gq @time_fg "#8c8fa1"
-  tmux set-option -gq @clock_fg "#a6adc8"
-  tmux set-option -gq @load_warn_fg "#f9e2af"
-  tmux set-option -gq @load_crit_fg "#f38ba8"
+  mode=dark
+  # Mocha
+  surface0="#313244"; surface1="#45475a"
+  text="#cdd6f4"; status_fg="white"
+  border="#191923"
+  clock="#a6adc8"
+  warn="#f9e2af"; crit="#f38ba8"; peach="#fab387"
+  mark="#cba6f7"; mark_fg="#11111b"
 else
-  # Catppuccin Latte
-  tmux set-option -gq status-style "bg=default,fg=#4c4f69"
-  tmux set-option -gq pane-border-style "fg=#ccd0da"
-  tmux set-option -gq pane-active-border-style "fg=#04a5e5"
-  tmux set-option -gq @active_fg "#04a5e5"
-  tmux set-option -gq @time_fg "#8c8fa1"
-  tmux set-option -gq @clock_fg "#6c6f85"
-  tmux set-option -gq @load_warn_fg "#df8e1d"
-  tmux set-option -gq @load_crit_fg "#d20f39"
+  mode=light
+  # Latte
+  surface0="#ccd0da"; surface1="#bcc0cc"
+  text="#4c4f69"; status_fg="#4c4f69"
+  border="#ccd0da"
+  clock="#6c6f85"
+  warn="#df8e1d"; crit="#d20f39"; peach="#fe640b"
+  mark="#8839ef"; mark_fg="#eff1f5"
 fi
+
+# This script runs on every status redraw. Re-applying ~20 options each time is
+# pure waste, so bail out unless the appearance actually flipped. Editing the
+# colors below? Run `tmux set -gu @appearance` first to force a re-apply.
+[ "$(tmux show-options -gqv @appearance)" = "$mode" ] && exit 0
+tmux set-option -gq @appearance "$mode"
+
+accent="#04a5e5"   # Latte sky, in both modes
+contrast="#11111b" # readable on the accent and on every highlight below
+
+# Status bar and panes
+tmux set-option -gq status-style "bg=default,fg=$status_fg"
+tmux set-option -gq pane-border-style "fg=$border"
+tmux set-option -gq pane-active-border-style "fg=$accent"
+tmux set-option -gq @active_fg "$accent"
+tmux set-option -gq @time_fg "#8c8fa1"
+tmux set-option -gq @clock_fg "$clock"
+tmux set-option -gq @load_warn_fg "$warn"
+tmux set-option -gq @load_crit_fg "$crit"
+
+# Menus, messages and popups. These default to bg=yellow, which is the stray
+# orange that shows up in every menu and prompt on an otherwise themed setup.
+tmux set-option -gq mode-style "bg=$accent,fg=$contrast"
+tmux set-option -gq message-style "bg=$surface0,fg=$text"
+tmux set-option -gq message-command-style "bg=$surface0,fg=$peach"
+tmux set-option -gq menu-style "bg=$surface0,fg=$text"
+tmux set-option -gq menu-selected-style "bg=$accent,fg=$contrast"
+tmux set-option -gq menu-border-style "fg=$surface1"
+tmux set-option -gq popup-border-style "fg=$surface1"
+
+# Copy mode: every match subdued, the current one loud, marks distinct from both.
+tmux set-option -gq copy-mode-match-style "bg=$warn,fg=$contrast"
+tmux set-option -gq copy-mode-current-match-style "bg=$peach,fg=$contrast"
+tmux set-option -gq copy-mode-mark-style "bg=$mark,fg=$mark_fg"
+
+# Prefix+t clock and Prefix+q pane numbers
+tmux set-option -gq clock-mode-colour "$accent"
+tmux set-option -gq display-panes-colour "#8c8fa1"
+tmux set-option -gq display-panes-active-colour "$accent"
