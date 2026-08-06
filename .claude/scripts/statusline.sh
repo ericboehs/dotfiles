@@ -65,13 +65,21 @@ fi
 
 # --- Effective context budget (auto-compaction aware) ---
 # Claude Code auto-compacts at CLAUDE_AUTOCOMPACT_PCT_OVERRIDE% of the
-# CLAUDE_CODE_AUTO_COMPACT_WINDOW. Base the gauge on that trigger so the %
-# tracks "how close to auto-compact" instead of the raw physical window —
-# otherwise a 1M-context model reads a misleadingly low % right up until it
-# compacts. The env window can only shrink the denominator, never exceed the
-# backend's real window (protects capped proxies like cerebras/oMLX).
-if [ -n "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" ] && [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -gt 0 ] 2>/dev/null; then
-  [ "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" -lt "$total" ] 2>/dev/null && total="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+# auto-compact window. Base the gauge on that trigger so the % tracks "how
+# close to auto-compact" instead of the raw physical window — otherwise a
+# 1M-context model reads a misleadingly low % right up until it compacts.
+#
+# The payload's context_window_size is always the model's physical window, so
+# resolve the auto-compact window here, mirroring Claude Code's own precedence:
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW, then the autoCompactWindow setting. Reading
+# the setting is what keeps this correct in the desktop app and cloud sessions,
+# which never see the shell alias. Either source can only shrink the
+# denominator, never exceed the backend's real window (protects capped proxies
+# like cerebras/oMLX).
+acw="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+[ -z "$acw" ] && acw=$(jq -r '.autoCompactWindow // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+if [ -n "$acw" ] && [ "$acw" -gt 0 ] 2>/dev/null; then
+  [ "$acw" -lt "$total" ] 2>/dev/null && total="$acw"
 fi
 if [ -n "$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" ] && [ "$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" -gt 0 ] 2>/dev/null && [ "$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" -le 100 ] 2>/dev/null; then
   total=$(( total * CLAUDE_AUTOCOMPACT_PCT_OVERRIDE / 100 ))
