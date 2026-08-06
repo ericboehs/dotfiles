@@ -78,8 +78,25 @@ first and wins; only set one.
   marketplaces you've added.
 - **`env`** — machine-specific, and the interesting vars are mostly undocumented.
 - **Machine-written state.** Claude Code writes some keys into this file itself:
-  `skipAutoPermissionPrompt` (whether you've accepted the auto mode opt-in
-  dialog), `feedbackSurveyState`, `feedbackSurveyRate`. Don't hand-set them.
+  `autoMode.skipAutoPermissionPrompt` (whether you've accepted the auto mode
+  opt-in dialog) and `feedbackSurveyState` (when the quality survey last
+  appeared). Don't hand-set those.
+
+## Turning off the session quality survey
+
+`feedbackSurveyRate` *looks* like machine-written state and isn't — it's a real
+setting, a 0–1 probability that the survey appears when eligible, defaulting to a
+server-side value. Set it to `0` to opt out:
+
+```json
+"feedbackSurveyRate": 0
+```
+
+A literal `0` is honored rather than treated as unset, because both readers use
+`??` rather than `||`. `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` is the broader
+switch — the rate only gates the quality survey, while the env var also covers
+the transcript-sharing asks. Left out of the example because whether to send
+Anthropic feedback is your call, not a default worth shipping to strangers.
 
 ## Checking your work
 
