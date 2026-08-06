@@ -22,14 +22,6 @@ source "$HOME/.zsh/functions.zsh"
 # Tools
 source "$HOME/.zsh/tools.zsh"
 
-# Aliases
-# Auto-compact bare `claude` at 200k: past ~200-300k tokens usage spikes and
-# large-context recall degrades (https://garrit.xyz/posts/2026-05-06-dont-trust-large-context-windows).
-# The 200k window itself is `autoCompactWindow` in ~/.claude/settings.json, so it
-# applies to the desktop app and cloud sessions too. No settings equivalent
-# exists for the percentage override, so it stays here.
-alias claude='CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100 command claude'
-
 # Prompt
 source "$HOME/.zsh/p10k.zsh"
 

@@ -35,7 +35,7 @@ is accepted by Claude Code without complaint.
 | `tui` | `"fullscreen"` uses the alt-screen renderer — no flicker, virtualized scrollback. `"default"` is the classic main-screen renderer. Toggle with `/tui`. |
 | `alwaysThinkingEnabled` | Extended thinking on by default for every session, instead of per-session. |
 | `effortLevel` | Persists `/effort` across sessions. One of `"low"`, `"medium"`, `"high"`, `"xhigh"`. |
-| `autoCompactWindow` | How full the context gets before auto-compaction, in tokens (`100000`–`1000000`). Omit to use the model-tuned default. Prefer this over the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var so it applies in the desktop app and cloud sessions too, not just your shell. |
+| `autoCompactWindow` | How full the context gets before auto-compaction, in tokens (`100000`–`1000000`). Omit to use the model-tuned default. See below. |
 | `attribution` | Drops Claude's bylines. See below. |
 | `permissions.defaultMode` | The permission mode at startup. `"auto"` routes tool calls through the classifier instead of prompting. Also accepts `default`/`manual`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. |
 | `statusLine` | Runs a script to render the status line. Points at `scripts/statusline.sh` in this repo — **remove this key if you aren't installing that script**, or the status line silently stays empty. |
@@ -81,6 +81,29 @@ first and wins; only set one.
   `autoMode.skipAutoPermissionPrompt` (whether you've accepted the auto mode
   opt-in dialog) and `feedbackSurveyState` (when the quality survey last
   appeared). Don't hand-set those.
+
+## The auto-compact window
+
+The example sets `autoCompactWindow` to 200k rather than letting a 1M-context
+model run to its limit: past roughly 200–300k tokens, usage climbs and
+large-context recall degrades ([why][ctx]). Set it to `"auto"` via `/autocompact
+reset` if you'd rather have the model-tuned default, which is what Anthropic
+recommends.
+
+[ctx]: https://garrit.xyz/posts/2026-05-06-dont-trust-large-context-windows
+
+Prefer this setting over the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var. The env
+var only reaches processes launched from that shell, so the desktop app and
+cloud sessions miss it — and while it is set, `/autocompact` refuses to change
+anything ("CLAUDE_CODE_AUTO_COMPACT_WINDOW is set and takes precedence. Unset it
+to change this setting.").
+
+`/autocompact` with no argument prints the resolved window *and* where it came
+from — `(from settings)`, `(from CLAUDE_CODE_AUTO_COMPACT_WINDOW)`, or a
+model default. That's the fastest way to confirm a change took effect.
+
+Note that the actual trigger is the window minus a reserve, not the window
+itself, so compaction fires a little early by design.
 
 ## Turning off the session quality survey
 
