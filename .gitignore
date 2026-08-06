@@ -8,6 +8,8 @@
 # ~/.claude is ignored by the global gitignore; re-include only what we track
 !/.claude/
 /.claude/*
+!/.claude/settings.example.json
+!/.claude/README.md
 !/.claude/scripts/
 /.claude/scripts/*
 !/.claude/scripts/statusline.sh
