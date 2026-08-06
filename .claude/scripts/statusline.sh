@@ -84,6 +84,17 @@ fi
 if [ -n "$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" ] && [ "$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" -gt 0 ] 2>/dev/null && [ "$CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" -le 100 ] 2>/dev/null; then
   total=$(( total * CLAUDE_AUTOCOMPACT_PCT_OVERRIDE / 100 ))
 fi
+
+# Compaction fires before the window is physically full. Claude Code reserves
+# min(model max_output_tokens, 20000) for the response, then triggers 13000
+# below that — so the real threshold is window - 33000 (167k of a 200k window,
+# i.e. 83.5%). Subtract it so 100% on the gauge means "compacting now" instead
+# of a number that never gets reached. The 20000 term assumes a model whose max
+# output is at least that; every current Claude model qualifies, but a small
+# proxied model would reserve less and compact slightly later than shown.
+compact_at=$(( total - 33000 ))
+[ "$compact_at" -gt 0 ] 2>/dev/null && total="$compact_at"
+
 pct=$(echo "$used * 100 / $total" | bc)
 
 # --- Format token counts ---
