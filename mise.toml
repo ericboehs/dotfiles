@@ -1,0 +1,321 @@
+# mise.toml — declarative machine setup, run with `mise bootstrap` from this dir.
+#
+#   mise bootstrap -n                    # preview everything
+#   mise bootstrap                       # converge
+#   mise bootstrap --only dotfiles       # just the symlinks
+#   mise bootstrap --skip macos-defaults # everything but defaults.sh's job
+#
+# Prerequisites (chicken-and-egg — mise has to exist before it can bootstrap):
+#   curl -fsSL https://mise.run | sh
+#   git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
+#   cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
+#
+# This replaces bootstrap.sh + defaults.sh; both are kept until this is proven
+# on a fresh machine.
+
+[env]
+REPO_PATH = "ericboehs/dotfiles"
+
+# ---------------------------------------------------------------------------
+# System packages
+# ---------------------------------------------------------------------------
+# Anything that must exist before `mise install` can build runtimes belongs
+# here rather than in [tools].
+#
+# The manager prefix doubles as the platform filter: mise reports entries for
+# a manager that doesn't exist on this host as "skipped (only available on
+# <os>)", so both lists can sit side by side.
+
+[bootstrap.packages]
+# macOS — brew
+"brew:neovim" = "latest"
+"brew:git" = "latest"
+"brew:lsd" = "latest"
+"brew:zoxide" = "latest"
+"brew:fzf" = "latest"
+"brew:zsh-autosuggestions" = "latest"
+"brew:gnupg" = "latest"
+"brew:tmux" = "latest"
+"brew:ripgrep" = "latest"
+"brew:fd" = "latest"
+"brew:lua" = "latest"
+"brew:gh" = "latest"
+"brew:terminal-notifier" = "latest"
+# `brew install delta` resolves to git-delta; name it canonically.
+"brew:git-delta" = "latest"
+# tree-sitter (the lib) and tree-sitter-cli are separate formulas;
+# nvim-treesitter needs the CLI for parser compilation.
+"brew:tree-sitter-cli" = "latest"
+# Replaces bootstrap.sh's manual nerd-fonts zip download.
+"brew-cask:font-inconsolata-nerd-font" = "latest"
+
+# Linux — apt
+"apt:zsh" = "latest"
+"apt:neovim" = "latest"
+"apt:zoxide" = "latest"
+"apt:fzf" = "latest"
+"apt:zsh-autosuggestions" = "latest"
+"apt:gnupg" = "latest"
+"apt:tmux" = "latest"
+"apt:ripgrep" = "latest"
+"apt:fd-find" = "latest"
+"apt:bat" = "latest"
+"apt:lua5.4" = "latest"
+"apt:gh" = "latest"
+"apt:git-delta" = "latest"
+# lsd is in universe on 22.04+ but missing on minimal images; the
+# bootstrap:linux-shims task installs the upstream .deb if this no-ops.
+"apt:lsd" = "latest"
+
+# ---------------------------------------------------------------------------
+# Git checkouts
+# ---------------------------------------------------------------------------
+# TPM is deliberately NOT here: repos are cloned before dotfiles, so cloning
+# into ~/.tmux/plugins/ would create a real ~/.tmux and block the symlink
+# below. It lives in the bootstrap:tpm task, which runs last.
+
+[bootstrap.repos]
+# .zsh/functions.zsh sources gcd from this fixed path.
+"~/Code/github.com/ericboehs/gcd" = { url = "https://github.com/ericboehs/gcd" }
+
+# ---------------------------------------------------------------------------
+# Dotfiles
+# ---------------------------------------------------------------------------
+# Sources are relative to this file. Modes:
+#   symlink      — one link for the whole file or directory (the default)
+#   symlink-each — real directory, one link per entry, recursing into
+#                  subdirectories; use it where something outside the repo
+#                  also writes into the target directory
+
+[dotfiles]
+"~/.aprc" = ".aprc"
+"~/.bundle" = ".bundle"
+"~/.default-gems" = ".default-gems"
+"~/.fzf.zsh" = ".fzf.zsh"
+"~/.gemrc" = ".gemrc"
+"~/.gitconfig" = ".gitconfig"
+"~/.npmrc" = ".npmrc"
+"~/.p10k.zsh" = ".p10k.zsh"
+"~/.rgignore" = ".rgignore"
+"~/.tmux.conf" = ".tmux.conf"
+"~/.zprofile" = ".zprofile"
+"~/.zshrc" = ".zshrc"
+# Contains the zsh plugin submodules; .zshrc sources them from $HOME/.zsh/.
+"~/.zsh" = ".zsh"
+# Renames: the repo tracks .example/.global names, $HOME wants the real ones.
+"~/.gitignore" = ".gitignore.global"
+"~/.gitconfig.private" = ".gitconfig.private.example"
+"~/.gitconfig.va-ghe" = ".gitconfig.va-ghe.example"
+# TPM installs into ~/.tmux/plugins/, which .gitignore excludes, so the whole
+# directory can be one link — that also gets the helper scripts .tmux.conf
+# binds (agenda.sh, btop.sh, goto-window.sh, move-window.sh, session-jump.sh),
+# which bootstrap.sh never linked.
+"~/.tmux" = ".tmux"
+
+"~/.config/nvim" = ".config/nvim"
+"~/.config/mise/config.toml" = ".config/mise/config.toml"
+# btop rewrites btop.conf on exit, so only the themes directory is managed.
+"~/.config/btop/themes" = { source = ".config/btop/themes", mode = "symlink-each" }
+"~/.config/lsd" = { source = ".config/lsd", mode = "symlink-each" }
+"~/.config/gitleaks" = { source = ".config/gitleaks", mode = "symlink-each" }
+# Ghostty writes nothing here, but $HOME already has a real directory.
+"~/.config/ghostty" = { source = ".config/ghostty", mode = "symlink-each" }
+
+# ~/.claude/ is Claude Code runtime state and ~/.gem/ is runtime state for
+# `gem` (it writes credentials there on push), so link individual files.
+"~/.claude/scripts/statusline.sh" = ".claude/scripts/statusline.sh"
+"~/.gem/credentials" = ".gem/credentials"
+
+# ---------------------------------------------------------------------------
+# macOS defaults (was defaults.sh)
+# ---------------------------------------------------------------------------
+# Curated sections compile down to the same `defaults write` calls but read
+# better; raw [bootstrap.macos.defaults] covers everything else.
+
+[bootstrap.macos.finder]
+show_all_files = true
+show_pathbar = true
+show_status_bar = true
+preferred_view_style = "list"
+
+[bootstrap.macos.dock]
+tilesize = 36
+show_recents = false
+mru_spaces = false
+
+[bootstrap.macos.keyboard]
+initial_key_repeat = 15
+key_repeat = 2
+press_and_hold = false
+
+[bootstrap.macos.trackpad]
+tap_to_click = true
+
+[bootstrap.macos.defaults.NSGlobalDomain]
+AppleShowAllExtensions = true
+AppleKeyboardUIMode = 3
+NSNavPanelExpandedStateForSaveMode = true
+NSNavPanelExpandedStateForSaveMode2 = true
+NSAutomaticSpellingCorrectionEnabled = false
+NSAutomaticDashSubstitutionEnabled = false
+NSAutomaticQuoteSubstitutionEnabled = false
+NSAutomaticPeriodSubstitutionEnabled = false
+
+[bootstrap.macos.defaults."com.apple.finder"]
+FXDefaultSearchScope = "SCcf"
+_FXShowPosixPathInTitle = true
+_FXSortFoldersFirst = true
+
+[bootstrap.macos.defaults."com.apple.desktopservices"]
+DSDontWriteNetworkStores = true
+DSDontWriteUSBStores = true
+
+# `location` is set in the pre-defaults hook instead: values here are written
+# literally, with no template expansion or tilde handling, so there's no way
+# to spell $HOME.
+[bootstrap.macos.defaults."com.apple.screencapture"]
+type = "png"
+disable-shadow = true
+
+[bootstrap.macos.defaults."com.apple.dock"]
+no-bouncing = true
+mineffect = "scale"
+
+[bootstrap.macos.defaults."com.apple.Safari"]
+ShowFullURLInSmartSearchField = true
+IncludeDevelopMenu = true
+WebKitDeveloperExtrasEnabledPreferenceKey = true
+"com.apple.Safari.ContentPageGroupIdentifier.WebKit2DeveloperExtrasEnabled" = true
+SendDoNotTrackHTTPHeader = true
+
+[bootstrap.macos.defaults."com.apple.TextEdit"]
+RichText = 0
+PlainTextEncoding = 4
+PlainTextEncodingForWrite = 4
+
+# ---------------------------------------------------------------------------
+# Hooks — the imperative bits that have no declarative equivalent
+# ---------------------------------------------------------------------------
+# Hooks fire regardless of platform, so each guards itself on `uname`.
+
+[bootstrap.hooks]
+pre-packages = '''
+if [ "$(uname)" = Darwin ] && ! command -v brew >/dev/null; then
+  # SSH non-interactive sessions don't load ~/.zprofile, so look in the
+  # standard Apple Silicon / Intel locations before installing.
+  for p in /opt/homebrew/bin /usr/local/bin; do
+    [ -x "$p/brew" ] && export PATH="$p:$PATH" && break
+  done
+  if ! command -v brew >/dev/null; then
+    NONINTERACTIVE=1 /bin/bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+fi
+if [ "$(uname)" = Linux ] && command -v apt-get >/dev/null; then
+  sudo apt-get update -qq
+fi
+'''
+
+# Submodules back .zsh/{powerlevel10k,fast-syntax-highlighting,
+# zsh-autosuggestions} and .tmux/extrakto, all of which are symlinked into
+# $HOME as part of their parent directory — so they must be populated first.
+pre-dotfiles = "git submodule update --init --recursive"
+
+pre-defaults = '''
+[ "$(uname)" = Darwin ] || exit 0
+# Quit System Settings so it doesn't override our writes.
+osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
+mkdir -p ~/Pictures/Screenshots
+defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"
+'''
+
+post-defaults = '''
+[ "$(uname)" = Darwin ] || exit 0
+# Per-host, so it can't be expressed in [bootstrap.macos.defaults].
+defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+for app in Finder Dock SystemUIServer; do
+  killall "$app" >/dev/null 2>&1 || true
+done
+'''
+
+final = '''
+command -v gh >/dev/null && ! gh auth status >/dev/null 2>&1 && \
+  echo "  gh auth login                       # octo.nvim, gh CLI"
+command -v op >/dev/null || \
+  echo "  brew install --cask 1password-cli   # for fnox + secrets"
+echo "Note: nvim-treesitter installs more parsers on demand the first time"
+echo "      you open files of new types — that's expected, not a bug."
+'''
+
+# ---------------------------------------------------------------------------
+# Tasks — run last, after packages, dotfiles and [tools] are all in place
+# ---------------------------------------------------------------------------
+
+[tasks.bootstrap]
+description = "Post-converge setup that needs the installed tools on PATH"
+depends = [
+  "bootstrap:linux-shims",
+  "bootstrap:tpm",
+  "bootstrap:nvim",
+  "bootstrap:iterm",
+]
+
+[tasks."bootstrap:linux-shims"]
+description = "Debian binary-name shims, lsd fallback, zsh login shell"
+run = '''
+[ "$(uname)" = Linux ] || exit 0
+# Debian ships fd as fdfind and bat as batcat.
+mkdir -p "$HOME/.local/bin"
+[ -x /usr/bin/fdfind ] && ln -sf /usr/bin/fdfind "$HOME/.local/bin/fd"
+[ -x /usr/bin/batcat ] && ln -sf /usr/bin/batcat "$HOME/.local/bin/bat"
+# apt:lsd silently no-ops on minimal images; fall back to the GitHub release.
+if ! command -v lsd >/dev/null; then
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/lsd.deb" \
+    "https://github.com/lsd-rs/lsd/releases/latest/download/lsd-musl_$(dpkg --print-architecture).deb"
+  sudo dpkg -i "$tmp/lsd.deb"
+  rm -rf "$tmp"
+fi
+# [bootstrap.user].login_shell takes one absolute path and can't vary by
+# platform; macOS already defaults to zsh, so only Linux needs this.
+if [ "$SHELL" != "$(command -v zsh)" ]; then
+  sudo chsh -s "$(command -v zsh)" "$USER"
+fi
+'''
+
+[tasks."bootstrap:tpm"]
+description = "Install tmux plugin manager and its plugins"
+run = '''
+[ -d ~/.tmux/plugins/tpm ] || \
+  git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+~/.tmux/plugins/tpm/bin/install_plugins
+'''
+
+[tasks."bootstrap:nvim"]
+description = "Sync Lazy.nvim plugins and pre-compile treesitter parsers"
+run = '''
+command -v nvim >/dev/null || exit 0
+# `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
+# during first install (treesitter parsers compiling); keep it visible.
+nvim --headless "+Lazy! sync" +qa
+# Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but
+# headless never triggers a filetype event), then block on install.
+# 5-10 min on first run.
+nvim --headless "+Lazy! load nvim-treesitter" \
+  "+lua require('nvim-treesitter').install('all'):wait(600000)" +qa
+'''
+
+[tasks."bootstrap:iterm"]
+description = "Import the Catppuccin Mocha color preset into iTerm2"
+run = '''
+[ "$(uname)" = Darwin ] || exit 0
+[ -d /Applications/iTerm.app ] || [ -d "$HOME/Applications/iTerm.app" ] || exit 0
+plutil -extract 'Custom Color Presets.Catppuccin Mocha' xml1 -o - \
+  ~/Library/Preferences/com.googlecode.iterm2.plist >/dev/null 2>&1 && exit 0
+tmp=$(mktemp -d)
+curl -fsSL -o "$tmp/Catppuccin Mocha.itermcolors" \
+  "https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/Catppuccin%20Mocha.itermcolors"
+open "$tmp/Catppuccin Mocha.itermcolors"
+sleep 2
+rm -rf "$tmp"
+'''
