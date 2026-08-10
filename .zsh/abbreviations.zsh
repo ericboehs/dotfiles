@@ -105,9 +105,8 @@ abbrevs+=(
   "vdm"  'nvim db/migrate/$(ls db/migrate | tail -1)'
 )
 
-# Heroku
+# Heroku. No bare "hk" abbrev: it shadowed the mise-managed hk pre-commit runner.
 abbrevs+=(
-  "hk"   "heroku"
   "hkgpr" "heroku git:remote -r pr -a"
   "hkb"  "heroku builds"
   "hkbo" "heroku builds:output"
