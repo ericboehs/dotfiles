@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Required parameters:
+# @raycast.schemaVersion 1
+# @raycast.title Open Daily Note
+# @raycast.mode silent
+
+# Optional parameters:
+# @raycast.icon 📓
+# @raycast.packageName Wiki
+# @raycast.description Open today's daily note in Typora, creating it if needed.
+
+# Documentation:
+# @raycast.author Eric Boehs
+# @raycast.authorURL boehs.com
+
+set -euo pipefail
+
+DAILY_DIR="$HOME/Documents/Wiki/daily"
+TODAY=$(date +%Y-%m-%d)
+NOTE="$DAILY_DIR/$TODAY.md"
+
+if [ ! -f "$NOTE" ]; then
+  mkdir -p "$DAILY_DIR"
+  cat > "$NOTE" <<EOF
+# $TODAY ($(date +%A))
+
+> Week: [[$(date +%G-W%V)]].
+
+## TODO
+
+### Work
+
+### Personal / Tinkering
+
+### Solar Shop
+
+### Personal / Farm
+
+## Notes
+EOF
+fi
+
+open -a Typora "$NOTE"
