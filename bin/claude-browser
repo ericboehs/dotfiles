@@ -1,8 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Claude Code Memory Browser — browse, search, and view the auto-memory
-# markdown files stored under ~/.claude/projects/*/memory/
+# Claude Browser — browse, search, and view Claude Code context surfaces:
+# the auto-memory markdown files under ~/.claude/projects/*/memory/ and the
+# user skills under ~/.claude/skills/*/SKILL.md
 
 require 'bundler/inline'
 
@@ -16,12 +17,14 @@ end
 
 require 'sinatra'
 require 'redcarpet'
+require 'fileutils'
 
 MEMORY_ROOT = File.expand_path('~/.claude/projects')
+SKILLS_ROOT = File.expand_path('~/.claude/skills')
 END_OF_FILE = defined?(DATA) ? DATA.pos.freeze : 0
 
 MARKDOWN = Redcarpet::Markdown.new(
-  Redcarpet::Render::HTML.new(hard_wrap: false, link_attributes: { target: '_blank', rel: 'noopener' }),
+  Redcarpet::Render::HTML.new(hard_wrap: false),
   autolink: true,
   tables: true,
   fenced_code_blocks: true,
@@ -53,18 +56,19 @@ helpers do
 
   def render_page(name, locals = {})
     locals.each { |k, v| instance_variable_set("@#{k}", v) }
-    @_title = locals[:title] || 'Claude Memory'
+    @_title = locals[:title] || 'Claude Browser'
     @_content = ERB.new(template(name)).result(binding)
     ERB.new(template('layout')).result(binding)
   end
 
   def md(text, link_prefix: nil)
     html = MARKDOWN.render(text.to_s)
-    return html unless link_prefix
-
     html.gsub(/href="([^"]+)"/) do |orig|
       url = Regexp.last_match(1)
-      if url.start_with?('http://', 'https://', '/', '#', 'mailto:')
+      if url.start_with?('http://', 'https://')
+        # External links open in a new tab; internal ones stay in-tab.
+        %(href="#{url}" target="_blank" rel="noopener")
+      elsif link_prefix.nil? || url.start_with?('/', '#', 'mailto:')
         orig
       else
         %(href="#{link_prefix}/#{url}")
@@ -110,10 +114,48 @@ helpers do
 
     _, fm, body = content.split(/^---\n/, 3)
     meta = {}
+    # Accept both top-level keys and keys nested one level under a parent
+    # like `metadata:` (the newer memory format), folding them into one flat
+    # hash. Parent keys (empty value, e.g. `metadata:`) are skipped.
     fm.to_s.each_line do |line|
-      meta[Regexp.last_match(1)] = Regexp.last_match(2).strip if line =~ /^(\w+):\s*(.*)$/
+      next unless line =~ /^\s*([\w-]+):\s*(.*)$/
+
+      key = Regexp.last_match(1)
+      value = Regexp.last_match(2).strip
+      meta[key] = value unless value.empty?
     end
     [meta, body.to_s]
+  end
+
+  # Rough always-loaded cost of a skill: only the frontmatter `description`
+  # is kept in context for matching (the body loads on demand). ~2.3 bytes
+  # per token for Eric's prose/path-heavy content.
+  def est_tokens(text)
+    (text.to_s.bytesize / 2.3).round
+  end
+
+  def skills
+    return [] unless File.directory?(SKILLS_ROOT)
+
+    Dir.children(SKILLS_ROOT).sort.filter_map do |slug|
+      md_path = File.join(SKILLS_ROOT, slug, 'SKILL.md')
+      next unless File.file?(md_path)
+
+      content = File.read(md_path)
+      meta, body = parse_frontmatter(content)
+      {
+        slug: slug,
+        name: meta['name'] || slug,
+        description: meta['description'].to_s,
+        allowed_tools: meta['allowed-tools'].to_s,
+        path: md_path,
+        mtime: File.mtime(md_path),
+        content: content,
+        body: body,
+        meta: meta,
+        tokens: est_tokens(meta['description'])
+      }
+    end.sort_by { |s| s[:name].downcase }
   end
 
   def type_color(type)
@@ -204,7 +246,7 @@ set :protection, host_authorization: { permitted_hosts: [] }
 
 get '/' do
   @projects = projects
-  render_page :index, projects: @projects, title: 'Claude Memory'
+  render_page :index, projects: @projects, title: 'Claude Browser'
 end
 
 get '/p/:encoded' do
@@ -243,6 +285,67 @@ get '/p/:encoded/:file' do
               body: body,
               raw: content,
               title: meta['name'] || file
+end
+
+post '/p/:encoded/:file/delete' do
+  encoded = params[:encoded]
+  file = params[:file]
+  halt 400, 'bad filename' if file.include?('/') || file.include?('..')
+  halt 400, 'refusing to delete index' if file == 'MEMORY.md'
+
+  path = File.join(MEMORY_ROOT, encoded, 'memory', file)
+  halt 404, 'not found' unless File.exist?(path) && path.start_with?(MEMORY_ROOT)
+
+  File.delete(path)
+
+  # Keep MEMORY.md in sync: drop any index line linking to the deleted file.
+  index = File.join(MEMORY_ROOT, encoded, 'memory', 'MEMORY.md')
+  if File.file?(index)
+    lines = File.readlines(index)
+    kept = lines.reject { |line| line.include?("](#{file})") }
+    File.write(index, kept.join) if kept.size != lines.size
+  end
+
+  redirect "/p/#{encoded}"
+end
+
+get '/skills' do
+  all = skills
+  render_page :skills,
+              skills: all,
+              total_tokens: all.sum { |s| s[:tokens] },
+              title: 'Skills'
+end
+
+get '/skills/:slug' do
+  slug = params[:slug]
+  halt 400, 'bad slug' if slug.include?('/') || slug.include?('..')
+
+  path = File.join(SKILLS_ROOT, slug, 'SKILL.md')
+  halt 404, 'not found' unless File.file?(path) && path.start_with?(SKILLS_ROOT)
+
+  content = File.read(path)
+  meta, body = parse_frontmatter(content)
+  render_page :skill,
+              slug: slug,
+              path: path,
+              mtime: File.mtime(path),
+              meta: meta,
+              body: body,
+              raw: content,
+              tokens: est_tokens(meta['description']),
+              title: meta['name'] || slug
+end
+
+post '/skills/:slug/delete' do
+  slug = params[:slug]
+  halt 400, 'bad slug' if slug.include?('/') || slug.include?('..')
+
+  dir = File.join(SKILLS_ROOT, slug)
+  halt 404, 'not found' unless File.directory?(dir) && dir.start_with?("#{SKILLS_ROOT}/")
+
+  FileUtils.rm_rf(dir)
+  redirect '/skills'
 end
 
 get '/search' do
@@ -306,10 +409,15 @@ __END__
 <body class="h-full bg-zinc-950 text-zinc-100 antialiased">
   <header class="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
     <div class="max-w-5xl mx-auto px-4 py-3 flex items-center gap-4">
-      <a href="/" class="flex items-center gap-2 font-semibold text-amber-400 hover:text-amber-300">
+      <a href="/" class="flex items-center gap-2 font-semibold text-amber-400 hover:text-amber-300 shrink-0">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5"><path d="M10 2a6 6 0 00-6 6c0 1.887.89 3.56 2.27 4.63L6 18l4-2 4 2-.27-5.37A5.99 5.99 0 0016 8a6 6 0 00-6-6z"/></svg>
-        Claude Memory
+        Claude Browser
       </a>
+      <% skills_active = request.path_info.start_with?('/skills') %>
+      <nav class="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-0.5 text-sm shrink-0">
+        <a href="/" class="px-3 py-1 rounded-md <%= skills_active ? 'text-zinc-400 hover:text-zinc-200' : 'bg-zinc-800 text-zinc-100' %>">Memories</a>
+        <a href="/skills" class="px-3 py-1 rounded-md <%= skills_active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200' %>">Skills</a>
+      </nav>
       <form action="/search" method="get" class="flex-1 max-w-lg ml-auto">
         <div class="relative">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 absolute left-3 top-2.5 text-zinc-500"><path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd"/></svg>
@@ -415,6 +523,15 @@ __END__
     <% if @meta['type'] %>
       <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset <%= type_color(@meta['type']) %>"><%= h(@meta['type']) %></span>
     <% end %>
+    <form method="post" action="/p/<%= h(@encoded) %>/<%= h(@file) %>/delete"
+          onsubmit="return confirm('Delete this memory?\n\n<%= h(@file) %>\n\nThis permanently removes the file and cannot be undone.');"
+          class="ml-auto shrink-0">
+      <button type="submit" title="Delete this memory"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900/40 hover:text-red-300 hover:border-red-800 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M8.75 1a1 1 0 00-.95.68L7.42 3H4.5a.75.75 0 000 1.5h.29l.7 10.55A2.25 2.25 0 007.73 17h4.54a2.25 2.25 0 002.24-1.95L15.21 4.5h.29a.75.75 0 000-1.5h-2.92l-.38-1.32A1 1 0 0011.25 1h-2.5zM9 6.75a.75.75 0 00-1.5 0v6.5a.75.75 0 001.5 0v-6.5zm3.5 0a.75.75 0 00-1.5 0v6.5a.75.75 0 001.5 0v-6.5z" clip-rule="evenodd"/></svg>
+        Delete
+      </button>
+    </form>
   </div>
   <% if @meta['description'] && !@meta['description'].empty? %>
     <p class="text-zinc-400 mt-2"><%= h(@meta['description']) %></p>
@@ -461,3 +578,86 @@ __END__
 <% elsif !@query.empty? %>
   <div class="text-zinc-500 text-sm">No matches.</div>
 <% end %>
+
+@@skills
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-zinc-100">Skills</h1>
+  <p class="text-sm text-zinc-400 mt-1">
+    <%= @skills.size %> user skill<%= 's' if @skills.size != 1 %>
+    · <span class="tabular-nums text-zinc-300">~<%= @total_tokens %></span> tokens always-loaded
+    <span class="text-zinc-600">(descriptions only; bodies load on demand)</span>
+  </p>
+</div>
+<% if @skills.empty? %>
+  <div class="text-zinc-400 text-sm border border-zinc-800 rounded-lg p-6">No skills found under <code><%= h(SKILLS_ROOT.sub(Dir.home, '~')) %></code>.</div>
+<% else %>
+  <ul class="space-y-2">
+    <% @skills.each do |s| %>
+      <li>
+        <a href="/skills/<%= h(s[:slug]) %>" class="block rounded-lg border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900 hover:border-zinc-700 p-4 transition">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-medium text-zinc-100"><%= h(s[:name]) %></span>
+                <% unless s[:allowed_tools].empty? %>
+                  <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-sky-500/15 text-sky-300 ring-sky-500/30">scoped tools</span>
+                <% end %>
+              </div>
+              <% unless s[:description].empty? %>
+                <div class="text-sm text-zinc-400 mt-1"><%= h(s[:description]) %></div>
+              <% end %>
+              <div class="text-xs text-zinc-600 mt-1 font-mono"><%= h(s[:slug]) %>/SKILL.md</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 text-xs shrink-0">
+              <span class="tabular-nums text-zinc-400">~<%= s[:tokens] %> tok</span>
+              <span class="tabular-nums text-zinc-500"><%= relative_time(s[:mtime]) %></span>
+            </div>
+          </div>
+        </a>
+      </li>
+    <% end %>
+  </ul>
+<% end %>
+
+@@skill
+<nav class="text-xs text-zinc-500 mb-4">
+  <a href="/skills" class="hover:text-zinc-300">← All skills</a>
+</nav>
+<div class="mb-6">
+  <div class="flex items-center gap-2 flex-wrap">
+    <h1 class="text-2xl font-semibold text-zinc-100"><%= h(@meta['name'] || @slug) %></h1>
+    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-violet-500/15 text-violet-300 ring-violet-500/30">skill</span>
+    <span class="ml-auto shrink-0 tabular-nums text-xs text-zinc-400 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1">~<%= @tokens %> tokens always-loaded</span>
+    <form method="post" action="/skills/<%= h(@slug) %>/delete"
+          onsubmit="return confirm('Delete this skill?\n\n<%= h(@slug) %>/\n\nThis permanently removes the entire skill directory and cannot be undone.');"
+          class="shrink-0">
+      <button type="submit" title="Delete this skill"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900/40 hover:text-red-300 hover:border-red-800 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M8.75 1a1 1 0 00-.95.68L7.42 3H4.5a.75.75 0 000 1.5h.29l.7 10.55A2.25 2.25 0 007.73 17h4.54a2.25 2.25 0 002.24-1.95L15.21 4.5h.29a.75.75 0 000-1.5h-2.92l-.38-1.32A1 1 0 0011.25 1h-2.5zM9 6.75a.75.75 0 00-1.5 0v6.5a.75.75 0 001.5 0v-6.5zm3.5 0a.75.75 0 00-1.5 0v6.5a.75.75 0 001.5 0v-6.5z" clip-rule="evenodd"/></svg>
+        Delete
+      </button>
+    </form>
+  </div>
+  <% if @meta['description'] && !@meta['description'].empty? %>
+    <p class="text-zinc-400 mt-2"><%= h(@meta['description']) %></p>
+  <% end %>
+  <% if @meta['allowed-tools'] && !@meta['allowed-tools'].empty? %>
+    <div class="mt-2 text-xs text-zinc-500">
+      <span class="text-zinc-400">allowed-tools:</span>
+      <code class="text-sky-300"><%= h(@meta['allowed-tools']) %></code>
+    </div>
+  <% end %>
+  <div class="flex items-center gap-3 text-xs text-zinc-500 mt-3 font-mono">
+    <span><%= h(@slug) %>/SKILL.md</span>
+    <span>·</span>
+    <span><%= relative_time(@mtime) %></span>
+  </div>
+</div>
+<article class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-6">
+  <div class="prose-memory"><%= md(@body) %></div>
+</article>
+<details class="mt-4">
+  <summary class="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300">raw source</summary>
+  <pre class="mt-2 bg-zinc-900 border border-zinc-800 rounded-lg p-4 overflow-x-auto text-xs text-zinc-300"><%= h(@raw) %></pre>
+</details>
+<div class="mt-4 text-xs text-zinc-600 font-mono break-all"><%= h(@path.sub(Dir.home, '~')) %></div>
