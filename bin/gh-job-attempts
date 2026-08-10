@@ -141,18 +141,22 @@ fetch_job_attempt() {
 
 # ---- Fetch previous attempts ----
 
-ATTEMPTS_JSON=$(curl -s "https://github.com/${OWNER}/${REPO}/actions/runs/${RUN_ID}/new_attempts?current_attempt_number=${LATEST_ATTEMPT}&retry_blankstate=false" \
+ATTEMPTS_HTML=$(curl -s "https://github.com/${OWNER}/${REPO}/actions/runs/${RUN_ID}/new_attempts?current_attempt_number=${LATEST_ATTEMPT}&retry_blankstate=false" \
   -H "X-Requested-With: XMLHttpRequest" \
-  -H "Accept: text/html" |
-  pup 'a json{}')
+  -H "Accept: text/html")
 
-if [[ -z "$ATTEMPTS_JSON" ]]; then
+if [[ -z "$ATTEMPTS_HTML" ]]; then
   echo "❌ Failed to fetch attempt data."
   exit 1
 fi
 
-ATTEMPTS=$(echo "$ATTEMPTS_JSON" | jq -r '.[].children[1].children[0].text | capture("Attempt #(?<n>\\d+)").n')
-ATTEMPTS=$(echo -e "$LATEST_ATTEMPT\n$ATTEMPTS" | sort -nr | uniq)
+# Pull the "Attempt #N" labels out of the returned menu markup. This used to
+# shell out to `pup`, but homebrew-core reassigned that name to Datadog's CLI,
+# so the HTML parser is no longer installable via brew. GNU grep (already
+# required above) is enough. The `|| true` keeps a no-match from tripping
+# `set -e`; the current attempt is added back in on the next line regardless.
+ATTEMPTS=$(printf '%s' "$ATTEMPTS_HTML" | "$GREP" -oP 'Attempt #\K[0-9]+' || true)
+ATTEMPTS=$(printf '%s\n%s\n' "$LATEST_ATTEMPT" "$ATTEMPTS" | sort -nr | uniq)
 
 # ---- Fetch + print attempts immediately ----
 
