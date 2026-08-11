@@ -5,8 +5,22 @@ Personal dotfiles optimized for macOS and zsh. Features modern shell tools, comp
 ## Installation
 
 ```sh
-bash -c "$(curl -sL https://raw.github.com/ericboehs/dotfiles/master/bootstrap.sh)"
+curl -fsSL https://mise.run | sh
+git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
+cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 ```
+
+Setup is declared in [mise.toml](mise.toml) rather than scripted, so it
+converges — re-running only changes what has drifted. Useful variations:
+
+```sh
+mise bootstrap -n                     # preview every change, touch nothing
+mise bootstrap --only dotfiles        # just the $HOME symlinks
+mise bootstrap --skip macos-defaults  # leave system preferences alone
+mise bootstrap dotfiles status        # what's linked, and what has drifted
+```
+
+Add `--force-dotfiles` if $HOME already has real files where symlinks belong.
 
 Configure git with your personal information:
 ```sh
@@ -45,10 +59,13 @@ $EDITOR ~/.gitconfig.private
   - Custom status line with zoom indicator
   - Auto-renumber windows
 
-### Version Management
+### Version Management and Setup
 
 - **Tool**: [mise](https://mise.jdx.dev/) (replaces asdf)
 - Manages Node.js, Ruby, Python, and other language runtimes
+- Also drives machine setup — packages, `$HOME` symlinks, macOS defaults and
+  git checkouts are all declared in [mise.toml](mise.toml) and applied with
+  `mise bootstrap`
 
 ### Fuzzy Finder
 
@@ -108,7 +125,7 @@ Collection of utility scripts in `bin/` including:
 ├── .gitconfig           # Git configuration
 ├── .tmux.conf           # Tmux configuration
 ├── .zshrc               # Zsh initialization
-└── bootstrap.sh         # Installation script
+└── mise.toml            # Declarative machine setup (`mise bootstrap`)
 ```
 
 ## License

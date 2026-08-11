@@ -3,15 +3,12 @@
 #   mise bootstrap -n                    # preview everything
 #   mise bootstrap                       # converge
 #   mise bootstrap --only dotfiles       # just the symlinks
-#   mise bootstrap --skip macos-defaults # everything but defaults.sh's job
+#   mise bootstrap --skip macos-defaults # everything but the system prefs
 #
 # Prerequisites (chicken-and-egg — mise has to exist before it can bootstrap):
 #   curl -fsSL https://mise.run | sh
 #   git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
 #   cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
-#
-# This replaces bootstrap.sh + defaults.sh; both are kept until this is proven
-# on a fresh machine.
 
 [env]
 REPO_PATH = "ericboehs/dotfiles"
@@ -46,7 +43,6 @@ REPO_PATH = "ericboehs/dotfiles"
 # tree-sitter (the lib) and tree-sitter-cli are separate formulas;
 # nvim-treesitter needs the CLI for parser compilation.
 "brew:tree-sitter-cli" = "latest"
-# Replaces bootstrap.sh's manual nerd-fonts zip download.
 "brew-cask:font-inconsolata-nerd-font" = "latest"
 
 # Linux — apt
@@ -107,9 +103,9 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.gitconfig.private" = ".gitconfig.private.example"
 "~/.gitconfig.va-ghe" = ".gitconfig.va-ghe.example"
 # TPM installs into ~/.tmux/plugins/, which .gitignore excludes, so the whole
-# directory can be one link — that also gets the helper scripts .tmux.conf
-# binds (agenda.sh, btop.sh, goto-window.sh, move-window.sh, session-jump.sh),
-# which bootstrap.sh never linked.
+# directory can be one link — which is also what gets every helper script
+# .tmux.conf binds (agenda.sh, btop.sh, goto-window.sh, move-window.sh,
+# session-jump.sh, theme-sync.sh) onto a fresh machine.
 "~/.tmux" = ".tmux"
 
 "~/.config/nvim" = ".config/nvim"
@@ -127,7 +123,7 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.gem/credentials" = ".gem/credentials"
 
 # ---------------------------------------------------------------------------
-# macOS defaults (was defaults.sh)
+# macOS defaults
 # ---------------------------------------------------------------------------
 # Curated sections compile down to the same `defaults write` calls but read
 # better; raw [bootstrap.macos.defaults] covers everything else.
@@ -253,12 +249,7 @@ echo "      you open files of new types — that's expected, not a bug."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = [
-  "bootstrap:linux-shims",
-  "bootstrap:tpm",
-  "bootstrap:nvim",
-  "bootstrap:iterm",
-]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim"]
 
 [tasks."bootstrap:linux-shims"]
 description = "Debian binary-name shims, lsd fallback, zsh login shell"
@@ -303,19 +294,4 @@ nvim --headless "+Lazy! sync" +qa
 # 5-10 min on first run.
 nvim --headless "+Lazy! load nvim-treesitter" \
   "+lua require('nvim-treesitter').install('all'):wait(600000)" +qa
-'''
-
-[tasks."bootstrap:iterm"]
-description = "Import the Catppuccin Mocha color preset into iTerm2"
-run = '''
-[ "$(uname)" = Darwin ] || exit 0
-[ -d /Applications/iTerm.app ] || [ -d "$HOME/Applications/iTerm.app" ] || exit 0
-plutil -extract 'Custom Color Presets.Catppuccin Mocha' xml1 -o - \
-  ~/Library/Preferences/com.googlecode.iterm2.plist >/dev/null 2>&1 && exit 0
-tmp=$(mktemp -d)
-curl -fsSL -o "$tmp/Catppuccin Mocha.itermcolors" \
-  "https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/Catppuccin%20Mocha.itermcolors"
-open "$tmp/Catppuccin Mocha.itermcolors"
-sleep 2
-rm -rf "$tmp"
 '''
