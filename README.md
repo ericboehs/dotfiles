@@ -11,7 +11,9 @@ cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 ```
 
 Setup is declared in [mise.toml](mise.toml) rather than scripted, so it
-converges — re-running only changes what has drifted. Useful variations:
+converges — re-running only changes what has drifted. Requires mise 2026.8.4
+or newer for the per-package `os` filters; older versions say so and stop.
+Useful variations:
 
 ```sh
 mise bootstrap -n                     # preview every change, touch nothing

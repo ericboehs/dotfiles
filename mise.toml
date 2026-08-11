@@ -10,6 +10,10 @@
 #   git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
 #   cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 
+# [bootstrap.packages] entries below use per-package `os` filters, which older
+# mise rejects with a bare "invalid type: map, expected a string".
+min_version = "2026.8.4"
+
 [env]
 REPO_PATH = "ericboehs/dotfiles"
 
@@ -19,49 +23,52 @@ REPO_PATH = "ericboehs/dotfiles"
 # Anything that must exist before `mise install` can build runtimes belongs
 # here rather than in [tools].
 #
-# The manager prefix doubles as the platform filter: mise reports entries for
-# a manager that doesn't exist on this host as "skipped (only available on
-# <os>)", so both lists can sit side by side.
+# The manager prefix is NOT a platform filter in both directions: apt is
+# absent on macOS so those entries skip themselves, but Homebrew runs on Linux
+# too, so an unfiltered brew list gets installed there as well — duplicating
+# the apt list and hard-failing on macOS-only formulas like terminal-notifier,
+# which mise tries to build from source and dies on xcodebuild. Hence explicit
+# `os` on every entry.
 
 [bootstrap.packages]
 # macOS — brew
-"brew:neovim" = "latest"
-"brew:git" = "latest"
-"brew:lsd" = "latest"
-"brew:zoxide" = "latest"
-"brew:fzf" = "latest"
-"brew:zsh-autosuggestions" = "latest"
-"brew:gnupg" = "latest"
-"brew:tmux" = "latest"
-"brew:ripgrep" = "latest"
-"brew:fd" = "latest"
-"brew:lua" = "latest"
-"brew:gh" = "latest"
-"brew:terminal-notifier" = "latest"
+"brew:neovim" = { version = "latest", os = ["macos"] }
+"brew:git" = { version = "latest", os = ["macos"] }
+"brew:lsd" = { version = "latest", os = ["macos"] }
+"brew:zoxide" = { version = "latest", os = ["macos"] }
+"brew:fzf" = { version = "latest", os = ["macos"] }
+"brew:zsh-autosuggestions" = { version = "latest", os = ["macos"] }
+"brew:gnupg" = { version = "latest", os = ["macos"] }
+"brew:tmux" = { version = "latest", os = ["macos"] }
+"brew:ripgrep" = { version = "latest", os = ["macos"] }
+"brew:fd" = { version = "latest", os = ["macos"] }
+"brew:lua" = { version = "latest", os = ["macos"] }
+"brew:gh" = { version = "latest", os = ["macos"] }
+"brew:terminal-notifier" = { version = "latest", os = ["macos"] }
 # `brew install delta` resolves to git-delta; name it canonically.
-"brew:git-delta" = "latest"
+"brew:git-delta" = { version = "latest", os = ["macos"] }
 # tree-sitter (the lib) and tree-sitter-cli are separate formulas;
 # nvim-treesitter needs the CLI for parser compilation.
-"brew:tree-sitter-cli" = "latest"
-"brew-cask:font-inconsolata-nerd-font" = "latest"
+"brew:tree-sitter-cli" = { version = "latest", os = ["macos"] }
+"brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
 
 # Linux — apt
-"apt:zsh" = "latest"
-"apt:neovim" = "latest"
-"apt:zoxide" = "latest"
-"apt:fzf" = "latest"
-"apt:zsh-autosuggestions" = "latest"
-"apt:gnupg" = "latest"
-"apt:tmux" = "latest"
-"apt:ripgrep" = "latest"
-"apt:fd-find" = "latest"
-"apt:bat" = "latest"
-"apt:lua5.4" = "latest"
-"apt:gh" = "latest"
-"apt:git-delta" = "latest"
+"apt:zsh" = { version = "latest", os = ["linux"] }
+"apt:neovim" = { version = "latest", os = ["linux"] }
+"apt:zoxide" = { version = "latest", os = ["linux"] }
+"apt:fzf" = { version = "latest", os = ["linux"] }
+"apt:zsh-autosuggestions" = { version = "latest", os = ["linux"] }
+"apt:gnupg" = { version = "latest", os = ["linux"] }
+"apt:tmux" = { version = "latest", os = ["linux"] }
+"apt:ripgrep" = { version = "latest", os = ["linux"] }
+"apt:fd-find" = { version = "latest", os = ["linux"] }
+"apt:bat" = { version = "latest", os = ["linux"] }
+"apt:lua5.4" = { version = "latest", os = ["linux"] }
+"apt:gh" = { version = "latest", os = ["linux"] }
+"apt:git-delta" = { version = "latest", os = ["linux"] }
 # lsd is in universe on 22.04+ but missing on minimal images; the
 # bootstrap:linux-shims task installs the upstream .deb if this no-ops.
-"apt:lsd" = "latest"
+"apt:lsd" = { version = "latest", os = ["linux"] }
 
 # ---------------------------------------------------------------------------
 # Git checkouts
