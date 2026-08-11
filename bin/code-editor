@@ -1,4 +1,4 @@
 #! /usr/bin/env bash
 
-open -a iTerm
+open -a Ghostty
 tmux switch-client -t 👨🏼‍💻
