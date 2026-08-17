@@ -25,6 +25,12 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run bootstrap
+        env:
+          # mise resolves tool versions from GitHub's releases API. Unauthenticated
+          # runners share a 60 req/hr pool per IP and this job has already failed
+          # a run with 403s on it. The job's existing contents: read is all the
+          # token needs, and it lifts the ceiling well clear of what a run costs.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           mise trust
@@ -37,20 +43,46 @@ jobs:
           # ~/.config/mise/config.toml is a symlink into the repo as of the
           # dotfiles step above, so it needs trusting before it can be read.
           mise trust ~/.config/mise/config.toml
+          # neovim moved out of apt and into [tools], and this job skips the
+          # tools step wholesale, so install just the editor. It is the one
+          # tool with a hard minimum version — LazyVim refuses to load below
+          # it — which the next step asserts.
+          mise install neovim
 
       - name: Verify dotfiles converged
         run: mise bootstrap dotfiles status --missing
 
+      # nvim is deliberately not in this loop — these are the apt-provided
+      # tools, and the editor now comes from [tools]. It gets its own check.
       - name: Verify CLI tools installed
         run: |
           set -e
-          for cmd in zsh nvim lsd zoxide fzf tmux rg gh delta; do
+          for cmd in zsh lsd zoxide fzf tmux rg gh delta; do
             command -v "$cmd" >/dev/null || { echo "missing: $cmd"; exit 1; }
           done
           test -x "$HOME/.local/bin/fd"
           test -x "$HOME/.local/bin/bat"
 
+      # Regression test for a real failure: apt's neovim was 0.10.4 against
+      # LazyVim's 0.11.2 floor, so the editor would not load on a bootstrapped
+      # Linux box — and bootstrap:nvim hung forever rather than saying so,
+      # because LazyVim reports the problem with a keypress prompt that
+      # --headless can never answer.
+      - name: Verify neovim meets LazyVim's floor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          floor=0.11.2
+          v=$(mise exec -- nvim --version | sed -n '1s/^NVIM v\([0-9][0-9.]*\).*/\1/p')
+          [ -n "$v" ] || { echo "could not read nvim version"; exit 1; }
+          [ "$(printf '%s\n%s\n' "$floor" "$v" | sort -V | head -1)" = "$floor" ] \
+            || { echo "neovim $v is below LazyVim's $floor floor"; exit 1; }
+          echo "neovim $v (floor $floor)"
+
       - name: Verify re-running is a no-op
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           before=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
