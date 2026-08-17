@@ -16,12 +16,10 @@ min_version = "2026.8.4"
 
 [env]
 REPO_PATH = "ericboehs/dotfiles"
-# Tasks run in a non-login shell, so .zprofile's path_helper line never fires
-# and Homebrew's bin is missing from PATH — on a fresh Mac that made
-# bootstrap:nvim skip itself silently and bootstrap:tpm fail outright, even
-# though `mise bootstrap` had just installed nvim and tmux. Add it explicitly.
-# (/usr/local/bin is the Intel prefix; a path that doesn't exist is ignored.)
-_.path = ["/opt/homebrew/bin", "/usr/local/bin"]
+# Homebrew is deliberately NOT added to PATH here: `_.path` prepends, which
+# put /opt/homebrew/bin ahead of mise's own installs and let brew's python and
+# ruby shadow the [tools] versions inside this repo. The tasks that need brew
+# binaries append it themselves instead, so mise keeps precedence.
 
 # ---------------------------------------------------------------------------
 # System packages
@@ -293,6 +291,12 @@ fi
 [tasks."bootstrap:tpm"]
 description = "Install tmux plugin manager and its plugins"
 run = '''
+# Tasks run in a non-login shell, so .zprofile's path_helper line never fires
+# and Homebrew's bin is missing — on a fresh Mac that made this task fail
+# outright even though `mise bootstrap` had just installed tmux. Appended, not
+# prepended, so brew fills the gap without shadowing mise-managed tools.
+# (/usr/local/bin is the Intel prefix; a path that doesn't exist is ignored.)
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
 # install_plugins shells out to tmux; without it TPM aborts with a confusing
 # "not configured in tmux.conf". Say why and move on rather than failing the
 # whole bootstrap.
@@ -308,6 +312,9 @@ fi
 [tasks."bootstrap:nvim"]
 description = "Sync Lazy.nvim plugins and pre-compile treesitter parsers"
 run = '''
+# See bootstrap:tpm — non-login PATH has no Homebrew. Appended so mise's own
+# tool installs keep precedence over brew's copies.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
 # A bare `|| exit 0` here hid a real failure once: nvim was installed but not
 # on the task's PATH, so this skipped without a word and no parsers compiled.
 if ! command -v nvim >/dev/null; then
