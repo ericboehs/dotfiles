@@ -50,6 +50,9 @@ _.path = ["/opt/homebrew/bin", "/usr/local/bin"]
 "brew:fd" = { version = "latest", os = ["macos"] }
 "brew:lua" = { version = "latest", os = ["macos"] }
 "brew:gh" = { version = "latest", os = ["macos"] }
+# LazyVim binds <leader>gg to lazygit and its healthcheck warns without it.
+# Deliberately macOS-only: lazygit is not in the Ubuntu LTS apt repos.
+"brew:lazygit" = { version = "latest", os = ["macos"] }
 "brew:terminal-notifier" = { version = "latest", os = ["macos"] }
 # `brew install delta` resolves to git-delta; name it canonically.
 "brew:git-delta" = { version = "latest", os = ["macos"] }
@@ -319,4 +322,16 @@ nvim --headless "+Lazy! sync" +qa
 # 5-10 min on first run.
 nvim --headless "+Lazy! load nvim-treesitter" \
   "+lua require('nvim-treesitter').install('all'):wait(600000)" +qa
+# Mason installs its ensure_installed tools the first time it loads, which
+# otherwise happens on the first real nvim launch — the exact "why is my
+# editor installing things" moment this task exists to prevent. Loading it
+# headless triggers the same install; the wait blocks until the queue drains
+# rather than exiting mid-download.
+nvim --headless "+Lazy! load mason.nvim" \
+  "+lua local r = require('mason-registry')
+     vim.wait(600000, function()
+       return #vim.tbl_filter(function(p) return p:is_installing() end,
+                              r.get_all_packages()) == 0
+         and #r.get_installed_packages() > 0
+     end, 1000)" +qa
 '''
