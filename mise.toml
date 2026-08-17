@@ -57,6 +57,12 @@ REPO_PATH = "ericboehs/dotfiles"
 # tree-sitter (the lib) and tree-sitter-cli are separate formulas;
 # nvim-treesitter needs the CLI for parser compilation.
 "brew:tree-sitter-cli" = { version = "latest", os = ["macos"] }
+# bin/tmux-claude-save and -restore parse Claude's session JSON with jq and
+# abort without it. macOS has shipped /usr/bin/jq (1.7.1-apple) for a while, so
+# this is belt-and-braces here — it is the apt entry below that a Linux box
+# actually needs. Declared on both so the dependency is stated rather than
+# inherited from whatever Apple happens to bundle.
+"brew:jq" = { version = "latest", os = ["macos"] }
 "brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
 
 # Linux — apt
@@ -73,6 +79,8 @@ REPO_PATH = "ericboehs/dotfiles"
 "apt:lua5.4" = { version = "latest", os = ["linux"] }
 "apt:gh" = { version = "latest", os = ["linux"] }
 "apt:git-delta" = { version = "latest", os = ["linux"] }
+# See brew:jq above.
+"apt:jq" = { version = "latest", os = ["linux"] }
 # lsd is in universe on 22.04+ but missing on minimal images; the
 # bootstrap:linux-shims task installs the upstream .deb if this no-ops.
 "apt:lsd" = { version = "latest", os = ["linux"] }
