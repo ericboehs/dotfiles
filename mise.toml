@@ -121,6 +121,12 @@ REPO_PATH = "ericboehs/dotfiles"
 # .tmux.conf binds (agenda.sh, btop.sh, goto-window.sh, move-window.sh,
 # session-jump.sh, theme-sync.sh) onto a fresh machine.
 "~/.tmux" = ".tmux"
+# .zsh/path.zsh puts ~/bin at the front of $PATH, but nothing created it — on
+# this machine it was a hand-made symlink from years back, so the gap only
+# showed up on a pristine VM: every script the README documents (claude-man,
+# gh-pm, vm, notes, …) was simply missing. One link, not symlink-each, so new
+# scripts appear without re-running bootstrap.
+"~/bin" = "bin"
 
 "~/.config/nvim" = ".config/nvim"
 "~/.config/mise/config.toml" = ".config/mise/config.toml"
