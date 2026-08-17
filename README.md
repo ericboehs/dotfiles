@@ -28,6 +28,12 @@ overrides that, but it *replaces* those files rather than merging them — on a
 machine where Homebrew or rbenv had written their own `.zprofile`, that content
 is gone. Move anything you want to keep aside first.
 
+One caveat on convergence: the `tools` step runs before the `bootstrap` task,
+and a single failed download there — mise resolves runtime versions from
+GitHub's releases API, so a GitHub incident is enough — aborts the run before
+the task ever starts. The output still reads like a finished bootstrap. If
+neovim and tmux look unwarmed, re-run; it picks up where it left off.
+
 Configure git with your personal information:
 ```sh
 cp ~/.gitconfig.private.example ~/.gitconfig.private
