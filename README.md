@@ -10,6 +10,14 @@ git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotf
 cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 ```
 
+Install mise from `mise.run`, not Homebrew. mise bootstraps itself, so it is
+deliberately absent from `[bootstrap.packages]` — whichever copy you install by
+hand is the one that runs. Homebrew's build disables `mise self-update` and
+lags upstream, and because it lands in `/opt/homebrew/bin` instead of
+`~/.local/bin` it papers over a real bug: mise's rubygems plugin shells out to
+`mise reshim` after installing any gem with executables, so mason's gem-backed
+packages fail on a `mise.run` machine unless that directory is on `PATH`.
+
 Setup is declared in [mise.toml](mise.toml) rather than scripted, so it
 converges — re-running only changes what has drifted. Requires mise 2026.8.4
 or newer for the per-package `os` filters; older versions say so and stop.
