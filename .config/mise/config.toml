@@ -25,13 +25,5 @@ gitleaks = "latest"
 hk = "latest"
 pkl = "latest"
 watchexec = "latest"
-# LazyVim's terraform extra hardcodes the terraform_fmt formatter and the
-# terraform_validate linter, so opening a .tf file without the binary throws
-# "Error running terraform: ENOENT". Here rather than in [bootstrap.packages]
-# because homebrew-core dropped the formula over the BUSL relicense, and mise's
-# brew backend refuses third-party taps ("the tap must publish API metadata …
-# mise will not proxy to the brew CLI") — which fails the whole packages step,
-# not just that entry.
-terraform = "latest"
 aube = "latest"
 "npm:@playwright/cli" = "latest"
