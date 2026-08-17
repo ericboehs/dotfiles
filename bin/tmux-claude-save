@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # tmux-claude-save - Save tmux session state including Claude session IDs
 #
-# Captures all windows/panes running Claude in a tmux session, determines
-# session IDs, and saves state to a JSON file for later restoration.
+# Captures every pane running Claude in a tmux session, resolves each pane's
+# Claude session ID, and writes state to JSON for tmux-claude-restore.
+#
+# Session IDs come from ~/.claude/sessions/<pid>.json, which Claude Code
+# maintains for each running instance. That file is an authoritative
+# pid -> sessionId map, so no guessing from file timestamps is needed.
+# Heuristics remain only as fallbacks for older Claude versions.
 #
 # Usage: tmux-claude-save [SESSION_NAME]
 #   SESSION_NAME defaults to "future"
@@ -12,187 +17,185 @@ set -euo pipefail
 SESSION_NAME="${1:-future}"
 SAVE_DIR="$HOME/.config/tmux-claude"
 SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
-TMP_FILE=$(mktemp)
-trap 'rm -f "$TMP_FILE"' EXIT
+CLAUDE_SESSIONS="$HOME/.claude/sessions"
+PROJECTS_DIR="$HOME/.claude/projects"
+
+for dep in tmux jq; do
+  command -v "$dep" >/dev/null || { echo "Error: '$dep' is required" >&2; exit 1; }
+done
 
 mkdir -p "$SAVE_DIR"
 
-# Check tmux session exists
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   echo "Error: tmux session '$SESSION_NAME' not found" >&2
   echo "Available sessions:" >&2
-  tmux list-sessions 2>/dev/null | sed 's/^/  /' >&2
+  tmux list-sessions -F '  #{session_name}' 2>/dev/null >&2 || true
   exit 1
 fi
 
-# Convert CWD to Claude project directory path
-# Claude replaces all non-alphanumeric chars (except -) with - in the dir name
+# Encode a cwd the way Claude names its project dirs: every character that is
+# not alphanumeric or '-' becomes '-' (this includes '/', '.', '_', ' ' and '~').
 cwd_to_project_dir() {
-  local cwd="$1"
-  local project_path="${cwd#/}"
-  # Replace / with -, then replace spaces and ~ with - to match Claude's encoding
-  local encoded="${project_path//\//-}"
-  encoded="${encoded// /-}"
-  encoded="${encoded//\~/-}"
-  echo "$HOME/.claude/projects/-${encoded}"
+  printf '%s/%s\n' "$PROJECTS_DIR" "$(printf '%s' "$1" | sed 's/[^a-zA-Z0-9-]/-/g')"
 }
 
-# Find session ID from --resume in command line args
-session_id_from_args() {
-  local args="$1"
-  local uuid_pattern='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-  echo "$args" | grep -oE -- "--resume $uuid_pattern" | grep -oE "$uuid_pattern" || true
+# Walk a process tree (depth-limited) and echo every descendant pid.
+descendants() {
+  local pid="$1" depth="${2:-0}" child
+  [ "$depth" -ge 4 ] && return 0
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    printf '%s\n' "$child"
+    descendants "$child" $((depth + 1))
+  done
+  return 0
 }
 
-# Find session ID by matching process start time to JSONL birth time
-session_id_from_birthtime() {
-  local project_dir="$1"
-  local proc_start_epoch="$2"
-  local best_match=""
-  local best_diff=999999
-
-  [ -d "$project_dir" ] || return
-
-  for f in "$project_dir"/*.jsonl; do
-    [ -f "$f" ] || continue
-    local birth_epoch
-    birth_epoch=$(stat -f '%B' "$f" 2>/dev/null) || continue
-    local diff=$(( birth_epoch - proc_start_epoch ))
-    # Birth time should be within 120s after process start
-    if [ "$diff" -ge -5 ] && [ "$diff" -le 120 ] && [ "$diff" -lt "$best_diff" ]; then
-      best_diff=$diff
-      best_match=$(basename "$f" .jsonl)
+# Echo the pid of the Claude process running in a pane, if any.
+claude_pid_for_pane() {
+  local pane_pid="$1" pid cmd
+  for pid in $(descendants "$pane_pid"); do
+    # A live sessions file is the strongest signal that this really is Claude.
+    if [ -f "$CLAUDE_SESSIONS/$pid.json" ]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+    cmd=$(ps -ww -o comm= -p "$pid" 2>/dev/null || true)
+    if [ "$(basename "${cmd:-}")" = "claude" ]; then
+      printf '%s\n' "$pid"
+      return 0
     fi
   done
-
-  echo "$best_match"
+  return 0
 }
 
-# Find session ID by most recently modified JSONL in project dir
+# Fallback: pull a session id out of an explicit --resume argument.
+session_id_from_args() {
+  local uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  printf '%s' "$1" | grep -oE -- "--resume[= ]$uuid" | grep -oE "$uuid" | head -1 || true
+  return 0
+}
+
+# Fallback: most recently modified transcript in the project dir that has not
+# already been claimed by another pane. Dedup matters because several panes
+# frequently share one cwd.
 session_id_from_recent() {
-  local project_dir="$1"
-  [ -d "$project_dir" ] || return
-  ls -t "$project_dir"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl
+  local project_dir="$1" f id
+  [ -d "$project_dir" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    id=$(basename "$f" .jsonl)
+    case " $CLAIMED " in
+      *" $id "*) continue ;;
+    esac
+    printf '%s\n' "$id"
+    return 0
+  done < <(ls -t "$project_dir"/*.jsonl 2>/dev/null)
+  return 0
 }
 
 echo "Scanning tmux session: $SESSION_NAME"
 echo ""
 
-# Initialize JSON array
-echo '[]' > "$TMP_FILE"
+CLAIMED=""
+entries="[]"
+total=0
+found=0
 
-# Get panes ONLY for the specified session (no -a flag)
 while IFS='|' read -r window_index pane_index pane_pid window_name; do
-  # Find claude child process
-  claude_pid=$(pgrep -P "$pane_pid" 2>/dev/null | head -1) || true
-  [ -z "$claude_pid" ] && continue
+  claude_pid=$(claude_pid_for_pane "$pane_pid")
+  [ -n "$claude_pid" ] || continue
 
-  # Check if it's actually claude
-  claude_cmd=$(ps -ww -o args= -p "$claude_pid" 2>/dev/null) || true
-  if ! echo "$claude_cmd" | grep -q "claude"; then
-    continue
-  fi
-
-  # Get CWD
-  cwd=$(lsof -p "$claude_pid" -a -d cwd -Fn 2>/dev/null | grep ^n | sed 's/^n//') || true
-
-  # Get process start time as epoch (macOS date -j handles local timezone)
-  proc_start_epoch=""
-  proc_lstart=$(ps -o lstart= -p "$claude_pid" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  if [ -n "$proc_lstart" ]; then
-    # Normalize double spaces in date (e.g., "Mar  5" -> "Mar 05")
-    normalized=$(echo "$proc_lstart" | sed 's/  / 0/g')
-    proc_start_epoch=$(date -j -f "%a %b %d %H:%M:%S %Y" "$normalized" "+%s" 2>/dev/null) || true
-  fi
-
-  # Determine session ID
+  total=$((total + 1))
   session_id=""
   detection_method=""
+  session_name=""
+  cwd=""
+  state_file="$CLAUDE_SESSIONS/$claude_pid.json"
 
-  # Method 1: Extract from --resume args
-  session_id=$(session_id_from_args "$claude_cmd")
-  if [ -n "$session_id" ]; then
-    detection_method="command_args"
+  # Method 1 (authoritative): Claude's own per-pid session state.
+  if [ -f "$state_file" ]; then
+    session_id=$(jq -r '.sessionId // empty' "$state_file" 2>/dev/null || true)
+    cwd=$(jq -r '.cwd // empty' "$state_file" 2>/dev/null || true)
+    session_name=$(jq -r '.name // empty' "$state_file" 2>/dev/null || true)
+    [ -n "$session_id" ] && detection_method="claude_state"
   fi
 
-  # Method 2: Match by birth time
-  if [ -z "$session_id" ] && [ -n "$cwd" ] && [ -n "$proc_start_epoch" ]; then
-    project_dir=$(cwd_to_project_dir "$cwd")
-    session_id=$(session_id_from_birthtime "$project_dir" "$proc_start_epoch")
-    if [ -n "$session_id" ]; then
-      detection_method="birthtime_match"
-    fi
+  claude_cmd=$(ps -ww -o args= -p "$claude_pid" 2>/dev/null || true)
+
+  # Resolve cwd from the process if Claude's state file did not supply one.
+  if [ -z "$cwd" ]; then
+    cwd=$(lsof -p "$claude_pid" -a -d cwd -Fn 2>/dev/null | grep '^n' | sed 's/^n//' | head -1 || true)
   fi
 
-  # Method 3: Most recently modified JSONL (last resort)
+  # Method 2: an explicit --resume on the command line.
+  if [ -z "$session_id" ]; then
+    session_id=$(session_id_from_args "$claude_cmd")
+    [ -n "$session_id" ] && detection_method="command_args"
+  fi
+
+  # Method 3: most recent unclaimed transcript for this cwd.
   if [ -z "$session_id" ] && [ -n "$cwd" ]; then
-    project_dir=$(cwd_to_project_dir "$cwd")
-    session_id=$(session_id_from_recent "$project_dir")
-    if [ -n "$session_id" ]; then
-      detection_method="most_recent_fallback"
-    fi
+    session_id=$(session_id_from_recent "$(cwd_to_project_dir "$cwd")")
+    [ -n "$session_id" ] && detection_method="most_recent_fallback"
   fi
 
-  # Extract flags from command line
+  [ -n "$session_id" ] && CLAIMED="$CLAIMED $session_id"
+
   has_skip_permissions=false
-  if echo "$claude_cmd" | grep -q "dangerously-skip-permissions"; then
-    has_skip_permissions=true
-  fi
+  case "$claude_cmd" in
+    *--dangerously-skip-permissions*) has_skip_permissions=true ;;
+  esac
 
-  # Status indicator
   if [ -n "$session_id" ]; then
     status_icon="✓"
+    found=$((found + 1))
   else
     status_icon="✗"
+    detection_method="none"
   fi
 
   echo "  $status_icon Window $window_index ($window_name) → ${session_id:-(unknown)} ($detection_method)"
-  echo "    cwd: $cwd"
+  echo "    cwd: ${cwd:-(unknown)}${session_name:+  name: $session_name}"
 
-  # Add entry to JSON using python3 with proper escaping via env vars
-  ENTRY_WINDOW_INDEX="$window_index" \
-  ENTRY_WINDOW_NAME="$window_name" \
-  ENTRY_PANE_INDEX="$pane_index" \
-  ENTRY_CWD="$cwd" \
-  ENTRY_SESSION_ID="$session_id" \
-  ENTRY_DETECTION="$detection_method" \
-  ENTRY_SKIP_PERMS="$has_skip_permissions" \
-  ENTRY_PID="$claude_pid" \
-  python3 -c "
-import json, os
-with open('$TMP_FILE') as f:
-    arr = json.load(f)
-arr.append({
-    'window_index': int(os.environ['ENTRY_WINDOW_INDEX']),
-    'window_name': os.environ['ENTRY_WINDOW_NAME'],
-    'pane_index': int(os.environ['ENTRY_PANE_INDEX']),
-    'cwd': os.environ['ENTRY_CWD'],
-    'session_id': os.environ['ENTRY_SESSION_ID'],
-    'detection_method': os.environ['ENTRY_DETECTION'],
-    'dangerously_skip_permissions': os.environ['ENTRY_SKIP_PERMS'] == 'true',
-    'claude_pid': int(os.environ['ENTRY_PID']),
-})
-with open('$TMP_FILE', 'w') as f:
-    json.dump(arr, f)
-"
-
+  entries=$(jq -c \
+    --argjson window_index "$window_index" \
+    --argjson pane_index "$pane_index" \
+    --arg window_name "$window_name" \
+    --arg cwd "$cwd" \
+    --arg session_id "$session_id" \
+    --arg session_name "$session_name" \
+    --arg detection_method "$detection_method" \
+    --argjson skip_perms "$has_skip_permissions" \
+    --argjson claude_pid "$claude_pid" \
+    '. + [{
+       window_index: $window_index,
+       window_name: $window_name,
+       pane_index: $pane_index,
+       cwd: $cwd,
+       session_id: $session_id,
+       session_name: $session_name,
+       detection_method: $detection_method,
+       dangerously_skip_permissions: $skip_perms,
+       claude_pid: $claude_pid
+     }]' <<<"$entries")
 done < <(tmux list-panes -t "$SESSION_NAME" -s -F '#{window_index}|#{pane_index}|#{pane_pid}|#{window_name}')
 
-# Wrap in top-level object and save
-python3 -c "
-import json
-with open('$TMP_FILE') as f:
-    windows = json.load(f)
-state = {
-    'session_name': '$SESSION_NAME',
-    'saved_at': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
-    'windows': windows
-}
-with open('$SAVE_FILE', 'w') as f:
-    json.dump(state, f, indent=2)
-total = len(windows)
-found = sum(1 for w in windows if w['session_id'])
-print()
-print(f'Saved to: $SAVE_FILE')
-print(f'Windows with Claude sessions: {found}/{total}')
-"
+if [ "$total" -eq 0 ]; then
+  echo "  (no panes running Claude found)"
+  echo ""
+  echo "Nothing to save; leaving any existing $SAVE_FILE untouched." >&2
+  exit 1
+fi
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+jq -n \
+  --arg session_name "$SESSION_NAME" \
+  --arg saved_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson windows "$entries" \
+  '{session_name: $session_name, saved_at: $saved_at, windows: $windows}' >"$tmp"
+mv "$tmp" "$SAVE_FILE"
+
+echo ""
+echo "Saved to: $SAVE_FILE"
+echo "Windows with Claude sessions: $found/$total"
