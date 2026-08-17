@@ -82,6 +82,41 @@ Collection of utility scripts in `bin/` including:
 - **GitHub CLI extensions**: gh-pm, gh-reruns, gh-reviews-by-user, gh-labeler, ghb
 - **Tmux utilities**: toggle_notes_pane, monitor_tmux_pane, notes
 - **Development tools**: refresh_safari, colors, true-colors, utcdate
+- **Throwaway macOS VMs**: `vm` (see below)
+
+## Throwaway macOS VMs
+
+`bin/vm` wraps [tart](https://tart.run/) to give you disposable macOS guests on
+Apple Silicon — useful for testing this bootstrap against a genuinely clean
+machine.
+
+```sh
+brew install cirruslabs/cli/tart
+
+vm new              # clone a fresh VM named "clean"
+vm up               # boot it in a GUI window (-d to detach)
+vm ssh              # shell in as admin, no password
+vm reset            # wipe it and re-clone — back to pristine, ~3 seconds
+vm ls / vm ip / vm down / vm rm / vm seed
+```
+
+Every command takes an optional VM name, so `vm new sandbox && vm up sandbox`
+runs a second one alongside. Defaults come from `VM_CPU`, `VM_MEM`, `VM_DISK`,
+`VM_NAME`, `VM_DISPLAY`, `VM_SSH_KEY`, and `VM_BASE_OCI`.
+
+Two golden images sit behind this and are never booted for day-to-day work.
+`sequoia-base` is the pulled upstream image; `sequoia-base-keyed` is a clone of
+it with your public key appended to `authorized_keys`, built once by `vm seed`.
+`new` and `reset` clone from the keyed image, which is why a reset VM is both
+instant and still passwordless — pushing a key per-VM would mean re-injecting it
+after every reset. Re-run `vm seed` after changing `VM_SSH_KEY`.
+
+Clones are APFS copy-on-write, so a 28GB VM costs almost no disk until it
+diverges. Treat these as disposable rather than something to repair.
+
+Worth knowing, both imposed by Apple's Virtualization.framework: at most **two**
+macOS guests may run at once, and guests **cannot sign in to iCloud or the App
+Store**. Anything needing an Apple ID has to be tested on real hardware.
 
 ## Keybindings
 

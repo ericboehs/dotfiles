@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Throwaway macOS VMs on Apple Silicon, via tart.
+#
+#   vm new              # clone a fresh VM named "clean", key already trusted
+#   vm up               # boot it in a GUI window (Ctrl-C in this shell halts it)
+#   vm up -d            # ...or detached, logging to ~/.tart/logs/<name>.log
+#   vm reset            # nuke it and re-clone from base — back to pristine
+#   vm ssh              # ssh in as admin, no password
+#   vm ls / vm ip / vm rm / vm down / vm seed
+#
+# Every command takes an optional VM name so you can run more than one:
+#
+#   vm new sandbox && vm up sandbox
+#
+# The pulled base image (ghcr.io/cirruslabs/macos-sequoia-base) is never booted
+# directly. It stays pristine; everything clones off it. Clones are APFS
+# copy-on-write, so a 28GB VM costs ~nothing until it diverges and takes about a
+# second to create. That is the whole point of the design — `reset` is cheap
+# enough to use casually, so treat these VMs as disposable rather than something
+# to repair.
+#
+# SSH keys are handled by an intermediate golden image, "<base>-keyed", rather
+# than by pushing a key to each new VM. `vm seed` boots one clone of the base,
+# appends VM_SSH_KEY to its authorized_keys, and shuts it down; `new` and
+# `reset` then clone from *that*. The key costs ~a minute once and is inherited
+# for free forever after, which is what keeps `vm reset` a 2-second operation
+# and — unlike per-VM injection — means a reset VM still trusts your key.
+# Re-run `vm seed` after changing VM_SSH_KEY to rebuild the image.
+#
+# Authenticating to seed the image needs the base password (admin/admin) fed to
+# ssh non-interactively. That is done with SSH_ASKPASS + SSH_ASKPASS_REQUIRE
+# rather than sshpass, deliberately: sshpass was dropped from homebrew/core and
+# would be one more thing to install on a fresh machine, whereas askpass is
+# plain OpenSSH (>= 8.4) and always present.
+#
+# Two limits worth knowing, both imposed by Apple's Virtualization.framework:
+#
+#  1. At most 2 macOS guests may run at once, per host. The third `tart run`
+#     fails with an unhelpful error; that is why `up` checks first.
+#  2. Guests cannot sign in to iCloud or the App Store. Anything needing an
+#     Apple ID has to be tested on real hardware.
+#
+# Clipboard sharing needs tart-guest-agent running inside the guest. The
+# cirruslabs base images ship it, but if paste stops working, check that the
+# agent is alive in the guest before blaming the host.
+
+BASE="${VM_BASE:-sequoia-base}"
+BASE_OCI="${VM_BASE_OCI:-ghcr.io/cirruslabs/macos-sequoia-base:latest}"
+DEFAULT_NAME="${VM_NAME:-clean}"
+CPU="${VM_CPU:-4}"
+MEM="${VM_MEM:-8192}"      # megabytes
+DISK="${VM_DISK:-50}"      # gigabytes; tart can only grow a disk, never shrink
+DISPLAY_RES="${VM_DISPLAY:-1920x1080}"
+LOG_DIR="$HOME/.tart/logs"
+SSH_KEY="${VM_SSH_KEY:-$HOME/.ssh/id_ed25519.pub}"
+KEYED="$BASE-keyed"        # golden image with SSH_KEY baked in; see header
+GUEST_USER="admin"
+GUEST_PASS="admin"
+
+SSH_OPTS=(
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o LogLevel=ERROR
+)
+
+die() { printf 'vm: %s\n' "$*" >&2; exit 1; }
+info() { printf '\033[32m==>\033[0m %s\n' "$*"; }
+
+command -v tart >/dev/null || die "tart not installed — brew install cirruslabs/cli/tart"
+
+# Query one field of one VM out of `tart list`. Empty output means "no such VM",
+# which is how every existence check below is written.
+vm_field() {
+  tart list --format json 2>/dev/null | python3 -c '
+import json, sys
+name, field = sys.argv[1], sys.argv[2]
+for vm in json.load(sys.stdin):
+    if vm["Name"] == name:
+        print(vm[field]); break
+' "$1" "$2"
+}
+
+vm_exists() { [ -n "$(vm_field "$1" Name)" ]; }
+
+running_count() {
+  tart list --format json 2>/dev/null | python3 -c '
+import json, sys
+print(sum(1 for vm in json.load(sys.stdin) if vm["Running"]))'
+}
+
+# Make sure a local, unbooted golden image exists to clone from. Pulling is a
+# ~30GB download, so this only ever runs once.
+ensure_base() {
+  vm_exists "$BASE" && return 0
+  info "base image '$BASE' missing — pulling $BASE_OCI (this is a large download)"
+  tart pull "$BASE_OCI" || die "pull failed"
+  tart clone "$BASE_OCI" "$BASE" || die "clone of base failed"
+}
+
+# ssh to a guest using the base image's password, without an interactive prompt.
+# SSH_ASKPASS_REQUIRE=force (OpenSSH >= 8.4) makes ssh call the askpass helper
+# even when a tty is attached, which is what removes the need for sshpass.
+# The password never touches disk beyond a 0600 temp file we delete immediately.
+ssh_with_password() {
+  local ip="$1"; shift
+  local askpass rc
+  askpass="$(mktemp)"
+  chmod 700 "$askpass"
+  printf '#!/bin/sh\necho %s\n' "$GUEST_PASS" >"$askpass"
+  SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \
+    ssh "${SSH_OPTS[@]}" -o NumberOfPasswordPrompts=1 -o ConnectTimeout=10 \
+      -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+      "$GUEST_USER@$ip" "$@"
+  rc=$?
+  rm -f "$askpass"
+  return $rc
+}
+
+# sshd starts well after the guest gets a DHCP lease, so an IP is not a usable
+# signal on its own. Poll an actual login instead.
+wait_for_ssh() {
+  local ip="$1" waited=0
+  while [ "$waited" -lt 150 ]; do
+    ssh_with_password "$ip" true >/dev/null 2>&1 && return 0
+    sleep 5
+    waited=$((waited + 5))
+  done
+  return 1
+}
+
+wait_for_stop() {
+  local name="$1" waited=0
+  while [ "$waited" -lt 60 ]; do
+    [ "$(vm_field "$name" Running)" = "True" ] || return 0
+    sleep 2
+    waited=$((waited + 2))
+  done
+  return 1
+}
+
+destroy_vm() {
+  vm_exists "$1" || return 0
+  tart stop "$1" >/dev/null 2>&1
+  wait_for_stop "$1"
+  tart delete "$1" >/dev/null 2>&1
+}
+
+# A half-built keyed image would silently produce keyless VMs forever, so any
+# failure during seeding tears it down rather than leaving it in place.
+seed_failed() {
+  destroy_vm "$KEYED"
+  die "$1"
+}
+
+# Prove the key survived the shutdown instead of trusting that the write stuck.
+# Uses a disposable clone, because booting $KEYED again to check would mean a
+# second shutdown of the very image whose shutdown behavior is in question.
+verify_keyed_base() {
+  local probe="$KEYED-probe" ip waited=0
+  destroy_vm "$probe"
+  info "verifying the key survived the shutdown"
+  tart clone "$KEYED" "$probe" || seed_failed "probe clone failed"
+  tart run "$probe" --no-graphics >/dev/null 2>&1 &
+
+  ip="$(tart ip "$probe" --wait 150 2>/dev/null)"
+  if [ -z "$ip" ]; then
+    destroy_vm "$probe"
+    seed_failed "probe VM never got an IP"
+  fi
+
+  while [ "$waited" -lt 150 ]; do
+    if ssh "${SSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 \
+         -i "${SSH_KEY%.pub}" "$GUEST_USER@$ip" true >/dev/null 2>&1; then
+      destroy_vm "$probe"
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  destroy_vm "$probe"
+  seed_failed "key did not persist into '$KEYED' — clones still demand a password"
+}
+
+# Build the "<base>-keyed" golden image: one boot, one authorized_keys append,
+# one shutdown. Everything downstream clones from the result, so this is the
+# only time a VM ever has to boot just to be configured.
+build_keyed_base() {
+  [ -r "$SSH_KEY" ] || die "no public key at $SSH_KEY — set VM_SSH_KEY to one you have"
+  ensure_base
+
+  local running
+  running="$(running_count)"
+  [ "$running" -ge 2 ] && die "$running VMs already running (Apple's limit is 2) — stop one before seeding"
+
+  info "building keyed golden image '$KEYED' from $BASE (one-time, ~1 minute)"
+  tart clone "$BASE" "$KEYED" || die "clone failed"
+
+  tart run "$KEYED" --no-graphics >/dev/null 2>&1 &
+
+  local ip
+  ip="$(tart ip "$KEYED" --wait 150 2>/dev/null)" || seed_failed "guest never got an IP"
+  info "seeding $(basename "$SSH_KEY") into $GUEST_USER@$ip"
+  wait_for_ssh "$ip" || seed_failed "sshd never came up at $ip"
+
+  ssh_with_password "$ip" \
+    'mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && sync' \
+    <"$SSH_KEY" || seed_failed "failed to write authorized_keys"
+
+  # Shut down from *inside* the guest. `tart stop` only requests a graceful
+  # termination and force-kills after its timeout; a macOS guest routinely
+  # ignores that request, so the kill lands with authorized_keys still in the
+  # guest's page cache and the seeded image boots up without the key. The
+  # trailing `sync` above and this in-guest shutdown are what make it stick.
+  # The connection dies mid-command by design, so its exit status means nothing.
+  ssh_with_password "$ip" 'sudo shutdown -h now' >/dev/null 2>&1 || true
+
+  # Cloning a VM whose disk is still settling yields a dirty image, so make the
+  # shutdown fully complete before anyone clones this.
+  if ! wait_for_stop "$KEYED"; then
+    info "guest ignored shutdown; forcing"
+    tart stop "$KEYED" >/dev/null 2>&1
+    wait_for_stop "$KEYED" || seed_failed "guest would not shut down"
+  fi
+
+  # Trust nothing: prove the key actually survived the reboot cycle rather than
+  # reporting success on a write that the shutdown silently threw away.
+  verify_keyed_base
+  info "'$KEYED' ready — every 'vm new' from here on is passwordless"
+}
+
+ensure_keyed_base() {
+  vm_exists "$KEYED" || build_keyed_base
+}
+
+cmd_seed() {
+  if vm_exists "$KEYED"; then
+    info "discarding existing '$KEYED'"
+    destroy_vm "$KEYED"
+  fi
+  build_keyed_base
+}
+
+cmd_new() {
+  local name="${1:-$DEFAULT_NAME}"
+  vm_exists "$name" && die "'$name' already exists — use 'vm reset $name' to wipe it"
+  ensure_keyed_base
+  info "cloning $KEYED -> $name"
+  tart clone "$KEYED" "$name" || die "clone failed"
+
+  tart set "$name" --cpu "$CPU" --memory "$MEM" --display "$DISPLAY_RES" --display-refit \
+    || die "failed to configure $name"
+
+  # Only resize when growing. tart refuses to shrink (it would lose data), so
+  # asking for the size it already has would be a hard error, not a no-op.
+  local current
+  current="$(vm_field "$name" Disk)"
+  if [ -n "$current" ] && [ "$DISK" -gt "$current" ]; then
+    info "growing disk ${current}GB -> ${DISK}GB"
+    tart set "$name" --disk-size "$DISK" || die "resize failed"
+  fi
+
+  # A fresh MAC and serial per clone keeps two VMs off the same DHCP lease and
+  # stops them looking like the same machine to anything that fingerprints.
+  tart set "$name" --random-mac --random-serial >/dev/null 2>&1
+
+  info "'$name' ready — ${CPU} CPU / $((MEM / 1024))GB RAM / ${DISK}GB disk"
+  printf '    vm up %s     boot it (GUI login is %s / %s)\n' "$name" "$GUEST_USER" "$GUEST_PASS"
+  printf '    vm ssh %s    shell in, no password\n' "$name"
+}
+
+cmd_up() {
+  local detach=0 name=""
+  for arg in "$@"; do
+    case "$arg" in
+      -d|--detach) detach=1 ;;
+      -*) die "unknown flag: $arg" ;;
+      *) name="$arg" ;;
+    esac
+  done
+  name="${name:-$DEFAULT_NAME}"
+
+  vm_exists "$name" || die "no VM named '$name' — create it with 'vm new $name'"
+  [ "$(vm_field "$name" Running)" = "True" ] && die "'$name' is already running"
+
+  # Virtualization.framework caps concurrent macOS guests at 2. Fail here with
+  # an explanation rather than letting tart emit its opaque error.
+  local running
+  running="$(running_count)"
+  [ "$running" -ge 2 ] && die "$running macOS VMs already running (Apple's limit is 2) — 'vm down <name>' one first"
+
+  if [ "$detach" -eq 1 ]; then
+    mkdir -p "$LOG_DIR"
+    nohup tart run "$name" >"$LOG_DIR/$name.log" 2>&1 &
+    info "'$name' starting detached (log: $LOG_DIR/$name.log)"
+  else
+    info "booting '$name' — close the window or Ctrl-C here to halt it"
+    tart run "$name"
+  fi
+}
+
+cmd_down() {
+  local name="${1:-$DEFAULT_NAME}"
+  vm_exists "$name" || die "no VM named '$name'"
+  info "stopping '$name'"
+  tart stop "$name"
+}
+
+cmd_reset() {
+  local name="${1:-$DEFAULT_NAME}"
+  if vm_exists "$name"; then
+    [ "$(vm_field "$name" Running)" = "True" ] && { info "stopping '$name'"; tart stop "$name"; }
+    info "deleting '$name'"
+    tart delete "$name" || die "delete failed"
+  fi
+  cmd_new "$name"
+}
+
+cmd_rm() {
+  local name="${1:-$DEFAULT_NAME}"
+  vm_exists "$name" || die "no VM named '$name'"
+  # Both golden images are rebuild-expensive (a re-pull and a re-seed), so they
+  # are only removable through their own commands, never by a stray `vm rm`.
+  [ "$name" = "$BASE" ] && die "refusing to delete the base image '$BASE'"
+  [ "$name" = "$KEYED" ] && die "refusing to delete the keyed image — use 'vm seed' to rebuild it"
+  [ "$(vm_field "$name" Running)" = "True" ] && { info "stopping '$name'"; tart stop "$name"; }
+  tart delete "$name" && info "deleted '$name'"
+}
+
+# The guest gets its IP over DHCP well after boot starts, so `tart ip` fails for
+# the first ~30s. Block instead of making the caller retry by hand.
+cmd_ip() {
+  local name="${1:-$DEFAULT_NAME}"
+  vm_exists "$name" || die "no VM named '$name'"
+  tart ip "$name" --wait 90 2>/dev/null || die "no IP after 90s — is '$name' booted?"
+}
+
+cmd_ssh() {
+  local name="${1:-$DEFAULT_NAME}"
+  local ip
+  ip="$(cmd_ip "$name")" || exit 1
+  info "ssh $GUEST_USER@$ip"
+  # Throwaway VMs recycle IPs constantly, so a known_hosts entry from a deleted
+  # VM would block every future login. Skip host key checking deliberately.
+  # If this still asks for a password, the VM predates `vm seed` — reset it.
+  ssh "${SSH_OPTS[@]}" -i "${SSH_KEY%.pub}" "$GUEST_USER@$ip"
+}
+
+cmd_ls() {
+  tart list --format json | python3 -c '
+import json, sys
+vms = json.load(sys.stdin)
+local = [v for v in vms if v["Source"] == "local"]
+if not local:
+    print("no local VMs"); raise SystemExit
+print("%-24s %-10s %6s %8s" % ("NAME", "STATE", "DISK", "ON DISK"))
+for v in sorted(local, key=lambda v: v["Name"]):
+    print("%-24s %-10s %6s %8s" % (v["Name"], v["State"], "%dGB" % v["Disk"], "%dGB" % v["Size"]))
+'
+}
+
+# Print the header comment block as the help text, so usage can never drift out
+# of sync with the docs. Stops at the first line of actual code.
+usage() {
+  awk 'NR > 2 { if (/^#/) { sub(/^# ?/, ""); print } else if (NF) exit }' "$0"
+  exit "${1:-0}"
+}
+
+case "${1:-}" in
+  new)    shift; cmd_new "$@" ;;
+  seed)   shift; cmd_seed "$@" ;;
+  up)     shift; cmd_up "$@" ;;
+  down)   shift; cmd_down "$@" ;;
+  reset)  shift; cmd_reset "$@" ;;
+  rm)     shift; cmd_rm "$@" ;;
+  ip)     shift; cmd_ip "$@" ;;
+  ssh)    shift; cmd_ssh "$@" ;;
+  ls)     shift; cmd_ls "$@" ;;
+  -h|--help|help|"") usage 0 ;;
+  *)      printf 'vm: unknown command: %s\n\n' "$1" >&2; usage 1 ;;
+esac
