@@ -26,4 +26,10 @@ hk = "latest"
 pkl = "latest"
 watchexec = "latest"
 aube = "latest"
+# Pinned, not "latest": this file is symlinked into ~/.config, so a version mise
+# cannot resolve warns on every shell init — which is enough console output to
+# trip Powerlevel10k's instant-prompt guard. A pin keeps working through a
+# GitHub releases-API outage. Also satisfies the LazyVim terraform extra, which
+# otherwise errors with ENOENT on every .tf buffer.
+terraform = "1.15.8"
 "npm:@playwright/cli" = "latest"

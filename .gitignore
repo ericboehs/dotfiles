@@ -1,10 +1,9 @@
 .bundle
 .zshrc.local
-.vimrc.local
-.vim/.undo
-.vim/pack/minpac
-.vim/.netrwhist
 .tmux/plugins
+# mise.toml is ignored by the global gitignore (per-project configs stay
+# local); this repo's copy is the machine setup itself, so track it
+!/mise.toml
 # ~/.claude is ignored by the global gitignore; re-include only what we track
 !/.claude/
 /.claude/*

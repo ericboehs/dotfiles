@@ -5,8 +5,42 @@ Personal dotfiles optimized for macOS and zsh. Features modern shell tools, comp
 ## Installation
 
 ```sh
-bash -c "$(curl -sL https://raw.github.com/ericboehs/dotfiles/master/bootstrap.sh)"
+curl -fsSL https://mise.run | sh
+git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
+cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 ```
+
+Install mise from `mise.run`, not Homebrew. mise bootstraps itself, so it is
+deliberately absent from `[bootstrap.packages]` — whichever copy you install by
+hand is the one that runs. Homebrew's build disables `mise self-update` and
+lags upstream, and because it lands in `/opt/homebrew/bin` instead of
+`~/.local/bin` it papers over a real bug: mise's rubygems plugin shells out to
+`mise reshim` after installing any gem with executables, so mason's gem-backed
+packages fail on a `mise.run` machine unless that directory is on `PATH`.
+
+Setup is declared in [mise.toml](mise.toml) rather than scripted, so it
+converges — re-running only changes what has drifted. Requires mise 2026.8.4
+or newer for the per-package `os` filters; older versions say so and stop.
+Useful variations:
+
+```sh
+mise bootstrap -n                     # preview every change, touch nothing
+mise bootstrap --only dotfiles        # just the $HOME symlinks
+mise bootstrap --skip macos-defaults  # leave system preferences alone
+mise bootstrap dotfiles status        # what's linked, and what has drifted
+```
+
+Dotfile linking is all-or-nothing: if $HOME already has real files where
+symlinks belong, mise names them and refuses the whole step. `--force-dotfiles`
+overrides that, but it *replaces* those files rather than merging them — on a
+machine where Homebrew or rbenv had written their own `.zprofile`, that content
+is gone. Move anything you want to keep aside first.
+
+One caveat on convergence: the `tools` step runs before the `bootstrap` task,
+and a single failed download there — mise resolves runtime versions from
+GitHub's releases API, so a GitHub incident is enough — aborts the run before
+the task ever starts. The output still reads like a finished bootstrap. If
+neovim and tmux look unwarmed, re-run; it picks up where it left off.
 
 Configure git with your personal information:
 ```sh
@@ -45,10 +79,13 @@ $EDITOR ~/.gitconfig.private
   - Custom status line with zoom indicator
   - Auto-renumber windows
 
-### Version Management
+### Version Management and Setup
 
 - **Tool**: [mise](https://mise.jdx.dev/) (replaces asdf)
 - Manages Node.js, Ruby, Python, and other language runtimes
+- Also drives machine setup — packages, `$HOME` symlinks, macOS defaults and
+  git checkouts are all declared in [mise.toml](mise.toml) and applied with
+  `mise bootstrap`
 
 ### Fuzzy Finder
 
@@ -147,7 +184,7 @@ Store**. Anything needing an Apple ID has to be tested on real hardware.
 ├── .gitconfig           # Git configuration
 ├── .tmux.conf           # Tmux configuration
 ├── .zshrc               # Zsh initialization
-└── bootstrap.sh         # Installation script
+└── mise.toml            # Declarative machine setup (`mise bootstrap`)
 ```
 
 ## License

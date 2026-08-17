@@ -25,5 +25,10 @@ source "$HOME/.zsh/tools.zsh"
 # Prompt
 source "$HOME/.zsh/p10k.zsh"
 
-# Local overrides
-[[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
+# Local overrides. Spelled as `if` rather than `[[ … ]] && source …` because
+# the && form leaves $? = 1 when the file is absent, and this is the last
+# statement in .zshrc — so p10k painted the very first prompt's ❯ red on every
+# machine that has no .zshrc.local.
+if [[ -f "$HOME/.zshrc.local" ]]; then
+  source "$HOME/.zshrc.local"
+fi

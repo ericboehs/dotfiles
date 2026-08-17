@@ -85,7 +85,7 @@ send_notification() {
     local duration="$2"
     
     if [[ "$USE_TERMINAL_NOTIFIER" == true ]]; then
-        terminal-notifier -title "Claude Monitor" -message "Claude pane $pane idle for $duration seconds" -sender com.googlecode.iterm2
+        terminal-notifier -title "Claude Monitor" -message "Claude pane $pane idle for $duration seconds" -sender com.mitchellh.ghostty
     else
         # Default OS9 notification via tmux
         printf '\ePtmux;\e\e]9;Claude pane %s idle for %d seconds\a\e\\' "$pane" "$duration"

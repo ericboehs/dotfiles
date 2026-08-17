@@ -5,41 +5,41 @@ on:
     branches: [master]
   pull_request:
 
+permissions: {} # default-deny; no job here needs the GITHUB_TOKEN
+
 jobs:
   ubuntu:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
     steps:
-      - uses: actions/checkout@v6
+      # Submodules are left to mise's pre-dotfiles hook so that the hook is
+      # exercised rather than bypassed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: recursive
+          persist-credentials: false
+
+      - name: Install mise
+        run: |
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run bootstrap
-        env:
-          FORCE_OVERWRITE: "1"
-          SKIP_TPM: "1"
-          SKIP_DEFAULTS: "1"
-          SKIP_NVIM: "1"
-          SKIP_MISE: "1"
-        run: bash bootstrap.sh
-
-      - name: Verify dotfiles symlinked
         run: |
           set -e
-          for f in .zshrc .gitconfig .tmux.conf .fzf.zsh .npmrc; do
-            test -L "$HOME/$f" || { echo "missing symlink: ~/$f"; exit 1; }
-          done
-          test -L "$HOME/.gem/credentials"
-          test -L "$HOME/.gitignore"
-          test -L "$HOME/.config/nvim"
-          test -L "$HOME/.config/mise/config.toml"
-          test -L "$HOME/.config/lsd/colors.yaml"
-          test -L "$HOME/.config/lsd/config.yaml"
-          test -L "$HOME/.config/gitleaks/config.toml"
-          test -L "$HOME/.tmux/loadavg.sh"
-          test -L "$HOME/.tmux/theme-sync.sh"
-          test -L "$HOME/.tmux/tmuxline.dark.conf"
-          test -L "$HOME/.tmux/tmuxline.light.conf"
-          test -L "$HOME/.tmux/extrakto"
+          mise trust
+          # tools: the runtimes in [tools] take far longer than this job is
+          #   worth; task: bootstrap:nvim compiles every treesitter parser.
+          mise bootstrap -y --force-dotfiles --skip tools,task
+          # The one task that is cheap and Linux-specific — it creates the
+          # fd/bat shims the next step asserts on.
+          mise run bootstrap:linux-shims
+          # ~/.config/mise/config.toml is a symlink into the repo as of the
+          # dotfiles step above, so it needs trusting before it can be read.
+          mise trust ~/.config/mise/config.toml
+
+      - name: Verify dotfiles converged
+        run: mise bootstrap dotfiles status --missing
 
       - name: Verify CLI tools installed
         run: |
@@ -50,20 +50,26 @@ jobs:
           test -x "$HOME/.local/bin/fd"
           test -x "$HOME/.local/bin/bat"
 
-      - name: Verify dry-run is a no-op
+      - name: Verify re-running is a no-op
         run: |
           set -e
           before=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
-          bash bootstrap.sh --dry-run > /dev/null
+          mise bootstrap -n --skip tools,task > /dev/null
           after=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
-          [[ "$before" == "$after" ]] || { echo "dry-run modified state"; exit 1; }
+          [ "$before" = "$after" ] || { echo "dry-run modified state"; exit 1; }
 
   shellcheck:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # .claude/scripts/statusline.sh is not covered yet — it has pre-existing
+      # warnings that want fixing on their own.
       - name: Run shellcheck
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck bootstrap.sh defaults.sh
+          shellcheck .tmux/*.sh

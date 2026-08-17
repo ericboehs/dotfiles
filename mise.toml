@@ -1,0 +1,407 @@
+# mise.toml — declarative machine setup, run with `mise bootstrap` from this dir.
+#
+#   mise bootstrap -n                    # preview everything
+#   mise bootstrap                       # converge
+#   mise bootstrap --only dotfiles       # just the symlinks
+#   mise bootstrap --skip macos-defaults # everything but the system prefs
+#
+# Prerequisites (chicken-and-egg — mise has to exist before it can bootstrap):
+#   curl -fsSL https://mise.run | sh
+#   git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
+#   cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
+
+# [bootstrap.packages] entries below use per-package `os` filters, which older
+# mise rejects with a bare "invalid type: map, expected a string".
+min_version = "2026.8.4"
+
+[env]
+REPO_PATH = "ericboehs/dotfiles"
+# Homebrew is deliberately NOT added to PATH here: `_.path` prepends, which
+# put /opt/homebrew/bin ahead of mise's own installs and let brew's python and
+# ruby shadow the [tools] versions inside this repo. The tasks that need brew
+# binaries append it themselves instead, so mise keeps precedence.
+
+# ---------------------------------------------------------------------------
+# System packages
+# ---------------------------------------------------------------------------
+# Anything that must exist before `mise install` can build runtimes belongs
+# here rather than in [tools].
+#
+# The manager prefix is NOT a platform filter in both directions: apt is
+# absent on macOS so those entries skip themselves, but Homebrew runs on Linux
+# too, so an unfiltered brew list gets installed there as well — duplicating
+# the apt list and hard-failing on macOS-only formulas like terminal-notifier,
+# which mise tries to build from source and dies on xcodebuild. Hence explicit
+# `os` on every entry.
+
+[bootstrap.packages]
+# macOS — brew
+"brew:neovim" = { version = "latest", os = ["macos"] }
+"brew:git" = { version = "latest", os = ["macos"] }
+"brew:lsd" = { version = "latest", os = ["macos"] }
+"brew:zoxide" = { version = "latest", os = ["macos"] }
+"brew:fzf" = { version = "latest", os = ["macos"] }
+"brew:zsh-autosuggestions" = { version = "latest", os = ["macos"] }
+"brew:gnupg" = { version = "latest", os = ["macos"] }
+"brew:tmux" = { version = "latest", os = ["macos"] }
+"brew:ripgrep" = { version = "latest", os = ["macos"] }
+"brew:fd" = { version = "latest", os = ["macos"] }
+"brew:lua" = { version = "latest", os = ["macos"] }
+"brew:gh" = { version = "latest", os = ["macos"] }
+# LazyVim binds <leader>gg to lazygit and its healthcheck warns without it.
+# Deliberately macOS-only: lazygit is not in the Ubuntu LTS apt repos.
+"brew:lazygit" = { version = "latest", os = ["macos"] }
+"brew:terminal-notifier" = { version = "latest", os = ["macos"] }
+# `brew install delta` resolves to git-delta; name it canonically.
+"brew:git-delta" = { version = "latest", os = ["macos"] }
+# tree-sitter (the lib) and tree-sitter-cli are separate formulas;
+# nvim-treesitter needs the CLI for parser compilation.
+"brew:tree-sitter-cli" = { version = "latest", os = ["macos"] }
+"brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
+
+# Linux — apt
+"apt:zsh" = { version = "latest", os = ["linux"] }
+"apt:neovim" = { version = "latest", os = ["linux"] }
+"apt:zoxide" = { version = "latest", os = ["linux"] }
+"apt:fzf" = { version = "latest", os = ["linux"] }
+"apt:zsh-autosuggestions" = { version = "latest", os = ["linux"] }
+"apt:gnupg" = { version = "latest", os = ["linux"] }
+"apt:tmux" = { version = "latest", os = ["linux"] }
+"apt:ripgrep" = { version = "latest", os = ["linux"] }
+"apt:fd-find" = { version = "latest", os = ["linux"] }
+"apt:bat" = { version = "latest", os = ["linux"] }
+"apt:lua5.4" = { version = "latest", os = ["linux"] }
+"apt:gh" = { version = "latest", os = ["linux"] }
+"apt:git-delta" = { version = "latest", os = ["linux"] }
+# lsd is in universe on 22.04+ but missing on minimal images; the
+# bootstrap:linux-shims task installs the upstream .deb if this no-ops.
+"apt:lsd" = { version = "latest", os = ["linux"] }
+
+# ---------------------------------------------------------------------------
+# Git checkouts
+# ---------------------------------------------------------------------------
+# TPM is deliberately NOT here: repos are cloned before dotfiles, so cloning
+# into ~/.tmux/plugins/ would create a real ~/.tmux and block the symlink
+# below. It lives in the bootstrap:tpm task, which runs last.
+
+[bootstrap.repos]
+# .zsh/functions.zsh sources gcd from this fixed path.
+"~/Code/github.com/ericboehs/gcd" = { url = "https://github.com/ericboehs/gcd" }
+
+# ---------------------------------------------------------------------------
+# Dotfiles
+# ---------------------------------------------------------------------------
+# Sources are relative to this file. Modes:
+#   symlink      — one link for the whole file or directory (the default)
+#   symlink-each — real directory, one link per entry, recursing into
+#                  subdirectories; use it where something outside the repo
+#                  also writes into the target directory
+
+[dotfiles]
+"~/.aprc" = ".aprc"
+"~/.bundle" = ".bundle"
+"~/.default-gems" = ".default-gems"
+"~/.fzf.zsh" = ".fzf.zsh"
+"~/.gemrc" = ".gemrc"
+"~/.gitconfig" = ".gitconfig"
+"~/.npmrc" = ".npmrc"
+"~/.p10k.zsh" = ".p10k.zsh"
+"~/.rgignore" = ".rgignore"
+"~/.tmux.conf" = ".tmux.conf"
+"~/.zprofile" = ".zprofile"
+"~/.zshrc" = ".zshrc"
+# Contains the zsh plugin submodules; .zshrc sources them from $HOME/.zsh/.
+"~/.zsh" = ".zsh"
+# Renames: the repo tracks .example/.global names, $HOME wants the real ones.
+"~/.gitignore" = ".gitignore.global"
+"~/.gitconfig.private" = ".gitconfig.private.example"
+"~/.gitconfig.va-ghe" = ".gitconfig.va-ghe.example"
+# TPM installs into ~/.tmux/plugins/, which .gitignore excludes, so the whole
+# directory can be one link — which is also what gets every helper script
+# .tmux.conf binds (agenda.sh, btop.sh, goto-window.sh, move-window.sh,
+# session-jump.sh, theme-sync.sh) onto a fresh machine.
+"~/.tmux" = ".tmux"
+# .zsh/path.zsh puts ~/bin at the front of $PATH, but nothing created it — on
+# this machine it was a hand-made symlink from years back, so the gap only
+# showed up on a pristine VM: every script the README documents (claude-man,
+# gh-pm, vm, notes, …) was simply missing. One link, not symlink-each, so new
+# scripts appear without re-running bootstrap.
+"~/bin" = "bin"
+
+"~/.config/nvim" = ".config/nvim"
+"~/.config/mise/config.toml" = ".config/mise/config.toml"
+# btop rewrites btop.conf on exit, so only the themes directory is managed.
+"~/.config/btop/themes" = { source = ".config/btop/themes", mode = "symlink-each" }
+"~/.config/lsd" = { source = ".config/lsd", mode = "symlink-each" }
+"~/.config/gitleaks" = { source = ".config/gitleaks", mode = "symlink-each" }
+# Ghostty writes nothing here, but $HOME already has a real directory.
+"~/.config/ghostty" = { source = ".config/ghostty", mode = "symlink-each" }
+
+# ~/.claude/ is Claude Code runtime state and ~/.gem/ is runtime state for
+# `gem` (it writes credentials there on push), so link individual files.
+"~/.claude/scripts/statusline.sh" = ".claude/scripts/statusline.sh"
+"~/.gem/credentials" = ".gem/credentials"
+
+# ---------------------------------------------------------------------------
+# macOS defaults
+# ---------------------------------------------------------------------------
+# Curated sections compile down to the same `defaults write` calls but read
+# better; raw [bootstrap.macos.defaults] covers everything else.
+
+[bootstrap.macos.finder]
+show_all_files = true
+show_pathbar = true
+show_status_bar = true
+preferred_view_style = "list"
+
+[bootstrap.macos.dock]
+tilesize = 36
+show_recents = false
+mru_spaces = false
+
+[bootstrap.macos.keyboard]
+initial_key_repeat = 15
+key_repeat = 2
+press_and_hold = false
+
+[bootstrap.macos.trackpad]
+tap_to_click = true
+
+[bootstrap.macos.defaults.NSGlobalDomain]
+AppleShowAllExtensions = true
+AppleKeyboardUIMode = 3
+NSNavPanelExpandedStateForSaveMode = true
+NSNavPanelExpandedStateForSaveMode2 = true
+NSAutomaticSpellingCorrectionEnabled = false
+NSAutomaticDashSubstitutionEnabled = false
+NSAutomaticQuoteSubstitutionEnabled = false
+NSAutomaticPeriodSubstitutionEnabled = false
+
+[bootstrap.macos.defaults."com.apple.finder"]
+FXDefaultSearchScope = "SCcf"
+_FXShowPosixPathInTitle = true
+_FXSortFoldersFirst = true
+
+[bootstrap.macos.defaults."com.apple.desktopservices"]
+DSDontWriteNetworkStores = true
+DSDontWriteUSBStores = true
+
+# `location` is set in the pre-defaults hook instead: values here are written
+# literally, with no template expansion or tilde handling, so there's no way
+# to spell $HOME.
+[bootstrap.macos.defaults."com.apple.screencapture"]
+type = "png"
+disable-shadow = true
+
+[bootstrap.macos.defaults."com.apple.dock"]
+no-bouncing = true
+mineffect = "scale"
+
+[bootstrap.macos.defaults."com.apple.Safari"]
+ShowFullURLInSmartSearchField = true
+IncludeDevelopMenu = true
+WebKitDeveloperExtrasEnabledPreferenceKey = true
+"com.apple.Safari.ContentPageGroupIdentifier.WebKit2DeveloperExtrasEnabled" = true
+SendDoNotTrackHTTPHeader = true
+
+[bootstrap.macos.defaults."com.apple.TextEdit"]
+RichText = 0
+PlainTextEncoding = 4
+PlainTextEncodingForWrite = 4
+
+# ---------------------------------------------------------------------------
+# Hooks — the imperative bits that have no declarative equivalent
+# ---------------------------------------------------------------------------
+# Hooks fire regardless of platform, so each guards itself on `uname`.
+
+[bootstrap.hooks]
+pre-packages = '''
+if [ "$(uname)" = Darwin ] && ! command -v brew >/dev/null; then
+  # SSH non-interactive sessions don't load ~/.zprofile, so look in the
+  # standard Apple Silicon / Intel locations before installing.
+  for p in /opt/homebrew/bin /usr/local/bin; do
+    [ -x "$p/brew" ] && export PATH="$p:$PATH" && break
+  done
+  if ! command -v brew >/dev/null; then
+    NONINTERACTIVE=1 /bin/bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+fi
+if [ "$(uname)" = Linux ] && command -v apt-get >/dev/null; then
+  sudo apt-get update -qq
+fi
+'''
+
+# Submodules back .zsh/{powerlevel10k,fast-syntax-highlighting,
+# zsh-autosuggestions} and .tmux/extrakto, all of which are symlinked into
+# $HOME as part of their parent directory — so they must be populated first.
+pre-dotfiles = "git submodule update --init --recursive"
+
+pre-defaults = '''
+[ "$(uname)" = Darwin ] || exit 0
+# Quit System Settings so it doesn't override our writes.
+osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
+mkdir -p ~/Pictures/Screenshots
+defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"
+'''
+
+post-defaults = '''
+[ "$(uname)" = Darwin ] || exit 0
+# Per-host, so it can't be expressed in [bootstrap.macos.defaults].
+defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+for app in Finder Dock SystemUIServer; do
+  killall "$app" >/dev/null 2>&1 || true
+done
+'''
+
+final = '''
+command -v gh >/dev/null && ! gh auth status >/dev/null 2>&1 && \
+  echo "  gh auth login                       # octo.nvim, gh CLI"
+command -v op >/dev/null || \
+  echo "  brew install --cask 1password-cli   # for fnox + secrets"
+# This used to say on-demand parser installs were expected — true before
+# bootstrap:nvim installed all of them, and actively misleading now: it tells
+# you to shrug off the one visible symptom of the warm having half-failed.
+echo "Note: bootstrap:nvim installs every treesitter parser, so opening a new"
+echo "      filetype should install nothing. If nvim starts compiling parsers,"
+echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
+'''
+
+# ---------------------------------------------------------------------------
+# Tasks — run last, after packages, dotfiles and [tools] are all in place
+# ---------------------------------------------------------------------------
+
+[tasks.bootstrap]
+description = "Post-converge setup that needs the installed tools on PATH"
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim"]
+
+[tasks."bootstrap:linux-shims"]
+description = "Debian binary-name shims, lsd fallback, zsh login shell"
+run = '''
+[ "$(uname)" = Linux ] || exit 0
+# Debian ships fd as fdfind and bat as batcat.
+mkdir -p "$HOME/.local/bin"
+[ -x /usr/bin/fdfind ] && ln -sf /usr/bin/fdfind "$HOME/.local/bin/fd"
+[ -x /usr/bin/batcat ] && ln -sf /usr/bin/batcat "$HOME/.local/bin/bat"
+# apt:lsd silently no-ops on minimal images; fall back to the GitHub release.
+if ! command -v lsd >/dev/null; then
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/lsd.deb" \
+    "https://github.com/lsd-rs/lsd/releases/latest/download/lsd-musl_$(dpkg --print-architecture).deb"
+  sudo dpkg -i "$tmp/lsd.deb"
+  rm -rf "$tmp"
+fi
+# [bootstrap.user].login_shell takes one absolute path and can't vary by
+# platform; macOS already defaults to zsh, so only Linux needs this.
+if [ "$SHELL" != "$(command -v zsh)" ]; then
+  sudo chsh -s "$(command -v zsh)" "$USER"
+fi
+'''
+
+[tasks."bootstrap:tpm"]
+description = "Install tmux plugin manager and its plugins"
+run = '''
+# Tasks run in a non-login shell, so .zprofile's path_helper line never fires
+# and Homebrew's bin is missing — on a fresh Mac that made this task fail
+# outright even though `mise bootstrap` had just installed tmux. Appended, not
+# prepended, so brew fills the gap without shadowing mise-managed tools.
+# (/usr/local/bin is the Intel prefix; a path that doesn't exist is ignored.)
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+# install_plugins shells out to tmux; without it TPM aborts with a confusing
+# "not configured in tmux.conf". Say why and move on rather than failing the
+# whole bootstrap.
+if ! command -v tmux >/dev/null; then
+  echo "bootstrap:tpm: tmux not on PATH — skipping plugin install" >&2
+  exit 0
+fi
+[ -d ~/.tmux/plugins/tpm ] || \
+  git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+~/.tmux/plugins/tpm/bin/install_plugins
+'''
+
+[tasks."bootstrap:nvim"]
+description = "Sync Lazy.nvim plugins and pre-compile treesitter parsers"
+run = '''
+# See bootstrap:tpm — non-login PATH has no Homebrew. Appended so mise's own
+# tool installs keep precedence over brew's copies.
+#
+# ~/.local/bin is where mise.run puts mise, and it has to be here for mason's
+# gem-backed packages (erb-formatter, erb_lint) to install: mise ships a
+# rubygems plugin that shells out to `mise reshim` after installing any gem with
+# executables, and `mise exec` does not put mise itself on PATH. Without it the
+# hook dies with ENOENT, gem exits 1, and mason reports a failure — the gem
+# files land, so it looks like a mystery. This never reproduced on a Mac whose
+# mise came from brew, because /opt/homebrew/bin above already satisfied it.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+# A bare `|| exit 0` here hid a real failure once: nvim was installed but not
+# on the task's PATH, so this skipped without a word and no parsers compiled.
+if ! command -v nvim >/dev/null; then
+  echo "bootstrap:nvim: nvim not on PATH — skipping plugin sync" >&2
+  exit 0
+fi
+parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; }
+
+# `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
+# during first install (treesitter parsers compiling); keep it visible.
+nvim --headless "+Lazy! sync" +qa
+
+# Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but headless
+# never triggers a filetype event), then block on install. 5-10 min on a good
+# first run. Each parser is a separate GitHub download, and ~300 of them back
+# to back reliably draws 429s (plus whatever 502/503 GitHub is serving that
+# day) — install() resolves anyway, so one pass exits 0 having quietly skipped
+# a third of the list. Retry until a pass stops adding parsers.
+prev=-1
+attempt=0
+while [ "$(parsers)" != "$prev" ]; do
+  prev=$(parsers)
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 8 ]; then
+    echo "bootstrap:nvim: still gaining parsers after 8 passes — giving up at \
+$prev. Re-run this task once the network settles." >&2
+    break
+  fi
+  # A failed download leaves its extract dir behind, and the next attempt dies
+  # on ENOTEMPTY trying to rename over it.
+  rm -rf ~/.cache/nvim/tree-sitter-*-tmp
+  nvim --headless "+Lazy! load nvim-treesitter" \
+    "+lua require('nvim-treesitter').install('all'):wait(1800000)" +qa
+  echo "bootstrap:nvim: $(parsers) treesitter parsers after pass $attempt"
+done
+
+# Mason installs LazyVim's tools the first time it loads, which otherwise
+# happens on the first real nvim launch — the exact "why is my editor
+# installing things" moment this task exists to prevent. Loading it headless
+# triggers the same install.
+#
+# The wait needs a quiet period, not a single idle sample: mason queues its
+# downloads, so there are moments early on when nothing is installing yet and
+# the queue is far from empty. Waiting on `no package is installing` alone
+# returned immediately and nvim exited mid-download, leaving mason to finish
+# the job on first launch anyway ("Neovim is exiting while packages are still
+# installing").
+#
+# A package can also just fail — erb-formatter and erb-lint are gems, so they
+# need a usable ruby, and mason only says so in ~/.local/state/nvim/mason.log.
+# Surface the names here instead, since a silent 8-of-10 is what sends you back
+# to the editor wondering.
+nvim --headless "+Lazy! load mason.nvim" \
+  "+lua local r = require('mason-registry')
+     local failed = {}
+     r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
+     local idle = 0
+     vim.wait(1800000, function()
+       local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
+                                    r.get_all_packages())
+       idle = busy > 0 and 0 or idle + 1
+       return idle >= 15
+     end, 1000)
+     if #failed > 0 then
+       io.stderr:write('bootstrap:nvim: mason could not install ' ..
+         table.concat(failed, ', ') .. ' — see ~/.local/state/nvim/mason.log\n')
+     end" +qa
+
+echo "bootstrap:nvim: $(parsers) parsers, \
+$(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
+$(ls ~/.local/share/nvim/lazy 2>/dev/null | wc -l | tr -d ' ') plugins"
+'''

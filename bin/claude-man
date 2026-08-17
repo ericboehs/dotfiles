@@ -251,7 +251,7 @@ monitor_pane() {
                                 if [[ "$NOTIFY_ALWAYS" == true ]]; then
                                     terminal-notifier -title "Claude Session Idle" -message "Session $pane ($pane_title) is now idle"
                                 else
-                                    terminal-notifier -title "Claude Session Idle" -message "Session $pane ($pane_title) is now idle" -sender com.googlecode.iterm2
+                                    terminal-notifier -title "Claude Session Idle" -message "Session $pane ($pane_title) is now idle" -sender com.mitchellh.ghostty
                                 fi
                             else
                                 echo "Warning: terminal-notifier not found, skipping notification"
@@ -339,7 +339,7 @@ monitor_pane() {
                                 if [[ "$NOTIFY_ALWAYS" == true ]]; then
                                     terminal-notifier -title "Claude Low Context" -message "Only $context_percent% context remaining in $pane"
                                 else
-                                    terminal-notifier -title "Claude Low Context" -message "Only $context_percent% context remaining in $pane" -sender com.googlecode.iterm2
+                                    terminal-notifier -title "Claude Low Context" -message "Only $context_percent% context remaining in $pane" -sender com.mitchellh.ghostty
                                 fi
                             fi
                         fi
