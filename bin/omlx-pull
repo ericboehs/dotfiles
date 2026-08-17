@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# Pull a Hugging Face model repo into ~/.omlx/models/<basename>.
+#
+#   omlx-pull fcmeyer/Qwen3.8-27B-MLX-oQ4e-mtp
+#   JOBS=6 omlx-pull unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
+#   DEST=/tmp/scratch omlx-pull some/repo
+#
+# oMLX builds its /v1/models catalog once at startup, so restart the app after
+# a new model lands or it will not be served:
+#   pkill -x oMLX; sleep 4; open -a oMLX
+#
+# Auth is optional. Export HUGGING_FACE_API_KEY for gated repos and for
+# noticeably better throughput (~15 MB/s vs ~5 MB/s anonymous).
+#
+# Four rules learned the hard way, all load-bearing:
+#
+#  1. No `curl --retry`. Combined with `-C -` it restarts at byte 0 and
+#     truncates the partial. Retries are driven from the loop below so each
+#     attempt is a fresh curl that recomputes its resume offset from disk.
+#
+#  2. One instance per DEST, enforced by an atomic mkdir lock. Two loops
+#     sharing a `-C -` target interleave appends at offsets neither one
+#     tracks, yielding files of the right shape and entirely wrong content.
+#     Killing the driver is not enough — xargs and its `bash -c fetch`
+#     children do not match the driver's name and will happily keep going.
+#
+#  3. Verify sha256, not size. The corruption in (2) left two shards
+#     oversized and a third at a plausible size; only a content hash
+#     distinguishes them.
+#
+#  4. Parallel curl exits 0 on truncated files, so nothing is believed until
+#     the verify pass agrees.
+
+usage() { sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+[[ "${1:-}" =~ ^(-h|--help)$ ]] && usage 0
+
+REPO="${1:-${REPO:-}}"
+[[ -n "$REPO" ]] || { echo "usage: omlx-pull <org>/<name>" >&2; exit 2; }
+
+DEST="${DEST:-$HOME/.omlx/models/$(basename "$REPO")}"
+JOBS="${JOBS:-4}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-25}"
+
+mkdir -p "$DEST"
+
+# Atomic single-instance lock; mkdir is the portable test-and-set.
+LOCK="$DEST/.dl-lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  holder="$(cat "$LOCK/pid" 2>/dev/null || echo '?')"
+  if [[ "$holder" != "?" ]] && ! kill -0 "$holder" 2>/dev/null; then
+    echo "note: clearing stale lock from dead pid $holder"
+    rm -rf "$LOCK"; mkdir "$LOCK"
+  else
+    echo "ERROR: another omlx-pull (pid $holder) is writing $DEST" >&2
+    echo "if you are certain it is dead: rm -rf '$LOCK'" >&2
+    exit 3
+  fi
+fi
+echo $$ > "$LOCK/pid"
+
+MANIFEST="$(mktemp)"
+cleanup() {
+  rm -rf "$LOCK"
+  rm -f "$MANIFEST"
+  # Reap workers that would otherwise outlive the driver (see rule 2).
+  pkill -9 -P $$ 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+# Tab-separated: size, sha256 (or "-" when HF publishes none), path.
+# The "-" placeholder matters: an empty field collapses under the whitespace
+# splitting xargs does, shifting every later argument by one.
+curl -sf "https://huggingface.co/api/models/${REPO}?blobs=true" \
+  | python3 -c '
+import sys, json
+for f in json.load(sys.stdin)["siblings"]:
+    sha = (f.get("lfs") or {}).get("sha256", "") or "-"
+    print("%s\t%s\t%s" % (f.get("size", 0), sha, f["rfilename"]))
+' > "$MANIFEST"
+
+[[ -s "$MANIFEST" ]] || { echo "ERROR: empty manifest for $REPO (typo? gated?)" >&2; exit 4; }
+echo "$REPO: $(wc -l < "$MANIFEST" | tr -d ' ') files, $(awk -F'\t' '{s+=$1} END {printf "%.1f GB", s/1e9}' "$MANIFEST")"
+echo "  -> $DEST"
+
+fetch() {
+  local want="$1" sha="$2" name="$3"
+  local out="$DEST/$name"
+  mkdir -p "$(dirname "$out")"
+
+  local attempt=0 have=0 prev=-1
+  while :; do
+    have=0; [[ -f "$out" ]] && have=$(stat -f%z "$out")
+
+    if [[ "$have" == "$want" ]]; then
+      if [[ "$sha" == "-" ]] || [[ "$(shasum -a 256 "$out" | cut -d' ' -f1)" == "$sha" ]]; then
+        echo "  ok        $name"; return 0
+      fi
+      echo "  BADHASH   $name (refetching)"; rm -f "$out"; prev=-1
+    elif [[ "$have" -gt "$want" ]]; then
+      # Unrepairable by resume: the excess is interleaved garbage, not a tail.
+      echo "  OVERSHOT  $name ($have > $want, restarting)"; rm -f "$out"; prev=-1
+    fi
+
+    attempt=$((attempt+1))
+    if [[ "$attempt" -gt "$MAX_ATTEMPTS" ]]; then
+      echo "  GIVEUP    $name ($have/$want after $MAX_ATTEMPTS tries)"; return 1
+    fi
+
+    # Auth goes in via --config on stdin, never as -H: argv is world-readable
+    # through ps, and the token must not touch disk either.
+    if [[ -n "${HUGGING_FACE_API_KEY:-}" ]]; then
+      curl -sL -C - --fail --connect-timeout 20 \
+        -o "$out" "https://huggingface.co/${REPO}/resolve/main/${name}" \
+        --config - <<CFG
+header = "Authorization: Bearer ${HUGGING_FACE_API_KEY}"
+CFG
+    else
+      curl -sL -C - --fail --connect-timeout 20 \
+        -o "$out" "https://huggingface.co/${REPO}/resolve/main/${name}"
+    fi
+
+    have=0; [[ -f "$out" ]] && have=$(stat -f%z "$out")
+    # No forward progress this attempt: back off before hammering again.
+    if [[ "$have" -le "$prev" ]]; then
+      sleep $(( attempt < 6 ? attempt * 3 : 20 ))
+    fi
+    prev="$have"
+  done
+}
+export -f fetch; export DEST REPO MAX_ATTEMPTS HUGGING_FACE_API_KEY
+
+awk -F'\t' '{print $1"\t"$2"\t"$3}' "$MANIFEST" \
+  | tr '\t' '\n' \
+  | xargs -P "$JOBS" -n3 bash -c 'fetch "$0" "$1" "$2"'
+
+echo "verifying (sha256)..."
+bad=0
+while IFS=$'\t' read -r want sha name; do
+  out="$DEST/$name"
+  if [[ ! -f "$out" ]]; then echo "  MISSING   $name"; bad=1; continue; fi
+  have=$(stat -f%z "$out")
+  if [[ "$have" != "$want" ]]; then echo "  BADSIZE   $name ($have/$want)"; bad=1; continue; fi
+  if [[ "$sha" != "-" ]]; then
+    got=$(shasum -a 256 "$out" | cut -d' ' -f1)
+    if [[ "$got" != "$sha" ]]; then echo "  BADHASH   $name"; bad=1; continue; fi
+  fi
+done < "$MANIFEST"
+
+if [[ "$bad" == 0 ]]; then
+  echo "DOWNLOAD_OK  ($(du -sh "$DEST" | cut -f1))"
+  echo "restart oMLX to serve it:  pkill -x oMLX; sleep 4; open -a oMLX"
+else
+  echo "DOWNLOAD_INCOMPLETE — rerun to resume"; exit 1
+fi

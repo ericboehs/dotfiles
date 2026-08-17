@@ -16,6 +16,12 @@ min_version = "2026.8.4"
 
 [env]
 REPO_PATH = "ericboehs/dotfiles"
+# Tasks run in a non-login shell, so .zprofile's path_helper line never fires
+# and Homebrew's bin is missing from PATH — on a fresh Mac that made
+# bootstrap:nvim skip itself silently and bootstrap:tpm fail outright, even
+# though `mise bootstrap` had just installed nvim and tmux. Add it explicitly.
+# (/usr/local/bin is the Intel prefix; a path that doesn't exist is ignored.)
+_.path = ["/opt/homebrew/bin", "/usr/local/bin"]
 
 # ---------------------------------------------------------------------------
 # System packages
@@ -284,6 +290,13 @@ fi
 [tasks."bootstrap:tpm"]
 description = "Install tmux plugin manager and its plugins"
 run = '''
+# install_plugins shells out to tmux; without it TPM aborts with a confusing
+# "not configured in tmux.conf". Say why and move on rather than failing the
+# whole bootstrap.
+if ! command -v tmux >/dev/null; then
+  echo "bootstrap:tpm: tmux not on PATH — skipping plugin install" >&2
+  exit 0
+fi
 [ -d ~/.tmux/plugins/tpm ] || \
   git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
 ~/.tmux/plugins/tpm/bin/install_plugins
@@ -292,7 +305,12 @@ run = '''
 [tasks."bootstrap:nvim"]
 description = "Sync Lazy.nvim plugins and pre-compile treesitter parsers"
 run = '''
-command -v nvim >/dev/null || exit 0
+# A bare `|| exit 0` here hid a real failure once: nvim was installed but not
+# on the task's PATH, so this skipped without a word and no parsers compiled.
+if ! command -v nvim >/dev/null; then
+  echo "bootstrap:nvim: nvim not on PATH — skipping plugin sync" >&2
+  exit 0
+fi
 # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
 # during first install (treesitter parsers compiling); keep it visible.
 nvim --headless "+Lazy! sync" +qa
