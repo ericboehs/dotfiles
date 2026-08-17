@@ -253,8 +253,12 @@ command -v gh >/dev/null && ! gh auth status >/dev/null 2>&1 && \
   echo "  gh auth login                       # octo.nvim, gh CLI"
 command -v op >/dev/null || \
   echo "  brew install --cask 1password-cli   # for fnox + secrets"
-echo "Note: nvim-treesitter installs more parsers on demand the first time"
-echo "      you open files of new types — that's expected, not a bug."
+# This used to say on-demand parser installs were expected — true before
+# bootstrap:nvim installed all of them, and actively misleading now: it tells
+# you to shrug off the one visible symptom of the warm having half-failed.
+echo "Note: bootstrap:nvim installs every treesitter parser, so opening a new"
+echo "      filetype should install nothing. If nvim starts compiling parsers,"
+echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 '''
 
 # ---------------------------------------------------------------------------
