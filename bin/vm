@@ -102,7 +102,7 @@ ensure_base() {
 # ssh to a guest using the base image's password, without an interactive prompt.
 # SSH_ASKPASS_REQUIRE=force (OpenSSH >= 8.4) makes ssh call the askpass helper
 # even when a tty is attached, which is what removes the need for sshpass.
-# The password never touches disk beyond a 0600 temp file we delete immediately.
+# The password never touches disk beyond a 0700 temp file we delete immediately.
 ssh_with_password() {
   local ip="$1"; shift
   local askpass rc
@@ -310,6 +310,11 @@ cmd_down() {
 
 cmd_reset() {
   local name="${1:-$DEFAULT_NAME}"
+  # reset deletes before it re-clones, so it needs the same golden-image guards
+  # as rm — without them 'vm reset sequoia-base' silently replaces the pristine
+  # base with a keyed clone, and only a ~30GB re-pull gets it back.
+  [ "$name" = "$BASE" ] && die "refusing to reset the base image '$BASE'"
+  [ "$name" = "$KEYED" ] && die "refusing to reset the keyed image — use 'vm seed' to rebuild it"
   if vm_exists "$name"; then
     [ "$(vm_field "$name" Running)" = "True" ] && { info "stopping '$name'"; tart stop "$name"; }
     info "deleting '$name'"
