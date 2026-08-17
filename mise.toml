@@ -347,6 +347,24 @@ if ! command -v nvim >/dev/null; then
   echo "bootstrap:nvim: nvim not on PATH — skipping plugin sync" >&2
   exit 0
 fi
+# LazyVim enforces its minimum nvim version by printing the error and then
+# calling vim.fn.getchar() — which under --headless waits on a keypress that
+# can never arrive. stdin is already /dev/null and it still sleeps in
+# epoll_wait forever, so the task never returns, `mise bootstrap` never
+# finishes, and nothing times out to rescue it. Debian 13 ships neovim 0.10.4
+# and stable will hold there for years, so on Linux this is the ordinary path,
+# not an edge case. Exits 0 like the guard above: an unwarmed nvim is a
+# degraded machine, not a failed bootstrap, and the final hook already says how
+# to spot one.
+nvim_floor=0.11.2
+nvim_version=$(nvim --version | sed -n '1s/^NVIM v\([0-9][0-9.]*\).*/\1/p')
+if [ -z "$nvim_version" ] || \
+   [ "$(printf '%s\n%s\n' "$nvim_floor" "$nvim_version" | sort -V | head -1)" != "$nvim_floor" ]; then
+  echo "bootstrap:nvim: nvim ${nvim_version:-(version unreadable)} is below \
+LazyVim's $nvim_floor floor — skipping. Distro packages lag; install a current \
+neovim and re-run \`mise run bootstrap:nvim\`." >&2
+  exit 0
+fi
 parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; }
 
 # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
