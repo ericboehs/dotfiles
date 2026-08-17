@@ -116,12 +116,16 @@ Collection of utility scripts in `bin/` including:
 
 ### Zsh
 - `Esc`: Enter vi command mode
-- `Alt-L`: Clear screen
 - `Ctrl-Y`: Copy current command to clipboard
 - `Ctrl-R`: Fuzzy search command history
+- `Ctrl-Alt-L`: Clear screen (zsh built-in; prompt only — see `Ctrl-Shift-L` for
+  anything else)
 
 ### Tmux
 - `Ctrl-h/j/k/l`: Navigate between vim and tmux panes
+- `Ctrl-Shift-L`: Clear screen and scrollback
+- `Alt-h/l`: Previous/next window
+- `Alt-j/k`: Previous/next session
 
 ## Directory Structure
 
