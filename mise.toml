@@ -36,7 +36,14 @@ REPO_PATH = "ericboehs/dotfiles"
 
 [bootstrap.packages]
 # macOS — brew
-"brew:neovim" = { version = "latest", os = ["macos"] }
+#
+# neovim is deliberately absent from both package lists and declared in
+# [tools] instead. LazyVim has a hard minimum version, and apt's neovim is
+# below it — Debian 13 ships 0.10.4 against a 0.11.2 floor and stable will not
+# move for years, so the editor simply would not load on a bootstrapped Linux
+# box. brew happens to be current today, but that is luck rather than a
+# guarantee, and two package managers meant two answers to "which nvim".
+# mise gives the same 0.12.4 on both platforms from one declaration.
 "brew:git" = { version = "latest", os = ["macos"] }
 "brew:lsd" = { version = "latest", os = ["macos"] }
 "brew:zoxide" = { version = "latest", os = ["macos"] }
@@ -67,7 +74,7 @@ REPO_PATH = "ericboehs/dotfiles"
 
 # Linux — apt
 "apt:zsh" = { version = "latest", os = ["linux"] }
-"apt:neovim" = { version = "latest", os = ["linux"] }
+# See the note above — neovim comes from [tools], not apt.
 "apt:zoxide" = { version = "latest", os = ["linux"] }
 "apt:fzf" = { version = "latest", os = ["linux"] }
 "apt:zsh-autosuggestions" = { version = "latest", os = ["linux"] }
@@ -265,8 +272,11 @@ done
 final = '''
 command -v gh >/dev/null && ! gh auth status >/dev/null 2>&1 && \
   echo "  gh auth login                       # octo.nvim, gh CLI"
-command -v op >/dev/null || \
-  echo "  brew install --cask 1password-cli   # for fnox + secrets"
+command -v op >/dev/null || case "$(uname)" in
+  Darwin) echo "  brew install --cask 1password-cli   # for fnox + secrets" ;;
+  # Handing a Linux box a brew command is advice it cannot follow.
+  *) echo "  https://developer.1password.com/docs/cli/get-started/  # for fnox + secrets" ;;
+esac
 # This used to say on-demand parser installs were expected — true before
 # bootstrap:nvim installed all of them, and actively misleading now: it tells
 # you to shrug off the one visible symptom of the warm having half-failed.

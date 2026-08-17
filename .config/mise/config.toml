@@ -32,4 +32,11 @@ aube = "latest"
 # GitHub releases-API outage. Also satisfies the LazyVim terraform extra, which
 # otherwise errors with ENOENT on every .tf buffer.
 terraform = "1.15.8"
+# The editor, declared here rather than left to brew/apt: LazyVim enforces a
+# minimum nvim version, and Debian 13's apt gives 0.10.4 against a 0.11.2
+# floor, so LazyVim refuses to load on a freshly bootstrapped Linux box.
+# Pinned for the same reason terraform is, plus one of its own — an
+# unresolvable "latest" would leave nvim below the floor again, which is the
+# failure this entry exists to prevent.
+neovim = "0.12.4"
 "npm:@playwright/cli" = "latest"
