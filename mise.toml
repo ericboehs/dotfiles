@@ -334,15 +334,21 @@ nvim --headless "+Lazy! sync" +qa
 # day) — install() resolves anyway, so one pass exits 0 having quietly skipped
 # a third of the list. Retry until a pass stops adding parsers.
 prev=-1
-for attempt in 1 2 3 4; do
+attempt=0
+while [ "$(parsers)" != "$prev" ]; do
+  prev=$(parsers)
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt 8 ]; then
+    echo "bootstrap:nvim: still gaining parsers after 8 passes — giving up at \
+$prev. Re-run this task once the network settles." >&2
+    break
+  fi
   # A failed download leaves its extract dir behind, and the next attempt dies
   # on ENOTEMPTY trying to rename over it.
   rm -rf ~/.cache/nvim/tree-sitter-*-tmp
   nvim --headless "+Lazy! load nvim-treesitter" \
     "+lua require('nvim-treesitter').install('all'):wait(1800000)" +qa
   echo "bootstrap:nvim: $(parsers) treesitter parsers after pass $attempt"
-  [ "$(parsers)" = "$prev" ] && break
-  prev=$(parsers)
 done
 
 # Mason installs LazyVim's tools the first time it loads, which otherwise
@@ -356,15 +362,26 @@ done
 # returned immediately and nvim exited mid-download, leaving mason to finish
 # the job on first launch anyway ("Neovim is exiting while packages are still
 # installing").
+#
+# A package can also just fail — erb-formatter and erb-lint are gems, so they
+# need a usable ruby, and mason only says so in ~/.local/state/nvim/mason.log.
+# Surface the names here instead, since a silent 8-of-10 is what sends you back
+# to the editor wondering.
 nvim --headless "+Lazy! load mason.nvim" \
   "+lua local r = require('mason-registry')
+     local failed = {}
+     r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
      local idle = 0
      vim.wait(1800000, function()
        local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
                                     r.get_all_packages())
        idle = busy > 0 and 0 or idle + 1
        return idle >= 15
-     end, 1000)" +qa
+     end, 1000)
+     if #failed > 0 then
+       io.stderr:write('bootstrap:nvim: mason could not install ' ..
+         table.concat(failed, ', ') .. ' — see ~/.local/state/nvim/mason.log\n')
+     end" +qa
 
 echo "bootstrap:nvim: $(parsers) parsers, \
 $(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
