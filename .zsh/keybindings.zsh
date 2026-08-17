@@ -6,9 +6,8 @@ bindkey -M emacs '\e' vi-cmd-mode
 export KEYTIMEOUT=10 # Escape takes too long
 bindkey -r '^[h' # Disables Alt+H for help as it interferes with Escape, h (motion)
 
-# Alt+L to clear screen (Ctrl-L reserved for tmux)
-bindkey '^[l' clear-screen
-bindkey -M vicmd '^[l' clear-screen
+# Clear screen is Ctrl-Shift-L, bound in .tmux.conf — tmux eats Alt-L (next-window)
+# and Ctrl-L (vim-tmux-navigator) before either reaches zsh.
 
 # Open editor when pressing `v` in normal mode
 autoload edit-command-line; zle -N edit-command-line
