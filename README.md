@@ -22,7 +22,11 @@ mise bootstrap --skip macos-defaults  # leave system preferences alone
 mise bootstrap dotfiles status        # what's linked, and what has drifted
 ```
 
-Add `--force-dotfiles` if $HOME already has real files where symlinks belong.
+Dotfile linking is all-or-nothing: if $HOME already has real files where
+symlinks belong, mise names them and refuses the whole step. `--force-dotfiles`
+overrides that, but it *replaces* those files rather than merging them — on a
+machine where Homebrew or rbenv had written their own `.zprofile`, that content
+is gone. Move anything you want to keep aside first.
 
 Configure git with your personal information:
 ```sh

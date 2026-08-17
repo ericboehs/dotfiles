@@ -321,24 +321,52 @@ if ! command -v nvim >/dev/null; then
   echo "bootstrap:nvim: nvim not on PATH — skipping plugin sync" >&2
   exit 0
 fi
+parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; }
+
 # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
 # during first install (treesitter parsers compiling); keep it visible.
 nvim --headless "+Lazy! sync" +qa
-# Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but
-# headless never triggers a filetype event), then block on install.
-# 5-10 min on first run.
-nvim --headless "+Lazy! load nvim-treesitter" \
-  "+lua require('nvim-treesitter').install('all'):wait(600000)" +qa
-# Mason installs its ensure_installed tools the first time it loads, which
-# otherwise happens on the first real nvim launch — the exact "why is my
-# editor installing things" moment this task exists to prevent. Loading it
-# headless triggers the same install; the wait blocks until the queue drains
-# rather than exiting mid-download.
+
+# Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but headless
+# never triggers a filetype event), then block on install. 5-10 min on a good
+# first run. Each parser is a separate GitHub download, and ~300 of them back
+# to back reliably draws 429s (plus whatever 502/503 GitHub is serving that
+# day) — install() resolves anyway, so one pass exits 0 having quietly skipped
+# a third of the list. Retry until a pass stops adding parsers.
+prev=-1
+for attempt in 1 2 3 4; do
+  # A failed download leaves its extract dir behind, and the next attempt dies
+  # on ENOTEMPTY trying to rename over it.
+  rm -rf ~/.cache/nvim/tree-sitter-*-tmp
+  nvim --headless "+Lazy! load nvim-treesitter" \
+    "+lua require('nvim-treesitter').install('all'):wait(1800000)" +qa
+  echo "bootstrap:nvim: $(parsers) treesitter parsers after pass $attempt"
+  [ "$(parsers)" = "$prev" ] && break
+  prev=$(parsers)
+done
+
+# Mason installs LazyVim's tools the first time it loads, which otherwise
+# happens on the first real nvim launch — the exact "why is my editor
+# installing things" moment this task exists to prevent. Loading it headless
+# triggers the same install.
+#
+# The wait needs a quiet period, not a single idle sample: mason queues its
+# downloads, so there are moments early on when nothing is installing yet and
+# the queue is far from empty. Waiting on `no package is installing` alone
+# returned immediately and nvim exited mid-download, leaving mason to finish
+# the job on first launch anyway ("Neovim is exiting while packages are still
+# installing").
 nvim --headless "+Lazy! load mason.nvim" \
   "+lua local r = require('mason-registry')
-     vim.wait(600000, function()
-       return #vim.tbl_filter(function(p) return p:is_installing() end,
-                              r.get_all_packages()) == 0
-         and #r.get_installed_packages() > 0
+     local idle = 0
+     vim.wait(1800000, function()
+       local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
+                                    r.get_all_packages())
+       idle = busy > 0 and 0 or idle + 1
+       return idle >= 15
      end, 1000)" +qa
+
+echo "bootstrap:nvim: $(parsers) parsers, \
+$(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
+$(ls ~/.local/share/nvim/lazy 2>/dev/null | wc -l | tr -d ' ') plugins"
 '''
