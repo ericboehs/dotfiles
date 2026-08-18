@@ -8,6 +8,7 @@ set -uo pipefail
 #   vm up -d            # ...or detached, logging to ~/.tart/logs/<name>.log
 #   vm reset            # nuke it and re-clone from base — back to pristine
 #   vm ssh              # ssh in as admin, no password
+#   vm bootstrap        # clone the dotfiles into it and run `mise bootstrap`
 #   vm ls / vm ip / vm rm / vm down / vm seed
 #
 # Every command takes an optional VM name so you can run more than one:
@@ -42,6 +43,14 @@ set -uo pipefail
 #  2. Guests cannot sign in to iCloud or the App Store. Anything needing an
 #     Apple ID has to be tested on real hardware.
 #
+# `vm bootstrap` reproduces the README's three-command install inside a guest:
+# fetch mise, clone the repo, run `mise bootstrap`. It clones from the *remote*,
+# so it tests what you have pushed and cannot see uncommitted work — push a
+# branch and pass `--ref` to try it. `--fresh` resets the VM first, which is the
+# only way to prove the bootstrap works from a genuinely clean machine rather
+# than converging over the leftovers of an earlier run. Anything after `--` goes
+# to `mise bootstrap`, so `vm bootstrap -- -n` previews without touching a thing.
+#
 # Clipboard sharing needs tart-guest-agent running inside the guest. The
 # cirruslabs base images ship it, but if paste stops working, check that the
 # agent is alive in the guest before blaming the host.
@@ -55,6 +64,8 @@ DISK="${VM_DISK:-50}"      # gigabytes; tart can only grow a disk, never shrink
 DISPLAY_RES="${VM_DISPLAY:-1920x1080}"
 LOG_DIR="$HOME/.tart/logs"
 SSH_KEY="${VM_SSH_KEY:-$HOME/.ssh/id_ed25519.pub}"
+REPO_URL="${VM_REPO_URL:-https://github.com/ericboehs/dotfiles}"
+REPO_PATH="${VM_REPO_PATH:-Code/github.com/ericboehs/dotfiles}"
 KEYED="$BASE-keyed"        # golden image with SSH_KEY baked in; see header
 GUEST_USER="admin"
 GUEST_PASS="admin"
@@ -154,11 +165,29 @@ seed_failed() {
   die "$1"
 }
 
+# Run a command in a guest over key auth. BatchMode means a guest that has not
+# been seeded fails fast instead of hanging on a password prompt.
+ssh_with_key() {
+  local ip="$1"; shift
+  ssh "${SSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 \
+    -i "${SSH_KEY%.pub}" "$GUEST_USER@$ip" "$@"
+}
+
+wait_for_key_ssh() {
+  local ip="$1" waited=0
+  while [ "$waited" -lt 150 ]; do
+    ssh_with_key "$ip" true >/dev/null 2>&1 && return 0
+    sleep 5
+    waited=$((waited + 5))
+  done
+  return 1
+}
+
 # Prove the key survived the shutdown instead of trusting that the write stuck.
 # Uses a disposable clone, because booting $KEYED again to check would mean a
 # second shutdown of the very image whose shutdown behavior is in question.
 verify_keyed_base() {
-  local probe="$KEYED-probe" ip waited=0
+  local probe="$KEYED-probe" ip rc
   destroy_vm "$probe"
   info "verifying the key survived the shutdown"
   tart clone "$KEYED" "$probe" || seed_failed "probe clone failed"
@@ -170,18 +199,10 @@ verify_keyed_base() {
     seed_failed "probe VM never got an IP"
   fi
 
-  while [ "$waited" -lt 150 ]; do
-    if ssh "${SSH_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 \
-         -i "${SSH_KEY%.pub}" "$GUEST_USER@$ip" true >/dev/null 2>&1; then
-      destroy_vm "$probe"
-      return 0
-    fi
-    sleep 5
-    waited=$((waited + 5))
-  done
-
+  wait_for_key_ssh "$ip"
+  rc=$?
   destroy_vm "$probe"
-  seed_failed "key did not persist into '$KEYED' — clones still demand a password"
+  [ "$rc" -eq 0 ] || seed_failed "key did not persist into '$KEYED' — clones still demand a password"
 }
 
 # Build the "<base>-keyed" golden image: one boot, one authorized_keys append,
@@ -353,6 +374,102 @@ cmd_ssh() {
   ssh "${SSH_OPTS[@]}" -i "${SSH_KEY%.pub}" "$GUEST_USER@$ip"
 }
 
+# Where this script lives, resolved through the ~/bin symlink, so the default
+# ref can be "whatever branch I am on" rather than a hardcoded master.
+repo_root() {
+  local src="$0" dir
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+  done
+  cd -P "$(dirname "$src")/.." && pwd
+}
+
+# Reproduce the README's three-command install inside a guest: get mise, clone
+# the repo, run the bootstrap. The point is to exercise the real path a fresh
+# machine takes, so this deliberately clones from the remote rather than copying
+# the working tree — it tests what you have actually pushed. Uncommitted work is
+# invisible to it by design; push to a branch and pass --ref to try that branch.
+cmd_bootstrap() {
+  local name="" ref="" fresh=0 extra="" arg
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ref)    ref="${2:-}"; [ -n "$ref" ] || die "--ref needs a value"; shift 2 ;;
+      --fresh)  fresh=1; shift ;;
+      --)       shift; break ;;
+      -*)       die "unknown flag: $1" ;;
+      *)        name="$1"; shift ;;
+    esac
+  done
+  # Anything after -- is forwarded verbatim to `mise bootstrap`, so
+  # `vm bootstrap -- -n` previews and `-- --skip macos-defaults` skips a step.
+  for arg in "$@"; do extra+=" $(printf '%q' "$arg")"; done
+
+  # The cirruslabs base image ships its own ~/.gitconfig (git-credential-manager)
+  # and ~/.zprofile (brew shellenv, rbenv), so the all-or-nothing dotfiles step
+  # aborts every run on an otherwise untouched guest. Force by default: there is
+  # nothing in a throwaway VM worth preserving, and our own .zprofile inlines the
+  # same brew setup it replaces. Pass --force-dotfiles yourself to see the abort.
+  case " $* " in
+    *" --force-dotfiles "*) ;;
+    *) extra=" --force-dotfiles$extra" ;;
+  esac
+
+  name="${name:-$DEFAULT_NAME}"
+  if [ -z "$ref" ]; then
+    ref="$(git -C "$(repo_root)" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    [ -n "$ref" ] && [ "$ref" != HEAD ] || ref="master"
+  fi
+
+  [ "$fresh" -eq 1 ] && cmd_reset "$name"
+  vm_exists "$name" || cmd_new "$name"
+
+  if [ "$(vm_field "$name" Running)" != "True" ]; then
+    cmd_up -d "$name" || exit 1
+  fi
+
+  local ip
+  ip="$(cmd_ip "$name")" || exit 1
+  info "waiting for sshd on $ip"
+  wait_for_key_ssh "$ip" || die "'$name' never accepted key auth — 'vm seed' may be stale"
+
+  info "bootstrapping $REPO_URL ($ref) in '$name'"
+
+  # -t so mise's progress output renders and Ctrl-C reaches the guest. The
+  # remote side sets its own PATH because a non-login ssh shell never sources
+  # .zprofile, so the ~/.local/bin that mise.run installs into is absent.
+  ssh_with_key_tty "$ip" "
+set -eu
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+dest=\"\$HOME/$REPO_PATH\"
+
+command -v mise >/dev/null || { echo '==> installing mise'; curl -fsSL https://mise.run | sh; }
+
+if [ -d \"\$dest/.git\" ]; then
+  echo \"==> updating \$dest to $ref\"
+  git -C \"\$dest\" fetch --prune origin
+  git -C \"\$dest\" checkout $ref
+  git -C \"\$dest\" reset --hard origin/$ref
+else
+  echo \"==> cloning into \$dest\"
+  mkdir -p \"\$(dirname \"\$dest\")\"
+  git clone --branch $ref $REPO_URL \"\$dest\"
+fi
+
+cd \"\$dest\"
+mise trust
+mise bootstrap$extra
+" || die "bootstrap failed in '$name' — 'vm ssh $name' to poke at it"
+
+  info "bootstrap finished in '$name'"
+}
+
+ssh_with_key_tty() {
+  local ip="$1"; shift
+  ssh -t "${SSH_OPTS[@]}" -o BatchMode=yes -i "${SSH_KEY%.pub}" "$GUEST_USER@$ip" "$@"
+}
+
 cmd_ls() {
   tart list --format json | python3 -c '
 import json, sys
@@ -382,6 +499,7 @@ case "${1:-}" in
   rm)     shift; cmd_rm "$@" ;;
   ip)     shift; cmd_ip "$@" ;;
   ssh)    shift; cmd_ssh "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;
   ls)     shift; cmd_ls "$@" ;;
   -h|--help|help|"") usage 0 ;;
   *)      printf 'vm: unknown command: %s\n\n' "$1" >&2; usage 1 ;;

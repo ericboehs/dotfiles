@@ -134,12 +134,29 @@ vm new              # clone a fresh VM named "clean"
 vm up               # boot it in a GUI window (-d to detach)
 vm ssh              # shell in as admin, no password
 vm reset            # wipe it and re-clone — back to pristine, ~3 seconds
+vm bootstrap        # clone these dotfiles into it and run `mise bootstrap`
 vm ls / vm ip / vm down / vm rm / vm seed
 ```
 
+`vm bootstrap` is the point of the whole thing: it installs mise, clones this
+repo and converges it, so a cold run proves the bootstrap works on a machine
+that has never seen it. `--fresh` resets the VM first, `--ref <branch>` picks
+the branch, and anything after `--` is passed through to `mise bootstrap`:
+
+```sh
+vm bootstrap --fresh --ref my-branch   # cold run, ~4 minutes
+vm bootstrap -- --only dotfiles        # just the symlinks
+```
+
+It clones from **origin**, not your working tree, so uncommitted work is
+invisible to it — push the branch first. `--force-dotfiles` is the default
+here, because the base image ships its own `~/.gitconfig` and `~/.zprofile`
+and the all-or-nothing dotfiles step would otherwise abort every run.
+
 Every command takes an optional VM name, so `vm new sandbox && vm up sandbox`
 runs a second one alongside. Defaults come from `VM_CPU`, `VM_MEM`, `VM_DISK`,
-`VM_NAME`, `VM_DISPLAY`, `VM_SSH_KEY`, and `VM_BASE_OCI`.
+`VM_NAME`, `VM_DISPLAY`, `VM_SSH_KEY`, `VM_BASE_OCI`, `VM_REPO_URL`, and
+`VM_REPO_PATH`.
 
 Two golden images sit behind this and are never booted for day-to-day work.
 `sequoia-base` is the pulled upstream image; `sequoia-base-keyed` is a clone of
