@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Copy this machine's Claude Code login into another machine's login keychain,
+# for when a remote box reports "OAuth session expired" but you are already
+# logged in here. Keychain to keychain: the credential is piped, never written
+# to a file on either end and never printed.
+
+SERVICE="Claude Code-credentials"
+VERIFY=false
+HOSTS=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -v|--verify)
+            VERIFY=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: claude-cred-push [OPTIONS] HOST..."
+            echo "Options:"
+            echo "  -v, --verify           Run 'claude -p' on each host afterward to confirm"
+            echo "  -h, --help             Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  claude-cred-push gfe"
+            echo "  claude-cred-push -v gfe coop"
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            HOSTS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ${#HOSTS[@]} -eq 0 ]]; then
+    echo "Usage: claude-cred-push [OPTIONS] HOST..." >&2
+    exit 1
+fi
+
+# Base64 for the trip: the credential is JSON, and its quotes and braces would
+# not survive being handed through ssh and then a shell inside tmux. Encoding
+# also keeps it off any terminal it passes through in readable form.
+cred_b64() {
+    security find-generic-password -s "$SERVICE" -w 2>/dev/null | base64 | tr -d '\n'
+}
+
+if [[ -z "$(cred_b64)" ]]; then
+    echo "No '$SERVICE' in this machine's keychain - log in here first." >&2
+    exit 1
+fi
+
+# The remote half runs inside tmux, not in the ssh session that starts it. A
+# plain ssh context cannot unlock the login keychain: 'security' answers "User
+# interaction is not allowed", which is what surfaces as an expired session in
+# the first place. An attached tmux server is already in an unlocked context, so
+# the write goes through run-shell, which has no stdin - hence the credential
+# arriving as an argument rather than on a pipe. It is visible in ps for that
+# moment; there is no way around it short of leaving it on disk, which is worse.
+remote_import() {
+    cat <<'EOF'
+#!/bin/bash
+set -uo pipefail
+CRED=$(printf %s "$1" | base64 -d)
+security add-generic-password -U -a "$USER" -s "Claude Code-credentials" -w "$CRED"
+EOF
+}
+
+status=0
+for host in "${HOSTS[@]}"; do
+    printf '%-12s ' "$host"
+
+    if ! ssh -o BatchMode=yes "$host" 'tmux ls' >/dev/null 2>&1; then
+        echo "no attached tmux server - start one there first"
+        status=1
+        continue
+    fi
+
+    remote_import | ssh -o BatchMode=yes "$host" 'cat > /tmp/claude-cred-import.sh && chmod 700 /tmp/claude-cred-import.sh' || {
+        echo "could not stage the import helper"
+        status=1
+        continue
+    }
+
+    if cred_b64 | ssh -o BatchMode=yes "$host" 'read -r B64
+        tmux run-shell "bash /tmp/claude-cred-import.sh $B64 > /tmp/claude-cred-import.log 2>&1"
+        for _ in $(seq 20); do [ -s /tmp/claude-cred-import.log ] && break; sleep 0.5; done
+        grep -q "password has been" /tmp/claude-cred-import.log ||
+            [ ! -s /tmp/claude-cred-import.log ]
+        rc=$?
+        cat /tmp/claude-cred-import.log >&2
+        rm -f /tmp/claude-cred-import.sh /tmp/claude-cred-import.log
+        exit $rc'; then
+        echo -n "imported"
+    else
+        echo "import failed"
+        status=1
+        continue
+    fi
+
+    if [[ "$VERIFY" == "true" ]]; then
+        answer=$(ssh -o BatchMode=yes "$host" 'tmux run-shell "bash -lc \"cd ~ && claude -p 2+2 --output-format text\" > /tmp/claude-cred-verify.log 2>&1"
+            for _ in $(seq 60); do [ -s /tmp/claude-cred-verify.log ] && break; sleep 1; done
+            head -1 /tmp/claude-cred-verify.log
+            rm -f /tmp/claude-cred-verify.log' 2>/dev/null)
+        if [[ "$answer" == "4" ]]; then
+            echo ", verified"
+        else
+            echo ", but 'claude -p 2+2' said: ${answer:-nothing}"
+            status=1
+        fi
+    else
+        echo
+    fi
+done
+
+exit $status
