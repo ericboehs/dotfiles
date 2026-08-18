@@ -71,6 +71,15 @@ REPO_PATH = "ericboehs/dotfiles"
 # inherited from whatever Apple happens to bundle.
 "brew:jq" = { version = "latest", os = ["macos"] }
 "brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
+# The apps the post-defaults hook pins to the Dock are deliberately NOT
+# declared here. Ghostty and Slack do have casks, but Homebrew installed them
+# on request and mise refuses to take over a cask it does not own — it fails
+# the package with "Homebrew owns this cask", and that aborts the whole
+# bootstrap before dotfiles, defaults or tasks ever run. Adopting them would
+# mean uninstalling and reinstalling each app through mise, which is a lot to
+# risk for a Dock tile. Home Assistant is installed outside brew here, and
+# Protect is a wrapped iOS app with no cask at all. The hook leaves anything
+# missing unpinned with a note rather than pinning a "?" tile.
 
 # Linux — apt
 "apt:zsh" = { version = "latest", os = ["linux"] }
@@ -320,8 +329,18 @@ EOF
 
 # Only write on an actual mismatch. The killall below restarts the Dock either
 # way, but a needless write throws away the bookmarks it took a launch to build.
-if [ "$(defaults read com.apple.dock persistent-apps 2>/dev/null | dock_names)" \
-     != "$(printf '%s' "$want")" ]; then
+#
+# The empty case is guarded because `defaults write -array` with no arguments
+# is not a no-op — it writes an empty array and unpins everything. That needs
+# every declared app to be missing at once, which on macOS means something has
+# gone badly wrong; wiping the Dock is not the way to report it.
+if [ "$#" -eq 0 ]; then
+  echo "dock: none of the declared apps are installed — leaving the Dock alone" >&2
+elif [ "$(defaults read com.apple.dock persistent-apps 2>/dev/null | dock_names)" \
+       != "$(printf '%s' "$want")" ]; then
+  # Said out loud: this silently reverts anything pinned by hand since the last
+  # run, and a Dock that rearranges itself with no explanation is a mystery.
+  echo "dock: repinning $# app(s) to match mise.toml"
   defaults write com.apple.dock persistent-apps -array "$@"
 fi
 
@@ -385,7 +404,12 @@ run = '''
 # outright even though `mise bootstrap` had just installed tmux. Appended, not
 # prepended, so brew fills the gap without shadowing mise-managed tools.
 # (/usr/local/bin is the Intel prefix; a path that doesn't exist is ignored.)
-export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+#
+# Within that appended group ~/.local/bin comes first, matching the other two
+# tasks: a stale brew mise otherwise wins over the one mise.run installed and
+# fails their version check. This task never shells out to mise, so the order
+# costs it nothing — but the other two point here for the reasoning.
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 # install_plugins shells out to tmux; without it TPM aborts with a confusing
 # "not configured in tmux.conf". Say why and move on rather than failing the
 # whole bootstrap.
@@ -453,6 +477,13 @@ parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; 
 # the queue is far from empty. Waiting on `no package is installing` alone
 # returned immediately and nvim exited mid-download.
 #
+# That period is measured against the clock rather than by counting callbacks.
+# vim.wait's interval is a ceiling on how long it sleeps between polls, not a
+# cadence: with interval=1000 the callback still fired 16 times in 3s on an
+# idle machine, so a `>= 15` counter was a ~5s wait wearing a 15s label. Worse,
+# every libuv wakeup runs it, so an install in flight makes the counter finish
+# sooner — it declared the queue quiet fastest exactly when mason was busiest.
+#
 # A package can also just fail — erb-formatter and erb_lint are gems, so they
 # need a usable ruby, and mason only says so in ~/.local/state/nvim/mason.log.
 # Surface the names here instead, since a silent 8-of-10 is what sends you back
@@ -460,12 +491,13 @@ parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; 
 mason_drain="lua local r = require('mason-registry')
      local failed = {}
      r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
-     local idle = 0
+     local quiet_since
      vim.wait(1800000, function()
        local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
                                     r.get_all_packages())
-       idle = busy > 0 and 0 or idle + 1
-       return idle >= 15
+       if busy > 0 then quiet_since = nil
+       elseif not quiet_since then quiet_since = vim.uv.now() end
+       return quiet_since ~= nil and vim.uv.now() - quiet_since >= 15000
      end, 1000)
      if #failed > 0 then
        io.stderr:write('bootstrap:nvim: mason could not install ' ..
