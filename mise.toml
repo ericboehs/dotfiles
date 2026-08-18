@@ -291,7 +291,7 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:claude"]
 
 [tasks."bootstrap:linux-shims"]
 description = "Debian binary-name shims, lsd fallback, zsh login shell"
@@ -440,4 +440,39 @@ nvim --headless "+Lazy! load mason.nvim" \
 echo "bootstrap:nvim: $(parsers) parsers, \
 $(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
 $(ls ~/.local/share/nvim/lazy 2>/dev/null | wc -l | tr -d ' ') plugins"
+'''
+
+[tasks."bootstrap:claude"]
+description = "Install Claude Code from its native, self-updating installer"
+run = '''
+# See bootstrap:tpm — non-login PATH has no Homebrew, and ~/.local/bin is
+# where mise.run puts mise, which the npm-cleanup branch below shells out to.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+
+# Deliberately not a [tools] entry. The npm package ships a stub cli.js and
+# fetches the real per-platform binary from its postinstall — and .npmrc sets
+# ignore-scripts=true, so every npm-backed install lands a `claude` that dies
+# with "native binary not installed" the moment you run it. That also takes
+# out auto-update, since the updater reinstalls through the same npm path.
+# The official installer sidesteps npm entirely: one binary under
+# ~/.local/share/claude/versions, symlinked from ~/.local/bin/claude, which
+# updates itself in the background from then on.
+
+# An npm-global copy left over from before shadows the good one: mise's shims
+# directory sorts ahead of ~/.local/bin on PATH, and node's bin dir gets a
+# shim. Drop the package, then reshim so the shim goes with it.
+if command -v mise >/dev/null &&
+   mise exec node -- npm ls -g --depth=0 @anthropic-ai/claude-code >/dev/null 2>&1; then
+  echo "bootstrap:claude: removing the npm-global copy that shadows ~/.local/bin"
+  mise exec node -- npm uninstall -g @anthropic-ai/claude-code >/dev/null
+  mise reshim
+fi
+
+# Version check rather than a bare -x test, so a half-installed or broken
+# binary reinstalls instead of being taken for a working one.
+if "$HOME/.local/bin/claude" --version >/dev/null 2>&1; then
+  echo "bootstrap:claude: $("$HOME/.local/bin/claude" --version) already installed"
+  exit 0
+fi
+curl -fsSL https://claude.ai/install.sh | bash
 '''
