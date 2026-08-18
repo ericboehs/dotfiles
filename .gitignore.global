@@ -12,6 +12,7 @@ CLAUDE.md
 TODO.md
 .opencode
 .gh-pm.yml
+.bundle/
 .playwright-mcp/
 .playwright-cli/
 .sidecar/
