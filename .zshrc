@@ -32,3 +32,18 @@ source "$HOME/.zsh/p10k.zsh"
 if [[ -f "$HOME/.zshrc.local" ]]; then
   source "$HOME/.zshrc.local"
 fi
+
+# Claude notifications from a machine you are only ever ssh'd into come back to
+# whichever machine you are sitting at, and need to name the pane holding that
+# ssh so clicking one can land on it. LC_* is the only namespace ssh forwards by
+# default (SendEnv LANG LC_* against sshd's matching AcceptEnv), and a %pane_id
+# survives every rename and renumbering, so that is what travels.
+#
+# Which half runs depends on which end of the connection this shell is: the far
+# end records where the login came from, keyed by tty, because a tmux session
+# there outlives any one connection and cannot rely on its own environment.
+if [[ -n $SSH_TTY && -n $LC_CLAUDE_PANE ]]; then
+  mkdir -p ~/.claude/origin && print -r -- $LC_CLAUDE_PANE > ~/.claude/origin/${SSH_TTY//\//-}
+elif [[ -n $TMUX_PANE ]]; then
+  export LC_CLAUDE_PANE=$TMUX_PANE
+fi
