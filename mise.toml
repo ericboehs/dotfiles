@@ -409,9 +409,12 @@ run = '''
 # rubygems plugin that shells out to `mise reshim` after installing any gem with
 # executables, and `mise exec` does not put mise itself on PATH. Without it the
 # hook dies with ENOENT, gem exits 1, and mason reports a failure — the gem
-# files land, so it looks like a mystery. This never reproduced on a Mac whose
-# mise came from brew, because /opt/homebrew/bin above already satisfied it.
-export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+# files land, so it looks like a mystery. It has to come BEFORE
+# /opt/homebrew/bin too: a brew mise older than min_version above wins
+# otherwise, and `mise reshim` hard-exits 1 on the version check rather than
+# ENOENT — same broken hook, different error, and it only starts happening
+# once brew's copy goes stale. The cirruslabs VM base image ships one.
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 # A bare `|| exit 0` here hid a real failure once: nvim was installed but not
 # on the task's PATH, so this skipped without a word and no parsers compiled.
 if ! command -v nvim >/dev/null; then
@@ -508,7 +511,7 @@ description = "Install Claude Code from its native, self-updating installer"
 run = '''
 # See bootstrap:tpm — non-login PATH has no Homebrew, and ~/.local/bin is
 # where mise.run puts mise, which the npm-cleanup branch below shells out to.
-export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 
 # Deliberately not a [tools] entry. The npm package ships a stub cli.js and
 # fetches the real per-platform binary from its postinstall — and .npmrc sets
