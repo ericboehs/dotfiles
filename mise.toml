@@ -170,7 +170,7 @@ show_status_bar = true
 preferred_view_style = "list"
 
 [bootstrap.macos.dock]
-tilesize = 36
+tilesize = 99
 show_recents = false
 mru_spaces = false
 
@@ -264,6 +264,67 @@ post-defaults = '''
 [ "$(uname)" = Darwin ] || exit 0
 # Per-host, so it can't be expressed in [bootstrap.macos.defaults].
 defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+
+# The Dock's pinned apps, in order. persistent-apps is an array of dicts, each
+# carrying a binary bookmark blob, so [bootstrap.macos.defaults] — which writes
+# scalars — has no way to express it. Path and label are all that need writing:
+# the Dock regenerates the bookmark, the bundle id and the rest of tile-data
+# when it next starts, which the killall at the bottom provides.
+#
+# Safari is listed at its cryptex path because that is where macOS actually
+# keeps it; /Applications/Safari.app is a stub.
+dock_apps='/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app
+/System/Applications/Mail.app
+/System/Applications/Messages.app
+/Applications/Ghostty.app
+/Applications/Slack.app
+/System/Applications/Utilities/Screen Sharing.app
+/Applications/Home Assistant.app
+/System/Applications/iPhone Mirroring.app
+/Applications/Protect.app'
+
+# Read back what is pinned as a list of bundle names. Compare on those rather
+# than on paths: the Dock answers with the path it resolved and percent-encodes
+# it, so "Screen Sharing.app" returns as "Screen%20Sharing.app" and a path
+# comparison would see drift on a converged machine and rewrite the Dock on
+# every single bootstrap.
+dock_names() {
+  sed -n 's/.*"_CFURLString" = "\(.*\)";/\1/p' \
+    | sed -e 's|/$||' -e 's|.*/||' -e 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g' \
+    | while IFS= read -r name; do printf '%b\n' "$name"; done
+}
+
+want=''
+set --
+# Fed by heredoc rather than a pipe so the loop stays in this shell and the
+# positional parameters it builds survive it.
+while IFS= read -r app; do
+  # An app that isn't installed would pin as a "?" placeholder, so leave it off
+  # and say so — a half-provisioned machine gets an honest Dock, not a broken
+  # one, and re-running bootstrap after installing it puts the tile back.
+  if [ ! -e "$app" ]; then
+    echo "dock: not installed, leaving unpinned: $app" >&2
+    continue
+  fi
+  label=${app##*/}; label=${label%.app}
+  want="$want${app##*/}
+"
+  set -- "$@" "<dict><key>tile-data</key><dict><key>file-data</key><dict>\
+<key>_CFURLString</key><string>$app</string>\
+<key>_CFURLStringType</key><integer>0</integer></dict>\
+<key>file-label</key><string>$label</string></dict>\
+<key>tile-type</key><string>file-tile</string></dict>"
+done <<EOF
+$dock_apps
+EOF
+
+# Only write on an actual mismatch. The killall below restarts the Dock either
+# way, but a needless write throws away the bookmarks it took a launch to build.
+if [ "$(defaults read com.apple.dock persistent-apps 2>/dev/null | dock_names)" \
+     != "$(printf '%s' "$want")" ]; then
+  defaults write com.apple.dock persistent-apps -array "$@"
+fi
+
 for app in Finder Dock SystemUIServer; do
   killall "$app" >/dev/null 2>&1 || true
 done
