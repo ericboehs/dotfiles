@@ -18,10 +18,10 @@ bun = "latest"
 node = "26"
 ruby = "4"
 fnox = "latest"
-# Not just a nicety: the claude-manager workspace's MCP servers (apple-mail,
-# mcp-ical, mac-messages) are all declared as `uv --directory ... run`, so a
-# machine without uv starts Claude with three dead servers and no clue why.
-# It was reaching an ad-hoc brew install that a fresh bootstrap never makes.
+# Python's package/tool runner, and the one thing here that was already on
+# the machine without anything declaring it — an ad-hoc brew install a full
+# major behind (0.8.22) that a fresh bootstrap would never have made. Any
+# `uv tool` or `uv run` invocation was silently depending on that.
 uv = "latest"
 # Dev-env tooling: gitleaks (pre-commit secret scanning, referenced by
 # the .gitconfig hook), hk (project pre-commit manager, takes hk.pkl),
