@@ -441,9 +441,40 @@ neovim and re-run \`mise run bootstrap:nvim\`." >&2
 fi
 parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; }
 
+# Mason starts installing LazyVim's tool list as soon as its config runs, and
+# `Lazy! sync` triggers that on a cold bootstrap — so this invocation has to
+# drain the queue before +qa. It did not, and every cold run printed "Neovim
+# exited while the following packages were installing. Installation was
+# aborted" naming 7 of the 10 tools, then deferred them to the user's first
+# real launch: exactly the surprise this task exists to prevent.
+#
+# The wait needs a quiet period, not a single idle sample: mason queues its
+# downloads, so there are moments early on when nothing is installing yet and
+# the queue is far from empty. Waiting on `no package is installing` alone
+# returned immediately and nvim exited mid-download.
+#
+# A package can also just fail — erb-formatter and erb_lint are gems, so they
+# need a usable ruby, and mason only says so in ~/.local/state/nvim/mason.log.
+# Surface the names here instead, since a silent 8-of-10 is what sends you back
+# to the editor wondering.
+mason_drain="lua local r = require('mason-registry')
+     local failed = {}
+     r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
+     local idle = 0
+     vim.wait(1800000, function()
+       local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
+                                    r.get_all_packages())
+       idle = busy > 0 and 0 or idle + 1
+       return idle >= 15
+     end, 1000)
+     if #failed > 0 then
+       io.stderr:write('bootstrap:nvim: mason could not install ' ..
+         table.concat(failed, ', ') .. ' — see ~/.local/state/nvim/mason.log\n')
+     end"
+
 # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
 # during first install (treesitter parsers compiling); keep it visible.
-nvim --headless "+Lazy! sync" +qa
+nvim --headless "+Lazy! sync" "+Lazy! load mason.nvim" "+$mason_drain" +qa
 
 # Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but headless
 # never triggers a filetype event), then block on install. 5-10 min on a good
@@ -469,37 +500,10 @@ $prev. Re-run this task once the network settles." >&2
   echo "bootstrap:nvim: $(parsers) treesitter parsers after pass $attempt"
 done
 
-# Mason installs LazyVim's tools the first time it loads, which otherwise
-# happens on the first real nvim launch — the exact "why is my editor
-# installing things" moment this task exists to prevent. Loading it headless
-# triggers the same install.
-#
-# The wait needs a quiet period, not a single idle sample: mason queues its
-# downloads, so there are moments early on when nothing is installing yet and
-# the queue is far from empty. Waiting on `no package is installing` alone
-# returned immediately and nvim exited mid-download, leaving mason to finish
-# the job on first launch anyway ("Neovim is exiting while packages are still
-# installing").
-#
-# A package can also just fail — erb-formatter and erb-lint are gems, so they
-# need a usable ruby, and mason only says so in ~/.local/state/nvim/mason.log.
-# Surface the names here instead, since a silent 8-of-10 is what sends you back
-# to the editor wondering.
-nvim --headless "+Lazy! load mason.nvim" \
-  "+lua local r = require('mason-registry')
-     local failed = {}
-     r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
-     local idle = 0
-     vim.wait(1800000, function()
-       local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
-                                    r.get_all_packages())
-       idle = busy > 0 and 0 or idle + 1
-       return idle >= 15
-     end, 1000)
-     if #failed > 0 then
-       io.stderr:write('bootstrap:nvim: mason could not install ' ..
-         table.concat(failed, ', ') .. ' — see ~/.local/state/nvim/mason.log\n')
-     end" +qa
+# The sync above normally finishes mason off. This is the backstop for anything
+# queued since — a tool whose install only registers once mason.nvim is loaded
+# outright — and it re-reports failures. A ~15s no-op when there is nothing left.
+nvim --headless "+Lazy! load mason.nvim" "+$mason_drain" +qa
 
 echo "bootstrap:nvim: $(parsers) parsers, \
 $(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
