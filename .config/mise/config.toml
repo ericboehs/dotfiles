@@ -13,11 +13,16 @@ ruby.compile = false
 idiomatic_version_file_enable_tools = ["node"]
 
 [tools]
-python = "3.12"
+python = "3.14"
 bun = "latest"
-node = "24"
+node = "26"
 ruby = "4"
 fnox = "latest"
+# Not just a nicety: the claude-manager workspace's MCP servers (apple-mail,
+# mcp-ical, mac-messages) are all declared as `uv --directory ... run`, so a
+# machine without uv starts Claude with three dead servers and no clue why.
+# It was reaching an ad-hoc brew install that a fresh bootstrap never makes.
+uv = "latest"
 # Dev-env tooling: gitleaks (pre-commit secret scanning, referenced by
 # the .gitconfig hook), hk (project pre-commit manager, takes hk.pkl),
 # pkl (Apple's config language hk uses), watchexec (file-watch task runner).
