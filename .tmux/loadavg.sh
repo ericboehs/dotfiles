@@ -6,8 +6,15 @@
 #   >= half           yellow, the machine is working
 #   > CPU count       red, runnable work is queueing behind the CPUs
 
-ncpu=$(sysctl -n hw.ncpu)
-read -r _ one five fifteen _ < <(sysctl -n vm.loadavg)
+# Linux keeps both in /proc; macOS has neither, and answers via sysctl instead.
+if [[ -r /proc/loadavg ]]; then
+  ncpu=$(nproc)
+  read -r one five fifteen _ < /proc/loadavg
+else
+  ncpu=$(sysctl -n hw.ncpu)
+  # vm.loadavg is brace-wrapped: "{ 1.23 4.56 7.89 }".
+  read -r _ one five fifteen _ < <(sysctl -n vm.loadavg)
+fi
 
 # Reset to @time_fg rather than "default": the surrounding status-format sets
 # @time_fg before calling this, and "default" would reset to the brighter
