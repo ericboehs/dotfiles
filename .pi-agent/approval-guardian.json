@@ -1,7 +1,7 @@
 {
   "model": "openai-codex/codex-auto-review",
   "timeoutMs": 90000,
-  "policy": "Allow routine, reversible local development work such as builds, tests, linting, git status/diff, and narrowly scoped project maintenance. Deny destructive operations, production changes, secret disclosure, persistent security weakening, and unrequested external data transfer.",
+  "policy": "Allow autonomous end-to-end development in user-owned or task-scoped repositories, including inspecting and editing files, installing dependencies, running builds/tests/linters, creating commits and branches, creating forks when needed for upstream contributions, pushing non-protected branches, and creating or updating task-related pull requests, issues, and CI metadata when these actions naturally advance or complete the user's request. Allow routine network access required for package installation, documentation, source control, and task-scoped repository collaboration. Require explicit authorization for merges, force pushes, rewriting published history, releases or package publishing, deployments or production changes, deleting remote resources, changing repository permissions or security settings, destructive operations, secret or private-data disclosure, persistent security weakening, and external communication unrelated to the task.",
   "review": {
     "bash.command": "always",
     "grep.path": "private-only",
