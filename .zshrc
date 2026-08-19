@@ -16,6 +16,8 @@ source "$HOME/.zsh/path.zsh"
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/abbreviations.zsh"
+# Before fzf.zsh: it colors itself from the ~/.cache/dark-mode this writes.
+source "$HOME/.zsh/appearance.zsh"
 source "$HOME/.zsh/fzf.zsh"
 source "$HOME/.zsh/functions.zsh"
 

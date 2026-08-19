@@ -4,16 +4,16 @@
 # Allow regex search like ^git to find history starting with git
 export FZF_CTRL_R_OPTS="--no-sort --exact --preview 'echo {}' --preview-window down:3:wrap"
 
-# Catppuccin colors, picked per macOS appearance.
-# Reads ~/.cache/dark-mode flag (updated in background) to avoid
-# forking `defaults` synchronously. Run `_fzf_theme_sync` after
-# toggling dark/light mode if the flag is stale.
+# Catppuccin colors, picked per appearance. Reads the ~/.cache/dark-mode flag
+# that appearance.zsh (sourced ahead of this file) writes, which keeps one
+# answer for fzf, tmux and btop and is the only one a Linux box can get. Run
+# `_fzf_theme_sync` after toggling dark/light mode if the flag is stale.
 _fzf_theme_sync() {
   local mode
   if [[ -f ~/.cache/dark-mode ]]; then
     mode="$(< ~/.cache/dark-mode)"
   else
-    mode=light
+    mode=dark
   fi
   if [[ "$mode" == dark ]]; then
     # Mocha
@@ -29,9 +29,6 @@ _fzf_theme_sync() {
 --color=marker:#7287fd,fg+:#4c4f69,prompt:#8839ef,hl+:#d20f39"
   fi
 }
-
-# Update the flag in background (atomic write so readers never see empty file)
-{ defaults read -g AppleInterfaceStyle &>/dev/null && echo dark || echo light } > ~/.cache/dark-mode.$$ && mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode &!
 
 _fzf_theme_sync
 autoload -Uz add-zsh-hook

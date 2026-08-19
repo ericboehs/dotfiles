@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Sync tmux theme with macOS system appearance: Catppuccin Latte / Mocha.
+# Sync the tmux theme with the system appearance: Catppuccin Latte / Mocha.
 # Called on tmux startup and re-evaluated via #() in status-format.
 #
 # Two deliberate exceptions to the palettes: the accent stays Latte's sky in
 # both modes (it reads on either background, so the active window is the same
 # color all day), and @time_fg stays Latte's overlay1 for the same reason.
 
-if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark; then
+# Detecting inline here used to mean calling `defaults`, which does not exist on
+# Linux and failed into the light branch — leaving coop's status bar in Latte
+# against a dark terminal no matter what the Mac was set to. bin/appearance
+# answers for both platforms; on Linux it reads what the SSH client forwarded.
+if [ "$("$HOME/bin/appearance")" = dark ]; then
   mode=dark
   # Mocha
   surface0="#313244"; surface1="#45475a"

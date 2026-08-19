@@ -103,6 +103,10 @@ REPO_PATH = "ericboehs/dotfiles"
 "apt:jq" = { version = "latest", os = ["linux"] }
 # See brew:btop above.
 "apt:btop" = { version = "latest", os = ["linux"] }
+# .tmux/agenda.sh opens with `cal -A 1 -B 1`. Debian splits the BSD tools up
+# and `cal` rides in ncal rather than the bsdextrautils that carries the rest,
+# so a stock trixie box has no cal at all. macOS ships one.
+"apt:ncal" = { version = "latest", os = ["linux"] }
 # lsd is in universe on 22.04+ but missing on minimal images; the
 # bootstrap:linux-shims task installs the upstream .deb if this no-ops.
 "apt:lsd" = { version = "latest", os = ["linux"] }

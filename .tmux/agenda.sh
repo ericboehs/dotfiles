@@ -16,8 +16,21 @@ printf '\n  \033[1m%s\033[0m\n\n' "$(date '+%A, %B %-d')"
 # Previous/current/next month for context. BSD cal reverse-highlights today
 # only when stdout is a tty, so leave it unpiped -- indenting it through sed
 # costs the highlight, which is the main reason to show a calendar at all.
-cal -A 1 -B 1
-echo
+# Debian carries this cal in `ncal`, not the `bsdextrautils` that owns the rest
+# of the BSD tools, so it is easy to end up on a box without it.
+if command -v cal >/dev/null 2>&1; then
+  cal -A 1 -B 1
+  echo
+fi
+
+# ical drives EventKit and so exists on macOS only. Say so rather than letting
+# the 2>/dev/null below swallow the error and render an empty agenda, which
+# reads as "nothing scheduled today".
+if ! command -v ical >/dev/null 2>&1; then
+  echo "  No calendar here — ical is macOS-only."
+  echo
+  exec "${SHELL:-/bin/zsh}" -i
+fi
 
 ical today -o json --exclude-calendar "VA (outlook-cli)" 2>/dev/null | jq -r '
   map(select(.status != "canceled"))

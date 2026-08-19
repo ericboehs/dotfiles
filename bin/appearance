@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Print the current appearance — "dark" or "light" — for everything that themes
+# itself: .zsh/appearance.zsh (which caches it and forwards it over SSH),
+# .tmux/theme-sync.sh, and through tmux's @appearance, .tmux/btop.sh.
+#
+# Precedence, most authoritative first:
+#   1. macOS, which can be asked directly, so a toggle lands on the next redraw.
+#   2. LC_APPEARANCE, forwarded by the SSH client from a Mac. It is the only
+#      answer a Linux box has; see .zsh/appearance.zsh for why LC_* carries it.
+#   3. ~/.cache/dark-mode, whatever the last login resolved. This is the branch
+#      anything the server forks without a login shell lands on, which is most
+#      of tmux.
+#   4. dark, because a terminal nobody has themed is more often dark than
+#      light, and Latte on a dark background is the worse way to be wrong.
+
+if command -v defaults >/dev/null 2>&1; then
+  if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark; then
+    echo dark
+  else
+    echo light
+  fi
+elif [ -n "${LC_APPEARANCE:-}" ]; then
+  echo "$LC_APPEARANCE"
+elif [ -s "$HOME/.cache/dark-mode" ]; then
+  cat "$HOME/.cache/dark-mode"
+else
+  echo dark
+fi
