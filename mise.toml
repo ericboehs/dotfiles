@@ -176,6 +176,13 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.claude/scripts/statusline.sh" = ".claude/scripts/statusline.sh"
 "~/.gem/credentials" = ".gem/credentials"
 
+# Pi keeps credentials, sessions, downloaded packages, caches, and generated
+# model catalogs alongside configuration. Link only reviewed stable files;
+# never link the entire ~/.pi/agent directory.
+"~/.pi/agent/settings.json" = ".pi-agent/settings.json"
+"~/.pi/agent/approval-guardian.json" = ".pi-agent/approval-guardian.json"
+"~/.pi/agent/extensions" = { source = ".pi-agent/extensions", mode = "symlink-each" }
+
 # ---------------------------------------------------------------------------
 # macOS defaults
 # ---------------------------------------------------------------------------
@@ -381,7 +388,7 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:claude"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:claude"]
 
 [tasks."bootstrap:linux-shims"]
 description = "Debian binary-name shims, lsd fallback, zsh login shell"
@@ -550,6 +557,39 @@ nvim --headless "+Lazy! load mason.nvim" "+$mason_drain" +qa
 echo "bootstrap:nvim: $(parsers) parsers, \
 $(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
 $(ls ~/.local/share/nvim/lazy 2>/dev/null | wc -l | tr -d ' ') plugins"
+'''
+
+[tasks."bootstrap:pi"]
+description = "Install pinned Pi packages from the tracked global settings"
+run = '''
+# Tasks run in a non-login shell. Keep mise's own install ahead of a stale
+# Homebrew copy while still making Homebrew-provided helpers available.
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+
+if ! command -v pi >/dev/null; then
+  echo "bootstrap:pi: pi is not on PATH after the tools step" >&2
+  exit 1
+fi
+
+# All package sources in settings.json are pinned. This installs missing
+# packages on a clean machine and reconciles git checkouts to their exact refs.
+PI_SKIP_VERSION_CHECK=1 pi update --extensions
+
+packages=$(mktemp)
+sources=$(mktemp)
+trap 'rm -f "$packages" "$sources"' EXIT
+PI_SKIP_VERSION_CHECK=1 pi list > "$packages"
+jq -er '.packages[] | if type == "string" then . else .source end' \
+  "$HOME/.pi/agent/settings.json" > "$sources"
+while IFS= read -r source; do
+  grep -F "  $source" "$packages" >/dev/null || {
+    echo "bootstrap:pi: package was not installed: $source" >&2
+    exit 1
+  }
+done < "$sources"
+
+printf 'bootstrap:pi: '
+pi --version
 '''
 
 [tasks."bootstrap:claude"]

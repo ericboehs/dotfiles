@@ -1,0 +1,14 @@
+{
+  "model": "openai-codex/codex-auto-review",
+  "timeoutMs": 90000,
+  "policy": "Allow routine, reversible local development work such as builds, tests, linting, git status/diff, and narrowly scoped project maintenance. Deny destructive operations, production changes, secret disclosure, persistent security weakening, and unrequested external data transfer.",
+  "review": {
+    "bash.command": "always",
+    "grep.path": "private-only",
+    "read.path": "private-only",
+    "find.path": "private-only",
+    "ls.path": "private-only",
+    "write.path": "private-only",
+    "edit.path": "private-only"
+  }
+}

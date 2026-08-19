@@ -1,0 +1,10 @@
+# This directory is published. Track only reviewed, reproducible configuration.
+*
+!.gitignore
+!README.md
+!settings.json
+!approval-guardian.json
+!extensions/
+extensions/*
+!extensions/*.ts
+!extensions/pi-footer.json
