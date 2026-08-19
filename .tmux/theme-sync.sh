@@ -55,6 +55,10 @@ tmux set-option -gq menu-selected-style "bg=$accent,fg=$contrast"
 tmux set-option -gq menu-border-style "fg=$surface1"
 tmux set-option -gq popup-border-style "fg=$surface1"
 
+# Search-hit highlight, shared with the prefix+F pane finder's preview.
+tmux set-option -gq @match_bg "$warn"
+tmux set-option -gq @match_fg "$contrast"
+
 # Copy mode: every match subdued, the current one loud, marks distinct from both.
 tmux set-option -gq copy-mode-match-style "bg=$warn,fg=$contrast"
 tmux set-option -gq copy-mode-current-match-style "bg=$peach,fg=$contrast"

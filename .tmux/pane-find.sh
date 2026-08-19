@@ -25,14 +25,28 @@ build_content_cache() {
     > "$PANEFIND_DIR/content"
 }
 
-# Paint the query black-on-yellow. Not reverse video: fzf's ANSI parser drops
-# both \e[27m and \e[0m mid-line, so a reverse highlight bleeds to the end of
-# the row. An explicit color pair closed with \e[39;49m it does honour.
+# Paint the query in the same colors copy-mode uses for a search hit, which
+# theme-sync.sh republishes as @match_bg/@match_fg on every light/dark flip.
+# Not reverse video: fzf's ANSI parser drops both \e[27m and \e[0m mid-line, so
+# a reverse highlight bleeds to the end of the row. An explicit color pair
+# closed with \e[39;49m it does honour.
 highlight() {
-  local query=${1-}
-  if [ -z "$query" ]; then cat; else
-    perl -pe 'BEGIN { $q = shift } s/(\Q$q\E)/\e[30;43m$1\e[39;49m/gi' -- "$query"
+  local query=${1-} bg fg
+  [ -n "$query" ] || { cat; return; }
+
+  bg=$(tmux show-options -gqv @match_bg 2>/dev/null)
+  fg=$(tmux show-options -gqv @match_fg 2>/dev/null)
+  if [[ $bg =~ ^#[0-9a-fA-F]{6}$ && $fg =~ ^#[0-9a-fA-F]{6}$ ]]; then
+    HL_START=$(printf '\033[38;2;%d;%d;%dm\033[48;2;%d;%d;%dm' \
+      $((16#${fg:1:2})) $((16#${fg:3:2})) $((16#${fg:5:2})) \
+      $((16#${bg:1:2})) $((16#${bg:3:2})) $((16#${bg:5:2})))
+  else
+    HL_START=$(printf '\033[30;43m')   # theme-sync has not run yet
   fi
+
+  HL_START=$HL_START perl -pe '
+    BEGIN { $q = shift; $s = $ENV{HL_START} }
+    s/(\Q$q\E)/$s$1\e[39;49m/gi' -- "$query"
 }
 
 render_tree() {
