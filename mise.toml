@@ -70,6 +70,10 @@ REPO_PATH = "ericboehs/dotfiles"
 # actually needs. Declared on both so the dependency is stated rather than
 # inherited from whatever Apple happens to bundle.
 "brew:jq" = { version = "latest", os = ["macos"] }
+# .tmux.conf's status-bar click target (MouseDown1StatusRight opens btop via
+# .tmux/btop.sh). apt lags brew here — Debian 13 ships 1.3.2 against brew's
+# 1.4.7 — but nothing in the click path depends on the newer release.
+"brew:btop" = { version = "latest", os = ["macos"] }
 "brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
 # The apps the post-defaults hook pins to the Dock are deliberately NOT
 # declared here. Ghostty and Slack do have casks, but Homebrew installed them
@@ -97,6 +101,8 @@ REPO_PATH = "ericboehs/dotfiles"
 "apt:git-delta" = { version = "latest", os = ["linux"] }
 # See brew:jq above.
 "apt:jq" = { version = "latest", os = ["linux"] }
+# See brew:btop above.
+"apt:btop" = { version = "latest", os = ["linux"] }
 # lsd is in universe on 22.04+ but missing on minimal images; the
 # bootstrap:linux-shims task installs the upstream .deb if this no-ops.
 "apt:lsd" = { version = "latest", os = ["linux"] }
