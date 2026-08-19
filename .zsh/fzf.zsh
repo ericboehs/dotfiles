@@ -4,30 +4,20 @@
 # Allow regex search like ^git to find history starting with git
 export FZF_CTRL_R_OPTS="--no-sort --exact --preview 'echo {}' --preview-window down:3:wrap"
 
-# Catppuccin colors, picked per appearance. Reads the ~/.cache/dark-mode flag
-# that appearance.zsh (sourced ahead of this file) writes, which keeps one
-# answer for fzf, tmux and btop and is the only one a Linux box can get. Run
-# `_fzf_theme_sync` after toggling dark/light mode if the flag is stale.
+# Catppuccin colors, picked per appearance. The palettes themselves live in
+# fzf-colors.{dark,light} beside this file, because .tmux/theme-sync.sh needs
+# the same strings for tmux popups and a second copy drifted from this one.
+# Mode comes from the ~/.cache/dark-mode flag appearance.zsh (sourced ahead of
+# this file) writes, which keeps one answer for fzf, tmux and btop and is the
+# only one a Linux box can get. Run `_fzf_theme_sync` after toggling dark/light
+# mode if the flag is stale.
+#
+# $(<file) is a zsh builtin read, not a fork, so this stays free at startup.
 _fzf_theme_sync() {
-  local mode
-  if [[ -f ~/.cache/dark-mode ]]; then
-    mode="$(< ~/.cache/dark-mode)"
-  else
-    mode=dark
-  fi
-  if [[ "$mode" == dark ]]; then
-    # Mocha
-    export FZF_DEFAULT_OPTS="\
---color=bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8 \
---color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc \
---color=marker:#f5e0dc,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8"
-  else
-    # Latte
-    export FZF_DEFAULT_OPTS="\
---color=bg+:#ccd0da,bg:#eff1f5,spinner:#dc8a78,hl:#d20f39 \
---color=fg:#4c4f69,header:#d20f39,info:#8839ef,pointer:#dc8a78 \
---color=marker:#7287fd,fg+:#4c4f69,prompt:#8839ef,hl+:#d20f39"
-  fi
+  local mode=dark
+  [[ -f ~/.cache/dark-mode ]] && mode="$(< ~/.cache/dark-mode)"
+  [[ -f ~/.zsh/fzf-colors.$mode ]] || return
+  export FZF_DEFAULT_OPTS="$(< ~/.zsh/fzf-colors.$mode)"
 }
 
 _fzf_theme_sync
