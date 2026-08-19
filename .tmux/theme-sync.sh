@@ -38,6 +38,13 @@ fi
 [ "$(tmux show-options -gqv @appearance)" = "$mode" ] && exit 0
 tmux set-option -gq @appearance "$mode"
 
+# Past the guard above means the appearance just flipped, which is exactly once
+# per toggle — the right moment to tell the Linux boxes, which cannot see the
+# toggle themselves. Fully detached: tmux reads this script's stdout to EOF, so
+# a child holding a copy of it would stall the status line for the length of the
+# push.
+~/bin/appearance-push "$mode" >/dev/null 2>&1 </dev/null &
+
 accent="#04a5e5"   # Latte sky, in both modes
 contrast="#11111b" # readable on the accent and on every highlight below
 

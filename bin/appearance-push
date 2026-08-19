@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Push the current appearance out to the hosts that cannot work it out
+# themselves, so a remote tmux flips with the Mac instead of lagging it.
+#
+# ~/.cache/dark-mode on a Linux box is otherwise only refreshed by a login shell
+# there (see .zsh/appearance.zsh), so toggling the Mac while already attached to
+# coop left its status bar in the old theme until the next new window. Writing
+# the file is the whole job — the remote tmux re-runs theme-sync.sh on its next
+# status-interval and picks the change up within five seconds.
+#
+# Called from .tmux/theme-sync.sh on the redraw where the mode actually flips,
+# so it runs once per toggle rather than once per redraw.
+
+# Only the machine that can answer the question gets to push an answer. On a
+# Linux box `defaults` is absent and the local value is itself second-hand.
+command -v defaults >/dev/null 2>&1 || exit 0
+
+mode=${1:-$(~/bin/appearance)}
+[ "$mode" = dark ] || [ "$mode" = light ] || exit 0
+
+# A named list rather than a scan of the running ssh clients. `ps` output cannot
+# be re-split into argv — Ghostty launches ssh with `-o SendEnv TERM_PROGRAM
+# TERM_PROGRAM_VERSION`, and those trailing words are indistinguishable from a
+# destination once the quoting is gone. The list is also the better behaviour:
+# it keeps the remote cache honest whether or not a session is attached, so the
+# next login already finds the right answer.
+#
+# macOS hosts do not belong here. They read their own appearance and would only
+# be told about someone else's.
+HOSTS=(coop)
+
+for host in "${HOSTS[@]}"; do
+  # BatchMode and the timeout so a box that is off or off-network costs three
+  # seconds in the background rather than a prompt or a hang. ClearAllForwardings
+  # keeps a push from re-declaring the tunnels a Host block asks for.
+  printf '%s\n' "$mode" | ssh -o BatchMode=yes \
+                              -o ConnectTimeout=3 \
+                              -o ClearAllForwardings=yes \
+                              "$host" \
+    'mkdir -p ~/.cache && cat > ~/.cache/dark-mode.$$ &&
+       mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode' >/dev/null 2>&1 &
+done
+wait
