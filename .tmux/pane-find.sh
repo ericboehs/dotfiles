@@ -160,9 +160,13 @@ trap 'rm -rf "$PANEFIND_DIR"' EXIT
 echo title > "$PANEFIND_DIR/mode"
 
 q=$(printf '%q' "$self")
+# Popups inherit whatever FZF_DEFAULT_OPTS the server froze at start, which goes
+# stale the first time the appearance flips; theme-sync keeps @fzf_colors true.
+IFS=' ' read -ra colors <<< "$(tmux show-options -gqv @fzf_colors)"
+
 render_tree > "$PANEFIND_DIR/list"
 target=$(
-  fzf --ansi --disabled --sync --delimiter=$'\t' --with-nth=2 \
+  fzf ${colors[@]+"${colors[@]}"} --ansi --disabled --sync --delimiter=$'\t' --with-nth=2 \
     --prompt='find pane> ' --info=inline --reverse --no-sort \
     --header='ctrl-/ search pane contents · ctrl-r rescan' \
     --bind "start:reload(cat $PANEFIND_DIR/list)" \

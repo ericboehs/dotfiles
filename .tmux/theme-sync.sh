@@ -15,6 +15,7 @@ if defaults read -g AppleInterfaceStyle 2>/dev/null | grep -q Dark; then
   clock="#a6adc8"
   warn="#f9e2af"; crit="#f38ba8"; peach="#fab387"
   mark="#cba6f7"; mark_fg="#11111b"
+  base="#1e1e2e"; rose="#f5e0dc"; marker="#f5e0dc"
 else
   mode=light
   # Latte
@@ -24,6 +25,7 @@ else
   clock="#6c6f85"
   warn="#df8e1d"; crit="#d20f39"; peach="#fe640b"
   mark="#8839ef"; mark_fg="#eff1f5"
+  base="#eff1f5"; rose="#dc8a78"; marker="#7287fd"
 fi
 
 # This script runs on every status redraw. Re-applying ~20 options each time is
@@ -54,6 +56,17 @@ tmux set-option -gq menu-style "bg=$surface0,fg=$text"
 tmux set-option -gq menu-selected-style "bg=$accent,fg=$contrast"
 tmux set-option -gq menu-border-style "fg=$surface1"
 tmux set-option -gq popup-border-style "fg=$surface1"
+
+# fzf's palette, matching ~/.zsh/fzf.zsh. That file only reaches shells it is
+# sourced in; popups get a copy of FZF_DEFAULT_OPTS frozen at server start, so
+# a flip left every popup showing Latte on a Mocha terminal. The tmux env fixes
+# popups started from here on; @fzf_colors lets one pass it on the command line,
+# which beats an inherited FZF_DEFAULT_OPTS outright.
+fzf_colors="--color=bg+:$surface0,bg:$base,spinner:$rose,hl:$crit"
+fzf_colors+=" --color=fg:$text,header:$crit,info:$mark,pointer:$rose"
+fzf_colors+=" --color=marker:$marker,fg+:$text,prompt:$mark,hl+:$crit"
+tmux set-option -gq @fzf_colors "$fzf_colors"
+tmux set-environment -g FZF_DEFAULT_OPTS "$fzf_colors"
 
 # Search-hit highlight, shared with the prefix+F pane finder's preview.
 tmux set-option -gq @match_bg "$warn"
