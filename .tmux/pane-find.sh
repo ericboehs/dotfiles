@@ -50,17 +50,24 @@ highlight() {
 }
 
 render_tree() {
-  local query=${1-} mode list keep
+  local query=${1-} mode list keep exact
   mode=$(cat "$PANEFIND_DIR/mode" 2>/dev/null || echo title)
   list=$(tmux list-panes -a -F "$FMT") || return 0
 
   if [ -z "$query" ]; then
     keep=$list
   else
-    # fzf does the fuzzy matching over "session window-name pane-title"; the
-    # winners are then re-projected onto the original tree order.
+    # fzf does the matching over "session window-name pane-title"; the winners
+    # are then re-projected onto the original tree order. Content mode drops
+    # the fuzziness here too, or the session name donates letters the pane
+    # never showed: "vapo" fuzzy-matches harVest-enid ... creAte ... Persistent
+    # ... fOr, and that pane turns up under a content search with no excerpt to
+    # explain itself.
+    exact=()
+    [ "$mode" = content ] && exact=(--exact)
     keep=$(printf '%s\n' "$list" |
-      fzf --filter="$query" --delimiter=$'\t' --with-nth=2,4,6 2>/dev/null)
+      fzf --filter="$query" ${exact[@]+"${exact[@]}"} \
+          --delimiter=$'\t' --with-nth=2,4,6 2>/dev/null)
     if [ "$mode" = content ]; then
       build_content_cache
       # Exact, not fuzzy: fuzzy over raw pane text matches nearly everything.
