@@ -42,8 +42,19 @@ fi
 # Which half runs depends on which end of the connection this shell is: the far
 # end records where the login came from, keyed by tty, because a tmux session
 # there outlives any one connection and cannot rely on its own environment.
-if [[ -n $SSH_TTY && -n $LC_CLAUDE_PANE ]]; then
-  mkdir -p ~/.claude/origin && print -r -- $LC_CLAUDE_PANE > ~/.claude/origin/${SSH_TTY//\//-}
+# A login with no pane to declare has to erase the last one's answer, not just
+# decline to write: ttys are reused, so /dev/pts/0 keeps whatever some earlier
+# connection recorded there. Ssh'ing from a plain terminal tab after once having
+# ssh'd from inside tmux left the old pane id standing, and a notification from
+# this machine would then send the click to a pane that had nothing to do with
+# it - selecting the wrong tab and yanking the local tmux somewhere else.
+if [[ -n $SSH_TTY ]]; then
+  mkdir -p ~/.claude/origin
+  if [[ -n $LC_CLAUDE_PANE ]]; then
+    print -r -- $LC_CLAUDE_PANE > ~/.claude/origin/${SSH_TTY//\//-}
+  else
+    rm -f ~/.claude/origin/${SSH_TTY//\//-}
+  fi
 elif [[ -n $TMUX_PANE ]]; then
   export LC_CLAUDE_PANE=$TMUX_PANE
 fi
