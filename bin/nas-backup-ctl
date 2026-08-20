@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# nas-backup-ctl -- inspect and control Hyper Backup jobs on the Synology.
+#
+# Exists so this can be granted as a narrow permission rule instead of a blanket
+# "any ssh command to 10.0.1.3" allowance. There is deliberately no passthrough
+# subcommand: every operation below is one of a fixed, reviewable set.
+#
+# Task IDs come from /var/packages/HyperBackup/etc/synobackup.conf:
+#   1  nas-backup barra4  -> /mnt/barra4/hyperbackup/NAS_1.hbk       versioned, ~505GB
+#   2  nas-backup exos16  -> /mnt/exos16/hyperbackup/synology.hbk    versioned, ~506GB
+#   4  nas-backup mirror  -> /mnt/exos16/mirror/synology-mirror.hbk  versioned media, ~7.15TB
+# (Task 3 was the original single-version mirror; it was deleted and replaced by 4.)
+
+set -uo pipefail
+
+NAS=(ssh -o ConnectTimeout=10 -o IdentityAgent=none -i "$HOME/.ssh/id_ed25519" ericboehs@10.0.1.3)
+PI=(ssh -o ConnectTimeout=10 ericboehs@nas-backup.local)
+SYNOBACKUP=/usr/syno/bin/synobackup
+
+# Use the hostname for the Pi, never the bare IP: only nas-backup.local is in
+# known_hosts, and the box is dual-homed (wlan0 sits on the IoT SSID).
+
+die() { printf 'nas-backup-ctl: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+usage: nas-backup-ctl <command>
+
+  status          sizes, free space, worker state, throughput hint
+  running         exit 0 if idle, 1 if a backup/restore is running
+  log [n]         last n lines of the synobackupd job log (default 15)
+  start <id>      start task 1, 2, or 4
+  cancel --yes    cancel the RUNNING backup (see warning below)
+
+cancel takes no task ID -- the DSM tool cancels whatever is currently
+running, so it can only be used safely when you already know which job
+that is. --yes is required to make that deliberate.
+EOF
+}
+
+hbk_path() {
+  case "$1" in
+    1) echo /mnt/barra4/hyperbackup/NAS_1.hbk ;;
+    2) echo /mnt/exos16/hyperbackup/synology.hbk ;;
+    4) echo /mnt/exos16/mirror/synology-mirror.hbk ;;
+    *) return 1 ;;
+  esac
+}
+
+cmd_status() {
+  "${PI[@]}" '
+    echo "=== target sizes ==="
+    sudo du -sh /mnt/barra4/hyperbackup/*.hbk \
+                /mnt/exos16/hyperbackup/*.hbk \
+                /mnt/exos16/mirror/*.hbk 2>/dev/null
+    echo
+    echo "=== free space ==="
+    df -h /mnt/barra4 /mnt/exos16
+    echo
+    echo "=== guard refusals (stderr is NOT logged, so grep this string only) ==="
+    printf "pre-xfer exec returned failure: "
+    sudo grep -c "pre-xfer exec returned failure" /var/log/rsyncd.log 2>/dev/null || echo 0
+    echo
+    echo "=== last rsyncd activity ==="
+    sudo tail -3 /var/log/rsyncd.log
+  '
+  echo
+  echo "=== NAS worker ==="
+  "${NAS[@]}" '
+    found=0
+    for d in /proc/[0-9]*; do
+      [ -r "$d/cmdline" ] || continue
+      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -q img_backup; then
+        found=1
+        printf "pid %s  " "${d#/proc/}"
+        tr "\0" " " < "$d/cmdline"; echo
+        grep "^State" "$d/status"
+      fi
+    done
+    [ "$found" = 1 ] || echo "(no img_backup worker running)"
+  '
+  # D (disk sleep) is normal and means I/O-bound, not hung. R is fine too.
+}
+
+cmd_running() {
+  "${NAS[@]}" "sudo $SYNOBACKUP --is-backup-restore-running"
+  local rc=$?
+  [ "$rc" = 0 ] && echo "idle" || echo "a backup or restore is running"
+  return "$rc"
+}
+
+cmd_log() {
+  local n=${1:-15}
+  "${NAS[@]}" "sudo tail -$n /var/log/systemd/synobackupd.service.log"
+}
+
+cmd_start() {
+  local id=${1:-}
+  local path
+  path=$(hbk_path "$id") || die "unknown task id '${id:-<none>}' (expected 1, 2, or 4)"
+
+  # --backend image is the branch DSM itself uses. 'rsync' enqueues a job whose
+  # handler does not exist and dies with exit(127); 'cloud_image' enqueues a
+  # branch that wedges the unique slot and 409s every later attempt.
+  "${NAS[@]}" "sudo $SYNOBACKUP --backup $id --backend image" || die "start failed"
+  echo "enqueued task $id -> $path"
+  sleep 15
+  cmd_log 3
+}
+
+cmd_cancel() {
+  [ "${1:-}" = "--yes" ] || die "cancel needs --yes; it stops whatever backup is running, not a task you name"
+  "${NAS[@]}" "sudo $SYNOBACKUP --cancel-backup"
+  sleep 5
+  cmd_running
+}
+
+case "${1:-}" in
+  status)        shift; cmd_status "$@" ;;
+  running)       shift; cmd_running "$@" ;;
+  log)           shift; cmd_log "$@" ;;
+  start)         shift; cmd_start "$@" ;;
+  cancel)        shift; cmd_cancel "$@" ;;
+  -h|--help|'')  usage ;;
+  *)             usage; exit 1 ;;
+esac
