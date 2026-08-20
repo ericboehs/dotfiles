@@ -597,6 +597,18 @@ if [ "$#" -gt 0 ]; then
     "$@"
 fi
 
+# The global .npmrc sets ignore-scripts=true, so npm never runs the install
+# scripts that compile native addons — most notably better-sqlite3, a
+# transitive dep of pi-hermes-memory that session indexing needs. Without it,
+# `pi` fails with "Could not locate the bindings file". Rebuild native modules
+# with scripts enabled, scoping the exception to this reproducible install
+# rather than weakening the global setting.
+if [ -d "$HOME/.pi/agent/npm/node_modules/better-sqlite3" ]; then
+  npm rebuild better-sqlite3 \
+    --prefix "$HOME/.pi/agent/npm" \
+    --ignore-scripts=false --foreground-scripts
+fi
+
 PI_SKIP_VERSION_CHECK=1 pi list > "$packages"
 while IFS= read -r source; do
   awk -v source="  $source" '
