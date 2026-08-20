@@ -19,12 +19,23 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 const FAKE_CURSOR = /\x1b\[7m([\s\S]*?)\x1b\[0m/g;
 
 class NativeCursorEditor extends CustomEditor {
+  private readonly hardwareCursorTui: TUI;
+
   constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
     super(tui, theme, keybindings);
+    this.hardwareCursorTui = tui;
     tui.setShowHardwareCursor(true);
   }
 
   render(width: number): string[] {
+    // On /reload pi fires session_start (which reinstalls this editor and turns
+    // the hardware cursor on) and only afterwards runs applyRuntimeSettings(),
+    // which resets the hardware cursor to the settings default. That would leave
+    // no cursor at all: the fake reverse-video cursor is stripped below while the
+    // hardware cursor is off. Re-assert it every render so the native cursor
+    // survives a reload. setShowHardwareCursor early-returns when unchanged, so
+    // this is idempotent and only triggers a render on the frame it flips back on.
+    this.hardwareCursorTui.setShowHardwareCursor(true);
     return super.render(width).map((line) => line.replace(FAKE_CURSOR, "$1"));
   }
 }
