@@ -258,7 +258,8 @@
           "fg": "brightBlack",
           "bg": "default",
           "bold": false,
-          "tokenFormatStyle": "compact"
+          "tokenFormatStyle": "compact",
+          "speedUnit": "per-second"
         }
       },
       {
@@ -272,7 +273,8 @@
           "fg": "brightBlack",
           "bg": "default",
           "bold": true,
-          "tokenFormatStyle": "compact"
+          "tokenFormatStyle": "compact",
+          "speedUnit": "per-second"
         }
       }
     ]
