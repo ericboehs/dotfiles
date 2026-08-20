@@ -506,13 +506,25 @@ parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; 
 # need a usable ruby, and mason only says so in ~/.local/state/nvim/mason.log.
 # Surface the names here instead, since a silent 8-of-10 is what sends you back
 # to the editor wondering.
+#
+# get_all_packages() is wrapped because mason re-downloads registry.json every
+# time mason.nvim loads, and the file is empty for a moment mid-write — a poll
+# landing in that window gets "Expected value but found T_END at character 1"
+# out of the JSON decode. The throw propagates out of vim.wait's callback and
+# aborts the whole wait, so the drain is skipped and nvim exits with the queue
+# still full: the exact failure this block exists to prevent, and it reads as a
+# mason bug rather than a race. coop hit it on every run; the Macs got lucky on
+# timing. An unreadable registry counts as busy, never as quiet.
 mason_drain="lua local r = require('mason-registry')
      local failed = {}
      r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
      local quiet_since
      vim.wait(1800000, function()
-       local busy = #vim.tbl_filter(function(p) return p:is_installing() end,
-                                    r.get_all_packages())
+       local ok, busy = pcall(function()
+         return #vim.tbl_filter(function(p) return p:is_installing() end,
+                                r.get_all_packages())
+       end)
+       if not ok then quiet_since = nil return false end
        if busy > 0 then quiet_since = nil
        elseif not quiet_since then quiet_since = vim.uv.now() end
        return quiet_since ~= nil and vim.uv.now() - quiet_since >= 15000
