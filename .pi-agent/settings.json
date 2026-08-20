@@ -2,14 +2,17 @@
   "lastChangelogVersion": "0.84.2",
   "packages": [
     "npm:pi-approval-guardian@0.8.0",
-    "git:github.com/ericboehs/pi-footer@4c34d7b64e54dd97897675fa4ab78483a6967ebd",
+    "git:github.com/ericboehs/pi-footer@388ab82a606e96852fa927b1c3efa458bc64e2b1",
     "npm:pi-web-access@0.24.0",
     "npm:pi-background-tasks@2.4.2",
     "npm:pi-subagents@0.51.0",
-    "npm:pi-hermes-memory"
+    "npm:pi-hermes-memory",
+    "npm:@nicknisi/pi-stash",
+    "npm:pi-intercom@0.11.0",
+    "git:github.com/ericboehs/pi-claude-link@6a0c37fe3a0c5d284364958db3fa2f9488c0c584"
   ],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-opus-4.8",
   "defaultThinkingLevel": "xhigh",
   "theme": "light",
   "steeringMode": "all",
