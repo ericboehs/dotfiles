@@ -19,6 +19,7 @@
 !.config/lsd/
 !.config/gitleaks/
 !.config/btop/
+!.config/hammerspoon/
 .config/mise/config.local.toml
 .config/nvim/lazy-lock.json
 # btop rewrites its config on exit; track only the themes
