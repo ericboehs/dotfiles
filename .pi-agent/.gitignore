@@ -3,6 +3,7 @@
 !.gitignore
 !README.md
 !settings.json
+!keybindings.json
 !approval-guardian.json
 !extensions/
 extensions/*

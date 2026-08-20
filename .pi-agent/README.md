@@ -6,6 +6,7 @@ Reproducible configuration for [`pi`](https://pi.dev), installed by
 Tracked here:
 
 - Pi settings and pinned package sources
+- custom keybindings (e.g. Opt+Enter inserts a newline)
 - approval-guardian policy
 - local TypeScript extensions
 - pi-footer layout

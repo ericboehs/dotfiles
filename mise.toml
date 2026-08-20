@@ -180,6 +180,7 @@ REPO_PATH = "ericboehs/dotfiles"
 # model catalogs alongside configuration. Link only reviewed stable files;
 # never link the entire ~/.pi/agent directory.
 "~/.pi/agent/settings.json" = ".pi-agent/settings.json"
+"~/.pi/agent/keybindings.json" = ".pi-agent/keybindings.json"
 "~/.pi/agent/approval-guardian.json" = ".pi-agent/approval-guardian.json"
 "~/.pi/agent/extensions" = { source = ".pi-agent/extensions", mode = "symlink-each" }
 
