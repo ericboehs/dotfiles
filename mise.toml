@@ -515,6 +515,26 @@ parsers() { ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l | tr -d ' '; 
 # still full: the exact failure this block exists to prevent, and it reads as a
 # mason bug rather than a race. coop hit it on every run; the Macs got lucky on
 # timing. An unreadable registry counts as busy, never as quiet.
+# LazyVim queues its language servers through mason-lspconfig's ensure_installed,
+# and mason-lspconfig skips that feature outright when headless
+# (mason-lspconfig/init.lua: `if not platform.is_headless and ...`). So a headless
+# bootstrap installs the tools list — stylua, shfmt, the linters — and none of the
+# ~16 servers the extras in .config/nvim/lazyvim.json ask for. The machines that
+# looked converged were the ones nvim had also been opened on by hand; coop, which
+# has only ever been bootstrapped over ssh, sat at 11 packages instead of 27.
+#
+# Call the feature directly. It has to come after nvim-lspconfig's config runs,
+# since that is what calls mason-lspconfig.setup() and populates the list. pcall'd
+# because this is a private module path — a rename upstream should cost the LSP
+# servers, not the whole task.
+mason_lsp="lua local ok, err = pcall(function()
+       require('mason-lspconfig.features.ensure_installed')()
+     end)
+     if not ok then
+       io.stderr:write('bootstrap:nvim: could not queue LSP servers: ' ..
+         tostring(err) .. '\n')
+     end"
+
 mason_drain="lua local r = require('mason-registry')
      local failed = {}
      r:on('package:install:failed', function(p) failed[#failed + 1] = p.name end)
@@ -536,7 +556,8 @@ mason_drain="lua local r = require('mason-registry')
 
 # `Lazy! sync` is non-interactive (no UI prompts). Stderr can be noisy
 # during first install (treesitter parsers compiling); keep it visible.
-nvim --headless "+Lazy! sync" "+Lazy! load mason.nvim" "+$mason_drain" +qa
+nvim --headless "+Lazy! sync" "+Lazy! load mason.nvim" \
+  "+Lazy! load nvim-lspconfig" "+$mason_lsp" "+$mason_drain" +qa
 
 # Fully load nvim-treesitter (LazyVim lazy-loads it by filetype, but headless
 # never triggers a filetype event), then block on install. 5-10 min on a good
@@ -565,7 +586,8 @@ done
 # The sync above normally finishes mason off. This is the backstop for anything
 # queued since — a tool whose install only registers once mason.nvim is loaded
 # outright — and it re-reports failures. A ~15s no-op when there is nothing left.
-nvim --headless "+Lazy! load mason.nvim" "+$mason_drain" +qa
+nvim --headless "+Lazy! load mason.nvim" "+Lazy! load nvim-lspconfig" \
+  "+$mason_lsp" "+$mason_drain" +qa
 
 echo "bootstrap:nvim: $(parsers) parsers, \
 $(ls ~/.local/share/nvim/mason/packages 2>/dev/null | wc -l | tr -d ' ') mason packages, \
