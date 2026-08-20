@@ -4,7 +4,7 @@
     "npm:pi-approval-guardian@0.8.0",
     "git:github.com/ericboehs/pi-footer@388ab82a606e96852fa927b1c3efa458bc64e2b1",
     "npm:pi-web-access@0.24.0",
-    "npm:pi-background-tasks@2.4.2",
+    "git:github.com/ericboehs/pi-background-tasks@721efcb6eedd2178dcbe249a7ca00e30cca83fb0",
     "npm:pi-subagents@0.51.0",
     "npm:pi-hermes-memory",
     "npm:@nicknisi/pi-stash",
