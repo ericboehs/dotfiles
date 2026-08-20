@@ -2,7 +2,7 @@
   "lastChangelogVersion": "0.84.2",
   "packages": [
     "npm:pi-approval-guardian@0.8.0",
-    "git:github.com/ericboehs/pi-footer@1a2f6ff0664c41bf17c107e91968106f68bb4b5b",
+    "git:github.com/ericboehs/pi-footer@4c34d7b64e54dd97897675fa4ab78483a6967ebd",
     "npm:pi-web-access@0.24.0",
     "npm:pi-background-tasks@2.4.2",
     "npm:pi-subagents@0.51.0",
