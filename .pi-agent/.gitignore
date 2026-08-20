@@ -5,6 +5,7 @@
 !settings.json
 !keybindings.json
 !approval-guardian.json
+!web-search.json
 !extensions/
 extensions/*
 !extensions/*.ts
