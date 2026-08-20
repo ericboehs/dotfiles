@@ -87,6 +87,13 @@ $EDITOR ~/.gitconfig.private
   git checkouts are all declared in [mise.toml](mise.toml) and applied with
   `mise bootstrap`
 
+### Pi coding agent
+
+- Pi itself and its extension packages are version-pinned through mise.
+- Stable configuration and local extensions live in [`.pi-agent/`](.pi-agent/).
+- `bootstrap:pi` installs and verifies the pinned package set without tracking
+  credentials, sessions, caches, or downloaded package contents.
+
 ### Fuzzy Finder
 
 - **Tool**: [fzf](https://github.com/junegunn/fzf)

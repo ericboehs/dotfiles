@@ -45,3 +45,5 @@ terraform = "1.15.8"
 # failure this entry exists to prevent.
 neovim = "0.12.4"
 "npm:@playwright/cli" = "latest"
+# Pi is pinned so its extension API and the bootstrapped package set move together.
+"npm:@earendil-works/pi-coding-agent" = "0.84.2"
