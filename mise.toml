@@ -571,18 +571,40 @@ if ! command -v pi >/dev/null; then
   exit 1
 fi
 
-# All package sources in settings.json are pinned. This installs missing
-# packages on a clean machine and reconciles git checkouts to their exact refs.
-PI_SKIP_VERSION_CHECK=1 pi update --extensions
-
+# `pi update --extensions` reconciles the pinned git checkout but deliberately
+# skips pinned npm sources. Install those exact npm specs directly: `pi install`
+# would rewrite the tracked settings file based on stale package-manager state.
 packages=$(mktemp)
 sources=$(mktemp)
 trap 'rm -f "$packages" "$sources"' EXIT
-PI_SKIP_VERSION_CHECK=1 pi list > "$packages"
 jq -er '.packages[] | if type == "string" then . else .source end' \
   "$HOME/.pi/agent/settings.json" > "$sources"
+PI_SKIP_VERSION_CHECK=1 pi update --extensions
+
+set --
 while IFS= read -r source; do
-  grep -F "  $source" "$packages" >/dev/null || {
+  case "$source" in
+    npm:*) set -- "$@" "${source#npm:}" ;;
+  esac
+done < "$sources"
+if [ "$#" -gt 0 ]; then
+  # The global npm config requires a 10-day release age for unpinned
+  # resolution. These are exact reviewed pins, so scope the exception to this
+  # isolated reproducible install instead of weakening the global setting.
+  NPM_CONFIG_MIN_RELEASE_AGE=0 npm install \
+    --prefix "$HOME/.pi/agent/npm" \
+    --save-exact --legacy-peer-deps --omit=dev \
+    "$@"
+fi
+
+PI_SKIP_VERSION_CHECK=1 pi list > "$packages"
+while IFS= read -r source; do
+  awk -v source="  $source" '
+    $0 == source {
+      if ((getline path) > 0 && path ~ /^    \//) found = 1
+    }
+    END { exit !found }
+  ' "$packages" || {
     echo "bootstrap:pi: package was not installed: $source" >&2
     exit 1
   }
