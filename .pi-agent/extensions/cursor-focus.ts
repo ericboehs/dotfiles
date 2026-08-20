@@ -1,10 +1,10 @@
-// Hide pi's prompt cursor when its terminal pane loses focus, so it is obvious
-// which split pane will receive input.
+// Use the terminal's real cursor while pi's pane is focused and hide the cursor
+// when the pane loses focus.
 //
-// pi draws a fake cursor by wrapping the character under it in reverse video.
-// Because that block remains painted in every tmux pane, inactive pi sessions
-// look focused. This extension enables terminal focus reporting, listens for
-// FocusIn/FocusOut, and removes the fake block while unfocused.
+// pi normally hides the hardware cursor and draws a fake cursor by wrapping the
+// character under it in reverse video. That fake block has pi's text color and
+// remains painted in every tmux pane. This extension removes the fake block,
+// enables pi-tui's hardware cursor on FocusIn, and hides it on FocusOut.
 //
 // Requires: tmux `set -g focus-events on`.
 
@@ -17,10 +17,12 @@ const FAKE_CURSOR = /\x1b\[7m([\s\S]*?)\x1b\[0m/g;
 interface FocusState {
   focused: boolean;
   listenerInstalled: boolean;
+  onFocusChange?: (focused: boolean) => void;
 }
 
-// Store state on the TUI so /reload reuses the listener instead of stacking
-// stale listeners with separate module-level focus flags.
+// Store state and the listener on the TUI so /reload does not stack listeners.
+// The callback is replaced on each load, allowing behavior changes without
+// replacing the long-lived input listener.
 function focusState(tui: TUI): FocusState {
   const holder = tui as unknown as { __cursorFocus?: FocusState };
   if (!holder.__cursorFocus) {
@@ -34,9 +36,15 @@ class FocusAwareEditor extends CustomEditor {
     super(tui, theme, keybindings);
     const state = focusState(tui);
 
+    state.onFocusChange = (focused) => {
+      tui.setShowHardwareCursor(focused);
+      tui.requestRender(true);
+    };
+
     // Re-enable after every extension load; reload teardown may reset terminal
     // modes while the TUI-attached listener remains installed.
     process.stdout.write("\x1b[?1004h");
+    tui.setShowHardwareCursor(state.focused);
 
     if (state.listenerInstalled) return;
     state.listenerInstalled = true;
@@ -46,18 +54,17 @@ class FocusAwareEditor extends CustomEditor {
 
       // Last focus token in a batched input chunk wins.
       state.focused = data.lastIndexOf("\x1b[I") > data.lastIndexOf("\x1b[O");
-      const cleaned = data.split("\x1b[I").join("").split("\x1b[O").join("");
+      state.onFocusChange?.(state.focused);
 
-      // Focus changes do not otherwise invalidate the editor, so force a frame.
-      tui.requestRender(true);
+      const cleaned = data.split("\x1b[I").join("").split("\x1b[O").join("");
       return cleaned.length === 0 ? { consume: true } : { data: cleaned };
     });
   }
 
   render(width: number): string[] {
-    const lines = super.render(width);
-    if (focusState(this.tui).focused) return lines;
-    return lines.map((line) => line.replace(FAKE_CURSOR, "$1"));
+    // Preserve CURSOR_MARKER immediately before the fake block; pi-tui uses it
+    // to position the real terminal cursor after the reverse-video span is gone.
+    return super.render(width).map((line) => line.replace(FAKE_CURSOR, "$1"));
   }
 }
 
