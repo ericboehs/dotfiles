@@ -15,7 +15,7 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 
 // "hide"   -> cursor disappears entirely when the pane is unfocused
 // "hollow" -> underline the char under the cursor, box glyph at end of line
-const MODE: "hide" | "hollow" = "hide";
+const MODE: "hide" | "hollow" = "hollow";
 const HOLLOW_EMPTY = "\u25af"; // ▯  (used in hollow mode at end of line)
 
 let terminalFocused = true;
