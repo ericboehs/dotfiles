@@ -5,11 +5,12 @@
     "git:github.com/ericboehs/pi-footer@1a2f6ff0664c41bf17c107e91968106f68bb4b5b",
     "npm:pi-web-access@0.24.0",
     "npm:pi-background-tasks@2.4.2",
-    "npm:pi-subagents@0.51.0"
+    "npm:pi-subagents@0.51.0",
+    "npm:pi-hermes-memory"
   ],
-  "defaultProvider": "github-copilot",
-  "defaultModel": "claude-opus-4.8",
-  "defaultThinkingLevel": "high",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "xhigh",
   "theme": "light",
   "steeringMode": "all",
   "transport": "auto",
