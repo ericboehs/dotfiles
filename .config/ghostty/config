@@ -37,9 +37,39 @@ keybind = ctrl+7=text:\x1b[27;5;55~
 keybind = ctrl+8=text:\x1b[27;5;56~
 keybind = ctrl+9=text:\x1b[27;5;57~
 
+# Ctrl+Shift+hjkl (move window/session) and Ctrl+Shift+1-9 (switch session),
+# same modifyOtherKeys form as above with modifier 6 = ctrl+shift.
+#
+# These have to be spelled out for the same reason Ctrl+1-9 does. tmux only
+# knows how to request extended keys through xterm's modifyOtherKeys, and it
+# does not send that request for TERM=xterm-ghostty, so nothing here is
+# negotiated: without these lines Ctrl+Shift+H would arrive as a bare 0x08,
+# indistinguishable from Ctrl+H, and would quietly run the wrong binding.
+#
+# The payload must carry the *unshifted* keycode (h=104, not H=72) — tmux
+# ignores the shifted one. `set -as terminal-features 'xterm-ghostty:extkeys'`
+# in tmux.conf would make Ghostty emit all of these on its own and let this
+# whole block go away, at the cost of extended keys leaking into apps that
+# mishandle them.
+keybind = ctrl+shift+h=text:\x1b[27;6;104~
+keybind = ctrl+shift+j=text:\x1b[27;6;106~
+keybind = ctrl+shift+k=text:\x1b[27;6;107~
+keybind = ctrl+shift+l=text:\x1b[27;6;108~
+keybind = ctrl+shift+1=text:\x1b[27;6;49~
+keybind = ctrl+shift+2=text:\x1b[27;6;50~
+keybind = ctrl+shift+3=text:\x1b[27;6;51~
+keybind = ctrl+shift+4=text:\x1b[27;6;52~
+keybind = ctrl+shift+5=text:\x1b[27;6;53~
+keybind = ctrl+shift+6=text:\x1b[27;6;54~
+keybind = ctrl+shift+7=text:\x1b[27;6;55~
+keybind = ctrl+shift+8=text:\x1b[27;6;56~
+keybind = ctrl+shift+9=text:\x1b[27;6;57~
+
 # Send Option as Alt rather than composing accented characters, so every Alt key
 # reaches tmux and zsh. Replaces the per-key `keybind = alt+X=text:\x1bX` list
 # this used to carry (M-h/l windows, M-j/k sessions, M-Tab, M-`, and friends).
+# Most of those moved to Ctrl/Ctrl-Shift above; Opt now only carries Tab/backtick
+# cycling and Opt-l for clear-screen.
 # Trade-off: no more Opt-e -> é. Set to `left` to keep right-Option composing.
 macos-option-as-alt = true
 

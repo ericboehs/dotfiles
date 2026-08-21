@@ -4,7 +4,7 @@
 # Usage: session-jump.sh CURRENT_SESSION next|prev [move]
 #
 # tmux's own switch-client -n/-p walks sessions in name order, which would
-# disagree with Prefix+s and the Opt-1..9 bindings above. Both of those order
+# disagree with Prefix+s and the Ctrl-Shift-1..9 bindings. Both of those order
 # by creation time, so do the same here.
 
 set -euo pipefail

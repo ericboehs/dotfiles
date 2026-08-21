@@ -6,7 +6,7 @@
 # tmux's own relative targets (swap-window -t - / -t +) resolve against the
 # *current* session, which is whatever session happens to be attached, and they
 # do not wrap. Resolving positions from the window list keeps this predictable
-# and lets Opt-h/Opt-l always do something.
+# and lets Ctrl-Shift-h/Ctrl-Shift-l always do something.
 #
 # swap-window -d keeps the focus on the window that moved rather than jumping
 # to whatever it traded places with.
