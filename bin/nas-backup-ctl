@@ -70,7 +70,11 @@ cmd_status() {
     found=0
     for d in /proc/[0-9]*; do
       [ -r "$d/cmdline" ] || continue
-      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -q img_backup; then
+      # Skip the shell running this very script: its cmdline contains the whole
+      # script text. The [i] bracket keeps the pattern from matching itself as a
+      # literal; skipping $$ covers the case where a shell re-quotes it away.
+      [ "${d#/proc/}" = "$$" ] && continue
+      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -q "[i]mg_backup"; then
         found=1
         printf "pid %s  " "${d#/proc/}"
         tr "\0" " " < "$d/cmdline"; echo
