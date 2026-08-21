@@ -13,7 +13,9 @@
  * - Colors are plain ANSI-16 SGR codes; only the extension-status row uses the theme.
  */
 
-import { basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 
 import type {
   ExtensionAPI,
@@ -24,6 +26,14 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const GIT_TTL_MS = 5_000;
 const GIT_TIMEOUT_MS = 1_000;
+
+/**
+ * pi-claude-link registers this process in Claude Code's peer registry and
+ * derives a name ("pi-dotfiles") when the session has none. That name is what
+ * other agents address, so it is worth showing — dimmed, to distinguish it
+ * from a session name the user actually chose.
+ */
+const PEER_TTL_MS = 5_000;
 
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
@@ -161,6 +171,41 @@ function parseAheadBehind(output: string): Pick<GitState, "ahead" | "behind"> {
   return { ahead: ahead > 0, behind: behind > 0 };
 }
 
+/** Same stale-while-revalidate shape as the git cache, over one small JSON read. */
+class PeerNameCache {
+  private name = "";
+  private fetchedAt = 0;
+  private inFlight = false;
+
+  read(requestRender: () => void): string {
+    if (!this.inFlight && Date.now() - this.fetchedAt >= PEER_TTL_MS) {
+      void this.refresh(requestRender);
+    }
+    return this.name;
+  }
+
+  private async refresh(requestRender: () => void): Promise<void> {
+    this.inFlight = true;
+    let next = "";
+    try {
+      // Resolved per read, not at module load, so a HOME change is picked up.
+      const file = join(homedir(), ".claude", "sessions", `${process.pid}.json`);
+      const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+      const name = (parsed as { name?: unknown } | null)?.name;
+      if (typeof name === "string") next = name;
+    } catch {
+      // No pi-claude-link, no registry, or a half-written file: show nothing.
+      next = "";
+    } finally {
+      this.inFlight = false;
+    }
+    const changed = this.name !== next;
+    this.name = next;
+    this.fetchedAt = Date.now();
+    if (changed) requestRender();
+  }
+}
+
 /**
  * p10k-lean git summary: "master", "master*", "master ⇣⇡", "master* ⇡".
  *
@@ -236,6 +281,7 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
 
 export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
+  const peer = new PeerNameCache();
   let enabled = true;
   let bypassed = false;
   let repaint: (() => void) | undefined;
@@ -287,9 +333,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
           ];
 
           const leftLine = left.filter(Boolean).join(" ");
-          const right = pi.getSessionName();
-          const mainLine = right
-            ? padBetween(leftLine, color(CYAN, right), width)
+          // Fall back to the name other agents use to reach this session.
+          const sessionName = pi.getSessionName();
+          const peerName = sessionName ? "" : peer.read(requestRender);
+          const right =
+            sessionName ? color(CYAN, sessionName)
+            : peerName ? theme.fg("dim", peerName)
+            : "";
+          const mainLine =
+            sessionName || peerName ?
+              padBetween(leftLine, right, width)
             : truncateToWidth(leftLine, width, "…");
 
           const extra: string[] = [];

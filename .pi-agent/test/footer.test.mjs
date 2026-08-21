@@ -9,6 +9,9 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import footer from "../extensions/footer.ts";
@@ -72,7 +75,7 @@ async function mount(overrides = {}) {
 
   const component = factory(
     { requestRender: () => { renders += 1; } },
-    { fg: (_color, text) => text },
+    { fg: (color, text) => (color === "dim" ? `\x1B[2m${text}\x1B[22m` : text) },
     {
       getGitBranch: () => branch,
       getExtensionStatuses: () => statuses,
@@ -271,6 +274,54 @@ test("session name is right-aligned and statuses split inline vs status row", as
   assert.match(main, /codex 12% copilot 40% +footer-work$/);
   assert.equal(statusRow, "3s");
   assert.equal(main.length, 120);
+});
+
+/**
+ * Point HOME at a throwaway dir and register a pi-claude-link peer for this
+ * process. Never writes to the real ~/.claude/sessions, which Claude Code reads.
+ */
+function withPeerRegistry(name) {
+  const home = mkdtempSync(path.join(tmpdir(), "footer-home-"));
+  if (name !== undefined) {
+    mkdirSync(path.join(home, ".claude", "sessions"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".claude", "sessions", `${process.pid}.json`),
+      JSON.stringify({ pid: process.pid, name, nameSource: "derived" }),
+    );
+  }
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  return () => { process.env.HOME = previous; };
+}
+
+test("falls back to the pi-claude-link peer name, dimmed", async () => {
+  const restore = withPeerRegistry("pi-dotfiles");
+  try {
+    const ui = await mount({ sessionName: undefined });
+    const [main] = await ui.settled(80);
+    assert.match(main, / pi-dotfiles$/);
+    assert.equal(main.length, 80);
+    // Dim (SGR 2), where a real session name would be cyan.
+    assert.match(ui.raw(80)[0], /\x1B\[2mpi-dotfiles\x1B\[22m$/);
+
+    const named = await mount({ sessionName: "footer-work" });
+    const [namedLine] = await named.settled(80);
+    assert.match(namedLine, / footer-work$/, "an explicit session name wins");
+    assert.match(named.raw(80)[0], /\x1B\[36mfooter-work\x1B\[39m$/, "cyan, not dim");
+  } finally {
+    restore();
+  }
+});
+
+test("no peer registry means no right-hand segment at all", async () => {
+  const restore = withPeerRegistry(undefined);
+  try {
+    const ui = await mount({ sessionName: undefined });
+    const [main] = await ui.settled(80);
+    assert.equal(main, "dotfiles or ox hi master* 41.2k/1m $0.5123", "no padding, no trailing gap");
+  } finally {
+    restore();
+  }
 });
 
 test("long lines are truncated to the width", async () => {
