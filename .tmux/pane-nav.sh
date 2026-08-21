@@ -40,14 +40,29 @@ read -r at_edge zoomed floating windows session < <(
     "#{$edge} #{window_zoomed_flag} #{pane_floating_flag} #{session_windows} #{session_name}"
 )
 
-# A zoomed pane fills its window, so the other panes are not on screen at all and
-# tmux reports the zoomed one as sitting at every edge at once. Treat the window
-# as though it held this pane alone and fall straight out of it, leaving the zoom
-# intact. Running select-pane instead would silently do nothing in any direction
-# with no sibling pane that way, which just looks like a broken key.
-# A floating pane (floax) is not part of the window layout at all, so it keeps
-# tmux's plain select-pane behavior.
-if [ "$floating" = 1 ] || { [ "$zoomed" = 0 ] && [ "$at_edge" = 0 ]; }; then
+# A floating pane (floax popup) is not part of the window layout at all, so hand
+# it to tmux and let it do whatever it does.
+if [ "$floating" = 1 ]; then
+  exec tmux select-pane -t "$pane" "$move"
+fi
+
+# A zoomed pane covers its window, and while it does, tmux answers every
+# pane_at_* flag with 1 and resolves the direction tokens by wrapping round to
+# whichever pane is left, so there is no way to ask whether a real neighbour
+# lies that way. Drop the zoom, which restores the true layout, and ask again.
+# If a pane genuinely is that way, move to it and stay unzoomed — that is what
+# pressing the key is asking for. If nothing is, put the zoom back before
+# leaving, so the window is untouched when it is next returned to.
+if [ "$zoomed" = 1 ]; then
+  tmux resize-pane -Z -t "$pane"
+  at_edge=$(tmux display-message -p -t "$pane" "#{$edge}")
+  if [ "$at_edge" = 0 ]; then
+    exec tmux select-pane -t "$pane" "$move"
+  fi
+  tmux resize-pane -Z -t "$pane"
+fi
+
+if [ "$at_edge" = 0 ]; then
   exec tmux select-pane -t "$pane" "$move"
 fi
 
