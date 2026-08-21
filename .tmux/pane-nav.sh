@@ -40,11 +40,14 @@ read -r at_edge zoomed floating windows session < <(
     "#{$edge} #{window_zoomed_flag} #{pane_floating_flag} #{session_windows} #{session_name}"
 )
 
-# A zoomed pane fills its window, so tmux reports it as being at every edge at
-# once, and a floating pane (floax) is not part of the window layout at all.
-# Neither should fall out of the window, so keep tmux's own behavior there:
-# select-pane unzooms and moves.
-if [ "$at_edge" = 0 ] || [ "$zoomed" = 1 ] || [ "$floating" = 1 ]; then
+# A zoomed pane fills its window, so the other panes are not on screen at all and
+# tmux reports the zoomed one as sitting at every edge at once. Treat the window
+# as though it held this pane alone and fall straight out of it, leaving the zoom
+# intact. Running select-pane instead would silently do nothing in any direction
+# with no sibling pane that way, which just looks like a broken key.
+# A floating pane (floax) is not part of the window layout at all, so it keeps
+# tmux's plain select-pane behavior.
+if [ "$floating" = 1 ] || { [ "$zoomed" = 0 ] && [ "$at_edge" = 0 ]; }; then
   exec tmux select-pane -t "$pane" "$move"
 fi
 
