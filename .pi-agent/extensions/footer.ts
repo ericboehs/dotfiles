@@ -281,8 +281,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
             provider && HIDE_COST_PROVIDERS.has(provider)
               ? ""
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
-            bypassed ? color(BRIGHT_RED, "bypass") : "",
             ...INLINE_STATUS_KEYS.map((key) => statuses.get(key) ?? ""),
+            // Last before the flex gap, so it sits closest to the right edge.
+            bypassed ? color(BRIGHT_RED, "bypass") : "",
           ];
 
           const leftLine = left.filter(Boolean).join(" ");

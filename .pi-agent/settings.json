@@ -29,7 +29,8 @@
     "~/Code/github.com/ericboehs/claude-plugins/plugins/renaissance/skills/renaissance",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/unanet/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/wengage/skills/wengage",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills"
+    "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills",
+    "~/Code/github.com/ericboehs/claude-plugins/plugins/pr-review/skills"
   ],
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-5",

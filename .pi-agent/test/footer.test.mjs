@@ -281,14 +281,15 @@ test("long lines are truncated to the width", async () => {
 });
 
 test("/bypass drives the guardian and shows a bright red marker", async () => {
-  const ui = await mount();
+  const ui = await mount({ statuses: new Map([["codex-window", "codex 12%"]]) });
   assert.doesNotMatch(ui.plain()[0], /bypass/);
 
   await ui.run("bypass");
   assert.deepEqual(ui.sent, [
     { text: "/approval-guardian bypass", options: { expandPromptTemplates: true } },
   ]);
-  assert.match(ui.plain()[0], /\$0\.5123 bypass$/);
+  // Last segment before the flex gap, after cost and the inline statuses.
+  assert.match(ui.plain()[0], /\$0\.5123 codex 12% bypass$/);
   assert.match(ui.raw()[0], /\x1B\[91mbypass\x1B\[39m/, "bright red");
 
   await ui.run("bypass");
