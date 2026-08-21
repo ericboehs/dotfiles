@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+# Typecheck and test the pi extensions in .pi-agent/extensions.
+# Usage: pi-ext-check [-h|--help] [--typecheck-only|--test-only]
+#
+# pi loads these extensions from the globally installed @earendil-works/pi-coding-agent,
+# so this borrows that install's types rather than adding a package.json to the
+# dotfiles repo: .pi-agent/node_modules/ gets symlinks to the global pi, pi-tui
+# and @types/node, which is enough for both tsc and Node's ESM resolver.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $(basename "$0") [--typecheck-only|--test-only]"
+  echo ""
+  echo "Typecheck (tsc) and smoke-test (node --test) the pi extensions."
+  echo "Links .pi-agent/node_modules to the globally installed pi first."
+  exit 0
+fi
+
+MODE="${1:-all}"
+
+# bin/ is symlinked to ~/bin, so resolve the real script location.
+target="${BASH_SOURCE[0]}"
+while [ -L "$target" ]; do
+  link="$(readlink "$target")"
+  case "$link" in
+    /*) target="$link" ;;
+    *) target="$(dirname "$target")/$link" ;;
+  esac
+done
+REPO="$(cd "$(dirname "$target")/.." && pwd)"
+PI_AGENT="$REPO/.pi-agent"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+if ! command -v npm >/dev/null; then
+  echo -e "${RED}❌ npm is not on PATH${NC}" >&2
+  exit 1
+fi
+
+PI_PKG="$(npm root -g)/@earendil-works/pi-coding-agent"
+if [ ! -d "$PI_PKG" ]; then
+  echo -e "${RED}❌ pi is not installed globally at $PI_PKG${NC}" >&2
+  exit 1
+fi
+
+# Fresh links every run: the global pi moves with each node version bump, and a
+# stale symlink fails in ways that read like a broken extension.
+mkdir -p "$PI_AGENT/node_modules/@earendil-works" "$PI_AGENT/node_modules/@types"
+ln -sfn "$PI_PKG" "$PI_AGENT/node_modules/@earendil-works/pi-coding-agent"
+ln -sfn "$PI_PKG/node_modules/@earendil-works/pi-tui" "$PI_AGENT/node_modules/@earendil-works/pi-tui"
+ln -sfn "$PI_PKG/node_modules/@types/node" "$PI_AGENT/node_modules/@types/node"
+
+status=0
+
+if [[ "$MODE" != "--test-only" ]]; then
+  # No typescript is installed anywhere on this machine by design, so fall back
+  # to npx (cached after the first run) rather than adding a dependency.
+  if command -v tsc >/dev/null; then
+    TSC=(tsc)
+  else
+    echo -e "${YELLOW}tsc not on PATH — using npx typescript${NC}"
+    TSC=(npx --yes --package=typescript@5 tsc)
+  fi
+
+  echo "Typechecking $PI_AGENT/extensions..."
+  if (cd "$PI_AGENT" && "${TSC[@]}" -p tsconfig.json); then
+    echo -e "${GREEN}✅ typecheck passed${NC}"
+  else
+    echo -e "${RED}❌ typecheck failed${NC}"
+    status=1
+  fi
+fi
+
+if [[ "$MODE" != "--typecheck-only" ]]; then
+  echo "Running $PI_AGENT/test..."
+  if (cd "$PI_AGENT" && node --test test/*.test.mjs); then
+    echo -e "${GREEN}✅ tests passed${NC}"
+  else
+    echo -e "${RED}❌ tests failed${NC}"
+    status=1
+  fi
+fi
+
+exit "$status"

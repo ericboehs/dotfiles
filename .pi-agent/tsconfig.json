@@ -1,0 +1,26 @@
+{
+  // Typechecks the pi extensions in ./extensions. Deliberately lives one level
+  // up: mise symlinks .pi-agent/extensions/* into ~/.pi/agent/extensions with
+  // mode "symlink-each", so anything dropped in there becomes something pi
+  // tries to load at startup. Editors still find this by walking up.
+  //
+  // node_modules/ next to this file is created by bin/pi-ext-check and links
+  // to the globally installed pi; it is gitignored.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    // pi loads .ts extensions through Node's type stripping, which only erases
+    // types — it cannot emit code. This flag rejects the syntax that would
+    // otherwise blow up at load time (parameter properties, enums, namespaces).
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["extensions/**/*.ts"]
+}

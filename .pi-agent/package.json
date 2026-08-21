@@ -1,0 +1,6 @@
+{
+  "//": "Not a real package: it marks .pi-agent as ESM so tsc and node treat the extensions the way pi does. bin/pi-ext-check links node_modules/ here.",
+  "name": "pi-agent-extensions",
+  "private": true,
+  "type": "module"
+}

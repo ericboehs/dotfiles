@@ -9,4 +9,11 @@
 !extensions/
 extensions/*
 !extensions/*.ts
-!extensions/pi-footer.json
+
+# Extension tooling (not linked into ~/.pi/agent — see tsconfig.json).
+# node_modules/ is symlinks to the global pi, created by bin/pi-ext-check.
+!package.json
+!tsconfig.json
+!test/
+test/*
+!test/*.mjs
