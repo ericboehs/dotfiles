@@ -71,21 +71,12 @@ const MODEL_RULES: Array<[RegExp, string]> = [
 
 interface GitState {
   isRepo: boolean;
-  staged: number;
-  unstaged: number;
-  untracked: number;
-  ahead: number;
-  behind: number;
+  dirty: boolean;
+  ahead: boolean;
+  behind: boolean;
 }
 
-const EMPTY_GIT: GitState = {
-  isRepo: false,
-  staged: 0,
-  unstaged: 0,
-  untracked: 0,
-  ahead: 0,
-  behind: 0,
-};
+const EMPTY_GIT: GitState = { isRepo: false, dirty: false, ahead: false, behind: false };
 
 /** Stale-while-revalidate git status: renders never await, they just trigger a repaint. */
 class GitStatusCache {
@@ -124,11 +115,12 @@ class GitStatusCache {
           timeout: GIT_TIMEOUT_MS,
         }),
       ]);
-      // trimEnd, not trim: columns 1/2 encode staged vs unstaged, so a leading
-      // space on the first line is significant.
       if (status.code === 0 && !status.killed) {
         next = {
-          ...parsePorcelain(status.stdout.trimEnd()),
+          isRepo: true,
+          // Any staged, unstaged or untracked path counts as dirty, matching
+          // p10k's vcs-detect-changes + git-untracked hooks.
+          dirty: status.stdout.trim().length > 0,
           // Detached HEAD or no upstream configured: rev-list exits non-zero.
           ...parseAheadBehind(revList.code === 0 && !revList.killed ? revList.stdout : ""),
         };
@@ -150,57 +142,28 @@ class GitStatusCache {
 function sameGit(a: GitState, b: GitState): boolean {
   return (
     a.isRepo === b.isRepo &&
-    a.staged === b.staged &&
-    a.unstaged === b.unstaged &&
-    a.untracked === b.untracked &&
+    a.dirty === b.dirty &&
     a.ahead === b.ahead &&
     a.behind === b.behind
   );
 }
 
-function parsePorcelain(output: string): Omit<GitState, "ahead" | "behind"> {
-  const state = { isRepo: true, staged: 0, unstaged: 0, untracked: 0 };
-  if (!output) return state;
-  for (const line of output.split("\n")) {
-    if (line.length < 2) continue;
-    const x = line[0];
-    const y = line[1];
-    if (x === "?" && y === "?") {
-      state.untracked += 1;
-      continue;
-    }
-    if (x && x !== " ") state.staged += 1;
-    if (y && y !== " ") state.unstaged += 1;
-  }
-  return state;
-}
-
 /** `rev-list --left-right --count @{upstream}...HEAD` prints "<behind>\t<ahead>". */
 function parseAheadBehind(output: string): Pick<GitState, "ahead" | "behind"> {
-  const [behind, ahead] = output.trim().split(/\s+/).map(Number);
-  return {
-    ahead: Number.isFinite(ahead) ? (ahead as number) : 0,
-    behind: Number.isFinite(behind) ? (behind as number) : 0,
-  };
+  const [behind = 0, ahead = 0] = output.trim().split(/\s+/).map(Number);
+  return { ahead: ahead > 0, behind: behind > 0 };
 }
 
-/** "↑2 ↓1", omitting zero counts; empty when in sync with the upstream. */
-function formatAheadBehind(state: GitState): string {
-  if (!state.isRepo) return "";
-  const parts: string[] = [];
-  if (state.ahead) parts.push(`↑${state.ahead}`);
-  if (state.behind) parts.push(`↓${state.behind}`);
-  return parts.join(" ");
-}
-
-/** "+2 ±1 ?3", omitting zero counts; empty when the tree is clean. */
-function formatGitStatus(state: GitState): string {
-  if (!state.isRepo) return "";
-  const parts: string[] = [];
-  if (state.staged) parts.push(`+${state.staged}`);
-  if (state.unstaged) parts.push(`±${state.unstaged}`);
-  if (state.untracked) parts.push(`?${state.untracked}`);
-  return parts.join(" ");
+/**
+ * p10k-lean git summary: "master", "master*", "master ⇣⇡", "master* ⇡".
+ *
+ * Mirrors ~/.p10k.zsh — DIRTY_ICON='*' glued to the branch, blank
+ * staged/unstaged/untracked icons, and unnumbered ⇣/⇡ arrows.
+ */
+function formatGit(branch: string | null, state: GitState): string {
+  if (!branch) return "";
+  const arrows = `${state.behind ? "⇣" : ""}${state.ahead ? "⇡" : ""}`;
+  return `${color(MAGENTA, `${branch}${state.dirty ? "*" : ""}`)}${arrows ? ` ${color(CYAN, arrows)}` : ""}`;
 }
 
 function color(code: number, text: string): string {
@@ -296,9 +259,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             color(BRIGHT_YELLOW, shortProvider(provider)),
             color(BRIGHT_YELLOW, shortModel(ctx.model?.id)),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
-            color(MAGENTA, branch ?? ""),
-            color(MAGENTA, formatAheadBehind(gitState)),
-            color(MAGENTA, formatGitStatus(gitState)),
+            formatGit(branch, gitState),
             // context-length / context-window share one segment (no spaces around "/")
             `${color(
               contextColorCode(usage?.tokens, usage?.contextWindow),

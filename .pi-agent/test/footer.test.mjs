@@ -96,10 +96,7 @@ function strip(text) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal(
-    (await ui.settled())[0],
-    "dotfiles or ox hi master +1 ±1 ?1 41.2k/1m $0.5123",
-  );
+  assert.equal((await ui.settled())[0], "dotfiles or ox hi master* 41.2k/1m $0.5123");
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {
@@ -127,34 +124,40 @@ test("non-repo directories drop the git segments", async () => {
   assert.equal((await ui.settled())[0], "dotfiles or ox hi 41.2k/1m $0.5123");
 });
 
-test("zero counts are omitted, and a clean tree drops the status segment", async () => {
+test("dirty marker: any change earns a single '*' glued to the branch", async () => {
   const cases = [
-    ["A  staged.ts\n M edited.ts\n?? new.ts\n", "master +1 ±1 ?1 41.2k"],
-    [" M edited.ts\n M other.ts\n", "master ±2 41.2k"],
-    ["?? new.ts\n", "master ?1 41.2k"],
-    ["A  staged.ts\n", "master +1 41.2k"],
-    ["MM both.ts\n", "master +1 ±1 41.2k"],
-    ["", "master 41.2k"],
+    ["A  staged.ts\n M edited.ts\n?? new.ts\n", "master*"],
+    [" M edited.ts\n M other.ts\n", "master*"],
+    ["?? new.ts\n", "master*"],
+    ["A  staged.ts\n", "master*"],
+    ["UU conflict.ts\n", "master*"],
+    ["", "master"],
   ];
   for (const [porcelain, expected] of cases) {
     const ui = await mount({ porcelain });
-    assert.match((await ui.settled())[0], new RegExp(expected.replace(/[+?]/g, "\\$&")), porcelain);
+    const branchSegment = (await ui.settled())[0].split(" ")[4];
+    assert.equal(branchSegment, expected, JSON.stringify(porcelain));
   }
 });
 
-test("ahead/behind counts appear after the branch, zeros omitted", async () => {
+test("p10k-style arrows, unnumbered, cyan, dropped when in sync", async () => {
   const cases = [
-    ["0\t0", "master +1 ±1 ?1"],
-    ["0\t2", "master ↑2 +1 ±1 ?1"],
-    ["3\t0", "master ↓3 +1 ±1 ?1"],
-    ["3\t2", "master ↑2 ↓3 +1 ±1 ?1"],
+    ["0\t0", "master*"],
+    ["0\t2", "master* ⇡"],
+    ["3\t0", "master* ⇣"],
+    ["3\t2", "master* ⇣⇡"],
     // No upstream / detached HEAD: rev-list prints nothing usable.
-    ["", "master +1 ±1 ?1"],
+    ["", "master*"],
   ];
   for (const [revList, expected] of cases) {
     const ui = await mount({ revList });
-    assert.ok((await ui.settled())[0].includes(expected), `${revList} -> ${expected}`);
+    assert.ok((await ui.settled())[0].includes(`${expected} 41.2k`), `${revList} -> ${expected}`);
   }
+  // Arrows are cyan (36) while the branch stays magenta (35), as in ~/.p10k.zsh.
+  const diverged = await mount({ revList: "3\t2" });
+  diverged.raw();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.match(diverged.raw()[0], /\x1B\[35mmaster\*\x1B\[39m \x1B\[36m⇣⇡\x1B\[39m/);
 });
 
 test("provider aliases", async () => {
