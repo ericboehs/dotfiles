@@ -9,10 +9,10 @@
     "git:github.com/ericboehs/pi-claude-link@6a0c37fe3a0c5d284364958db3fa2f9488c0c584",
     "git:github.com/ericboehs/pi-context"
   ],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-opus-4.8",
   "defaultThinkingLevel": "high",
-  "theme": "light",
+  "theme": "light/dark",
   "steeringMode": "all",
   "transport": "auto",
   "quietStartup": true,
@@ -30,5 +30,14 @@
     "baseten/deepseek-ai/DeepSeek-V4-Flash-0731",
     "github-copilot/claude-opus-4.8",
     "openai-codex/gpt-5.6-sol"
-  ]
+  ],
+  "showHardwareCursor": true,
+  "editorPaddingX": 1,
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto",
+  "fullscreenExitOutput": "resume-hint",
+  "enableInstallTelemetry": false
 }
