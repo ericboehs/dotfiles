@@ -25,6 +25,7 @@ async function mount(overrides = {}) {
     statuses = new Map(),
     costs = [0.0123, 0.5],
     porcelain = PORCELAIN,
+    revList = "0\t0",
     gitCode = 0,
   } = overrides;
 
@@ -49,7 +50,8 @@ async function mount(overrides = {}) {
   const pi = {
     exec: async (command, args, options) => {
       execCalls.push({ command, args, options });
-      return { stdout: porcelain, stderr: "", code: gitCode, killed: false };
+      const stdout = args[0] === "rev-list" ? revList : porcelain;
+      return { stdout, stderr: "", code: gitCode, killed: false };
     },
     getThinkingLevel: () => overrides.thinkingLevel ?? "high",
     getSessionName: () => sessionName,
@@ -107,13 +109,17 @@ test("first render omits git and repaints when the refresh lands", async () => {
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
 
-test("git runs a single porcelain call and caches it for 5s", async () => {
+test("git runs one porcelain + one rev-list per refresh, cached for 5s", async () => {
   const ui = await mount();
   await ui.settled();
   ui.plain();
   ui.plain();
-  assert.equal(ui.execCalls.length, 1);
-  assert.deepEqual(ui.execCalls[0].args, ["status", "--porcelain=v1"]);
+  assert.equal(ui.execCalls.length, 2);
+  assert.deepEqual(ui.execCalls.map((call) => call.args[0]).sort(), ["rev-list", "status"]);
+  assert.deepEqual(
+    ui.execCalls.find((call) => call.args[0] === "status").args,
+    ["status", "--porcelain=v1"],
+  );
 });
 
 test("non-repo directories drop the git segments", async () => {
@@ -133,6 +139,21 @@ test("zero counts are omitted, and a clean tree drops the status segment", async
   for (const [porcelain, expected] of cases) {
     const ui = await mount({ porcelain });
     assert.match((await ui.settled())[0], new RegExp(expected.replace(/[+?]/g, "\\$&")), porcelain);
+  }
+});
+
+test("ahead/behind counts appear after the branch, zeros omitted", async () => {
+  const cases = [
+    ["0\t0", "master +1 ±1 ?1"],
+    ["0\t2", "master ↑2 +1 ±1 ?1"],
+    ["3\t0", "master ↓3 +1 ±1 ?1"],
+    ["3\t2", "master ↑2 ↓3 +1 ±1 ?1"],
+    // No upstream / detached HEAD: rev-list prints nothing usable.
+    ["", "master +1 ±1 ?1"],
+  ];
+  for (const [revList, expected] of cases) {
+    const ui = await mount({ revList });
+    assert.ok((await ui.settled())[0].includes(expected), `${revList} -> ${expected}`);
   }
 });
 

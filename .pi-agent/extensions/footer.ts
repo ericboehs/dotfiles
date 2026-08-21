@@ -74,9 +74,18 @@ interface GitState {
   staged: number;
   unstaged: number;
   untracked: number;
+  ahead: number;
+  behind: number;
 }
 
-const EMPTY_GIT: GitState = { isRepo: false, staged: 0, unstaged: 0, untracked: 0 };
+const EMPTY_GIT: GitState = {
+  isRepo: false,
+  staged: 0,
+  unstaged: 0,
+  untracked: 0,
+  ahead: 0,
+  behind: 0,
+};
 
 /** Stale-while-revalidate git status: renders never await, they just trigger a repaint. */
 class GitStatusCache {
@@ -106,14 +115,24 @@ class GitStatusCache {
     this.inFlight = true;
     let next = EMPTY_GIT;
     try {
-      const { stdout, code, killed } = await this.pi.exec(
-        "git",
-        ["status", "--porcelain=v1"],
-        { cwd, timeout: GIT_TIMEOUT_MS },
-      );
+      // Both run concurrently: rev-list is wasted work outside a repo or
+      // without an upstream, but it costs nothing next to a serial round trip.
+      const [status, revList] = await Promise.all([
+        this.pi.exec("git", ["status", "--porcelain=v1"], { cwd, timeout: GIT_TIMEOUT_MS }),
+        this.pi.exec("git", ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], {
+          cwd,
+          timeout: GIT_TIMEOUT_MS,
+        }),
+      ]);
       // trimEnd, not trim: columns 1/2 encode staged vs unstaged, so a leading
       // space on the first line is significant.
-      if (code === 0 && !killed) next = parsePorcelain(stdout.trimEnd());
+      if (status.code === 0 && !status.killed) {
+        next = {
+          ...parsePorcelain(status.stdout.trimEnd()),
+          // Detached HEAD or no upstream configured: rev-list exits non-zero.
+          ...parseAheadBehind(revList.code === 0 && !revList.killed ? revList.stdout : ""),
+        };
+      }
     } catch {
       next = EMPTY_GIT;
     } finally {
@@ -133,12 +152,14 @@ function sameGit(a: GitState, b: GitState): boolean {
     a.isRepo === b.isRepo &&
     a.staged === b.staged &&
     a.unstaged === b.unstaged &&
-    a.untracked === b.untracked
+    a.untracked === b.untracked &&
+    a.ahead === b.ahead &&
+    a.behind === b.behind
   );
 }
 
-function parsePorcelain(output: string): GitState {
-  const state: GitState = { isRepo: true, staged: 0, unstaged: 0, untracked: 0 };
+function parsePorcelain(output: string): Omit<GitState, "ahead" | "behind"> {
+  const state = { isRepo: true, staged: 0, unstaged: 0, untracked: 0 };
   if (!output) return state;
   for (const line of output.split("\n")) {
     if (line.length < 2) continue;
@@ -152,6 +173,24 @@ function parsePorcelain(output: string): GitState {
     if (y && y !== " ") state.unstaged += 1;
   }
   return state;
+}
+
+/** `rev-list --left-right --count @{upstream}...HEAD` prints "<behind>\t<ahead>". */
+function parseAheadBehind(output: string): Pick<GitState, "ahead" | "behind"> {
+  const [behind, ahead] = output.trim().split(/\s+/).map(Number);
+  return {
+    ahead: Number.isFinite(ahead) ? (ahead as number) : 0,
+    behind: Number.isFinite(behind) ? (behind as number) : 0,
+  };
+}
+
+/** "↑2 ↓1", omitting zero counts; empty when in sync with the upstream. */
+function formatAheadBehind(state: GitState): string {
+  if (!state.isRepo) return "";
+  const parts: string[] = [];
+  if (state.ahead) parts.push(`↑${state.ahead}`);
+  if (state.behind) parts.push(`↓${state.behind}`);
+  return parts.join(" ");
 }
 
 /** "+2 ±1 ?3", omitting zero counts; empty when the tree is clean. */
@@ -258,6 +297,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             color(BRIGHT_YELLOW, shortModel(ctx.model?.id)),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
             color(MAGENTA, branch ?? ""),
+            color(MAGENTA, formatAheadBehind(gitState)),
             color(MAGENTA, formatGitStatus(gitState)),
             // context-length / context-window share one segment (no spaces around "/")
             `${color(

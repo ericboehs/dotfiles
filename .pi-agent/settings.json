@@ -33,7 +33,7 @@
   ],
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-5",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "theme": "light/dark",
   "steeringMode": "all",
   "transport": "auto",
