@@ -6,11 +6,25 @@
 vim.keymap.set("n", "<C-q>", ":q<CR>")
 vim.keymap.set("i", "<C-q>", "<Esc>:q<CR>")
 
--- Tmux Navigator
-vim.keymap.set("n", "<C-h>", "<Cmd>NvimTmuxNavigateLeft<CR>", { silent = true })
-vim.keymap.set("n", "<C-j>", "<Cmd>NvimTmuxNavigateDown<CR>", { silent = true })
-vim.keymap.set("n", "<C-k>", "<Cmd>NvimTmuxNavigateUp<CR>", { silent = true })
-vim.keymap.set("n", "<C-l>", "<Cmd>NvimTmuxNavigateRight<CR>", { silent = true })
+-- Tmux Navigator: try an nvim split first, and hand off to pane-nav.sh when
+-- there is none that way. That is the same script Ctrl-h/j/k/l run from
+-- tmux.conf, so a split edge, a pane edge, a window edge and a session edge all
+-- behave identically. nvim-tmux-navigation could not do this: it shells out to
+-- `tmux select-pane` directly, which stops dead at the edge of the window and
+-- never reaches the tmux key binding.
+local function navigate(direction)
+  return function()
+    local from = vim.api.nvim_get_current_win()
+    pcall(vim.cmd.wincmd, direction)
+    if vim.api.nvim_get_current_win() == from and vim.env.TMUX then
+      vim.system({ vim.fn.expand("~/.tmux/pane-nav.sh"), direction })
+    end
+  end
+end
+
+for _, direction in ipairs({ "h", "j", "k", "l" }) do
+  vim.keymap.set("n", "<C-" .. direction .. ">", navigate(direction), { silent = true })
+end
 
 -- Vim Tmux Runner
 vim.keymap.set("n", "<leader>ta", "<Cmd>VtrAttachToPane<CR>", { silent = true })
