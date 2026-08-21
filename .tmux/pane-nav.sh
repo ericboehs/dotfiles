@@ -35,9 +35,11 @@ if [ -z "$pane" ]; then
   exit 2
 fi
 
-read -r at_edge zoomed floating windows session < <(
+# selection_present is written as a conditional because it expands to the empty
+# string outside copy mode, which would shift every field after it.
+read -r at_edge zoomed floating selecting windows session < <(
   tmux display-message -p -t "$pane" \
-    "#{$edge} #{window_zoomed_flag} #{pane_floating_flag} #{session_windows} #{session_name}"
+    "#{$edge} #{window_zoomed_flag} #{pane_floating_flag} #{?selection_present,1,0} #{session_windows} #{session_name}"
 )
 
 # A floating pane (floax popup) is not part of the window layout at all, so hand
@@ -53,7 +55,15 @@ fi
 # If a pane genuinely is that way, move to it and stay unzoomed — that is what
 # pressing the key is asking for. If nothing is, put the zoom back before
 # leaving, so the window is untouched when it is next returned to.
-if [ "$zoomed" = 1 ]; then
+#
+# The exception is a selection in progress. Any select-pane against a zoomed
+# pane throws the selection away, even one that finds no pane and does nothing,
+# and the unzoom is a resize, which throws it away too. Leaving the window is
+# the only move that keeps it: next-window, previous-window and switch-client
+# all leave the selection, the mode and the zoom exactly as they were. So a
+# selection skips this block entirely and falls through below, which treats the
+# zoom as a window holding a single pane.
+if [ "$zoomed" = 1 ] && [ "$selecting" = 0 ]; then
   tmux resize-pane -Z -t "$pane"
   at_edge=$(tmux display-message -p -t "$pane" "#{$edge}")
   if [ "$at_edge" = 0 ]; then
