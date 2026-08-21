@@ -4,7 +4,7 @@
     "npm:pi-approval-guardian@0.8.0",
     "npm:pi-web-access@0.24.0",
     "npm:@nicknisi/pi-stash",
-    "git:github.com/ericboehs/pi-claude-link@659095edb61b32e6211bc3c4c069917913295380",
+    "git:github.com/ericboehs/pi-claude-link@83256e182c4179843e8f872a9a9706c2884a59c0",
     "git:github.com/ericboehs/pi-context"
   ],
   "extensions": [

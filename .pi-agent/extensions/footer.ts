@@ -34,6 +34,9 @@ const GIT_TIMEOUT_MS = 1_000;
  * from a session name the user actually chose.
  */
 const PEER_TTL_MS = 5_000;
+// pi-claude-link registers after session_start and may rename itself moments
+// later to dodge a collision, so poke the cache instead of waiting for a render.
+const PEER_SETTLE_DELAYS_MS = [300, 1_000, 3_000, 8_000];
 
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
@@ -182,6 +185,11 @@ class PeerNameCache {
       void this.refresh(requestRender);
     }
     return this.name;
+  }
+
+  /** Re-read now, ignoring the TTL. */
+  reload(requestRender: () => void): void {
+    if (!this.inFlight) void this.refresh(requestRender);
   }
 
   private async refresh(requestRender: () => void): Promise<void> {
@@ -423,6 +431,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
     // The guardian's bypass resets when the session runtime reloads.
     bypassed = false;
     apply(ctx);
+    // Renders are event-driven, so an idle footer would otherwise miss a peer
+    // name that lands after the last startup paint — until the next keystroke.
+    for (const delay of PEER_SETTLE_DELAYS_MS) {
+      setTimeout(() => peer.reload(() => repaint?.()), delay).unref?.();
+    }
   });
   pi.on("model_select", async (_event, ctx) => apply(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {

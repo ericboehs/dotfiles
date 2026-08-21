@@ -324,6 +324,31 @@ test("no peer registry means no right-hand segment at all", async () => {
   }
 });
 
+test("a peer name that lands after startup appears without a keystroke", async () => {
+  // Registry empty at mount: the first render caches a miss for the whole TTL.
+  const restore = withPeerRegistry(undefined);
+  try {
+    const ui = await mount({ sessionName: undefined });
+    await ui.settled(80);
+    assert.doesNotMatch(ui.plain(80)[0], /pi-late/);
+    const paintsBefore = ui.renderCount();
+
+    // pi-claude-link registers a moment later, as it does in a real session.
+    mkdirSync(path.join(process.env.HOME, ".claude", "sessions"), { recursive: true });
+    writeFileSync(
+      path.join(process.env.HOME, ".claude", "sessions", `${process.pid}.json`),
+      JSON.stringify({ pid: process.pid, name: "pi-late" }),
+    );
+
+    await ui.startSession();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.ok(ui.renderCount() > paintsBefore, "repainted on its own");
+    assert.match(ui.plain(80)[0], / pi-late$/, "and inside the 5s TTL");
+  } finally {
+    restore();
+  }
+});
+
 test("long lines are truncated to the width", async () => {
   const ui = await mount({ sessionName: "footer-work" });
   const [main] = await ui.settled(30);
