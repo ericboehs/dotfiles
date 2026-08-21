@@ -121,6 +121,21 @@ test("non-repo directories drop the git segments", async () => {
   assert.equal((await ui.settled())[0], "dotfiles or ox hi 41.2k/1m $0.5123");
 });
 
+test("zero counts are omitted, and a clean tree drops the status segment", async () => {
+  const cases = [
+    ["A  staged.ts\n M edited.ts\n?? new.ts\n", "master +1 ±1 ?1 41.2k"],
+    [" M edited.ts\n M other.ts\n", "master ±2 41.2k"],
+    ["?? new.ts\n", "master ?1 41.2k"],
+    ["A  staged.ts\n", "master +1 41.2k"],
+    ["MM both.ts\n", "master +1 ±1 41.2k"],
+    ["", "master 41.2k"],
+  ];
+  for (const [porcelain, expected] of cases) {
+    const ui = await mount({ porcelain });
+    assert.match((await ui.settled())[0], new RegExp(expected.replace(/[+?]/g, "\\$&")), porcelain);
+  }
+});
+
 test("provider aliases", async () => {
   const cases = [
     ["openrouter", "or"],

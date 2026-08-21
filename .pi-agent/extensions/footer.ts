@@ -154,6 +154,16 @@ function parsePorcelain(output: string): GitState {
   return state;
 }
 
+/** "+2 ±1 ?3", omitting zero counts; empty when the tree is clean. */
+function formatGitStatus(state: GitState): string {
+  if (!state.isRepo) return "";
+  const parts: string[] = [];
+  if (state.staged) parts.push(`+${state.staged}`);
+  if (state.unstaged) parts.push(`±${state.unstaged}`);
+  if (state.untracked) parts.push(`?${state.untracked}`);
+  return parts.join(" ");
+}
+
 function color(code: number, text: string): string {
   return text ? `\x1b[${code}m${text}\x1b[39m` : "";
 }
@@ -248,12 +258,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             color(BRIGHT_YELLOW, shortModel(ctx.model?.id)),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
             color(MAGENTA, branch ?? ""),
-            color(
-              MAGENTA,
-              gitState.isRepo
-                ? `+${gitState.staged} ±${gitState.unstaged} ?${gitState.untracked}`
-                : "",
-            ),
+            color(MAGENTA, formatGitStatus(gitState)),
             // context-length / context-window share one segment (no spaces around "/")
             `${color(
               contextColorCode(usage?.tokens, usage?.contextWindow),
