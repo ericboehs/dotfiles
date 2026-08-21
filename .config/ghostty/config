@@ -26,44 +26,24 @@ keybind = escape=unbind
 # Undo
 keybind = super+z=text:\x1f
 
-# Ctrl+1-9 keybindings to send escape sequences
-keybind = ctrl+1=text:\x1b[27;5;49~
-keybind = ctrl+2=text:\x1b[27;5;50~
-keybind = ctrl+3=text:\x1b[27;5;51~
-keybind = ctrl+4=text:\x1b[27;5;52~
-keybind = ctrl+5=text:\x1b[27;5;53~
-keybind = ctrl+6=text:\x1b[27;5;54~
-keybind = ctrl+7=text:\x1b[27;5;55~
-keybind = ctrl+8=text:\x1b[27;5;56~
-keybind = ctrl+9=text:\x1b[27;5;57~
+# Ctrl+1-9 (windows), Ctrl+Shift+hjkl (move window/session) and Ctrl+Shift+1-9
+# (switch session) used to be spelled out here as explicit escape sequences,
+# 22 of them, in the modifyOtherKeys form `\x1b[27;<modifier>;<keycode>~`.
+#
+# They are gone because Ghostty already sends those sequences by itself. tmux
+# only knows how to ask for extended keys through xterm's modifyOtherKeys and it
+# never sends that request under TERM=xterm-ghostty, so the assumption was that
+# nothing arrived unless it was written out here — but a tmux binding on
+# Ctrl+Shift+G, a key with no entry in this file and no legacy encoding of its
+# own, fired anyway, on a client with no `extkeys` feature negotiated.
+#
+# If a key ever stops registering, put its line back rather than reaching for
+# `set -as terminal-features 'xterm-ghostty:extkeys'`: that makes tmux request
+# the mode explicitly, but it also leaks extended keys into applications that
+# mishandle them. Two details for writing one by hand: the payload carries the
+# *unshifted* keycode (h is 104, not 72), and modifier 5 is ctrl while 6 is
+# ctrl+shift.
 
-# Ctrl+Shift+hjkl (move window/session) and Ctrl+Shift+1-9 (switch session),
-# same modifyOtherKeys form as above with modifier 6 = ctrl+shift.
-#
-# These have to be spelled out for the same reason Ctrl+1-9 does. tmux only
-# knows how to request extended keys through xterm's modifyOtherKeys, and it
-# does not send that request for TERM=xterm-ghostty, so nothing here is
-# negotiated: without these lines Ctrl+Shift+H would arrive as a bare 0x08,
-# indistinguishable from Ctrl+H, and would quietly run the wrong binding.
-#
-# The payload must carry the *unshifted* keycode (h=104, not H=72) — tmux
-# ignores the shifted one. `set -as terminal-features 'xterm-ghostty:extkeys'`
-# in tmux.conf would make Ghostty emit all of these on its own and let this
-# whole block go away, at the cost of extended keys leaking into apps that
-# mishandle them.
-keybind = ctrl+shift+h=text:\x1b[27;6;104~
-keybind = ctrl+shift+j=text:\x1b[27;6;106~
-keybind = ctrl+shift+k=text:\x1b[27;6;107~
-keybind = ctrl+shift+l=text:\x1b[27;6;108~
-keybind = ctrl+shift+1=text:\x1b[27;6;49~
-keybind = ctrl+shift+2=text:\x1b[27;6;50~
-keybind = ctrl+shift+3=text:\x1b[27;6;51~
-keybind = ctrl+shift+4=text:\x1b[27;6;52~
-keybind = ctrl+shift+5=text:\x1b[27;6;53~
-keybind = ctrl+shift+6=text:\x1b[27;6;54~
-keybind = ctrl+shift+7=text:\x1b[27;6;55~
-keybind = ctrl+shift+8=text:\x1b[27;6;56~
-keybind = ctrl+shift+9=text:\x1b[27;6;57~
 
 # Send Option as Alt rather than composing accented characters, so every Alt key
 # reaches tmux and zsh. Replaces the per-key `keybind = alt+X=text:\x1bX` list
