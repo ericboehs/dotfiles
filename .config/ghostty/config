@@ -26,23 +26,28 @@ keybind = escape=unbind
 # Undo
 keybind = super+z=text:\x1f
 
-# Ctrl+1-9 (windows), Ctrl+Shift+hjkl (move window/session) and Ctrl+Shift+1-9
-# (switch session) used to be spelled out here as explicit escape sequences,
-# 22 of them, in the modifyOtherKeys form `\x1b[27;<modifier>;<keycode>~`.
+# Ctrl+1-9 switches tmux windows. Ghostty does not send anything distinguishable
+# for a bare ctrl+digit, so these have to be written out as modifyOtherKeys
+# sequences: `\x1b[27;<modifier>;<keycode>~`, modifier 5 being ctrl.
 #
-# They are gone because Ghostty already sends those sequences by itself. tmux
-# only knows how to ask for extended keys through xterm's modifyOtherKeys and it
-# never sends that request under TERM=xterm-ghostty, so the assumption was that
-# nothing arrived unless it was written out here — but a tmux binding on
-# Ctrl+Shift+G, a key with no entry in this file and no legacy encoding of its
-# own, fired anyway, on a client with no `extkeys` feature negotiated.
-#
-# If a key ever stops registering, put its line back rather than reaching for
-# `set -as terminal-features 'xterm-ghostty:extkeys'`: that makes tmux request
-# the mode explicitly, but it also leaks extended keys into applications that
-# mishandle them. Two details for writing one by hand: the payload carries the
-# *unshifted* keycode (h is 104, not 72), and modifier 5 is ctrl while 6 is
-# ctrl+shift.
+# The ctrl+shift+hjkl and ctrl+shift+1-9 equivalents used to be listed here too
+# and are not needed: Ghostty emits those on its own. It is only the unshifted
+# ctrl+digit that falls back to a legacy encoding tmux cannot tell apart.
+keybind = ctrl+1=text:\x1b[27;5;49~
+keybind = ctrl+2=text:\x1b[27;5;50~
+keybind = ctrl+3=text:\x1b[27;5;51~
+keybind = ctrl+4=text:\x1b[27;5;52~
+keybind = ctrl+5=text:\x1b[27;5;53~
+keybind = ctrl+6=text:\x1b[27;5;54~
+keybind = ctrl+7=text:\x1b[27;5;55~
+keybind = ctrl+8=text:\x1b[27;5;56~
+keybind = ctrl+9=text:\x1b[27;5;57~
+
+# If a Ctrl+Shift key ever stops registering, write its line back the same way
+# rather than reaching for `set -as terminal-features 'xterm-ghostty:extkeys'`:
+# that makes tmux request the mode explicitly, but it also leaks extended keys
+# into applications that mishandle them. Modifier 6 is ctrl+shift, and the
+# payload carries the *unshifted* keycode (h is 104, not 72).
 
 
 # Send Option as Alt rather than composing accented characters, so every Alt key
