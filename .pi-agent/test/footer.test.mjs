@@ -32,6 +32,9 @@ async function mount(overrides = {}) {
   let factory;
   let renders = 0;
   const execCalls = [];
+  const sent = [];
+  const notices = [];
+  const widgets = [];
 
   const ctx = {
     hasUI: true,
@@ -43,7 +46,8 @@ async function mount(overrides = {}) {
     },
     ui: {
       setFooter: (f) => { factory = f; },
-      notify: () => {},
+      setWidget: (key, content) => { widgets.push({ key, content }); },
+      notify: (message, level) => { notices.push({ message, level }); },
     },
   };
 
@@ -55,8 +59,11 @@ async function mount(overrides = {}) {
     },
     getThinkingLevel: () => overrides.thinkingLevel ?? "high",
     getSessionName: () => sessionName,
-    registerCommand: () => {},
+    getCommands: () => overrides.commands ?? [{ name: "approval-guardian" }],
+    sendUserMessage: (text, options) => { sent.push({ text, options }); },
+    registerCommand: (name, options) => { pi.commands[name] = options; },
     on: (name, handler) => { pi.handlers[name] = handler; },
+    commands: {},
     handlers: {},
   };
 
@@ -76,6 +83,13 @@ async function mount(overrides = {}) {
   return {
     component,
     execCalls,
+    sent,
+    notices,
+    widgets,
+    ctx,
+    /** Run a registered slash command with the same ctx pi would pass. */
+    run: (name, args = "") => pi.commands[name].handler(args, ctx),
+    startSession: () => pi.handlers.session_start({}, ctx),
     renderCount: () => renders,
     /** Render once with ANSI stripped. */
     plain: (width = 120) => component.render(width).map(strip),
@@ -264,4 +278,55 @@ test("long lines are truncated to the width", async () => {
   const [main] = await ui.settled(30);
   assert.equal(main.length, 30);
   assert.ok(main.endsWith("…"));
+});
+
+test("/bypass drives the guardian and shows a bright red marker", async () => {
+  const ui = await mount();
+  assert.doesNotMatch(ui.plain()[0], /bypass/);
+
+  await ui.run("bypass");
+  assert.deepEqual(ui.sent, [
+    { text: "/approval-guardian bypass", options: { expandPromptTemplates: true } },
+  ]);
+  assert.match(ui.plain()[0], /\$0\.5123 bypass$/);
+  assert.match(ui.raw()[0], /\x1B\[91mbypass\x1B\[39m/, "bright red");
+
+  await ui.run("bypass");
+  assert.equal(ui.sent.at(-1).text, "/approval-guardian enable");
+  assert.doesNotMatch(ui.plain()[0], /bypass/);
+});
+
+test("/bypass takes explicit on/off and rejects anything else", async () => {
+  const ui = await mount();
+
+  await ui.run("bypass", "off");
+  assert.deepEqual(ui.sent, [], "already enabled, nothing to do");
+  assert.match(ui.notices.at(-1).message, /already enabled/);
+
+  await ui.run("bypass", "on");
+  assert.equal(ui.sent.at(-1).text, "/approval-guardian bypass");
+  await ui.run("bypass", "on");
+  assert.equal(ui.sent.length, 1, "already bypassed, nothing to do");
+
+  await ui.run("bypass", "maybe");
+  assert.match(ui.notices.at(-1).message, /Usage: \/bypass/);
+  assert.equal(ui.sent.length, 1);
+});
+
+test("/bypass refuses to run without the guardian loaded", async () => {
+  const ui = await mount({ commands: [{ name: "footer" }] });
+  await ui.run("bypass");
+  assert.deepEqual(ui.sent, [], "must not reach the LLM as a plain message");
+  assert.equal(ui.notices.at(-1).level, "error");
+  assert.doesNotMatch(ui.plain()[0], /bypass/);
+});
+
+test("bypass clears the guardian's below-editor warning and resets per session", async () => {
+  const ui = await mount();
+  await ui.run("bypass");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual(ui.widgets.at(-1), { key: "approval-guardian-bypass", content: undefined });
+
+  await ui.startSession();
+  assert.doesNotMatch(ui.plain()[0], /bypass/);
 });

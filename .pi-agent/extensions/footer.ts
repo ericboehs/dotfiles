@@ -34,6 +34,12 @@ const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 const CONTEXT_WARNING_PERCENT = 70;
 const CONTEXT_DANGER_PERCENT = 90;
 
+/** pi-approval-guardian's persistent below-editor warning, replaced by our marker. */
+const GUARDIAN_COMMAND = "approval-guardian";
+const GUARDIAN_WIDGET_KEY = "approval-guardian-bypass";
+// The guardian awaits waitForIdle() before painting, so a single clear races it.
+const GUARDIAN_CLEAR_DELAYS_MS = [100, 600, 2_500];
+
 const BLUE = 34;
 const MAGENTA = 35;
 const CYAN = 36;
@@ -41,6 +47,7 @@ const GREEN = 32;
 const YELLOW = 33;
 const RED = 31;
 const BRIGHT_YELLOW = 93;
+const BRIGHT_RED = 91;
 
 /** Short names for verbose provider ids. */
 const PROVIDER_NAMES: Record<string, string> = {
@@ -230,6 +237,8 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
 export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
   let enabled = true;
+  let bypassed = false;
+  let repaint: (() => void) | undefined;
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!ctx.hasUI) return;
@@ -241,9 +250,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
     ctx.ui.setFooter((tui, theme, footerData) => {
       const requestRender = () => tui.requestRender();
       const unsubscribe = footerData.onBranchChange(requestRender);
+      repaint = requestRender;
 
       return {
-        dispose: unsubscribe,
+        dispose: () => {
+          unsubscribe();
+          repaint = undefined;
+        },
         invalidate(): void {},
         render(width: number): string[] {
           if (width <= 0) return [];
@@ -268,6 +281,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             provider && HIDE_COST_PROVIDERS.has(provider)
               ? ""
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
+            bypassed ? color(BRIGHT_RED, "bypass") : "",
             ...INLINE_STATUS_KEYS.map((key) => statuses.get(key) ?? ""),
           ];
 
@@ -294,6 +308,54 @@ export default function footerExtension(pi: ExtensionAPI): void {
     return truncateToWidth(`${left}${" ".repeat(gap)}${right}`, width, "…");
   }
 
+  /**
+   * Take over the guardian's persistent below-editor warning.
+   *
+   * The guardian refuses to bypass outside the TUI so its warning stays
+   * visible; the footer marker is just as persistent, so the property holds —
+   * but only while the footer is on, hence the `enabled` guard.
+   */
+  function suppressGuardianWidget(ctx: ExtensionCommandContext): void {
+    if (!enabled || !ctx.hasUI) return;
+    for (const delay of GUARDIAN_CLEAR_DELAYS_MS) {
+      setTimeout(() => {
+        if (bypassed && enabled) ctx.ui.setWidget(GUARDIAN_WIDGET_KEY, undefined);
+      }, delay).unref?.();
+    }
+  }
+
+  pi.registerCommand("bypass", {
+    description: "Toggle Approval Guardian bypass, shown in the footer",
+    handler: async (args, ctx) => {
+      const argument = args.trim().toLowerCase();
+      const next =
+        argument === "on" ? true
+        : argument === "off" ? false
+        : argument === "" ? !bypassed
+        : undefined;
+      if (next === undefined) {
+        ctx.ui.notify("Usage: /bypass [on|off]", "warning");
+        return;
+      }
+      if (next === bypassed) {
+        ctx.ui.notify(`Approval Guardian is already ${next ? "bypassed" : "enabled"}`, "info");
+        return;
+      }
+      if (!pi.getCommands().some((command) => command.name === GUARDIAN_COMMAND)) {
+        // Without the guardian loaded this would go to the LLM as a plain message.
+        ctx.ui.notify(`/${GUARDIAN_COMMAND} is not available`, "error");
+        return;
+      }
+
+      bypassed = next;
+      pi.sendUserMessage(`/${GUARDIAN_COMMAND} ${next ? "bypass" : "enable"}`, {
+        expandPromptTemplates: true,
+      });
+      if (next) suppressGuardianWidget(ctx);
+      repaint?.();
+    },
+  });
+
   pi.registerCommand("footer", {
     description: "Toggle the custom footer",
     handler: async (_args, ctx) => {
@@ -303,7 +365,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("session_start", async (_event, ctx) => apply(ctx));
+  pi.on("session_start", async (_event, ctx) => {
+    // The guardian's bypass resets when the session runtime reloads.
+    bypassed = false;
+    apply(ctx);
+  });
   pi.on("model_select", async (_event, ctx) => apply(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {
     if (ctx.hasUI) ctx.ui.setFooter(undefined);
