@@ -2,7 +2,6 @@
   "lastChangelogVersion": "0.84.2",
   "packages": [
     "npm:pi-approval-guardian@0.8.0",
-    "git:github.com/ericboehs/pi-footer@388ab82a606e96852fa927b1c3efa458bc64e2b1",
     "npm:pi-web-access@0.24.0",
     "npm:@nicknisi/pi-stash",
     "git:github.com/ericboehs/pi-claude-link@6a0c37fe3a0c5d284364958db3fa2f9488c0c584",
@@ -32,8 +31,8 @@
     "~/Code/github.com/ericboehs/claude-plugins/plugins/wengage/skills/wengage",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills"
   ],
-  "defaultProvider": "openrouter",
-  "defaultModel": "stealth/ox-alpha",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-opus-5",
   "defaultThinkingLevel": "high",
   "theme": "light/dark",
   "steeringMode": "all",
