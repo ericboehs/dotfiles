@@ -734,7 +734,7 @@ pi --version
 
 # pi's Node build loads 177 ES modules before it paints the first frame.
 # bin/pi-bundle collapses them into one file and repoints the `pi` bin at
-# bin/pi-launch, which is worth ~150ms per launch. Strictly an optimization:
+# bin/pi-launch, which is worth ~115ms per launch. Strictly an optimization:
 # the launcher falls back to dist/cli.js whenever the bundle is missing or
 # older than the package, so a failure here costs speed and nothing else.
 pi_bundle="${MISE_PROJECT_ROOT:-.}/bin/pi-bundle"

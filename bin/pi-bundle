@@ -4,7 +4,7 @@
 # Usage: pi-bundle [-h|--help] [--status|--off]
 #
 # pi ships its Node build as ~200 ES modules, and 177 of them load before the
-# first frame. Collapsing them into one file takes ~150ms off every launch.
+# first frame. Collapsing them into one file takes ~115ms off every launch.
 #
 # Two patches are needed, and they only pay off together:
 #
