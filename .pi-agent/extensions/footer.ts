@@ -42,14 +42,13 @@ const PEER_SETTLE_DELAYS_MS = [300, 1_000, 3_000, 8_000];
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
 
 /**
- * How long the boot timer stays in the footer after launch.
+ * The boot timer sits in the footer until the first message goes out.
  *
  * Measured at the footer's first render, which is the last thing to happen in
  * `interactiveMode.init()` — so `process.uptime()` there is genuinely
  * exec-to-first-paint, node bootstrap and extension loading included. Run
  * `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi` for the phase-by-phase breakdown.
  */
-const BOOT_DISPLAY_MS = 30_000;
 
 /** Providers whose cost is meaningless (subscription-billed). */
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
@@ -312,7 +311,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   // switch, uptime is however long the process has been sitting there.
   let coldStart = false;
   let bootMs: number | undefined;
-  let bootShownAt = 0;
+  let bootCleared = false;
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!ctx.hasUI) return;
@@ -343,11 +342,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
           if (coldStart && bootMs === undefined) {
             bootMs = Math.round(process.uptime() * 1_000);
-            bootShownAt = Date.now();
-            // Renders are event-driven, so schedule the paint that retires this.
-            setTimeout(() => repaint?.(), BOOT_DISPLAY_MS).unref?.();
           }
-          const showBoot = bootMs !== undefined && Date.now() - bootShownAt < BOOT_DISPLAY_MS;
+          const showBoot = bootMs !== undefined && !bootCleared;
 
           const left: string[] = [
             color(BLUE, basename(ctx.cwd)),
@@ -480,6 +476,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
       setTimeout(() => peer.reload(() => repaint?.()), delay).unref?.();
     }
   });
+  // Retire the boot timer the moment a message is sent. Extension commands are
+  // matched before this event, so /boot and /footer leave it alone; messages
+  // this extension sends itself arrive as source "extension" and do too.
+  pi.on("input", async (event) => {
+    if (bootCleared || event.source !== "interactive") return undefined;
+    bootCleared = true;
+    repaint?.();
+    return undefined;
+  });
+
   pi.on("model_select", async (_event, ctx) => apply(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {
     if (ctx.hasUI) ctx.ui.setFooter(undefined);
