@@ -2,15 +2,19 @@
  * Minimal footer/statusline for pi — a lean replacement for the pi-footer package.
  *
  * Renders one line:
- *   dir provider model thinking branch +s ±u ?n ctx/window $cost [inline statuses]  session-name
+ *   dir provider model thinking branch* ⇣⇡ ctx/window $cost [inline statuses] ⚡boot bypass   session-name
  * plus an optional dim row of other extension statuses (from ctx.ui.setStatus).
+ * The boot timer shows until the first message; "bypass" replaces it as the
+ * right-most main-line marker while Approval Guardian is bypassed.
  *
  * Design notes:
  * - No config UI, no widget registry: the layout is this file.
  * - Git state comes from a single `git status --porcelain=v1` per refresh, cached
  *   with a 5s TTL and refreshed asynchronously (stale-while-revalidate), so a slow
  *   repo never blocks a render.
- * - Colors are plain ANSI-16 SGR codes; only the extension-status row uses the theme.
+ * - Colors are plain ANSI-16 SGR codes; the theme supplies only the dim
+ *   foreground, shared by the boot timer, the peer session name, and the
+ *   extension-status row.
  */
 
 import { appendFile, readFile, realpath, stat, writeFile } from "node:fs/promises";
