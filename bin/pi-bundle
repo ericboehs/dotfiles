@@ -279,8 +279,12 @@ mv -f "$TMP" "$BUNDLE"
 # require.resolve entirely, which is why this is filesystem work.
 # Verified the other lazy APIs don't need this: they use static imports and
 # get inlined like everything else.
-shim_target="$(find -L "$PKG/node_modules" "$PKG/../../../.." \
-  -maxdepth 7 -path "*@earendil-works/pi-ai/dist/api/bedrock-converse-stream.js" 2>/dev/null | head -1)"
+# || true inside the substitution: under pipefail, head -1 closing the pipe
+# SIGPIPEs find (exit 141) and set -e would abort the whole script silently —
+# which is exactly what happened on the Linux box, mid-success.
+shim_target="$( \
+  (find -L "$PKG/node_modules" "$PKG/../../../.." \
+    -maxdepth 7 -path "*@earendil-works/pi-ai/dist/api/bedrock-converse-stream.js" 2>/dev/null || true) | head -1)"
 if [ -n "$shim_target" ]; then
   node - "$PKG" "${shim_target%/dist/*}" "$shim_target" >/dev/null <<'SHIM'
 const fs = require("node:fs");
