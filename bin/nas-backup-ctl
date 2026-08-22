@@ -124,6 +124,10 @@ cmd_start() {
 cmd_cancel() {
   [ "${1:-}" = "--yes" ] || die "cancel needs --yes; it stops whatever backup is running, not a task you name"
   "${NAS[@]}" "sudo $SYNOBACKUP --cancel-backup"
+  local rc=$?
+  # Without this, a failed cancel gets followed by a cmd_running that reports
+  # the job as still going — indistinguishable from a cancel the NAS ignored.
+  [ "$rc" -eq 0 ] || die "cancel failed (ssh exit $rc)"
   sleep 5
   cmd_running
 }
