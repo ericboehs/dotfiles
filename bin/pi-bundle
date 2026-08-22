@@ -18,11 +18,22 @@
 #      bundle *slower* than the stock build. Measured at +313ms on one
 #      extension, so bundling without this reads as a regression.
 #
+# The entrypoint is dist/bun/cli.js, not dist/cli.js. pi deliberately hides its
+# OAuth flows and the bedrock provider from bundlers behind variable import
+# specifiers, and dist/bun/cli.js is the entry that statically registers them
+# again for its own Bun binary. Bundling dist/cli.js instead produces a pi that
+# starts fine and then fails every OAuth provider at runtime with
+# "Cannot find module .../dist/openai-codex.js".
+#
 # Nothing in the install is modified. The bundle is built from a patched copy
 # and dropped next to dist/cli.js, and the `pi` bin points at bin/pi-launch,
 # which falls back to dist/cli.js whenever the bundle is missing or older than
 # the package. A pi upgrade therefore degrades to stock speed, never breakage;
 # re-run this afterwards (mise task bootstrap:pi does).
+#
+# Where the bin is a generated shim script rather than a symlink (mise's npm
+# backend), the shim's own entrypoint selection is rewritten instead, with the
+# stock copy kept alongside as pi.pre-bundle.
 
 set -euo pipefail
 
@@ -76,10 +87,55 @@ done
 VERSION="$(node -p "require('$PKG/package.json').version")"
 BUNDLE="$PKG/dist/bundle.mjs"
 PI_BIN_LINK="$BIN_DIR/pi"
+SHIM_BACKUP="$PI_BIN_LINK.pre-bundle"
+
+# mise's npm backend writes a generated shim script at the bin path instead of
+# a symlink, so there is nothing to repoint. Rewrite the shim's own entrypoint
+# selection instead, keeping the stock file as the fallback.
+is_shim() { [ -f "$PI_BIN_LINK" ] && [ ! -L "$PI_BIN_LINK" ] && grep -q 'dist/cli\.js' "$PI_BIN_LINK"; }
+
+patch_shim() {
+  [ -f "$SHIM_BACKUP" ] || cp -p "$PI_BIN_LINK" "$SHIM_BACKUP"
+  node - "$SHIM_BACKUP" "$PI_BIN_LINK" <<'SHIM' || die "could not patch $PI_BIN_LINK (restore it from $SHIM_BACKUP)"
+const fs = require("node:fs");
+const [, , from, to] = process.argv;
+const src = fs.readFileSync(from, "utf8");
+
+// Every exec line points at the same "$basedir/<rel>/dist/cli.js".
+const m = src.match(/exec (?:"\$basedir\/node"|node) "\$basedir\/(\S+)\/dist\/cli\.js"/);
+if (!m) { console.error("no exec line naming dist/cli.js"); process.exit(1); }
+const rel = m[1];
+
+const guard = [
+  "",
+  "# pi-bundle: prefer the single-file bundle, but only while it is present and",
+  "# no older than the package, so an upgrade degrades to stock speed.",
+  `pi_entry="$basedir/${rel}/dist/bundle.mjs"`,
+  `{ [ -z "$PI_NO_BUNDLE" ] && [ -f "$pi_entry" ] && [ ! "$basedir/${rel}/package.json" -nt "$pi_entry" ]; } \\`,
+  `  || pi_entry="$basedir/${rel}/dist/cli.js"`,
+  "",
+].join("\n");
+
+const anchor = 'basedir=$(dirname "$link")\n';
+if (!src.includes(anchor)) { console.error("no basedir assignment to anchor on"); process.exit(1); }
+
+const out = src
+  .split(`"$basedir/${rel}/dist/cli.js"`).join('"$pi_entry"')
+  .replace(anchor, anchor + guard);
+fs.writeFileSync(to, out);
+fs.chmodSync(to, 0o755);
+SHIM
+}
 
 if [[ "${1:-}" == "--status" ]]; then
   echo "pi        $VERSION ($PKG)"
-  echo "bin       $PI_BIN_LINK -> $(readlink "$PI_BIN_LINK" 2>/dev/null || echo "(not a symlink)")"
+  if [ -L "$PI_BIN_LINK" ]; then
+    echo "bin       $PI_BIN_LINK -> $(readlink "$PI_BIN_LINK")"
+  elif [ -f "$SHIM_BACKUP" ]; then
+    echo "bin       $PI_BIN_LINK (shim, patched; stock copy at $(basename "$SHIM_BACKUP"))"
+  else
+    echo "bin       $PI_BIN_LINK (shim, unpatched)"
+  fi
   if [ -f "$BUNDLE" ]; then
     stale=""
     [ "$PKG/package.json" -nt "$BUNDLE" ] && stale=" ${YELLOW}(stale: older than the package)${NC}"
@@ -92,6 +148,7 @@ fi
 
 if [[ "${1:-}" == "--off" ]]; then
   [ -L "$PI_BIN_LINK" ] && ln -sfn "$PKG/dist/cli.js" "$PI_BIN_LINK"
+  [ -f "$SHIM_BACKUP" ] && mv -f "$SHIM_BACKUP" "$PI_BIN_LINK"
   rm -f "$BUNDLE"
   echo "${GREEN}✅ restored the stock entrypoint${NC}"
   exit 0
@@ -139,24 +196,36 @@ PATCH
 
 TMP="$PKG/dist/.bundle.tmp.mjs"
 rm -f "$TMP"
+# dist/bun/cli.js registers the OAuth flows and the bedrock provider that pi
+# hides from bundlers, then defers to ../cli.js. Older versions may not ship it.
+ENTRY="$STAGE/dist/bun/cli.js"
+[ -f "$ENTRY" ] || { ENTRY="$STAGE/dist/cli.js"; echo "${YELLOW}dist/bun/cli.js is missing — OAuth providers may not work${NC}"; }
 if command -v bun >/dev/null; then
   # Whitespace and syntax only: mangling identifiers buys nothing measurable
   # and costs readable function names in pi's own stack traces.
-  bun build "$STAGE/dist/cli.js" --target=node --format=esm \
+  bun build "$ENTRY" --target=node --format=esm \
     --minify-whitespace --minify-syntax --external '*.node' --outfile "$TMP" >/dev/null
 else
   echo "${YELLOW}bun not found — falling back to npx esbuild${NC}"
-  npx --yes esbuild@0.25 "$STAGE/dist/cli.js" --bundle --platform=node --format=esm \
+  npx --yes esbuild@0.25 "$ENTRY" --bundle --platform=node --format=esm \
     --target=node24 --external:*.node --log-level=error --outfile="$TMP" \
     --banner:js='import{createRequire as __pcr}from "node:module";import{fileURLToPath as __pfu}from "node:url";import{dirname as __pdn}from "node:path";const require=__pcr(import.meta.url);const __filename=__pfu(import.meta.url);const __dirname=__pdn(__filename);'
 fi
 [ -s "$TMP" ] || die "the bundler produced nothing"
 
 # Smoke test before it becomes the entrypoint: --version proves the graph
-# evaluates, `list` proves settings and the package manager still resolve.
+# evaluates, `list` proves settings and the package manager still resolve, and
+# `auth check` has to agree with the stock build for every OAuth provider —
+# that last one is what catches a bundle whose provider imports went missing.
 built="$(node "$TMP" --version 2>&1 | tail -1)"
 [ "$built" = "$VERSION" ] || { rm -f "$TMP"; die "bundle reports version '$built', expected '$VERSION'"; }
 node "$TMP" list >/dev/null 2>&1 || { rm -f "$TMP"; die "bundle failed to run 'pi list'"; }
+for provider in openai-codex anthropic; do
+  # An unconfigured provider exits non-zero; only the answers have to match.
+  want="$(node "$PKG/dist/cli.js" auth check --provider "$provider" --no-refresh --json 2>&1 | tail -1 || true)"
+  got="$(node "$TMP" auth check --provider "$provider" --no-refresh --json 2>&1 | tail -1 || true)"
+  [ "$got" = "$want" ] || { rm -f "$TMP"; die "bundle disagrees with the stock build on $provider auth:"$'\n'"  stock:  $want"$'\n'"  bundle: $got"; }
+done
 
 mv -f "$TMP" "$BUNDLE"
 size="$(du -h "$BUNDLE" | cut -f1)"
@@ -165,10 +234,11 @@ if [ -n "${PI_BUNDLE_NO_LINK:-}" ]; then
 elif [ -L "$PI_BIN_LINK" ] || [ ! -e "$PI_BIN_LINK" ]; then
   ln -sfn "$LAUNCHER" "$PI_BIN_LINK"
   echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — $PI_BIN_LINK now goes through pi-launch"
+elif is_shim; then
+  patch_shim
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — patched the shim at $PI_BIN_LINK"
 else
-  # mise's npm backend writes a generated shim script here rather than a
-  # symlink. Replacing it would break the install's own bookkeeping.
   echo "${GREEN}✅ bundled pi $VERSION${NC} ($size)"
-  echo "${YELLOW}   $PI_BIN_LINK is a script, not a symlink — left alone.${NC}"
+  echo "${YELLOW}   $PI_BIN_LINK is neither a symlink nor a shim this script knows — left alone.${NC}"
   echo "${YELLOW}   Run pi as: node $BUNDLE${NC}"
 fi
