@@ -37,7 +37,7 @@
   "theme": "light/dark",
   "steeringMode": "all",
   "transport": "auto",
-  "quietStartup": true,
+  "quietStartup": false,
   "defaultProjectTrust": "always",
   "doubleEscapeAction": "tree",
   "treeFilterMode": "default",
