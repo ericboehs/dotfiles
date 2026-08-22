@@ -46,9 +46,10 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "  --status   show what the pi bin currently points at"
   echo "  --off      restore the stock entrypoint and delete the bundle"
   echo ""
-  echo "PI_BIN=<path>         locate the install through a pi that is not on PATH"
-  echo "PI_BUNDLE_NO_LINK=1   build the bundle without repointing the bin"
-  echo "PI_NO_BUNDLE=1        skip the bundle for one launch"
+  echo "PI_BIN=<path>          locate the install through a pi that is not on PATH"
+  echo "PI_BUNDLE_NO_LINK=1    build the bundle without repointing the bin"
+  echo "PI_BUNDLE_NO_BEDROCK=1 leave the AWS SDK out (~30ms faster, breaks bedrock)"
+  echo "PI_NO_BUNDLE=1         skip the bundle for one launch"
   exit 0
 fi
 
@@ -200,6 +201,28 @@ rm -f "$TMP"
 # hides from bundlers, then defers to ../cli.js. Older versions may not ship it.
 ENTRY="$STAGE/dist/bun/cli.js"
 [ -f "$ENTRY" ] || { ENTRY="$STAGE/dist/cli.js"; echo "${YELLOW}dist/bun/cli.js is missing — OAuth providers may not work${NC}"; }
+
+# Registering bedrock drags the whole AWS SDK in and evaluates it on every
+# launch: 32ms and 0.7MB (608ms -> 576ms to first frame here) for a provider
+# most installs never authenticate. Opt-in rather than default, since silently
+# disabling a provider is the bug this entrypoint exists to fix — and refuse to
+# do it quietly to someone who actually has bedrock credentials.
+if [ -n "${PI_BUNDLE_NO_BEDROCK:-}" ] && [ "$ENTRY" = "$STAGE/dist/bun/cli.js" ]; then
+  auth_file="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/auth.json"
+  if [ -f "$auth_file" ] && grep -q '"bedrock"' "$auth_file"; then
+    echo "${YELLOW}PI_BUNDLE_NO_BEDROCK is set but $auth_file has bedrock credentials — keeping bedrock${NC}" >&2
+  else
+  node - "$ENTRY" <<'BEDROCK' || die "could not remove the bedrock registration from dist/bun/cli.js"
+const fs = require("node:fs");
+const file = process.argv[2];
+const src = fs.readFileSync(file, "utf8");
+const line = 'await import("./register-bedrock.js");\n';
+if (!src.includes(line)) { console.error("register-bedrock import not found"); process.exit(1); }
+fs.writeFileSync(file, src.replace(line, ""));
+BEDROCK
+    no_bedrock=1
+  fi
+fi
 if command -v bun >/dev/null; then
   # Whitespace and syntax only: mangling identifiers buys nothing measurable
   # and costs readable function names in pi's own stack traces.
@@ -217,6 +240,17 @@ fi
 # evaluates, `list` proves settings and the package manager still resolve, and
 # `auth check` has to agree with the stock build for every OAuth provider —
 # that last one is what catches a bundle whose provider imports went missing.
+#
+# These run against the real ~/.pi/agent on purpose. Pointing them at a scratch
+# PI_CODING_AGENT_DIR would make both sides answer credentials_not_configured
+# and the comparison would pass vacuously, which is exactly how the broken
+# bundle survived a day. All three commands leave settings.json byte-identical
+# (measured), but settings.json is a tracked symlink here, so verify that
+# instead of trusting it.
+SETTINGS="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/settings.json"
+settings_before=""
+[ -f "$SETTINGS" ] && settings_before="$(cat "$SETTINGS")"
+
 built="$(node "$TMP" --version 2>&1 | tail -1)"
 [ "$built" = "$VERSION" ] || { rm -f "$TMP"; die "bundle reports version '$built', expected '$VERSION'"; }
 node "$TMP" list >/dev/null 2>&1 || { rm -f "$TMP"; die "bundle failed to run 'pi list'"; }
@@ -227,16 +261,23 @@ for provider in openai-codex anthropic; do
   [ "$got" = "$want" ] || { rm -f "$TMP"; die "bundle disagrees with the stock build on $provider auth:"$'\n'"  stock:  $want"$'\n'"  bundle: $got"; }
 done
 
+if [ -n "$settings_before" ] && [ "$settings_before" != "$(cat "$SETTINGS")" ]; then
+  printf '%s' "$settings_before" > "$SETTINGS"
+  echo "${YELLOW}pi rewrote settings.json during the smoke tests — restored it${NC}" >&2
+fi
+
 mv -f "$TMP" "$BUNDLE"
 size="$(du -h "$BUNDLE" | cut -f1)"
+note=""
+[ -n "${no_bedrock:-}" ] && note=" ${YELLOW}without bedrock${NC}"
 if [ -n "${PI_BUNDLE_NO_LINK:-}" ]; then
-  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — left $PI_BIN_LINK alone"
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size)$note — left $PI_BIN_LINK alone"
 elif [ -L "$PI_BIN_LINK" ] || [ ! -e "$PI_BIN_LINK" ]; then
   ln -sfn "$LAUNCHER" "$PI_BIN_LINK"
-  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — $PI_BIN_LINK now goes through pi-launch"
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size)$note — $PI_BIN_LINK now goes through pi-launch"
 elif is_shim; then
   patch_shim
-  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — patched the shim at $PI_BIN_LINK"
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size)$note — patched the shim at $PI_BIN_LINK"
 else
   echo "${GREEN}✅ bundled pi $VERSION${NC} ($size)"
   echo "${YELLOW}   $PI_BIN_LINK is neither a symlink nor a shim this script knows — left alone.${NC}"

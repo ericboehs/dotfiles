@@ -691,7 +691,10 @@ pi_bundle="${MISE_PROJECT_ROOT:-.}/bin/pi-bundle"
 [ -x "$pi_bundle" ] || pi_bundle="$HOME/bin/pi-bundle"
 if [ -x "$pi_bundle" ]; then
   printf 'bootstrap:pi: '
-  "$pi_bundle" || echo "bootstrap:pi: bundling failed, staying on the stock entrypoint" >&2
+  # Neither machine authenticates bedrock, and registering it costs 32ms of AWS
+  # SDK evaluation on every launch. pi-bundle ignores this and keeps bedrock if
+  # it finds bedrock credentials, so adding the provider later still works.
+  PI_BUNDLE_NO_BEDROCK=1 "$pi_bundle" || echo "bootstrap:pi: bundling failed, staying on the stock entrypoint" >&2
 else
   echo "bootstrap:pi: bin/pi-bundle not found, staying on the stock entrypoint" >&2
 fi
