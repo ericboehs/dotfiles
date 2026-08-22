@@ -10,5 +10,7 @@
   "terminal": {
     "showTerminalProgress": true
   },
-  "enableInstallTelemetry": false
+  "enableInstallTelemetry": false,
+  "defaultProvider": "copilot-api",
+  "defaultModel": "claude-opus-5"
 }
