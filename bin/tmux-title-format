@@ -1,5 +1,11 @@
 #!/bin/sh
-# Print the name this machine is reached by, with a trailing colon, or nothing.
+# Print the terminal title format for this machine.
+#
+# The whole format is built here, rather than pasting a prefix onto one written
+# in .tmux.conf, because tmux expands formats in a run-shell command *before*
+# the shell runs: a bare #S in that command line arrives as "code", and glued to
+# a shell variable it silently becomes a different variable name. Emitting the
+# finished string keeps every # away from tmux until the title is actually drawn.
 #
 # A terminal title is read by whoever is looking at the tab, which is not always
 # the machine that wrote it. Ssh into a box whose tmux is also called "code" and
@@ -20,13 +26,15 @@
 # Silence is the answer for the machine being sat at: nobody is looking in from
 # outside, so the prefix would be noise on every tab.
 
+format='#S:#I #T'
+
 for f in "$HOME/.config/mise/config.local.toml" "$HOME"/.config/mise/conf.d/*.toml; do
   [ -f "$f" ] || continue
   host=$(sed -n 's/^[[:space:]]*CLAUDE_NOTIFY_HOST[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1)
   if [ -n "$host" ]; then
-    printf '%s:' "$host"
+    printf '%s:%s\n' "$host" "$format"
     exit 0
   fi
 done
 
-exit 0
+printf '%s\n' "$format"
