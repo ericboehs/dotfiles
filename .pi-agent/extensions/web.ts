@@ -6,6 +6,8 @@ const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 const SEARCH_TIMEOUT_MS = 120_000;
 const FETCH_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_CHARS = 20_000;
+const MIN_MAX_CHARS = 1_000;
+const MAX_MAX_CHARS = 100_000;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36";
 
@@ -411,7 +413,11 @@ export default function web(pi: ExtensionAPI): void {
     }),
     async execute(_id, params: any, signal, onUpdate) {
       onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}` }], details: undefined });
-      const text = await fetchUrl(params.url, params.max_chars ?? DEFAULT_MAX_CHARS, signal);
+      const raw = Number(params.max_chars ?? DEFAULT_MAX_CHARS);
+      const maxChars = Number.isFinite(raw)
+        ? Math.min(Math.max(Math.trunc(raw), MIN_MAX_CHARS), MAX_MAX_CHARS)
+        : DEFAULT_MAX_CHARS;
+      const text = await fetchUrl(params.url, maxChars, signal);
       return { content: [{ type: "text" as const, text }], details: { url: params.url } };
     },
   });
