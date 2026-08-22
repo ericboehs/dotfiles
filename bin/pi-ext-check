@@ -4,9 +4,11 @@
 # Usage: pi-ext-check [-h|--help] [--typecheck-only|--test-only]
 #
 # pi loads these extensions from the globally installed @earendil-works/pi-coding-agent,
-# so this borrows that install's types rather than adding a package.json to the
-# dotfiles repo: .pi-agent/node_modules/ gets symlinks to the global pi, pi-tui,
-# typebox and @types/node, which is enough for both tsc and Node's ESM resolver.
+# so this borrows that install's types rather than pinning any dependency
+# versions here: .pi-agent/package.json exists only to mark the directory ESM
+# for tsc and Node, and .pi-agent/node_modules/ gets symlinks to the global pi,
+# pi-tui, typebox and @types/node, which is enough for both tsc and Node's ESM
+# resolver.
 
 set -euo pipefail
 
