@@ -87,8 +87,12 @@ cmd_status() {
 }
 
 cmd_running() {
-  "${NAS[@]}" "sudo $SYNOBACKUP --is-backup-restore-running"
-  local rc=$?
+  # ssh exits 255 when the NAS is unreachable and >=2 covers other transports
+  # level trouble; only the remote command's own exit 1 means "running".
+  local out rc
+  out=$("${NAS[@]}" "sudo $SYNOBACKUP --is-backup-restore-running" 2>&1)
+  rc=$?
+  [ "$rc" -ge 2 ] && die "cannot reach NAS (ssh exit $rc): $out"
   [ "$rc" = 0 ] && echo "idle" || echo "a backup or restore is running"
   return "$rc"
 }
