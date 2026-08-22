@@ -26,6 +26,6 @@
     "openai-codex/gpt-5.6-sol"
   ],
   "extensions": [
-    "/home/agent/Code/github.com/ericboehs/claude-notify/extensions/pi-notify.ts"
+    "~/Code/github.com/ericboehs/claude-notify/extensions/pi-notify.ts"
   ]
 }

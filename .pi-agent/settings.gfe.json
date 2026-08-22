@@ -12,5 +12,9 @@
   },
   "enableInstallTelemetry": false,
   "defaultProvider": "copilot-api",
-  "defaultModel": "claude-opus-5"
+  "defaultModel": "claude-opus-5",
+  "extensions": [
+    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
+    "~/Code/github.com/ericboehs/claude-notify/extensions/pi-notify.ts"
+  ]
 }
