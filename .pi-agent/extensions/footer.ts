@@ -13,9 +13,9 @@
  * - Colors are plain ANSI-16 SGR codes; only the extension-status row uses the theme.
  */
 
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import type {
   ExtensionAPI,
@@ -42,13 +42,20 @@ const PEER_SETTLE_DELAYS_MS = [300, 1_000, 3_000, 8_000];
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
 
 /**
- * The boot timer sits in the footer until the first message goes out.
+ * The boot timer sits in the footer until the first message goes out, and every
+ * cold start is appended to `boot-times.jsonl` so `/boot stats` can show whether
+ * a change actually moved the needle or just felt like it did.
  *
  * Measured at the footer's first render, which is the last thing to happen in
  * `interactiveMode.init()` — so `process.uptime()` there is genuinely
  * exec-to-first-paint, node bootstrap and extension loading included. Run
  * `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi` for the phase-by-phase breakdown.
  */
+const BOOT_LOG_FILE = "boot-times.jsonl";
+const BOOT_STATS_DEFAULT = 50;
+/** Trim to this many records once the log crosses the size check below. */
+const BOOT_LOG_KEEP = 1_000;
+const BOOT_LOG_MAX_BYTES = 200_000;
 
 /** Providers whose cost is meaningless (subscription-billed). */
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
@@ -277,6 +284,63 @@ function formatMs(ms: number): string {
   return ms < 1_000 ? `${ms}ms` : `${(ms / 1_000).toFixed(2)}s`;
 }
 
+function bootLogPath(): string {
+  // Resolved per call, not at module load, so a HOME change is picked up.
+  return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), BOOT_LOG_FILE);
+}
+
+/** pi's own version, for correlating a regression with an upgrade. */
+async function piVersion(): Promise<string> {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return "";
+    // argv[1] is usually a bin symlink (mise shim -> ../lib/node_modules/.../dist/cli.js),
+    // so resolve it before walking up to the package root.
+    const resolved = await realpath(entry);
+    const pkg: unknown = JSON.parse(await readFile(join(dirname(dirname(resolved)), "package.json"), "utf8"));
+    const version = (pkg as { version?: unknown } | null)?.version;
+    return typeof version === "string" ? version : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Append one cold start. Never awaited by a render — blocking first paint to
+ * record how slow first paint was would be its own punchline.
+ */
+async function recordBoot(ms: number, cwd: string): Promise<void> {
+  const file = bootLogPath();
+  await appendFile(file, `${JSON.stringify({ t: new Date().toISOString(), ms, v: await piVersion(), cwd })}\n`);
+  // Concurrent pi processes can race this and drop a line or two. Fine: it is a
+  // trend log, not an audit log.
+  const { size } = await stat(file);
+  if (size <= BOOT_LOG_MAX_BYTES) return;
+  const kept = (await readFile(file, "utf8")).split("\n").filter(Boolean).slice(-BOOT_LOG_KEEP);
+  await writeFile(file, `${kept.join("\n")}\n`);
+}
+
+async function readBoots(limit: number): Promise<number[]> {
+  const out: number[] = [];
+  for (const line of (await readFile(bootLogPath(), "utf8")).split("\n")) {
+    if (!line) continue;
+    try {
+      const ms = (JSON.parse(line) as { ms?: unknown }).ms;
+      if (typeof ms === "number" && Number.isFinite(ms)) out.push(ms);
+    } catch {
+      // Half-written line from a racing process.
+    }
+  }
+  return out.slice(-limit);
+}
+
+/** Nearest-rank percentile over an ascending list. */
+function percentile(sorted: readonly number[], p: number): number {
+  const rank = Math.ceil((p / 100) * sorted.length);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, rank - 1))] ?? 0;
+}
+
+
 interface UsageLike {
   cost?: { total?: unknown };
 }
@@ -342,6 +406,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
           if (coldStart && bootMs === undefined) {
             bootMs = Math.round(process.uptime() * 1_000);
+            void recordBoot(bootMs, ctx.cwd).catch(() => {});
           }
           const showBoot = bootMs !== undefined && !bootCleared;
 
@@ -444,13 +509,38 @@ export default function footerExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("boot", {
-    description: "Show how long this pi launch took",
-    handler: async (_args, ctx) => {
+    description: "Show this launch's boot time, or /boot stats [n] for recent launches",
+    handler: async (args, ctx) => {
+      const argument = args.trim();
+      if (/^stats\b/.test(argument)) {
+        const requested = Number.parseInt(argument.slice("stats".length).trim(), 10);
+        const limit = Number.isFinite(requested) && requested > 0 ? requested : BOOT_STATS_DEFAULT;
+        let boots: number[] = [];
+        try {
+          boots = await readBoots(limit);
+        } catch {
+          // No log yet.
+        }
+        if (boots.length === 0) {
+          ctx.ui.notify("No boot times recorded yet", "warning");
+          return;
+        }
+        const sorted = [...boots].sort((a, b) => a - b);
+        ctx.ui.notify(
+          `${boots.length} launches · p50 ${formatMs(percentile(sorted, 50))}` +
+            ` · p95 ${formatMs(percentile(sorted, 95))}` +
+            ` · min ${formatMs(sorted[0] ?? 0)} · max ${formatMs(sorted[sorted.length - 1] ?? 0)}` +
+            (bootMs === undefined ? "" : ` · this one ${formatMs(bootMs)}`),
+          "info",
+        );
+        return;
+      }
+
       const uptime = formatMs(Math.round(process.uptime() * 1_000));
       ctx.ui.notify(
         bootMs === undefined ?
           `Up ${uptime} (boot not measured — footer was off at launch)`
-        : `Booted in ${formatMs(bootMs)}, up ${uptime}. Breakdown: PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi`,
+        : `Booted in ${formatMs(bootMs)}, up ${uptime}. Trend: /boot stats · Breakdown: PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi`,
         "info",
       );
     },

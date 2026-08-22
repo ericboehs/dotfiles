@@ -9,7 +9,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -71,7 +71,7 @@ async function mount(overrides = {}) {
   };
 
   footer(pi);
-  await pi.handlers.session_start({}, ctx);
+  await pi.handlers.session_start(overrides.sessionStart ?? {}, ctx);
 
   const component = factory(
     { requestRender: () => { renders += 1; } },
@@ -92,7 +92,9 @@ async function mount(overrides = {}) {
     ctx,
     /** Run a registered slash command with the same ctx pi would pass. */
     run: (name, args = "") => pi.commands[name].handler(args, ctx),
-    startSession: () => pi.handlers.session_start({}, ctx),
+    /** Fire the input event, as pi does when something is submitted. */
+    input: (event = { source: "interactive", text: "hi" }) => pi.handlers.input(event, ctx),
+    startSession: (event = {}) => pi.handlers.session_start(event, ctx),
     renderCount: () => renders,
     /** Render once with ANSI stripped. */
     plain: (width = 120) => component.render(width).map(strip),
@@ -406,4 +408,105 @@ test("bypass clears the guardian's below-editor warning and resets per session",
 
   await ui.startSession();
   assert.doesNotMatch(ui.plain()[0], /bypass/);
+});
+
+/* ------------------------------------------------------------- boot timing */
+
+const COLD_START = { sessionStart: { reason: "startup" } };
+
+/** Point the extension's boot log at a throwaway directory for one test. */
+function withBootLog(fn) {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const dir = mkdtempSync(path.join(tmpdir(), "pi-boot-"));
+  process.env.PI_CODING_AGENT_DIR = dir;
+  return Promise.resolve(fn(path.join(dir, "boot-times.jsonl"))).finally(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  });
+}
+
+test("a cold start shows the boot time until the first message is sent", async () => {
+  await withBootLog(async () => {
+    const ui = await mount(COLD_START);
+    assert.match(ui.plain()[0], /⚡\d/, "boot time should be on the line at launch");
+
+    const before = ui.renderCount();
+    await ui.input();
+    assert.equal(ui.renderCount(), before + 1, "clearing it should repaint");
+    assert.doesNotMatch(ui.plain()[0], /⚡/);
+  });
+});
+
+test("only interactive input clears it — commands and /bypass do not", async () => {
+  await withBootLog(async () => {
+    const ui = await mount(COLD_START);
+    ui.plain();
+
+    await ui.run("boot");
+    assert.match(ui.plain()[0], /⚡/, "a slash command is not a message");
+
+    await ui.input({ source: "extension", text: "/approval-guardian bypass" });
+    assert.match(ui.plain()[0], /⚡/, "messages the footer sends itself do not count");
+
+    await ui.input({ source: "interactive", text: "hi" });
+    assert.doesNotMatch(ui.plain()[0], /⚡/);
+  });
+});
+
+test("a reload reports no boot time, because uptime is not boot time", async () => {
+  await withBootLog(async (log) => {
+    const ui = await mount({ sessionStart: { reason: "reload" } });
+    assert.doesNotMatch(ui.plain()[0], /⚡/);
+
+    await ui.run("boot");
+    assert.match(ui.notices.at(-1).message, /boot not measured/);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.throws(() => readFileSync(log, "utf8"), "nothing to log on a reload");
+  });
+});
+
+test("each cold start appends one record", async () => {
+  await withBootLog(async (log) => {
+    const ui = await mount(COLD_START);
+    ui.plain();
+    ui.plain();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const lines = readFileSync(log, "utf8").trim().split("\n");
+    assert.equal(lines.length, 1, "one line per launch, not per render");
+    const record = JSON.parse(lines[0]);
+    assert.ok(Number.isFinite(record.ms) && record.ms > 0);
+    assert.equal(record.cwd, ui.ctx.cwd);
+    // Under `node --test`, argv[1] is the test runner rather than pi's bin, so
+    // the version lookup degrades to "" instead of throwing. In a real launch
+    // it resolves through the symlink to the installed package.
+    assert.equal(typeof record.v, "string");
+  });
+});
+
+test("/boot stats reports nearest-rank percentiles over the log", async () => {
+  await withBootLog(async (log) => {
+    const ms = [700, 100, 900, 300, 1000, 500, 200, 800, 400, 600];
+    writeFileSync(log, ms.map((value) => JSON.stringify({ t: "", ms: value, v: "", cwd: "" })).join("\n") + "\n");
+
+    // Not a cold start, so the log stays exactly as written.
+    const ui = await mount();
+    await ui.run("boot", "stats");
+    assert.equal(
+      ui.notices.at(-1).message,
+      "10 launches · p50 500ms · p95 1.00s · min 100ms · max 1.00s",
+    );
+
+    await ui.run("boot", "stats 3");
+    assert.match(ui.notices.at(-1).message, /^3 launches · p50 600ms/, "should take the last 3 written");
+  });
+});
+
+test("/boot stats says so when there is nothing recorded", async () => {
+  await withBootLog(async () => {
+    const ui = await mount();
+    await ui.run("boot", "stats");
+    assert.equal(ui.notices.at(-1).level, "warning");
+    assert.match(ui.notices.at(-1).message, /No boot times recorded/);
+  });
 });
