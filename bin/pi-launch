@@ -10,11 +10,18 @@
 
 dir=${0%/*}
 [ "$dir" = "$0" ] && dir=.
-pkg="$dir/../lib/node_modules/@earendil-works/pi-coding-agent"
 node="$dir/node"
 [ -x "$node" ] || node=node
-if [ ! -d "$pkg" ]; then
-  # Invoked from somewhere other than the node install's bin directory.
+
+# Two install layouts: npm's global prefix (bin/pi next to bin/node, package
+# under ../lib/node_modules) and a plain node_modules tree (bin/pi in
+# node_modules/.bin, package one level up), which is what mise's npm backend
+# produces. Both are relative to the directory holding this launcher.
+for rel in ../lib/node_modules/@earendil-works/pi-coding-agent ../@earendil-works/pi-coding-agent; do
+  [ -d "$dir/$rel" ] && { pkg="$dir/$rel"; break; }
+done
+if [ -z "${pkg:-}" ]; then
+  # Invoked from somewhere other than the install's bin directory.
   node=$(command -v node) || exit 127
   pkg="${node%/*}/../lib/node_modules/@earendil-works/pi-coding-agent"
 fi

@@ -35,7 +35,9 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "  --status   show what the pi bin currently points at"
   echo "  --off      restore the stock entrypoint and delete the bundle"
   echo ""
-  echo "PI_NO_BUNDLE=1 in the environment skips the bundle for one launch."
+  echo "PI_BIN=<path>         locate the install through a pi that is not on PATH"
+  echo "PI_BUNDLE_NO_LINK=1   build the bundle without repointing the bin"
+  echo "PI_NO_BUNDLE=1        skip the bundle for one launch"
   exit 0
 fi
 
@@ -54,18 +56,30 @@ done
 LAUNCHER="$(cd "$(dirname "$target")" && pwd)/pi-launch"
 [ -x "$LAUNCHER" ] || die "bin/pi-launch is missing or not executable"
 
-NODE="$(command -v node)" || die "node is not on PATH"
-BIN_DIR="$(cd "$(dirname "$NODE")" && pwd)"
-PKG_DIR="$BIN_DIR/../lib/node_modules/@earendil-works/pi-coding-agent"
-[ -d "$PKG_DIR" ] || die "pi is not installed under $BIN_DIR/../lib/node_modules"
-PKG="$(cd "$PKG_DIR" && pwd)"
+command -v node >/dev/null || die "node is not on PATH"
+
+# Locate the install through the pi bin rather than the node prefix: mise's npm
+# backend puts pi in a plain node_modules/.bin, nowhere near bin/node. Both
+# layouts are relative to the directory holding the bin, which stays true after
+# this script repoints that bin at pi-launch. PI_BIN overrides for a pi that is
+# not on PATH (a remote box driven over ssh, say).
+PI_BIN="${PI_BIN:-$(command -v pi || true)}"
+[ -n "$PI_BIN" ] || die "pi is not on PATH (set PI_BIN to its path)"
+BIN_DIR="$(cd "$(dirname "$PI_BIN")" && pwd)"
+PKG=""
+for rel in ../lib/node_modules/@earendil-works/pi-coding-agent ../@earendil-works/pi-coding-agent; do
+  # -P: mise's npm backend symlinks the package into a pnpm-style store and
+  # keeps the dependencies there, so only the physical path resolves them.
+  if [ -d "$BIN_DIR/$rel" ]; then PKG="$(cd "$BIN_DIR/$rel" && pwd -P)"; break; fi
+done
+[ -n "$PKG" ] || die "no pi install found next to $BIN_DIR"
 VERSION="$(node -p "require('$PKG/package.json').version")"
 BUNDLE="$PKG/dist/bundle.mjs"
-PI_BIN="$BIN_DIR/pi"
+PI_BIN_LINK="$BIN_DIR/pi"
 
 if [[ "${1:-}" == "--status" ]]; then
   echo "pi        $VERSION ($PKG)"
-  echo "bin       $PI_BIN -> $(readlink "$PI_BIN" 2>/dev/null || echo "(not a symlink)")"
+  echo "bin       $PI_BIN_LINK -> $(readlink "$PI_BIN_LINK" 2>/dev/null || echo "(not a symlink)")"
   if [ -f "$BUNDLE" ]; then
     stale=""
     [ "$PKG/package.json" -nt "$BUNDLE" ] && stale=" ${YELLOW}(stale: older than the package)${NC}"
@@ -77,7 +91,7 @@ if [[ "${1:-}" == "--status" ]]; then
 fi
 
 if [[ "${1:-}" == "--off" ]]; then
-  ln -sfn "$PKG/dist/cli.js" "$PI_BIN"
+  [ -L "$PI_BIN_LINK" ] && ln -sfn "$PKG/dist/cli.js" "$PI_BIN_LINK"
   rm -f "$BUNDLE"
   echo "${GREEN}✅ restored the stock entrypoint${NC}"
   exit 0
@@ -85,12 +99,15 @@ fi
 
 [[ -z "${1:-}" ]] || die "unknown argument: $1"
 
-# Patch a copy, never the install. dist/ is ~11MB; node_modules and
-# package.json are symlinked so the bundler resolves the real dependencies.
-STAGE="$(mktemp -d)"
+# Patch a copy, never the install. The copy goes next to the package rather
+# than in /tmp so that bare imports resolve exactly as they do for the real
+# thing: npm nests dependencies under the package, mise's npm backend hoists
+# them into a store directory one level up, and only a sibling sees both.
+STAGE="$(dirname "$PKG")/.pi-bundle-stage.$$"
+mkdir -p "$STAGE" 2>/dev/null || STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 cp -R "$PKG/dist" "$STAGE/dist"
-ln -s "$PKG/node_modules" "$STAGE/node_modules"
+[ -d "$PKG/node_modules" ] && ln -s "$PKG/node_modules" "$STAGE/node_modules"
 ln -s "$PKG/package.json" "$STAGE/package.json"
 
 node - "$STAGE/dist/core/extensions/loader.js" <<'PATCH' || die "loader.js does not look the way this script expects — pi may have changed it"
@@ -142,5 +159,16 @@ built="$(node "$TMP" --version 2>&1 | tail -1)"
 node "$TMP" list >/dev/null 2>&1 || { rm -f "$TMP"; die "bundle failed to run 'pi list'"; }
 
 mv -f "$TMP" "$BUNDLE"
-ln -sfn "$LAUNCHER" "$PI_BIN"
-echo "${GREEN}✅ bundled pi $VERSION${NC} ($(du -h "$BUNDLE" | cut -f1)) — $PI_BIN now goes through pi-launch"
+size="$(du -h "$BUNDLE" | cut -f1)"
+if [ -n "${PI_BUNDLE_NO_LINK:-}" ]; then
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — left $PI_BIN_LINK alone"
+elif [ -L "$PI_BIN_LINK" ] || [ ! -e "$PI_BIN_LINK" ]; then
+  ln -sfn "$LAUNCHER" "$PI_BIN_LINK"
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size) — $PI_BIN_LINK now goes through pi-launch"
+else
+  # mise's npm backend writes a generated shim script here rather than a
+  # symlink. Replacing it would break the install's own bookkeeping.
+  echo "${GREEN}✅ bundled pi $VERSION${NC} ($size)"
+  echo "${YELLOW}   $PI_BIN_LINK is a script, not a symlink — left alone.${NC}"
+  echo "${YELLOW}   Run pi as: node $BUNDLE${NC}"
+fi
