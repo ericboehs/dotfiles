@@ -635,17 +635,21 @@ if [ -e "$HOME/.pi/agent/settings.json" ] && [ ! -L "$HOME/.pi/agent/settings.js
 fi
 ln -sfn "$settings" "$HOME/.pi/agent/settings.json"
 
-# Custom providers are per host too, and only the work laptop has one: a local
-# copilot-api proxy that pi reaches over http. Hosts without a models.<host>.json
-# keep whatever they have, since pi treats a missing models.json as "no custom
-# providers" rather than an error.
+# Custom providers can be per host too. A host without models.<host>.json keeps
+# a real models.json alone, but removes a managed symlink whose tracked source
+# has gone away — otherwise deleting a provider leaves a dangling link forever.
 models="$root/.pi-agent/models.$host.json"
+models_link="$HOME/.pi/agent/models.json"
 if [ -f "$models" ]; then
-  if [ -e "$HOME/.pi/agent/models.json" ] && [ ! -L "$HOME/.pi/agent/models.json" ]; then
-    mv "$HOME/.pi/agent/models.json" "$HOME/.pi/agent/models.json.bak"
+  if [ -e "$models_link" ] && [ ! -L "$models_link" ]; then
+    mv "$models_link" "$models_link.bak"
     echo "bootstrap:pi: kept the previous models.json at ~/.pi/agent/models.json.bak" >&2
   fi
-  ln -sfn "$models" "$HOME/.pi/agent/models.json"
+  ln -sfn "$models" "$models_link"
+elif [ -L "$models_link" ]; then
+  case "$(readlink "$models_link")" in
+    "$root/.pi-agent/models."*.json) rm "$models_link" ;;
+  esac
 fi
 
 # `pi update --extensions` reconciles the pinned git checkout but deliberately

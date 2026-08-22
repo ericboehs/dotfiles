@@ -11,7 +11,7 @@
     "showTerminalProgress": true
   },
   "enableInstallTelemetry": false,
-  "defaultProvider": "copilot-api",
+  "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-5",
   "extensions": [
     "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
