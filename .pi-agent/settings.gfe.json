@@ -1,0 +1,14 @@
+{
+  "defaultThinkingLevel": "xhigh",
+  "theme": "light/dark",
+  "steeringMode": "all",
+  "transport": "auto",
+  "defaultProjectTrust": "always",
+  "doubleEscapeAction": "tree",
+  "treeFilterMode": "default",
+  "editorPaddingX": 1,
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "enableInstallTelemetry": false
+}
