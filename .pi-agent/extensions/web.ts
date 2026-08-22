@@ -109,16 +109,28 @@ function extractAnswer(output: unknown[]): { answer: string; sources: string[] }
   return { answer: parts.join("\n").trim(), sources: [...sources] };
 }
 
-async function search(query: string, recency: string | undefined, ctx: ExtensionContext, signal?: AbortSignal) {
+interface SearchOptions {
+  recency?: string;
+  linksOnly?: boolean;
+}
+
+async function search(query: string, opts: SearchOptions, ctx: ExtensionContext, signal?: AbortSignal) {
   const auth = await resolveAuth(ctx);
   if (!auth) throw new Error("No OpenAI/Codex credentials. Run /login and sign in with your Codex subscription.");
 
-  const instructions = [
-    "Search the web and answer concisely, grounded only in what you find.",
-    "Lead with the answer. Include inline markdown links to sources.",
-    recency ? `Prefer sources from the past ${recency}.` : "",
-  ]
-    .filter(Boolean)
+  const instructions = (
+    opts.linksOnly
+      ? [
+          "Search the web and return ONLY a markdown list of the most relevant pages, most useful first,",
+          "one per line as `- [title](url)`, at most 10.",
+          "No summary, no commentary, no preamble, no trailing notes.",
+        ]
+      : [
+          "Search the web and answer concisely, grounded only in what you find.",
+          "Lead with the answer. Include inline markdown links to sources.",
+        ]
+  )
+    .concat(opts.recency ? [`Prefer sources from the past ${opts.recency}.`] : [])
     .join(" ");
 
   const headers: Record<string, string> = {
@@ -154,8 +166,119 @@ async function search(query: string, recency: string | undefined, ctx: Extension
 
   const { answer, sources } = extractAnswer(collectOutput(await res.text()));
   if (!answer && sources.length === 0) throw new Error("Search returned nothing.");
+
+  // links mode: the list is the payload, so never append a duplicate source block.
+  if (opts.linksOnly) return answer || sources.slice(0, 10).map((u) => `- ${u}`).join("\n");
+
   const cited = sources.filter((u) => !answer.includes(u)).slice(0, 10);
   return cited.length ? `${answer}\n\nSources:\n${cited.map((u) => `- ${u}`).join("\n")}` : answer;
+}
+
+/* ----------------------------------------------------------------- youtube */
+
+const YT_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+  "www.youtu.be",
+]);
+
+function isYouTube(url: URL): boolean {
+  return YT_HOSTS.has(url.hostname.toLowerCase());
+}
+
+function stamp(seconds: number): string {
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+    : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function cueSeconds(line: string): number | undefined {
+  const m = /^(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->/.exec(line.trim());
+  if (!m) return undefined;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+}
+
+// Auto-generated captions roll the previous line into the next cue, so emit each
+// distinct line once and drop a [mm:ss] marker every minute for navigation.
+function vttToText(vtt: string, markEvery = 60): string {
+  const out: string[] = [];
+  let last = "";
+  let at = 0;
+  let nextMark = 0;
+  for (const raw of vtt.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || /^(WEBVTT|Kind:|Language:|NOTE\b|STYLE\b|REGION\b)/.test(line)) continue;
+    const t = cueSeconds(line);
+    if (t !== undefined) {
+      at = t;
+      continue;
+    }
+    if (line.includes("-->") || /^\d+$/.test(line)) continue;
+    const text = line
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text || text === last) continue;
+    if (at >= nextMark) {
+      out.push(`\n[${stamp(at)}]`);
+      nextMark = Math.floor(at / markEvery) * markEvery + markEvery;
+    }
+    out.push(text);
+    last = text;
+  }
+  return out.join(" ").replace(/ *\n */g, "\n").trim();
+}
+
+async function youtubeTranscript(url: string, signal?: AbortSignal): Promise<string> {
+  const { mkdtempSync, readdirSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "pi-yt-"));
+  try {
+    let meta = "";
+    try {
+      meta = await run(
+        "yt-dlp",
+        [
+          "--skip-download", "--no-simulate", "--no-warnings",
+          "--write-auto-subs", "--write-subs",
+          "--sub-langs", "en-orig,en,en-US",
+          "--sub-format", "vtt", "--convert-subs", "vtt",
+          "--paths", dir, "-o", "%(id)s",
+          "--print", "%(title)s\u0001%(channel)s\u0001%(duration_string)s\u0001%(webpage_url)s",
+          url,
+        ],
+        "",
+        signal,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/ENOENT/.test(msg)) throw new Error("yt-dlp is not installed (brew install yt-dlp).");
+      throw new Error(`yt-dlp failed: ${msg}`);
+    }
+
+    const files = readdirSync(dir).filter((f) => f.endsWith(".vtt"));
+    // Manually authored `.en.vtt` beats the `.en-orig` ASR track when both exist:
+    // same words, but punctuated and capitalized. Falls back to whatever is there.
+    const pick =
+      files.find((f) => /\.en\.vtt$/.test(f)) ?? files.find((f) => /\.en-US\.vtt$/.test(f)) ?? files[0];
+    if (!pick) throw new Error("No English captions available for this video.");
+
+    const [title, channel, duration, canonical] = meta.trim().split("\u0001");
+    const head = [title, channel && `by ${channel}`, duration, canonical || url].filter(Boolean).join(" · ");
+    return `${head}\n\n${vttToText(readFileSync(join(dir, pick), "utf-8"))}`;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /* ------------------------------------------------------------------- fetch */
@@ -213,6 +336,8 @@ async function fetchUrl(url: string, maxChars: number, signal?: AbortSignal): Pr
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) URLs are supported.");
 
+  if (isYouTube(parsed)) return truncate(await youtubeTranscript(url, signal), maxChars, url);
+
   const res = await fetch(url, {
     headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml,application/pdf,text/plain,*/*" },
     redirect: "follow",
@@ -239,11 +364,15 @@ async function fetchUrl(url: string, maxChars: number, signal?: AbortSignal): Pr
     body = await res.text();
   }
 
-  body = body.trim();
-  if (body.length > maxChars) {
-    body = `${body.slice(0, maxChars)}\n\n[truncated at ${maxChars} of ${body.length} chars — re-fetch with a larger max_chars for more]`;
+  return truncate(body, maxChars, url);
+}
+
+function truncate(body: string, maxChars: number, url: string): string {
+  let text = body.trim();
+  if (text.length > maxChars) {
+    text = `${text.slice(0, maxChars)}\n\n[truncated at ${maxChars} of ${text.length} chars — re-fetch with a larger max_chars for more]`;
   }
-  return `# ${url}\n\n${body}`;
+  return `# ${url}\n\n${text}`;
 }
 
 /* -------------------------------------------------------------- extension */
@@ -256,17 +385,26 @@ export default function web(pi: ExtensionAPI): void {
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language search query" }),
       recency: Type.Optional(Type.String({ description: "Bias to recent sources: day, week, month, or year" })),
+      links_only: Type.Optional(
+        Type.Boolean({ description: "Skip the summary, return just a ranked [title](url) list" }),
+      ),
     }),
     async execute(_id, params: any, signal, onUpdate, ctx) {
       onUpdate?.({ content: [{ type: "text", text: `Searching: ${params.query}` }] });
-      return { content: [{ type: "text", text: await search(params.query, params.recency, ctx, signal) }] };
+      const text = await search(
+        params.query,
+        { recency: params.recency, linksOnly: params.links_only },
+        ctx,
+        signal,
+      );
+      return { content: [{ type: "text", text }] };
     },
   });
 
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
-    description: "Fetch a URL and return its readable content as markdown.",
+    description: "Fetch a URL as readable markdown. YouTube links return the transcript.",
     parameters: Type.Object({
       url: Type.String({ description: "http(s) URL" }),
       max_chars: Type.Optional(Type.Number({ description: `Truncation limit (default ${DEFAULT_MAX_CHARS})` })),
