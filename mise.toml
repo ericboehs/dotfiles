@@ -668,15 +668,33 @@ fi
 
 PI_SKIP_VERSION_CHECK=1 pi list > "$packages"
 while IFS= read -r source; do
-  awk -v source="  $source" '
+  path=$(awk -v source="  $source" '
     $0 == source {
-      if ((getline path) > 0 && path ~ /^    \//) found = 1
+      if ((getline path) > 0 && path ~ /^    \//) { sub(/^ +/, "", path); print path; found = 1 }
     }
     END { exit !found }
-  ' "$packages" || {
+  ' "$packages") || {
     echo "bootstrap:pi: package was not installed: $source" >&2
     exit 1
   }
+  # `pi list` echoes the pin from settings, not the commit that is checked out,
+  # so a git package can sit on an old revision while every signal says it is
+  # current. That is how the Linux box ran a superseded extension for a day:
+  # the pin moved in a pull, the launch was clean, no warning appeared, and
+  # nothing ever compared the two. `pi update --extensions` above does move a
+  # changed pin; this only proves it did.
+  case "$source" in
+    git:*@*)
+      want=${source##*@}
+      if [ ${#want} -eq 40 ] && [ -z "$(printf '%s' "$want" | tr -d '0-9a-f')" ]; then
+        have=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
+        [ "$have" = "$want" ] || {
+          echo "bootstrap:pi: $source is checked out at ${have:-an unknown revision}" >&2
+          exit 1
+        }
+      fi
+      ;;
+  esac
 done < "$sources"
 
 printf 'bootstrap:pi: '
