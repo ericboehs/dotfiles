@@ -162,7 +162,10 @@ case ${1-} in
 esac
 
 # A fixed template without XXXX fails on GNU mktemp, so spell the suffix out.
-PANEFIND_DIR=$(mktemp -d "${TMPDIR:-/tmp}/panefind.XXXXXX")
+PANEFIND_DIR=$(mktemp -d "${TMPDIR:-/tmp}/panefind.XXXXXX") || {
+  echo "pane-find: mktemp failed" >&2
+  exit 1
+}
 export PANEFIND_DIR
 trap 'rm -rf "$PANEFIND_DIR"' EXIT
 echo title > "$PANEFIND_DIR/mode"
