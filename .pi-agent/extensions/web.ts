@@ -333,7 +333,9 @@ async function toMarkdown(html: string, signal?: AbortSignal): Promise<string> {
     );
     return md.replace(/\n{3,}/g, "\n\n").replace(/^:::.*$/gm, "").trim();
   } catch {
-    return textFallback(html);
+    // Say so when the fallback engages — unformatted text after a pandoc
+    // regression should not look like the page was always like this.
+    return `[web_fetch: pandoc unavailable/failed — unformatted text]\n\n${textFallback(html)}`;
   }
 }
 
