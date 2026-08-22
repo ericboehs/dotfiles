@@ -161,7 +161,8 @@ case ${1-} in
     render_tree "${2-}"; exit 0 ;;
 esac
 
-PANEFIND_DIR=$(mktemp -d -t panefind)
+# A fixed template without XXXX fails on GNU mktemp, so spell the suffix out.
+PANEFIND_DIR=$(mktemp -d "${TMPDIR:-/tmp}/panefind.XXXXXX")
 export PANEFIND_DIR
 trap 'rm -rf "$PANEFIND_DIR"' EXIT
 echo title > "$PANEFIND_DIR/mode"
