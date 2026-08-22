@@ -3,7 +3,7 @@
   "packages": [
     "npm:pi-approval-guardian@0.8.0",
     "npm:@nicknisi/pi-stash",
-    "git:github.com/ericboehs/pi-claude-link@15eb26c6ea11fa1e0939717611d41bb39544a85a",
+    "git:github.com/ericboehs/pi-claude-link@4239970fb0b2b18ea2ed047abfb36c43b138fad1",
     "git:github.com/ericboehs/pi-context"
   ],
   "defaultProvider": "openai-codex",
