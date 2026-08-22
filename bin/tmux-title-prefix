@@ -1,0 +1,32 @@
+#!/bin/sh
+# Print the name this machine is reached by, with a trailing colon, or nothing.
+#
+# A terminal title is read by whoever is looking at the tab, which is not always
+# the machine that wrote it. Ssh into a box whose tmux is also called "code" and
+# both tabs say "code:3" - one string, two machines - and a clicked notification
+# has no way to tell which tab holds the ssh.
+#
+# The prefix has to be the name you reach the box by, because that is the name
+# the notification carries (CLAUDE_NOTIFY_HOST) and therefore the string the
+# click matches on. tmux's own #h is the wrong answer twice over: on the work
+# laptop it expands to an asset tag nobody types or recognises, and it would
+# never match a notification labelled "gfe".
+#
+# Read from the file rather than the environment. A tmux server inherits the
+# environment of whatever started it, possibly days ago and possibly from a
+# shell that had not loaded mise, so asking the environment answers about the
+# wrong moment. The declaration on disk is the same one every time.
+#
+# Silence is the answer for the machine being sat at: nobody is looking in from
+# outside, so the prefix would be noise on every tab.
+
+for f in "$HOME/.config/mise/config.local.toml" "$HOME"/.config/mise/conf.d/*.toml; do
+  [ -f "$f" ] || continue
+  host=$(sed -n 's/^[[:space:]]*CLAUDE_NOTIFY_HOST[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1)
+  if [ -n "$host" ]; then
+    printf '%s:' "$host"
+    exit 0
+  fi
+done
+
+exit 0
