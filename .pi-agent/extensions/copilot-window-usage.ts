@@ -233,12 +233,15 @@ async function refresh(ctx: ExtensionContext): Promise<string | undefined> {
 }
 
 export default function copilotWindowUsage(pi: ExtensionAPI): void {
-  pi.on("session_start", async (_event, ctx) => {
-    await refresh(ctx);
+  // Fire-and-forget: pi awaits session_start/model_select handlers, so awaiting the
+  // quota round-trip here blocks TUI startup (~400ms) and the model picker. The
+  // requestGeneration guard in refresh() already discards stale responses.
+  pi.on("session_start", (_event, ctx) => {
+    void refresh(ctx);
   });
 
-  pi.on("model_select", async (_event, ctx) => {
-    await refresh(ctx);
+  pi.on("model_select", (_event, ctx) => {
+    void refresh(ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
