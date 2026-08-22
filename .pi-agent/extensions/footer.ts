@@ -41,6 +41,16 @@ const PEER_SETTLE_DELAYS_MS = [300, 1_000, 3_000, 8_000];
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
 
+/**
+ * How long the boot timer stays in the footer after launch.
+ *
+ * Measured at the footer's first render, which is the last thing to happen in
+ * `interactiveMode.init()` — so `process.uptime()` there is genuinely
+ * exec-to-first-paint, node bootstrap and extension loading included. Run
+ * `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi` for the phase-by-phase breakdown.
+ */
+const BOOT_DISPLAY_MS = 30_000;
+
 /** Providers whose cost is meaningless (subscription-billed). */
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 
@@ -263,6 +273,11 @@ function formatCost(cost: number): string {
   return `$${cost.toFixed(cost < 1 ? 4 : 2)}`;
 }
 
+/** 903 → "903ms", 1240 → "1.24s". */
+function formatMs(ms: number): string {
+  return ms < 1_000 ? `${ms}ms` : `${(ms / 1_000).toFixed(2)}s`;
+}
+
 interface UsageLike {
   cost?: { total?: unknown };
 }
@@ -293,6 +308,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let enabled = true;
   let bypassed = false;
   let repaint: (() => void) | undefined;
+  // Only a cold start has a boot time worth showing; after /reload or a session
+  // switch, uptime is however long the process has been sitting there.
+  let coldStart = false;
+  let bootMs: number | undefined;
+  let bootShownAt = 0;
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!ctx.hasUI) return;
@@ -321,6 +341,14 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const branch = footerData.getGitBranch();
           const statuses = footerData.getExtensionStatuses();
 
+          if (coldStart && bootMs === undefined) {
+            bootMs = Math.round(process.uptime() * 1_000);
+            bootShownAt = Date.now();
+            // Renders are event-driven, so schedule the paint that retires this.
+            setTimeout(() => repaint?.(), BOOT_DISPLAY_MS).unref?.();
+          }
+          const showBoot = bootMs !== undefined && Date.now() - bootShownAt < BOOT_DISPLAY_MS;
+
           const left: string[] = [
             color(BLUE, basename(ctx.cwd)),
             color(BRIGHT_YELLOW, shortProvider(provider)),
@@ -336,6 +364,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
               ? ""
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
             ...INLINE_STATUS_KEYS.map((key) => statuses.get(key) ?? ""),
+            showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
             // Last before the flex gap, so it sits closest to the right edge.
             bypassed ? color(BRIGHT_RED, "bypass") : "",
           ];
@@ -418,6 +447,19 @@ export default function footerExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("boot", {
+    description: "Show how long this pi launch took",
+    handler: async (_args, ctx) => {
+      const uptime = formatMs(Math.round(process.uptime() * 1_000));
+      ctx.ui.notify(
+        bootMs === undefined ?
+          `Up ${uptime} (boot not measured — footer was off at launch)`
+        : `Booted in ${formatMs(bootMs)}, up ${uptime}. Breakdown: PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi`,
+        "info",
+      );
+    },
+  });
+
   pi.registerCommand("footer", {
     description: "Toggle the custom footer",
     handler: async (_args, ctx) => {
@@ -427,9 +469,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     // The guardian's bypass resets when the session runtime reloads.
     bypassed = false;
+    coldStart = event.reason === "startup";
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer
     // name that lands after the last startup paint — until the next keystroke.
