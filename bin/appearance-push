@@ -33,25 +33,37 @@ HOSTS=(coop)
 # but failures used to vanish entirely; append them to a small cache log.
 LOG="$HOME/.cache/appearance-push.log"
 record_failure() {
+  local host=$1 rc=$2 err=$3
+  mkdir -p "${LOG%/*}" || {
+    echo "appearance-push: cannot create ${LOG%/*}; push to $host failed (ssh exit $rc)" >&2
+    return
+  }
+  # $$ in the tmp name: two toggles racing each other must not share a file.
   {
-    printf '%s push to %s failed (ssh exit %s)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2"
+    printf '%s push to %s failed (ssh exit %s)%s\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S')" "$host" "$rc" "${err:+: $err}"
     # Keep the last ~50 lines so an offline box can't grow it unbounded.
-    tail -n 49 "$LOG" 2>/dev/null
-  } > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+    tail -n 49 "$LOG" 2>/dev/null || :
+  } > "$LOG.$$.tmp" && mv "$LOG.$$.tmp" "$LOG" ||
+    echo "appearance-push: could not write $LOG; push to $host failed (ssh exit $rc)" >&2
 }
 
 push() {
-  local host=$1 rc=0
+  local host=$1 rc=0 err
   # BatchMode and the timeout so a box that is off or off-network costs three
   # seconds in the background rather than a prompt or a hang. ClearAllForwardings
   # keeps a push from re-declaring the tunnels a Host block asks for.
-  printf '%s\n' "$mode" | ssh -o BatchMode=yes \
+  err=$(printf '%s\n' "$mode" | ssh -o BatchMode=yes \
                               -o ConnectTimeout=3 \
                               -o ClearAllForwardings=yes \
                               "$host" \
     'mkdir -p ~/.cache && cat > ~/.cache/dark-mode.$$ &&
-       mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode' >/dev/null 2>&1 || rc=$?
-  [ "$rc" -eq 0 ] || record_failure "$host" "$rc"
+       mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode' 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # Only the last stderr line fits the record; it separates an auth refusal
+    # from a timeout on the otherwise identical "exit 255".
+    record_failure "$host" "$rc" "${err##*$'\n'}"
+  fi
 }
 
 for host in "${HOSTS[@]}"; do
