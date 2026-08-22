@@ -1,5 +1,18 @@
 #! /usr/bin/env bash
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'EOF'
+Usage: slack-noti [MESSAGE]
+
+Send MESSAGE to Eric's Slack notification webhook.
+Defaults to "Done" when MESSAGE is omitted.
+
+Options:
+  -h, --help  Show this help and exit without sending a notification.
+EOF
+  exit 0
+fi
+
 # Properly escape message for JSON using jq
 json_payload=$(jq -nc --arg text "${1:-Done}" '{text: $text}')
-curl -s -X POST -H 'Content-type: application/json' --data "$json_payload" $BOEHS_SLACK_NOTI_HOOK
+curl -s -X POST -H 'Content-type: application/json' --data "$json_payload" "$BOEHS_SLACK_NOTI_HOOK"
