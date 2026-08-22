@@ -17,7 +17,8 @@
  *   extension-status row.
  */
 
-import { appendFile, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { appendFile, readFile, realpath, stat, writeFile, access, constants } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -44,6 +45,13 @@ const PEER_SETTLE_DELAYS_MS = [300, 1_000, 3_000, 8_000];
 
 /** How often to re-read pi's on-disk version looking for an upgrade while running. */
 const UPDATE_TTL_MS = 30_000;
+
+/** Where the background bundle rebuild appends its output. */
+const AUTO_BUNDLE_LOG = "auto-bundle.log";
+/** Concurrent detections across pi instances serialize on this lock directory. */
+const AUTO_BUNDLE_LOCK = "pi-bundle.lock";
+/** A lock older than this is stale (a crashed run never cleaned up) and gets stolen. */
+const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
@@ -287,6 +295,7 @@ class UpdateCheckCache {
     const changed = this.current !== next;
     this.current = next;
     this.fetchedAt = Date.now();
+    if (changed && next !== this.bootVersion) void rebuildBundle(next).catch(() => {});
     if (changed) requestRender();
   }
 }
@@ -378,6 +387,66 @@ async function piVersion(): Promise<string> {
   } catch {
     return "";
   }
+}
+
+/** ~/bin/pi-bundle (bin/ is symlinked there), or null when it's not installed. */
+async function piBundleScript(): Promise<string | null> {
+  const candidate = join(homedir(), "bin", "pi-bundle");
+  try {
+    await access(candidate, constants.X_OK);
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+function autoBundleAgentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
+/**
+ * A pi update leaves dist/bundle.mjs stale and the bin at stock cli.js, so
+ * every launch runs ~115ms slower until someone re-runs pi-bundle. This footer
+ * is already the first to know about an update — so let it kick off the
+ * rebuild in a detached background process.
+ *
+ * Runs once per detected version (globalThis guard survives /reload), honors
+ * PI_NO_AUTO_BUNDLE=1, serializes concurrent detections from other pi
+ * instances on a lock directory, and appends everything to auto-bundle.log.
+ */
+async function rebuildBundle(version: string): Promise<void> {
+  const stash = globalThis as { __piFooterAutoBundleFor?: string };
+  if (stash.__piFooterAutoBundleFor === version) return;
+  stash.__piFooterAutoBundleFor = version;
+  if (process.env.PI_NO_AUTO_BUNDLE) return;
+
+  const script = await piBundleScript();
+  if (!script) return;
+
+  const agentDir = autoBundleAgentDir();
+  // Redirect by path, not by inherited fd: Node opens files with O_CLOEXEC,
+  // so fd numbers from this process don't exist in the detached child.
+  const logPath = join(agentDir, AUTO_BUNDLE_LOG);
+  const lockPath = join(agentDir, AUTO_BUNDLE_LOCK);
+  const sh = [
+    `lock=${JSON.stringify(lockPath)}`,
+    `log=${JSON.stringify(logPath)}`,
+    `if ! mkdir "$lock" 2>/dev/null; then`,
+    `  if [ -z "$(find "$lock" -maxdepth 0 -mmin -${AUTO_BUNDLE_LOCK_STALE_MIN} 2>/dev/null)" ]; then`,
+    `    rm -rf "$lock" && mkdir "$lock" || exit 0`,
+    `  else`,
+    `    exit 0`,
+    `  fi`,
+    `fi`,
+    `trap 'rm -rf "$lock"' EXIT`,
+    `echo "=== auto-rebuild for ${version} at $(date) (pid $$)" >> "$log"`,
+    `${JSON.stringify(script)} >> "$log" 2>&1`,
+  ].join("\n");
+  const child = spawn("/bin/sh", ["-c", sh], {
+    detached: true,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  child.unref();
 }
 
 /**
