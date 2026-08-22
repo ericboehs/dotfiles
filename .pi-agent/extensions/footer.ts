@@ -42,6 +42,9 @@ const PEER_TTL_MS = 5_000;
 // later to dodge a collision, so poke the cache instead of waiting for a render.
 const PEER_SETTLE_DELAYS_MS = [300, 1_000, 3_000, 8_000];
 
+/** How often to re-read pi's on-disk version looking for an upgrade while running. */
+const UPDATE_TTL_MS = 30_000;
+
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
 
@@ -235,6 +238,60 @@ class PeerNameCache {
 }
 
 /**
+ * Claude-style update notice: remember the version this process booted with,
+ * then watch the on-disk version; a mismatch means an install landed while we
+ * run old code and only a restart picks it up.
+ *
+ * The boot version is stashed on globalThis (keyed per process) so /reload —
+ * which re-executes this module against the already-updated files on disk —
+ * doesn't reset the baseline and silently clear a still-valid notice.
+ */
+class UpdateCheckCache {
+  private bootVersion = "";
+  private current = "";
+  private fetchedAt = 0;
+  private inFlight = false;
+
+  async init(): Promise<void> {
+    const stash = globalThis as { __piFooterBootVersion?: string };
+    if (stash.__piFooterBootVersion !== undefined) {
+      this.bootVersion = stash.__piFooterBootVersion;
+      return;
+    }
+    this.bootVersion = await piVersion();
+    stash.__piFooterBootVersion = this.bootVersion;
+    this.current = this.bootVersion;
+  }
+
+  read(requestRender: () => void): boolean {
+    if (!this.bootVersion) return false;
+    if (!this.inFlight && Date.now() - this.fetchedAt >= UPDATE_TTL_MS) {
+      void this.refresh(requestRender);
+    }
+    return this.current !== this.bootVersion;
+  }
+
+  /** Re-read now, ignoring the TTL (used by the idle-session poll timer). */
+  reload(requestRender: () => void): void {
+    if (this.bootVersion && !this.inFlight) void this.refresh(requestRender);
+  }
+
+  private async refresh(requestRender: () => void): Promise<void> {
+    this.inFlight = true;
+    let next = this.current;
+    try {
+      next = (await piVersion()) || this.current;
+    } finally {
+      this.inFlight = false;
+    }
+    const changed = this.current !== next;
+    this.current = next;
+    this.fetchedAt = Date.now();
+    if (changed) requestRender();
+  }
+}
+
+/**
  * p10k-lean git summary: "master", "master*", "master ⇣⇡", "master* ⇡".
  *
  * Mirrors ~/.p10k.zsh — DIRTY_ICON='*' glued to the branch, blank
@@ -293,15 +350,29 @@ function bootLogPath(): string {
   return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), BOOT_LOG_FILE);
 }
 
+/**
+ * pi's package.json, resolved fresh on every call. argv[1] is usually a bin
+ * symlink (mise shim -> ../lib/node_modules/.../dist/cli.js), so resolve it
+ * before walking up to the package root — and re-resolve per read, so an
+ * update that repoints the symlink (or swaps the tree underneath it) is seen.
+ */
+async function piPackageJsonPath(): Promise<string | null> {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return null;
+    const resolved = await realpath(entry);
+    return join(dirname(dirname(resolved)), "package.json");
+  } catch {
+    return null;
+  }
+}
+
 /** pi's own version, for correlating a regression with an upgrade. */
 async function piVersion(): Promise<string> {
   try {
-    const entry = process.argv[1];
-    if (!entry) return "";
-    // argv[1] is usually a bin symlink (mise shim -> ../lib/node_modules/.../dist/cli.js),
-    // so resolve it before walking up to the package root.
-    const resolved = await realpath(entry);
-    const pkg: unknown = JSON.parse(await readFile(join(dirname(dirname(resolved)), "package.json"), "utf8"));
+    const file = await piPackageJsonPath();
+    if (!file) return "";
+    const pkg: unknown = JSON.parse(await readFile(file, "utf8"));
     const version = (pkg as { version?: unknown } | null)?.version;
     return typeof version === "string" ? version : "";
   } catch {
@@ -372,6 +443,8 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
 export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
   const peer = new PeerNameCache();
+  const update = new UpdateCheckCache();
+  void update.init().catch(() => {});
   let enabled = true;
   let bypassed = false;
   let repaint: (() => void) | undefined;
@@ -380,6 +453,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let coldStart = false;
   let bootMs: number | undefined;
   let bootCleared = false;
+  let updateTimerStarted = false;
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!ctx.hasUI) return;
@@ -413,6 +487,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             void recordBoot(bootMs, ctx.cwd).catch(() => {});
           }
           const showBoot = bootMs !== undefined && !bootCleared;
+          const updated = update.read(requestRender);
 
           const left: string[] = [
             color(BLUE, basename(ctx.cwd)),
@@ -430,6 +505,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
             ...INLINE_STATUS_KEYS.map((key) => statuses.get(key) ?? ""),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
+            updated ? color(GREEN, "Update installed · Restart to update") : "",
             // Last before the flex gap, so it sits closest to the right edge.
             bypassed ? color(BRIGHT_RED, "bypass") : "",
           ];
@@ -569,6 +645,14 @@ export default function footerExtension(pi: ExtensionAPI): void {
     for (const delay of PEER_SETTLE_DELAYS_MS) {
       setTimeout(() => peer.reload(() => repaint?.()), delay).unref?.();
     }
+    // Renders are event-driven, so an idle session would never re-read the
+    // version; poll so a pi upgrade surfaces like Claude's update notice.
+    // session_start also fires on session switches — only start one timer.
+    if (!updateTimerStarted) {
+      updateTimerStarted = true;
+      const updateTimer = setInterval(() => update.reload(() => repaint?.()), UPDATE_TTL_MS);
+      updateTimer.unref?.();
+    }
   });
   // Retire the boot timer the moment a message is sent. Extension commands are
   // matched before this event, so /boot and /footer leave it alone; messages
@@ -579,6 +663,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
     repaint?.();
     return undefined;
   });
+
+  pi.on("model_select", async (_event, ctx) => apply(ctx));
 
   pi.on("model_select", async (_event, ctx) => apply(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {
