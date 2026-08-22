@@ -20,9 +20,9 @@ bin/pi-ext-check --test-only
 
 The extensions are typechecked against the globally installed pi rather than a
 vendored dependency: `pi-ext-check` symlinks `.pi-agent/node_modules` to that
-install (`@earendil-works/pi-coding-agent`, `pi-tui`, `@types/node`) and runs
-`tsc` from `npx`. `tsconfig.json` sets `erasableSyntaxOnly`, because pi loads
-`.ts` extensions through Node's type stripping — syntax that needs real
+install (`@earendil-works/pi-coding-agent`, `pi-tui`, `typebox`, `@types/node`)
+and runs `tsc` from `npx`. `tsconfig.json` sets `erasableSyntaxOnly`, because pi
+loads `.ts` extensions through Node's type stripping — syntax that needs real
 compilation (parameter properties, enums, namespaces) fails at load time
 otherwise.
 
@@ -38,5 +38,6 @@ Intentionally left as machine-local runtime state:
 - downloaded `npm/` and `git/` packages
 - generated model catalog and cache files
 - `models.json`, which may contain machine-specific provider configuration
-- trust decisions and web-search credentials
+- trust decisions
+- `boot-times.jsonl`, the launch log behind `/boot stats`
 - `.pi-agent/node_modules/`, the symlinks `bin/pi-ext-check` creates

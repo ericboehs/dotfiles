@@ -5,8 +5,8 @@
 #
 # pi loads these extensions from the globally installed @earendil-works/pi-coding-agent,
 # so this borrows that install's types rather than adding a package.json to the
-# dotfiles repo: .pi-agent/node_modules/ gets symlinks to the global pi, pi-tui
-# and @types/node, which is enough for both tsc and Node's ESM resolver.
+# dotfiles repo: .pi-agent/node_modules/ gets symlinks to the global pi, pi-tui,
+# typebox and @types/node, which is enough for both tsc and Node's ESM resolver.
 
 set -euo pipefail
 
@@ -54,6 +54,9 @@ mkdir -p "$PI_AGENT/node_modules/@earendil-works" "$PI_AGENT/node_modules/@types
 ln -sfn "$PI_PKG" "$PI_AGENT/node_modules/@earendil-works/pi-coding-agent"
 ln -sfn "$PI_PKG/node_modules/@earendil-works/pi-tui" "$PI_AGENT/node_modules/@earendil-works/pi-tui"
 ln -sfn "$PI_PKG/node_modules/@types/node" "$PI_AGENT/node_modules/@types/node"
+# Extensions that register tools declare their schemas with typebox, which pi
+# re-exports at runtime but tsc has to resolve on disk like any other import.
+ln -sfn "$PI_PKG/node_modules/typebox" "$PI_AGENT/node_modules/typebox"
 
 status=0
 

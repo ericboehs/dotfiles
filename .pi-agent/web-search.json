@@ -1,8 +1,0 @@
-{
-  "workflow": "none",
-  "autoOpenBrowser": false,
-  "searchRouting": {
-    "providers": ["openai", "duckduckgo"],
-    "fallbackOn": ["transient", "quota", "network", "invalid-response"]
-  }
-}

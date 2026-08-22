@@ -390,14 +390,14 @@ export default function web(pi: ExtensionAPI): void {
       ),
     }),
     async execute(_id, params: any, signal, onUpdate, ctx) {
-      onUpdate?.({ content: [{ type: "text", text: `Searching: ${params.query}` }] });
+      onUpdate?.({ content: [{ type: "text", text: `Searching: ${params.query}` }], details: undefined });
       const text = await search(
         params.query,
         { recency: params.recency, linksOnly: params.links_only },
         ctx,
         signal,
       );
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text" as const, text }], details: { query: params.query } };
     },
   });
 
@@ -410,9 +410,9 @@ export default function web(pi: ExtensionAPI): void {
       max_chars: Type.Optional(Type.Number({ description: `Truncation limit (default ${DEFAULT_MAX_CHARS})` })),
     }),
     async execute(_id, params: any, signal, onUpdate) {
-      onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}` }] });
+      onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}` }], details: undefined });
       const text = await fetchUrl(params.url, params.max_chars ?? DEFAULT_MAX_CHARS, signal);
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text" as const, text }], details: { url: params.url } };
     },
   });
 }
