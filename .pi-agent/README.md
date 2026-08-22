@@ -52,6 +52,24 @@ otherwise.
 `~/.pi/agent/extensions` with `symlink-each`, so anything in it becomes
 something pi tries to load.
 
+## Session scheduler
+
+`extensions/session-scheduler.ts` provides in-process, session-scoped prompts
+without registering an LLM tool or adding anything to model context:
+
+```text
+/loop 15m check CI
+/schedule hourly check status
+/schedule daily 9a write a morning summary
+/schedule once 30m check the build
+/schedule list
+/schedule cancel <id>
+```
+
+Schedules live in custom session entries, restore with that session, and are
+cleared by `/new` or a fork. Pi must be running; missed fires are skipped rather
+than replayed after resume. Recurring intervals have a one-minute minimum.
+
 Intentionally left as machine-local runtime state:
 
 - `auth.json` and other credentials
