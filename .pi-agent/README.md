@@ -17,6 +17,10 @@ Tracked here:
 `settings.default.json`, which holds only the machine-neutral preferences — no
 providers, packages, skills, or terminal capabilities.
 
+This directory is published, and some hostnames are asset tags. To pick the
+name yourself, write it into `.pi-agent/host` (untracked) or export
+`PI_SETTINGS_HOST`; either one wins over `hostname -s`.
+
 One shared `settings.json` does not survive two machines. Pi rewrites the file
 as you work (model switches, `lastChangelogVersion`, dismissed warnings), so
 every host carried a permanent uncommitted diff of it and every pull was a

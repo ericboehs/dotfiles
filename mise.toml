@@ -615,7 +615,14 @@ fi
 # conflict. Each host gets its own tracked file instead, seeded from
 # settings.default.json, which carries only the machine-neutral preferences.
 root="${MISE_PROJECT_ROOT:-$PWD}"
-host="$(hostname -s | tr '[:upper:]' '[:lower:]')"
+# The host key defaults to the short hostname, but this directory is published,
+# and a work machine's hostname is an asset tag nobody needs to read. Write a
+# neutral name into the untracked .pi-agent/host to override it.
+host="${PI_SETTINGS_HOST:-}"
+if [ -z "$host" ] && [ -f "$root/.pi-agent/host" ]; then
+  host="$(tr -d '[:space:]' < "$root/.pi-agent/host")"
+fi
+[ -n "$host" ] || host="$(hostname -s | tr '[:upper:]' '[:lower:]')"
 settings="$root/.pi-agent/settings.$host.json"
 if [ ! -f "$settings" ]; then
   cp "$root/.pi-agent/settings.default.json" "$settings"
