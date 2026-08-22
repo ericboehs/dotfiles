@@ -29,7 +29,19 @@ mode=${1:-$(~/bin/appearance)}
 # be told about someone else's.
 HOSTS=(coop)
 
-for host in "${HOSTS[@]}"; do
+# stdout/stderr stay suppressed (a failed push must not interrupt the toggle),
+# but failures used to vanish entirely; append them to a small cache log.
+LOG="$HOME/.cache/appearance-push.log"
+record_failure() {
+  {
+    printf '%s push to %s failed (ssh exit %s)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$1" "$2"
+    # Keep the last ~50 lines so an offline box can't grow it unbounded.
+    tail -n 49 "$LOG" 2>/dev/null
+  } > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+}
+
+push() {
+  local host=$1 rc=0
   # BatchMode and the timeout so a box that is off or off-network costs three
   # seconds in the background rather than a prompt or a hang. ClearAllForwardings
   # keeps a push from re-declaring the tunnels a Host block asks for.
@@ -38,6 +50,11 @@ for host in "${HOSTS[@]}"; do
                               -o ClearAllForwardings=yes \
                               "$host" \
     'mkdir -p ~/.cache && cat > ~/.cache/dark-mode.$$ &&
-       mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode' >/dev/null 2>&1 &
+       mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || record_failure "$host" "$rc"
+}
+
+for host in "${HOSTS[@]}"; do
+  push "$host" &
 done
 wait
