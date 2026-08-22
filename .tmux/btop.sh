@@ -23,6 +23,7 @@ if [ -f "$conf" ]; then
     mv "$tmp" "$conf"
   else
     rm -f "$tmp"
+    echo "btop.sh: could not update color_theme" >&2
   fi
 fi
 

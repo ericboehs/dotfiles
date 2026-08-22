@@ -3,6 +3,9 @@ import { Type } from "typebox";
 import { spawn } from "node:child_process";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
+// Plain OpenAI API keys speak the same Responses API shape, just at the
+// standard endpoint — the Codex one rejects them with a 401.
+const OPENAI_URL = "https://api.openai.com/v1/responses";
 const SEARCH_TIMEOUT_MS = 120_000;
 const FETCH_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_CHARS = 20_000;
@@ -147,7 +150,7 @@ async function search(query: string, opts: SearchOptions, ctx: ExtensionContext,
     headers.originator = "pi";
   }
 
-  const res = await fetch(CODEX_URL, {
+  const res = await fetch(auth.codex ? CODEX_URL : OPENAI_URL, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -329,8 +332,11 @@ async function toMarkdown(html: string, signal?: AbortSignal): Promise<string> {
       signal,
     );
     return md.replace(/\n{3,}/g, "\n\n").replace(/^:::.*$/gm, "").trim();
-  } catch {
-    return textFallback(html);
+  } catch (err) {
+    // A cancel or timeout is not a pandoc failure; let it propagate.
+    if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
+    const reason = err instanceof Error ? err.message : String(err);
+    return `[web_fetch: pandoc failed (${reason}) — unformatted text]\n\n${textFallback(html)}`;
   }
 }
 

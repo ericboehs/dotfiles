@@ -25,6 +25,9 @@ interface UsageResponse {
 
 let requestGeneration = 0;
 let lastValue: string | undefined;
+// Log only the first failure of a streak (and the recovery) so a dead token
+// doesn't spam the console on every settle.
+let warned = false;
 
 function isCodex(ctx: ExtensionContext): boolean {
   return ctx.model?.provider === PROVIDER;
@@ -183,11 +186,21 @@ async function refresh(ctx: ExtensionContext): Promise<string | undefined> {
     const value = await fetchValue(ctx);
     if (generation !== requestGeneration || !isCodex(ctx)) return undefined;
     lastValue = value;
+    if (warned) {
+      warned = false;
+      console.error("[codex-window-usage] usage fetch recovered");
+    }
     setStatus(ctx, value);
     return value;
-  } catch {
+  } catch (err) {
     if (generation === requestGeneration && !lastValue) {
       setStatus(ctx, undefined);
+    }
+    if (!warned && generation === requestGeneration) {
+      warned = true;
+      console.error(
+        `[codex-window-usage] usage fetch failed: ${err instanceof Error ? err.message : err}`,
+      );
     }
     return undefined;
   }

@@ -20,14 +20,18 @@ SYNOBACKUP=/usr/syno/bin/synobackup
 # Use the hostname for the Pi, never the bare IP: only nas-backup.local is in
 # known_hosts, and the box is dual-homed (wlan0 sits on the IoT SSID).
 
-die() { printf 'nas-backup-ctl: %s\n' "$*" >&2; exit 1; }
+# Exit 2 rather than 1: "running" uses 1, and scripted callers of the running
+# subcommand must be able to tell job state from a failed check.
+die() { printf 'nas-backup-ctl: %s\n' "$*" >&2; exit 2; }
 
 usage() {
   cat <<'EOF'
 usage: nas-backup-ctl <command>
 
   status          sizes, free space, worker state, throughput hint
-  running         exit 0 if idle, 1 if a backup/restore is running
+  running         exit 0 if idle, 1 if a backup/restore is running;
+                  exit 2 if the check itself failed (NAS unreachable,
+                  remote command error)
   log [n]         last n lines of the synobackupd job log (default 15)
   start <id>      start task 1, 2, or 4
   cancel --yes    cancel the RUNNING backup (see warning below)
@@ -87,10 +91,23 @@ cmd_status() {
 }
 
 cmd_running() {
-  "${NAS[@]}" "sudo $SYNOBACKUP --is-backup-restore-running"
-  local rc=$?
-  [ "$rc" = 0 ] && echo "idle" || echo "a backup or restore is running"
-  return "$rc"
+  # ssh exits 255 when the NAS is unreachable and >=2 covers other transport-
+  # level trouble; only the remote command's own exit 1 means "running".
+  local out rc
+  out=$("${NAS[@]}" "sudo $SYNOBACKUP --is-backup-restore-running" 2>&1)
+  rc=$?
+  [ "$rc" -ge 2 ] && die "cannot reach NAS (ssh exit $rc): $out"
+  # Exit 1 is ambiguous: synobackup uses it for "is running", but sudo uses it
+  # too when the remote command fails. A genuine answer prints nothing (the
+  # idle case is silent as well), so any output alongside exit 1 means the
+  # remote command blew up rather than a job being active.
+  if [ "$rc" = 1 ]; then
+    [ -z "$out" ] || die "unexpected failure on NAS (exit 1): $out"
+    echo "a backup or restore is running"
+    return 1
+  fi
+  [ "$rc" = 0 ] || die "unexpected exit $rc from NAS: $out"
+  echo "idle"
 }
 
 cmd_log() {
@@ -120,6 +137,10 @@ cmd_start() {
 cmd_cancel() {
   [ "${1:-}" = "--yes" ] || die "cancel needs --yes; it stops whatever backup is running, not a task you name"
   "${NAS[@]}" "sudo $SYNOBACKUP --cancel-backup"
+  local rc=$?
+  # Without this, a failed cancel gets followed by a cmd_running that reports
+  # the job as still going — indistinguishable from a cancel the NAS ignored.
+  [ "$rc" -eq 0 ] || die "cancel failed (ssh exit $rc)"
   sleep 5
   cmd_running
 }

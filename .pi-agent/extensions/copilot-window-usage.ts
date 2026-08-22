@@ -33,6 +33,9 @@ interface StoredCopilotCredential {
 
 let requestGeneration = 0;
 let lastValue: string | undefined;
+// Log only the first failure of a streak (and the recovery) so a dead token
+// doesn't spam the console on every settle.
+let warned = false;
 
 function isCopilot(ctx: ExtensionContext): boolean {
   return ctx.model?.provider === PROVIDER;
@@ -54,7 +57,11 @@ async function readStoredCredential(): Promise<StoredCopilotCredential | undefin
     return credential && typeof credential === "object"
       ? (credential as StoredCopilotCredential)
       : undefined;
-  } catch {
+  } catch (err) {
+    // A missing auth.json just means Copilot isn't configured. Anything else
+    // (corrupt JSON, bad permissions) should surface through fetchValue's
+    // error path instead of masquerading as "not configured".
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
     return undefined;
   }
 }
@@ -222,11 +229,21 @@ async function refresh(ctx: ExtensionContext): Promise<string | undefined> {
     const value = await fetchValue(ctx);
     if (generation !== requestGeneration || !isCopilot(ctx)) return undefined;
     lastValue = value;
+    if (warned) {
+      warned = false;
+      console.error("[copilot-window-usage] quota fetch recovered");
+    }
     setStatus(ctx, value);
     return value;
-  } catch {
+  } catch (err) {
     if (generation === requestGeneration && !lastValue) {
       setStatus(ctx, undefined);
+    }
+    if (!warned && generation === requestGeneration) {
+      warned = true;
+      console.error(
+        `[copilot-window-usage] quota fetch failed: ${err instanceof Error ? err.message : err}`,
+      );
     }
     return undefined;
   }
