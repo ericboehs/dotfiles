@@ -641,7 +641,9 @@ ln -sfn "$settings" "$HOME/.pi/agent/settings.json"
 packages=$(mktemp)
 sources=$(mktemp)
 trap 'rm -f "$packages" "$sources"' EXIT
-jq -er '.packages[] | if type == "string" then . else .source end' \
+# A freshly seeded host has no packages at all, and `.packages[]` on a missing
+# key aborts jq rather than yielding nothing.
+jq -r '(.packages // [])[] | if type == "string" then . else .source end' \
   "$HOME/.pi/agent/settings.json" > "$sources"
 PI_SKIP_VERSION_CHECK=1 pi update --extensions
 
