@@ -52,6 +52,19 @@ otherwise.
 `~/.pi/agent/extensions` with `symlink-each`, so anything in it becomes
 something pi tries to load.
 
+## Footer
+
+`extensions/footer.ts` renders the status line (dir, provider, model, git,
+context/cost, boot time) plus `/bypass`, `/boot` and `/footer`. It also watches
+pi's on-disk version: when an install lands while instances are running — via
+`pi update`, `npm i -g`, anything — each running footer shows a green
+"Update installed · Restart to update" segment within ~30s, like Claude Code.
+
+The same detection kicks off `bin/pi-bundle` in a detached background process,
+since an update leaves the bundle stale and every launch ~115ms slower until it
+is rebuilt. Concurrent pi instances serialize on a lock directory; output lands
+in `~/.pi/agent/auto-bundle.log`. Set `PI_NO_AUTO_BUNDLE=1` to opt out.
+
 ## Session scheduler
 
 `extensions/session-scheduler.ts` provides in-process, session-scoped prompts
@@ -85,5 +98,6 @@ Intentionally left as machine-local runtime state:
 - `models.json`, which may contain machine-specific provider configuration
 - trust decisions
 - `boot-times.jsonl`, the launch log behind `/boot stats`
+- `auto-bundle.log` and `pi-bundle.lock`, written by the footer's automatic bundle rebuild
 - `.pi-agent/node_modules/`, the symlinks `bin/pi-ext-check` creates
 - `dist/bundle.mjs` inside the pi install, which `bin/pi-bundle` rebuilds
