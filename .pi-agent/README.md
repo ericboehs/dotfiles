@@ -66,9 +66,15 @@ without registering an LLM tool or adding anything to model context:
 /schedule cancel <id>
 ```
 
-Schedules live in custom session entries, restore with that session, and are
-cleared by `/new` or a fork. Pi must be running; missed fires are skipped rather
-than replayed after resume. Recurring intervals have a one-minute minimum.
+Schedules live in custom session entries, so they restore when you resume that
+session and are not inherited by `/new`, `/fork` or `/clone`. Pi must be running;
+missed fires are skipped rather than replayed after resume. Recurring intervals
+have a one-minute minimum.
+
+One edge case, from pi's `SessionManager._persist`: pi does not create the session
+file until the session holds at least one assistant message. A schedule made
+before that is buffered in memory and is written out with the first reply — but a
+schedule made in a session that never prompts the model is lost on exit.
 
 Intentionally left as machine-local runtime state:
 
