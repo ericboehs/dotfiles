@@ -95,6 +95,11 @@ cmd_running() {
 
 cmd_log() {
   local n=${1:-15}
+  # $n is interpolated into a remote sudo command, and this script is granted
+  # to agents as a permission rule — without a check, "log 15 /etc/shadow"
+  # reads an arbitrary root-owned file.
+  case "$n" in ''|*[!0-9]*) die "log: line count must be a non-negative integer, got '$n'" ;; esac
+  [ "$n" -le 200 ] || die "log: line count capped at 200, got $n"
   "${NAS[@]}" "sudo tail -$n /var/log/systemd/synobackupd.service.log"
 }
 
