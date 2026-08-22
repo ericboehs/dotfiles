@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# Launch pi from the bundled entrypoint when there is a current one.
+#
+# The node install's `pi` bin symlink points here instead of at dist/cli.js.
+# See bin/pi-bundle, which builds the bundle and repoints that symlink.
+#
+# POSIX sh with no external commands on the happy path: this runs on every pi
+# launch and the whole point of the exercise is milliseconds.
+
+dir=${0%/*}
+[ "$dir" = "$0" ] && dir=.
+pkg="$dir/../lib/node_modules/@earendil-works/pi-coding-agent"
+node="$dir/node"
+[ -x "$node" ] || node=node
+if [ ! -d "$pkg" ]; then
+  # Invoked from somewhere other than the node install's bin directory.
+  node=$(command -v node) || exit 127
+  pkg="${node%/*}/../lib/node_modules/@earendil-works/pi-coding-agent"
+fi
+
+# npm rewrites package.json when it installs, so a bundle older than it was
+# built from the previous version. Fall back rather than run stale code.
+bundle="$pkg/dist/bundle.mjs"
+if [ -z "${PI_NO_BUNDLE:-}" ] && [ -f "$bundle" ] && [ ! "$pkg/package.json" -nt "$bundle" ]; then
+  exec "$node" "$bundle" "$@"
+fi
+
+exec "$node" "$pkg/dist/cli.js" "$@"

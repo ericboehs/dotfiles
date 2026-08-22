@@ -93,6 +93,12 @@ $EDITOR ~/.gitconfig.private
 - Stable configuration and local extensions live in [`.pi-agent/`](.pi-agent/).
 - `bootstrap:pi` installs and verifies the pinned package set without tracking
   credentials, sessions, caches, or downloaded package contents.
+- `bootstrap:pi` then runs `bin/pi-bundle`, which bundles pi's ~200-module Node
+  build into one file and points the `pi` bin at `bin/pi-launch`. Worth ~150ms
+  per launch (725ms → 568ms to first frame here). The launcher falls back to
+  the stock entrypoint if the bundle is missing or older than the package, so
+  an upgrade costs speed rather than a working pi; `pi-bundle --off` reverts
+  and `PI_NO_BUNDLE=1` skips it for one launch.
 
 ### Fuzzy Finder
 
@@ -126,6 +132,7 @@ Collection of utility scripts in `bin/` including:
 - **GitHub CLI extensions**: gh-pm, gh-reruns, gh-reviews-by-user, gh-labeler, ghb
 - **Tmux utilities**: toggle_notes_pane, monitor_tmux_pane, notes
 - **Development tools**: refresh_safari, colors, true-colors, utcdate
+- **Pi**: pi-bundle (faster startup), pi-launch, pi-ext-check (typecheck + test extensions)
 - **Throwaway macOS VMs**: `vm` (see below)
 
 ## Throwaway macOS VMs

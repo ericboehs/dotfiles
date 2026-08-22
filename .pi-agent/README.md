@@ -41,3 +41,4 @@ Intentionally left as machine-local runtime state:
 - trust decisions
 - `boot-times.jsonl`, the launch log behind `/boot stats`
 - `.pi-agent/node_modules/`, the symlinks `bin/pi-ext-check` creates
+- `dist/bundle.mjs` inside the pi install, which `bin/pi-bundle` rebuilds

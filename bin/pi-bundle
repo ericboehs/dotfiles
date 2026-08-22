@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+
+# Bundle the installed pi into a single file and point the `pi` bin at it.
+# Usage: pi-bundle [-h|--help] [--status|--off]
+#
+# pi ships its Node build as ~200 ES modules, and 177 of them load before the
+# first frame. Collapsing them into one file takes ~150ms off every launch.
+#
+# Two patches are needed, and they only pay off together:
+#
+#   1. The extension loader derives its jiti aliases from its own module path
+#      (`import.meta.url` then `../..`), which moves when everything collapses
+#      into one file.
+#   2. It only uses the in-memory `virtualModules` path when it believes it is
+#      a Bun binary. Without that, the first extension that imports
+#      @earendil-works/pi-coding-agent resolves to dist/index.js on disk and
+#      jiti loads pi's entire module graph a second time — which makes the
+#      bundle *slower* than the stock build. Measured at +313ms on one
+#      extension, so bundling without this reads as a regression.
+#
+# Nothing in the install is modified. The bundle is built from a patched copy
+# and dropped next to dist/cli.js, and the `pi` bin points at bin/pi-launch,
+# which falls back to dist/cli.js whenever the bundle is missing or older than
+# the package. A pi upgrade therefore degrades to stock speed, never breakage;
+# re-run this afterwards (mise task bootstrap:pi does).
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $(basename "$0") [--status|--off]"
+  echo ""
+  echo "Bundle the installed pi into dist/bundle.mjs and point the pi bin at"
+  echo "bin/pi-launch, which prefers the bundle and falls back to dist/cli.js."
+  echo ""
+  echo "  --status   show what the pi bin currently points at"
+  echo "  --off      restore the stock entrypoint and delete the bundle"
+  echo ""
+  echo "PI_NO_BUNDLE=1 in the environment skips the bundle for one launch."
+  exit 0
+fi
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; NC=$'\033[0m'
+die() { echo "${RED}❌ $*${NC}" >&2; exit 1; }
+
+# bin/ is symlinked to ~/bin, so resolve the real script location.
+target="${BASH_SOURCE[0]}"
+while [ -L "$target" ]; do
+  link="$(readlink "$target")"
+  case "$link" in
+    /*) target="$link" ;;
+    *) target="$(dirname "$target")/$link" ;;
+  esac
+done
+LAUNCHER="$(cd "$(dirname "$target")" && pwd)/pi-launch"
+[ -x "$LAUNCHER" ] || die "bin/pi-launch is missing or not executable"
+
+NODE="$(command -v node)" || die "node is not on PATH"
+BIN_DIR="$(cd "$(dirname "$NODE")" && pwd)"
+PKG_DIR="$BIN_DIR/../lib/node_modules/@earendil-works/pi-coding-agent"
+[ -d "$PKG_DIR" ] || die "pi is not installed under $BIN_DIR/../lib/node_modules"
+PKG="$(cd "$PKG_DIR" && pwd)"
+VERSION="$(node -p "require('$PKG/package.json').version")"
+BUNDLE="$PKG/dist/bundle.mjs"
+PI_BIN="$BIN_DIR/pi"
+
+if [[ "${1:-}" == "--status" ]]; then
+  echo "pi        $VERSION ($PKG)"
+  echo "bin       $PI_BIN -> $(readlink "$PI_BIN" 2>/dev/null || echo "(not a symlink)")"
+  if [ -f "$BUNDLE" ]; then
+    stale=""
+    [ "$PKG/package.json" -nt "$BUNDLE" ] && stale=" ${YELLOW}(stale: older than the package)${NC}"
+    echo "bundle    $(du -h "$BUNDLE" | cut -f1) built $(date -r "$BUNDLE" "+%Y-%m-%d %H:%M")$stale"
+  else
+    echo "bundle    ${YELLOW}not built${NC}"
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" == "--off" ]]; then
+  ln -sfn "$PKG/dist/cli.js" "$PI_BIN"
+  rm -f "$BUNDLE"
+  echo "${GREEN}✅ restored the stock entrypoint${NC}"
+  exit 0
+fi
+
+[[ -z "${1:-}" ]] || die "unknown argument: $1"
+
+# Patch a copy, never the install. dist/ is ~11MB; node_modules and
+# package.json are symlinked so the bundler resolves the real dependencies.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+cp -R "$PKG/dist" "$STAGE/dist"
+ln -s "$PKG/node_modules" "$STAGE/node_modules"
+ln -s "$PKG/package.json" "$STAGE/package.json"
+
+node - "$STAGE/dist/core/extensions/loader.js" <<'PATCH' || die "loader.js does not look the way this script expects — pi may have changed it"
+const fs = require("node:fs");
+const file = process.argv[2];
+let src = fs.readFileSync(file, "utf8");
+
+const edits = [
+  // The bundle sits at dist/bundle.mjs, so anchor on dist/ and re-add the
+  // segments the original path math assumes.
+  [
+    "    const __dirname = path.dirname(fileURLToPath(import.meta.url));",
+    '    const __dirname = path.join(path.dirname(fileURLToPath(import.meta.url)), "core/extensions");',
+  ],
+  // Take the virtualModules branch: extensions must get the copies of pi that
+  // are already in this bundle, not a second graph loaded off disk.
+  ["        ...(isBunBinary\n", "        ...(true\n"],
+];
+
+for (const [from, to] of edits) {
+  if (!src.includes(from)) {
+    console.error("pattern not found: " + JSON.stringify(from.trim().slice(0, 70)));
+    process.exit(1);
+  }
+  src = src.split(from).join(to);
+}
+fs.writeFileSync(file, src);
+PATCH
+
+TMP="$PKG/dist/.bundle.tmp.mjs"
+rm -f "$TMP"
+if command -v bun >/dev/null; then
+  # Whitespace and syntax only: mangling identifiers buys nothing measurable
+  # and costs readable function names in pi's own stack traces.
+  bun build "$STAGE/dist/cli.js" --target=node --format=esm \
+    --minify-whitespace --minify-syntax --external '*.node' --outfile "$TMP" >/dev/null
+else
+  echo "${YELLOW}bun not found — falling back to npx esbuild${NC}"
+  npx --yes esbuild@0.25 "$STAGE/dist/cli.js" --bundle --platform=node --format=esm \
+    --target=node24 --external:*.node --log-level=error --outfile="$TMP" \
+    --banner:js='import{createRequire as __pcr}from "node:module";import{fileURLToPath as __pfu}from "node:url";import{dirname as __pdn}from "node:path";const require=__pcr(import.meta.url);const __filename=__pfu(import.meta.url);const __dirname=__pdn(__filename);'
+fi
+[ -s "$TMP" ] || die "the bundler produced nothing"
+
+# Smoke test before it becomes the entrypoint: --version proves the graph
+# evaluates, `list` proves settings and the package manager still resolve.
+built="$(node "$TMP" --version 2>&1 | tail -1)"
+[ "$built" = "$VERSION" ] || { rm -f "$TMP"; die "bundle reports version '$built', expected '$VERSION'"; }
+node "$TMP" list >/dev/null 2>&1 || { rm -f "$TMP"; die "bundle failed to run 'pi list'"; }
+
+mv -f "$TMP" "$BUNDLE"
+ln -sfn "$LAUNCHER" "$PI_BIN"
+echo "${GREEN}✅ bundled pi $VERSION${NC} ($(du -h "$BUNDLE" | cut -f1)) — $PI_BIN now goes through pi-launch"
