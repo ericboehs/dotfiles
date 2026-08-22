@@ -647,8 +647,10 @@ if [ -f "$models" ]; then
   fi
   ln -sfn "$models" "$models_link"
 elif [ -L "$models_link" ]; then
-  case "$(readlink "$models_link")" in
-    "$root/.pi-agent/models."*.json) rm "$models_link" ;;
+  # Compare slash-squeezed: some hosts carry a trailing slash in HOME, so the
+  # stored link can read // where the repo path has /.
+  case "$(readlink "$models_link" | tr -s '/')" in
+    "$(printf '%s' "$root" | tr -s '/')"/.pi-agent/models.*.json) rm "$models_link" ;;
   esac
 fi
 
