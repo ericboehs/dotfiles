@@ -57,7 +57,11 @@ async function readStoredCredential(): Promise<StoredCopilotCredential | undefin
     return credential && typeof credential === "object"
       ? (credential as StoredCopilotCredential)
       : undefined;
-  } catch {
+  } catch (err) {
+    // A missing auth.json just means Copilot isn't configured. Anything else
+    // (corrupt JSON, bad permissions) should surface through fetchValue's
+    // error path instead of masquerading as "not configured".
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
     return undefined;
   }
 }
