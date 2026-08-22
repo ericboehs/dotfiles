@@ -686,7 +686,11 @@ while IFS= read -r source; do
   case "$source" in
     git:*@*)
       want=${source##*@}
-      if [ ${#want} -eq 40 ] && [ -z "$(printf '%s' "$want" | tr -d '0-9a-f')" ]; then
+      # mise renders this script through Tera first, and shell length
+      # expansion opens what Tera reads as an unterminated comment, so
+      # measure the pin with wc instead.
+      len=$(printf '%s' "$want" | wc -c | tr -d ' ')
+      if [ "$len" -eq 40 ] && [ -z "$(printf '%s' "$want" | tr -d '0-9a-f')" ]; then
         have=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
         [ "$have" = "$want" ] || {
           echo "bootstrap:pi: $source is checked out at ${have:-an unknown revision}" >&2
