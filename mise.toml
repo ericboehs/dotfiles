@@ -179,7 +179,10 @@ REPO_PATH = "ericboehs/dotfiles"
 # Pi keeps credentials, sessions, downloaded packages, caches, and generated
 # model catalogs alongside configuration. Link only reviewed stable files;
 # never link the entire ~/.pi/agent directory.
-"~/.pi/agent/settings.json" = ".pi-agent/settings.json"
+#
+# settings.json is deliberately absent: pi rewrites it at runtime, so one
+# shared copy meant every machine carried a permanent conflicting diff of the
+# same file. bootstrap:pi links the per-host .pi-agent/settings.<host>.json.
 "~/.pi/agent/keybindings.json" = ".pi-agent/keybindings.json"
 "~/.pi/agent/approval-guardian.json" = ".pi-agent/approval-guardian.json"
 "~/.pi/agent/extensions" = { source = ".pi-agent/extensions", mode = "symlink-each" }
@@ -605,6 +608,25 @@ if ! command -v pi >/dev/null; then
   echo "bootstrap:pi: pi is not on PATH after the tools step" >&2
   exit 1
 fi
+
+# Settings are per host. pi rewrites this file as you work — model switches,
+# lastChangelogVersion, dismissed warnings — so a single shared copy leaves
+# every machine with a permanent uncommitted diff and turns each pull into a
+# conflict. Each host gets its own tracked file instead, seeded from
+# settings.default.json, which carries only the machine-neutral preferences.
+root="${MISE_PROJECT_ROOT:-$PWD}"
+host="$(hostname -s | tr '[:upper:]' '[:lower:]')"
+settings="$root/.pi-agent/settings.$host.json"
+if [ ! -f "$settings" ]; then
+  cp "$root/.pi-agent/settings.default.json" "$settings"
+  echo "bootstrap:pi: seeded .pi-agent/settings.$host.json — review and commit it"
+fi
+mkdir -p "$HOME/.pi/agent"
+if [ -e "$HOME/.pi/agent/settings.json" ] && [ ! -L "$HOME/.pi/agent/settings.json" ]; then
+  mv "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/settings.json.bak"
+  echo "bootstrap:pi: kept the previous settings at ~/.pi/agent/settings.json.bak" >&2
+fi
+ln -sfn "$settings" "$HOME/.pi/agent/settings.json"
 
 # `pi update --extensions` reconciles the pinned git checkout but deliberately
 # skips pinned npm sources. Install those exact npm specs directly: `pi install`

@@ -2,7 +2,7 @@
 *
 !.gitignore
 !README.md
-!settings.json
+!settings.*.json
 !keybindings.json
 !approval-guardian.json
 !web-search.json

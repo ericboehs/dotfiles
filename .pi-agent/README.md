@@ -5,10 +5,27 @@ Reproducible configuration for [`pi`](https://pi.dev), installed by
 
 Tracked here:
 
-- Pi settings and pinned package sources
+- Pi settings and pinned package sources, one file per host
 - custom keybindings (e.g. Opt+Enter inserts a newline)
 - approval-guardian policy
 - local TypeScript extensions, plus the tooling to check them
+
+## Per-host settings
+
+`settings.<host>.json` is linked to `~/.pi/agent/settings.json` by
+`bootstrap:pi`, named after `hostname -s`. A new machine is seeded from
+`settings.default.json`, which holds only the machine-neutral preferences — no
+providers, packages, skills, or terminal capabilities.
+
+One shared `settings.json` does not survive two machines. Pi rewrites the file
+as you work (model switches, `lastChangelogVersion`, dismissed warnings), so
+every host carried a permanent uncommitted diff of it and every pull was a
+conflict waiting to happen. Splitting it also lets each host enable only what
+it can actually reach: the Linux box has no local oMLX server and no Copilot
+credentials, and naming them there printed a warning on every launch.
+
+The runtime writes land in a tracked file on purpose — `git diff` after a week
+shows exactly what pi changed on its own.
 
 ## Checking the extensions
 

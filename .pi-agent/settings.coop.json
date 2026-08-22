@@ -1,0 +1,31 @@
+{
+  "lastChangelogVersion": "0.84.2",
+  "packages": [
+    "npm:pi-approval-guardian@0.8.0",
+    "npm:@nicknisi/pi-stash",
+    "git:github.com/ericboehs/pi-claude-link@15eb26c6ea11fa1e0939717611d41bb39544a85a",
+    "git:github.com/ericboehs/pi-context"
+  ],
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "xhigh",
+  "theme": "light",
+  "steeringMode": "all",
+  "transport": "auto",
+  "quietStartup": true,
+  "defaultProjectTrust": "always",
+  "doubleEscapeAction": "tree",
+  "treeFilterMode": "default",
+  "warnings": {
+    "anthropicExtraUsage": false
+  },
+  "enabledModels": [
+    "baseten/moonshotai/Kimi-K3",
+    "baseten/deepseek-ai/DeepSeek-V4-Pro-0813",
+    "baseten/deepseek-ai/DeepSeek-V4-Flash-0731",
+    "openai-codex/gpt-5.6-sol"
+  ],
+  "extensions": [
+    "/home/agent/Code/github.com/ericboehs/claude-notify/extensions/pi-notify.ts"
+  ]
+}

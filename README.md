@@ -91,14 +91,17 @@ $EDITOR ~/.gitconfig.private
 
 - Pi itself and its extension packages are version-pinned through mise.
 - Stable configuration and local extensions live in [`.pi-agent/`](.pi-agent/).
+  Settings are per host (`settings.<hostname>.json`) because pi rewrites them
+  at runtime; `bootstrap:pi` links the right one and seeds new machines from
+  `settings.default.json`.
 - `bootstrap:pi` installs and verifies the pinned package set without tracking
   credentials, sessions, caches, or downloaded package contents.
 - `bootstrap:pi` then runs `bin/pi-bundle`, which bundles pi's ~200-module Node
-  build into one file and points the `pi` bin at `bin/pi-launch`. Worth ~150ms
-  per launch (725ms → 568ms to first frame here). The launcher falls back to
-  the stock entrypoint if the bundle is missing or older than the package, so
-  an upgrade costs speed rather than a working pi; `pi-bundle --off` reverts
-  and `PI_NO_BUNDLE=1` skips it for one launch.
+  build into one file and points the `pi` bin at `bin/pi-launch`. Worth ~115ms
+  per launch (716ms → 602ms to first frame here, 738ms → 616ms on Linux). The
+  launcher falls back to the stock entrypoint if the bundle is missing or
+  older than the package, so an upgrade costs speed rather than a working pi;
+  `pi-bundle --off` reverts and `PI_NO_BUNDLE=1` skips it for one launch.
 
 ### Fuzzy Finder
 
