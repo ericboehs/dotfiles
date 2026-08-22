@@ -271,18 +271,38 @@ mv -f "$TMP" "$BUNDLE"
 # pi-ai loads bedrock through a variable specifier specifically so bundlers
 # cannot follow it into the AWS SDK. At runtime that resolves against whoever
 # imported it — here dist/bundle.mjs — so a bedrock request looks for
-# dist/bedrock-converse-stream.js, which ships nowhere. A re-export shim at
-# exactly that path sends the load back to the real module, whose own imports
-# (@aws-sdk, ../models.js) still resolve from their home in node_modules.
+# dist/bedrock-converse-stream.js, which ships nowhere. Write a re-export shim
+# at exactly that path pointing at the real module. Where the real module lives
+# differs by install layout: npm hoists it under the package's own node_modules,
+# while mise's npm plugin gives each dependency its own store slot beside ours,
+# so check both rather than guess. pi-ai's exports map hides this path from
+# require.resolve entirely, which is why this is filesystem work.
 # Verified the other lazy APIs don't need this: they use static imports and
 # get inlined like everything else.
-cat > "$PKG/dist/bedrock-converse-stream.js" <<'SHIM'
-// Written by bin/pi-bundle: the bundled lazy loader resolves its variable
-// import against dist/, not against @earendil-works/pi-ai/dist/api where the
-// real module lives. Re-export it rather than copying it, so its relative and
-// bare imports keep resolving from home.
-export * from "../node_modules/@earendil-works/pi-ai/dist/api/bedrock-converse-stream.js";
+shim_target=""
+for candidate in \
+  "$PKG/node_modules/@earendil-works/pi-ai/dist/api/bedrock-converse-stream.js" \
+  "$PKG/../../../.."/.mise/@earendil-works+pi-ai@*/node_modules/@earendil-works/pi-ai/dist/api/bedrock-converse-stream.js
+do
+  [ -f "$candidate" ] && { shim_target=$candidate; break; }
+done
+if [ -n "$shim_target" ]; then
+  node - "$PKG" "${shim_target%/dist/*}" "$shim_target" >/dev/null <<'SHIM'
+const fs = require("node:fs");
+const path = require("node:path");
+const [, , pkg, , target] = process.argv;
+const rel = path.posix.relative(path.join(pkg, "dist"), target);
+const body =
+  "// Written by bin/pi-bundle: the bundled lazy loader resolves its variable\n" +
+  "// import against dist/, not against @earendil-works/pi-ai/dist/api where the\n" +
+  "// real module lives. Re-export it rather than copying it, so its relative and\n" +
+  "// bare imports keep resolving from home.\n" +
+  `export * from ${JSON.stringify(rel.startsWith(".") ? rel : `./${rel}`)};\n`;
+fs.writeFileSync(path.join(pkg, "dist", "bedrock-converse-stream.js"), body);
 SHIM
+else
+  echo "${YELLOW}could not locate pi-ai bedrock module; bedrock may fail through the bundle${NC}" >&2
+fi
 size="$(du -h "$BUNDLE" | cut -f1)"
 note=""
 [ -n "${no_bedrock:-}" ] && note=" ${YELLOW}without bedrock${NC}"
