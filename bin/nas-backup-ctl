@@ -20,14 +20,18 @@ SYNOBACKUP=/usr/syno/bin/synobackup
 # Use the hostname for the Pi, never the bare IP: only nas-backup.local is in
 # known_hosts, and the box is dual-homed (wlan0 sits on the IoT SSID).
 
-die() { printf 'nas-backup-ctl: %s\n' "$*" >&2; exit 1; }
+# Exit 2 rather than 1: "running" uses 1, and scripted callers of the running
+# subcommand must be able to tell job state from a failed check.
+die() { printf 'nas-backup-ctl: %s\n' "$*" >&2; exit 2; }
 
 usage() {
   cat <<'EOF'
 usage: nas-backup-ctl <command>
 
   status          sizes, free space, worker state, throughput hint
-  running         exit 0 if idle, 1 if a backup/restore is running
+  running         exit 0 if idle, 1 if a backup/restore is running;
+                  exit 2 if the check itself failed (NAS unreachable,
+                  remote command error)
   log [n]         last n lines of the synobackupd job log (default 15)
   start <id>      start task 1, 2, or 4
   cancel --yes    cancel the RUNNING backup (see warning below)
