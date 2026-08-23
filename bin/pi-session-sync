@@ -55,6 +55,32 @@ rescue StandardError
   false
 end
 
+# ...and knowing it is installed *now* says nothing about a session recorded
+# before it was. Rendering is not a one-time event: --force re-renders every
+# transcript ever written, so without a cutoff, installing the guardian on a
+# machine retroactively stamps "Direct prompts: 0" across its entire back
+# catalogue and /update-sessions filters that history away as subagent noise.
+# The package directory's creation time is the cutoff -- on this laptop it lands
+# 31 seconds before the very first guardian record, which is the install itself.
+GUARDIAN_PACKAGE = File.expand_path("~/.pi/agent/npm/node_modules/pi-approval-guardian")
+
+GUARDIAN_SINCE =
+  if GUARDIAN_AVAILABLE
+    begin
+      File.birthtime(GUARDIAN_PACKAGE)
+    rescue NotImplementedError, StandardError
+      # Linux Ruby has no birthtime, and mtime only ever moves later than the
+      # true install, so the worst case is an extra "unknown" -- never a
+      # false zero. A guardian installed from a git: source has no npm
+      # directory at all; nil then means "don't second-guess the count".
+      begin
+        File.mtime(GUARDIAN_PACKAGE)
+      rescue StandardError
+        nil
+      end
+    end
+  end
+
 # Mirrors log-session.sh's argument summary: one representative field, clipped.
 # Ordered by how much the field tells you about what the call actually did.
 TOOL_ARG_KEYS = %w[command file_path path pattern query url message prompt].freeze
@@ -141,12 +167,14 @@ def render(path)
   # "unknown" rather than a confident 0 where the guardian can't answer, so a
   # machine without it reads as unclassified instead of as all-subagents.
   direct_prompts =
-    if GUARDIAN_AVAILABLE
+    if !GUARDIAN_AVAILABLE
+      "unknown (no pi-approval-guardian on #{HOST})"
+    elsif GUARDIAN_SINCE && started < GUARDIAN_SINCE
+      "unknown (predates pi-approval-guardian on #{HOST})"
+    else
       records.count do |r|
         r["type"] == "custom" && r["customType"] == "approval-guardian-direct-user-input"
       end
-    else
-      "unknown (no pi-approval-guardian on #{HOST})"
     end
 
   out = [] # body only; the header is prepended once the turn count is known

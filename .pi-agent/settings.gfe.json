@@ -13,6 +13,9 @@
   "enableInstallTelemetry": false,
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-5",
+  "packages": [
+    "npm:pi-approval-guardian@0.8.0"
+  ],
   "extensions": [
     "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
     "~/Code/github.com/ericboehs/claude-notify/extensions/pi-notify.ts"
