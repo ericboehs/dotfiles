@@ -9,11 +9,18 @@
 #
 # Memory stays grey: on unified memory it is a size, not a pressure reading.
 #
+# An idle GPU is not worth any space at all, so both numbers hide below
+# GPU_FLOOR. They linger GPU_LINGER seconds past the last busy sample, though:
+# a workload that dips to 0% for one sample would otherwise blink the pair in
+# and out and shove the load average sideways every few seconds.
+#
 # Prints nothing at all when no GPU can be read, so a box without one — or a
 # Linux VM — just gets the load average where this would be.
 
 warn_at=${GPU_WARN:-60}
 crit_at=${GPU_CRIT:-90}
+floor=${GPU_FLOOR:-5}
+linger=${GPU_LINGER:-30}
 
 # tmux re-runs a status #() as often as once a second, on any redraw: a
 # keypress, a pane focus, a window rename. The number is only worth sampling as
@@ -66,11 +73,12 @@ human() {
   }'
 }
 
-# The cache holds "<sampled-at> <percent> <bytes>", so checking its age needs no
-# stat(1), whose flags differ between macOS and Linux. A machine with no GPU
-# caches the empty answer too, and so stops re-probing for one every second.
+# The cache holds "<sampled-at> <percent> <bytes> <last-busy-at>", so checking
+# its age needs no stat(1), whose flags differ between macOS and Linux. A
+# machine with no GPU caches the empty answer too, and so stops re-probing for
+# one every second.
 now=$(printf '%(%s)T' -1)
-read -r stamp gpu mem 2>/dev/null <"$cache"
+read -r stamp gpu mem busy 2>/dev/null <"$cache"
 
 if [[ ! $stamp =~ ^[0-9]+$ ]] || ((now - stamp >= ttl)); then
   # Every attached client redraws its own status, so the expiry lands on all of
@@ -94,16 +102,28 @@ if [[ ! $stamp =~ ^[0-9]+$ ]] || ((now - stamp >= ttl)); then
 
   if [[ -n $sample ]]; then
     read -r fresh fresh_mem < <(read_gpu)
+    # The linger clock is the sampler's to keep: it is the only process that
+    # sees a fresh reading, and it carries the old timestamp forward untouched
+    # while the GPU is quiet.
+    fresh_busy=$busy
+    [[ $fresh =~ ^[0-9]+$ ]] && ((fresh >= floor)) && fresh_busy=$now
     # Write via a temp file so a reader can never catch a half-written line.
-    printf '%s %s %s\n' "$now" "$fresh" "$fresh_mem" >"$cache.$$" && mv -f "$cache.$$" "$cache"
+    printf '%s %s %s %s\n' "$now" "$fresh" "$fresh_mem" "$fresh_busy" >"$cache.$$" &&
+      mv -f "$cache.$$" "$cache"
     # Then keep showing what every other client is showing, and let the new
     # numbers land on the next tick, so no two clients are ever a redraw out of
     # step. Only a cold start, with nothing cached, prints its own sample.
-    [[ $gpu =~ ^[0-9]+$ ]] || { gpu=$fresh; mem=$fresh_mem; }
+    [[ $gpu =~ ^[0-9]+$ ]] || { gpu=$fresh; mem=$fresh_mem; busy=$fresh_busy; }
   fi
 fi
 
 [[ $gpu =~ ^[0-9]+$ ]] || exit 0
+
+# Quiet, and quiet for long enough: give the bar back to the load average.
+if ((gpu < floor)); then
+  [[ $busy =~ ^[0-9]+$ ]] || exit 0
+  ((now - busy < linger)) || exit 0
+fi
 
 # One tmux call for all three colors instead of three show-options calls: this
 # runs on every redraw, cache or not.
