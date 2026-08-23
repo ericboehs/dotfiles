@@ -1,0 +1,273 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Render pi coding-agent session transcripts into ~/Documents/Wiki/AI Sessions/
+# so /checkin and /update-sessions see pi work the same way they see Claude work.
+#
+# This is the ONLY place that knows the wiki format. It has two triggers:
+#
+#   1. The pi extension (.pi-agent/extensions/wiki-session-log.ts) runs it on
+#      agent_settled, so files are live.
+#   2. /checkin runs it with --all as a backstop, which also backfills sessions
+#      that predate the extension or were written while it was broken.
+#
+# Two triggers, one implementation -- that's what keeps "both" from meaning two
+# formats drifting apart.
+#
+# Regeneration is FULL, not incremental. pi's JSONL is append-only and complete,
+# so rebuilding the whole file every time costs microseconds and removes the
+# state-file bookkeeping that ~/.claude/hooks/log-session.sh needs (and the
+# skew that comes with it). It also makes the two triggers idempotent rather
+# than racy: both produce identical bytes, and the write is atomic.
+#
+# Usage:
+#   pi-session-sync <session.jsonl> [...]   # specific sessions
+#   pi-session-sync --all [--since DAYS]    # walk ~/.pi/agent/sessions
+#   pi-session-sync --all --force           # ignore the up-to-date check
+
+require "json"
+require "time"
+require "fileutils"
+
+SESSION_ROOT = File.expand_path("~/.pi/agent/sessions")
+WIKI_DIR     = File.expand_path("~/Documents/Wiki/AI Sessions")
+
+# Mirrors log-session.sh's argument summary: one representative field, clipped.
+# Ordered by how much the field tells you about what the call actually did.
+TOOL_ARG_KEYS = %w[command file_path path pattern query url message prompt].freeze
+ARG_CLIP = 80
+
+def summarize_tool(item)
+  name = item["name"] || "tool"
+  args = item["arguments"]
+  return "- **#{name}**: action" unless args.is_a?(Hash)
+
+  key = TOOL_ARG_KEYS.find { |k| args[k].is_a?(String) && !args[k].empty? }
+  value =
+    if key
+      args[key]
+    else
+      # No known field -- show which knobs were set rather than dumping JSON.
+      args.keys.first(3).join(", ")
+    end
+  value = value.to_s.gsub(/\s+/, " ").strip
+  value = "#{value[0, ARG_CLIP]}..." if value.length > ARG_CLIP
+  "- **#{name}**: #{value}"
+end
+
+def text_of(content)
+  return content.to_s unless content.is_a?(Array)
+  content.select { |c| c.is_a?(Hash) && c["type"] == "text" }
+         .map { |c| c["text"].to_s }
+         .reject(&:empty?)
+         .join("\n\n")
+         .strip
+end
+
+def tools_of(content)
+  return [] unless content.is_a?(Array)
+  content.select { |c| c.is_a?(Hash) && c["type"] == "toolCall" }.map { |c| summarize_tool(c) }
+end
+
+# pi stamps records in UTC; the wiki (and /checkin's `grep "Started: <date>"`)
+# is local. Converting is not cosmetic -- an evening session at 02:00Z belongs
+# to the previous local day and would otherwise be filed under tomorrow.
+def local(ts)
+  Time.parse(ts).localtime
+rescue StandardError
+  nil
+end
+
+def parse_session(path)
+  records = []
+  File.foreach(path) do |line|
+    line = line.strip
+    next if line.empty?
+    begin
+      records << JSON.parse(line)
+    rescue JSON::ParserError
+      next # a torn final line while pi is mid-write; the next run picks it up
+    end
+  end
+  records
+end
+
+def render(path)
+  records = parse_session(path)
+  head = records.find { |r| r["type"] == "session" }
+  return nil unless head && head["id"]
+
+  session_id = head["id"]
+  started = local(head["timestamp"])
+  return nil unless started
+
+  model = records.reverse.find { |r| r["type"] == "model_change" }
+  model_line =
+    if model
+      [model["provider"], model["modelId"]].compact.join("/")
+    end
+
+  # pi writes subagent runs into the same session directory as real sessions,
+  # with an identical `session` header -- a review that fans out to five
+  # analyzers leaves six transcripts behind. Nothing in pi's own records
+  # distinguishes them, but pi-approval-guardian logs one
+  # `approval-guardian-direct-user-input` entry per prompt that came from a
+  # person (TUI typing or `pi -p`), and zero for a spawned subagent.
+  #
+  # Emitted as a raw count, not a "subagent: yes/no" verdict, so that if the
+  # guardian package is ever removed the failure is visible (every session
+  # reads 0) instead of silently emptying the daily note.
+  direct_prompts = records.count do |r|
+    r["type"] == "custom" && r["customType"] == "approval-guardian-direct-user-input"
+  end
+
+  out = [] # body only; the header is prepended once the turn count is known
+
+  # One block per assistant message, carrying whatever the user said since the
+  # last one. This is the "fuller fidelity" shape: every turn keeps its own real
+  # timestamp instead of one stamp per hook firing.
+  pending_user = []
+  blocks = 0
+
+  emit = lambda do |ts, user_texts, assistant_text, tools|
+    out << "### #{ts.strftime('%H:%M:%S')}"
+    out << ""
+    user_texts.each do |u|
+      out << "**User:** #{u}"
+      out << ""
+    end
+    if assistant_text && !assistant_text.empty?
+      out << "**Pi:**"
+      out << assistant_text
+      out << ""
+    end
+    unless tools.empty?
+      out << "**Tools:**"
+      out.concat(tools)
+      out << ""
+    end
+    out << "---"
+    out << ""
+    blocks += 1
+  end
+
+  records.each do |r|
+    next unless r["type"] == "message"
+    msg = r["message"]
+    next unless msg.is_a?(Hash)
+
+    case msg["role"]
+    when "user"
+      body = text_of(msg["content"])
+      pending_user << body unless body.empty?
+    when "assistant"
+      ts = local(r["timestamp"]) or next
+      body = text_of(msg["content"])   # `thinking` items are deliberately dropped
+      tools = tools_of(msg["content"])
+      next if body.empty? && tools.empty? && pending_user.empty?
+      emit.call(ts, pending_user, body, tools)
+      pending_user = []
+    end
+    # toolResult rows carry no narrative value here; the toolCall already named it.
+  end
+
+  # A question asked with no reply yet still deserves to show up in the day's notes.
+  unless pending_user.empty?
+    last = records.reverse.find { |r| r["type"] == "message" && local(r["timestamp"]) }
+    ts = last ? local(last["timestamp"]) : started
+    emit.call(ts, pending_user, nil, [])
+  end
+
+  return nil if blocks.zero?
+
+  header = []
+  header << "# Pi Session: #{session_id}"
+  header << ""
+  header << "Started: #{started.strftime('%Y-%m-%d %H:%M:%S')}"
+  header << "Working directory: #{head['cwd']}"
+  header << "Model: #{model_line}" if model_line && !model_line.empty?
+  header << "Turns: #{blocks}"
+  header << "Direct prompts: #{direct_prompts}"
+  header << ""
+  header << "---"
+  header << ""
+
+  [session_id, (header + out).join("\n")]
+end
+
+def sync(path, force: false)
+  target_probe = nil
+  # Cheap skip for --all: if the rendered file is newer than the transcript,
+  # nothing changed since last time.
+  unless force
+    id_guess = File.basename(path)[/_([0-9a-f-]{36})\.jsonl\z/, 1]
+    if id_guess
+      target_probe = File.join(WIKI_DIR, "#{id_guess}-pi.md")
+      if File.exist?(target_probe) && File.mtime(target_probe) >= File.mtime(path)
+        return :skipped
+      end
+    end
+  end
+
+  rendered = render(path)
+  return :empty unless rendered
+
+  session_id, body = rendered
+  target = File.join(WIKI_DIR, "#{session_id}-pi.md")
+  body += "\n" unless body.end_with?("\n")
+
+  return :unchanged if File.exist?(target) && File.read(target) == body
+
+  FileUtils.mkdir_p(WIKI_DIR)
+  # Atomic swap. Both triggers render identical bytes, so a race between the
+  # extension and the /checkin backstop resolves to the same file either way.
+  tmp = File.join(WIKI_DIR, ".#{session_id}-pi.md.tmp#{Process.pid}")
+  File.write(tmp, body)
+  File.rename(tmp, target)
+  :written
+ensure
+  File.unlink(tmp) if defined?(tmp) && tmp && File.exist?(tmp)
+end
+
+args = ARGV.dup
+force = !!args.delete("--force")
+all = !!args.delete("--all")
+since_idx = args.index("--since")
+since_days = nil
+if since_idx
+  since_days = args[since_idx + 1].to_f
+  args.slice!(since_idx, 2)
+end
+
+paths =
+  if all
+    list = Dir.glob(File.join(SESSION_ROOT, "**", "*.jsonl"))
+    if since_days && since_days > 0
+      cutoff = Time.now - (since_days * 86_400)
+      list.select { |p| File.mtime(p) >= cutoff }
+    else
+      list
+    end
+  else
+    args
+  end
+
+if paths.empty?
+  warn "usage: pi-session-sync <session.jsonl>... | --all [--since DAYS] [--force]"
+  exit 1
+end
+
+counts = Hash.new(0)
+paths.each do |p|
+  next unless File.file?(p)
+  begin
+    counts[sync(p, force: force)] += 1
+  rescue StandardError => e
+    counts[:error] += 1
+    warn "pi-session-sync: #{File.basename(p)}: #{e.class}: #{e.message}"
+  end
+end
+
+summary = counts.map { |k, v| "#{v} #{k}" }.join(", ")
+puts "pi-session-sync: #{summary.empty? ? 'nothing to do' : summary}"
+exit(counts[:error].zero? ? 0 : 1)

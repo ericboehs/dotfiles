@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -8,12 +9,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // work alongside Claude work.
 //
 // This extension deliberately knows nothing about the wiki format. All it does
-// is poke `pi-session-sync`, which reads this session's JSONL and regenerates
+// is poke `pi-session-sync` (bin/pi-session-sync in this repo), which reads
+// this session's JSONL and regenerates
 // the markdown from scratch. /checkin runs the same command with --all as a
 // backstop, so there is one implementation behind two triggers -- no second
 // renderer here to drift out of sync with the first.
 
-const SYNC_BIN = join(homedir(), ".local", "bin", "pi-session-sync");
+// Prefer an explicit path over a bare PATH lookup: pi may be launched from a
+// GUI or a login shell whose PATH lacks ~/bin, and a silently-unfound converter
+// would look exactly like "logging works" until checkin came up empty.
+// ~/bin is this repo's own bin/ (symlinked by mise), so it is the real home.
+const SYNC_BIN =
+  [
+    join(homedir(), "bin", "pi-session-sync"),
+    join(homedir(), ".local", "bin", "pi-session-sync"),
+  ].find((p) => existsSync(p)) ?? "pi-session-sync";
 
 export default function (pi: ExtensionAPI) {
   let sessionFile: string | undefined;
