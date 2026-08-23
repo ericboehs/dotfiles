@@ -37,9 +37,30 @@ WIKI_DIR     = File.expand_path("~/Documents/Wiki/AI Sessions")
 # `cd <dir> && pi --session <id>` in the daily note is only runnable on the
 # machine that produced it. log-session.sh solves this by keeping a separate
 # GFE-only copy of itself that hardcodes "(GFE)" -- two copies to keep in sync.
-# Recording the hostname unconditionally keeps this a single script: the reader
-# compares it against its own `hostname -s`.
-HOST = Socket.gethostname.split(".").first
+# Recording the host unconditionally keeps this a single script instead.
+#
+# Report the same host key bootstrap:pi resolves for settings.<host>.json, not
+# the raw hostname. A work machine's hostname is an asset tag, which is why
+# .pi-agent/host exists to override it, and one machine answering to two
+# different names across the notes and the config is the kind of mismatch that
+# only ever costs you later. __dir__ resolves through the ~/bin symlink into
+# the checkout, so the override is found no matter how the script was invoked.
+def resolve_host
+  env = ENV["PI_SETTINGS_HOST"].to_s.strip
+  return env unless env.empty?
+
+  override = File.expand_path("../.pi-agent/host", __dir__)
+  if File.exist?(override)
+    name = File.read(override).strip
+    return name unless name.empty?
+  end
+
+  Socket.gethostname.split(".").first.downcase
+rescue StandardError
+  Socket.gethostname.split(".").first.downcase
+end
+
+HOST = resolve_host
 
 # The subagent marker below is only meaningful where pi-approval-guardian is
 # installed. Without it every session records zero direct prompts, which reads

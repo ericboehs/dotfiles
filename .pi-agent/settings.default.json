@@ -10,5 +10,11 @@
   "terminal": {
     "showTerminalProgress": true
   },
-  "enableInstallTelemetry": false
+  "enableInstallTelemetry": false,
+  "packages": [
+    "npm:pi-approval-guardian@0.8.0",
+    "npm:@nicknisi/pi-stash",
+    "git:github.com/ericboehs/pi-claude-link@78e01168ddccbf1f5ef3a3474b70cf030a6bd551",
+    "git:github.com/ericboehs/pi-context"
+  ]
 }
