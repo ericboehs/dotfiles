@@ -28,9 +28,18 @@
 require "json"
 require "time"
 require "fileutils"
+require "socket"
 
 SESSION_ROOT = File.expand_path("~/.pi/agent/sessions")
 WIKI_DIR     = File.expand_path("~/Documents/Wiki/AI Sessions")
+
+# GFE sessions rsync into the same wiki directory as the laptop's, so a bare
+# `cd <dir> && pi --session <id>` in the daily note is only runnable on the
+# machine that produced it. log-session.sh solves this by keeping a separate
+# GFE-only copy of itself that hardcodes "(GFE)" -- two copies to keep in sync.
+# Recording the hostname unconditionally keeps this a single script: the reader
+# compares it against its own `hostname -s`.
+HOST = Socket.gethostname.split(".").first
 
 # Mirrors log-session.sh's argument summary: one representative field, clipped.
 # Ordered by how much the field tells you about what the call actually did.
@@ -185,6 +194,7 @@ def render(path)
   header << ""
   header << "Started: #{started.strftime('%Y-%m-%d %H:%M:%S')}"
   header << "Working directory: #{head['cwd']}"
+  header << "Host: #{HOST}"
   header << "Model: #{model_line}" if model_line && !model_line.empty?
   header << "Turns: #{blocks}"
   header << "Direct prompts: #{direct_prompts}"
