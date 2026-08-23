@@ -65,6 +65,31 @@ since an update leaves the bundle stale and every launch ~115ms slower until it
 is rebuilt. Concurrent pi instances serialize on a lock directory; output lands
 in `~/.pi/agent/auto-bundle.log`. Set `PI_NO_AUTO_BUNDLE=1` to opt out.
 
+`bin/pi-launch` also points node's V8 compile cache at `~/.cache/pi/v8`, worth
+another ~75ms. Compiling the bundle is the largest single thing pi does before
+`main()` — 8.7MB in one file — and it produces the same bytes every launch:
+
+| phase | cost |
+| --- | --- |
+| node itself | 30ms |
+| compiling the bundle | ~320ms |
+| `createAgentSessionRuntime` | 131ms |
+| `interactiveMode.init` | 161ms |
+| all 21 extensions | 45ms |
+
+Node namespaces the cache by version, arch and build id and keys entries by
+source hash, so an upgrade misses rather than running stale code, and
+`pi-bundle` clears it on each rebuild so it does not grow by ~1.4MB per
+release. `PI_NO_COMPILE_CACHE=1` opts out; `pi-bundle --status` shows its size.
+
+Interleaved A/B on one machine, best of 6 launches each:
+
+| entrypoint | boot |
+| --- | --- |
+| stock `dist/cli.js` | 693ms |
+| bundle only | 590ms |
+| bundle + compile cache | 528ms |
+
 Every cold start is appended to `boot-times.jsonl` with the gap back to the
 previous launch and the 1-minute load average, and `/boot stats` reports the
 two cohorts separately. This is not decoration: relaunching pi a few times in a
@@ -166,5 +191,6 @@ Intentionally left as machine-local runtime state:
 - trust decisions
 - `boot-times.jsonl`, the launch log behind `/boot stats`
 - `auto-bundle.log` and `pi-bundle.lock`, written by the footer's automatic bundle rebuild
+- `~/.cache/pi/v8`, the V8 compile cache `bin/pi-launch` points node at
 - `.pi-agent/node_modules/`, the symlinks `bin/pi-ext-check` creates
 - `dist/bundle.mjs` inside the pi install, which `bin/pi-bundle` rebuilds

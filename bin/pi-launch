@@ -13,6 +13,20 @@ dir=${0%/*}
 node="$dir/node"
 [ -x "$node" ] || node=node
 
+# V8 caches the compiled form of every module it loads under here, worth ~80ms
+# (13%) off every launch. Compiling the bundle is the single biggest thing pi
+# does before main() -- 8.7MB in one file, ~320ms of parse and compile against
+# 30ms for node itself and 307ms for all of main() -- and none of that work
+# changes between launches.
+#
+# Node namespaces the directory by version, arch and build id, and keys entries
+# by source hash, so an upgrade is a cache miss rather than stale code. Honour
+# an existing value; PI_NO_COMPILE_CACHE=1 opts out.
+if [ -z "${NODE_COMPILE_CACHE:-}" ] && [ -z "${PI_NO_COMPILE_CACHE:-}" ]; then
+  NODE_COMPILE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/pi/v8"
+  export NODE_COMPILE_CACHE
+fi
+
 # Two install layouts: npm's global prefix (bin/pi next to bin/node, package
 # under ../lib/node_modules) and a plain node_modules tree (bin/pi in
 # node_modules/.bin, package one level up), which is what mise's npm backend

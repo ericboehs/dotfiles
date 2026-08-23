@@ -50,6 +50,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "PI_BUNDLE_NO_LINK=1    build the bundle without repointing the bin"
   echo "PI_BUNDLE_NO_BEDROCK=1 leave the AWS SDK out (~30ms faster, breaks bedrock)"
   echo "PI_NO_BUNDLE=1         skip the bundle for one launch"
+  echo "PI_NO_COMPILE_CACHE=1  skip bin/pi-launch's V8 compile cache for one launch"
   exit 0
 fi
 
@@ -89,6 +90,8 @@ VERSION="$(node -p "require('$PKG/package.json').version")"
 BUNDLE="$PKG/dist/bundle.mjs"
 PI_BIN_LINK="$BIN_DIR/pi"
 SHIM_BACKUP="$PI_BIN_LINK.pre-bundle"
+# Kept in step with bin/pi-launch, which points node at it on every launch.
+COMPILE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/pi/v8"
 
 # mise's npm backend writes a generated shim script at the bin path instead of
 # a symlink, so there is nothing to repoint. Rewrite the shim's own entrypoint
@@ -144,6 +147,11 @@ if [[ "${1:-}" == "--status" ]]; then
   else
     echo "bundle    ${YELLOW}not built${NC}"
   fi
+  if [ -d "$COMPILE_CACHE" ]; then
+    echo "v8 cache  $(du -sh "$COMPILE_CACHE" | cut -f1) at $COMPILE_CACHE"
+  else
+    echo "v8 cache  ${YELLOW}empty${NC} (populates on the next launch)"
+  fi
   exit 0
 fi
 
@@ -151,6 +159,8 @@ if [[ "${1:-}" == "--off" ]]; then
   [ -L "$PI_BIN_LINK" ] && ln -sfn "$PKG/dist/cli.js" "$PI_BIN_LINK"
   [ -f "$SHIM_BACKUP" ] && mv -f "$SHIM_BACKUP" "$PI_BIN_LINK"
   rm -f "$BUNDLE"
+  # The bin no longer goes through pi-launch, so nothing would ever read these.
+  rm -rf "$COMPILE_CACHE"
   echo "${GREEN}✅ restored the stock entrypoint${NC}"
   exit 0
 fi
@@ -303,6 +313,10 @@ else
   echo "${YELLOW}could not locate pi-ai bedrock module; bedrock may fail through the bundle${NC}" >&2
 fi
 size="$(du -h "$BUNDLE" | cut -f1)"
+# Every entry in there is keyed to the bundle that just got replaced. Node would
+# miss on all of them and write new ones alongside, so the directory would grow
+# by ~1.4MB per pi release and never shrink.
+rm -rf "$COMPILE_CACHE"
 note=""
 [ -n "${no_bedrock:-}" ] && note=" ${YELLOW}without bedrock${NC}"
 if [ -n "${PI_BUNDLE_NO_LINK:-}" ]; then
