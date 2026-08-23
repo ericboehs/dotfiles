@@ -12,6 +12,7 @@
 // border and leaves every other surface — transcript, tools, markdown, syntax
 // — exactly as the theme author wrote it. `bashMode` is left alone on purpose,
 // so `!` still turns the border its own color no matter what /color is set to.
+// The footer imports sessionColorAnsi() to paint a `/name`d session to match.
 //
 // Two consequences of pi's setThemeInstance(), both intentional trades:
 //   - the theme file watcher stops, so editing the active custom theme's JSON
@@ -71,6 +72,8 @@ const STASH_KEY = "__piSessionColor";
 interface ColorState {
   /** What the user asked for ("blue", "#ff0088", "204"), or undefined when off. */
   spec?: string;
+  /** The exact SGR sequence the border got, shared with the footer. */
+  ansi?: string;
   /** The theme as it was before we tinted it — what /color off restores. */
   baseline?: Theme;
   /** The tinted instance we handed to pi, used to detect a theme change from elsewhere. */
@@ -92,6 +95,21 @@ function stash(): ColorState {
 
 /** A resolved color: a hex string, or an xterm-256 palette index. */
 type ColorValue = string | number;
+
+/**
+ * The SGR foreground the editor border is currently painted with, or undefined
+ * when no session color is set.
+ *
+ * Exported for the footer, which paints an explicit session name to match —
+ * the stored sequence rather than a recomputed one, so the two can't disagree
+ * about the terminal's color depth. Importing this module from another
+ * extension is safe: pi loads extensions by absolute path, so the import
+ * resolves to the same module instance and the default export is not run a
+ * second time.
+ */
+export function sessionColorAnsi(): string | undefined {
+  return stash().ansi;
+}
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const body = hex.slice(1);
@@ -193,12 +211,11 @@ interface ThemeInternals {
  * adds to a theme for free. Returns null if that map ever stops being a Map,
  * so a pi upgrade degrades to an error message instead of a broken theme.
  */
-function tint(base: Theme, value: ColorValue): Theme | null {
+function tint(base: Theme, ansi: string): Theme | null {
   const colors = (base as unknown as Partial<ThemeInternals>).fgColors;
   if (!(colors instanceof Map)) return null;
   const clone = Object.assign(Object.create(Object.getPrototypeOf(base) as object), base) as Theme;
   const next = new Map(colors);
-  const ansi = fgAnsi(value, base.getColorMode());
   for (const token of BORDER_TOKENS) next.set(token, ansi);
   (clone as unknown as ThemeInternals).fgColors = next;
   return clone;
@@ -241,17 +258,21 @@ export default function colorExtension(pi: ExtensionAPI): void {
   }
 
   function apply(ctx: ExtensionContext, value: ColorValue): string | null {
-    const tinted = tint(baseline(ctx), value);
+    const base = baseline(ctx);
+    const ansi = fgAnsi(value, base.getColorMode());
+    const tinted = tint(base, ansi);
     if (!tinted) return "this pi version stores theme colors differently — /color needs an update";
     const result = ctx.ui.setTheme(tinted);
     if (!result.success) return result.error ?? "failed to apply the theme";
     state.tinted = tinted;
+    state.ansi = ansi;
     return null;
   }
 
   function restore(ctx: ExtensionContext): void {
     const base = state.baseline;
     state.spec = undefined;
+    state.ansi = undefined;
     state.tinted = undefined;
     state.baseline = undefined;
     // Nothing to restore if the theme was replaced from elsewhere in the

@@ -28,6 +28,7 @@ import type {
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { sessionColorAnsi } from "./color.ts";
 
 const GIT_TTL_MS = 5_000;
 const GIT_TIMEOUT_MS = 1_000;
@@ -314,6 +315,11 @@ function formatGit(branch: string | null, state: GitState): string {
 
 function color(code: number, text: string): string {
   return text ? `\x1b[${code}m${text}\x1b[39m` : "";
+}
+
+/** Wrap text in a ready-made SGR foreground sequence (from /color). */
+function paint(ansi: string, text: string): string {
+  return text ? `${ansi}${text}\x1b[39m` : "";
 }
 
 /** Widget key for the scrollback banner, so it can be cleared by key later. */
@@ -702,8 +708,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // Fall back to the name other agents use to reach this session.
           const sessionName = pi.getSessionName();
           const peerName = sessionName ? "" : peer.read(requestRender);
+          // A /color'd session names itself in that color, matching the editor
+          // border. Only a name you chose: a peer name pi-claude-link derived
+          // stays dim, because it says "nobody named this" and a bright color
+          // would claim otherwise.
+          const tint = sessionColorAnsi();
           const right =
-            sessionName ? color(CYAN, sessionName)
+            sessionName ? (tint ? paint(tint, sessionName) : color(CYAN, sessionName))
             : peerName ? theme.fg("dim", peerName)
             : "";
           const mainLine =

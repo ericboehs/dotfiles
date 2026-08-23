@@ -84,6 +84,9 @@ It recolors the editor border only, by cloning the live theme with the seven
 thinking-level tokens overwritten — nothing else in pi reads those, so the
 transcript, tools and syntax colors stay exactly as the theme author wrote
 them. `bashMode` is left alone, so `!` still flips the border to its own color.
+The footer paints the session name in the same color, but only a name you set
+with `/name`: a name pi-claude-link derived for the peer registry stays dim,
+since it says "nobody named this" and a bright color would claim otherwise.
 Like Claude's, the choice is not persisted: it lives in the process (through
 `/reload`, via a `globalThis` stash) and dies with it.
 

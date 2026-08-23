@@ -14,7 +14,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import color from "../extensions/color.ts";
+import color, { sessionColorAnsi } from "../extensions/color.ts";
 
 const BORDER_TOKENS = [
   "thinkingOff",
@@ -285,6 +285,15 @@ test("a rejected setTheme is reported and not remembered", async () => {
   assert.equal(ui.notices.at(-1).level, "error");
   await ui.run("off");
   assert.equal(ui.notices.at(-1).message, "No session color set");
+});
+
+test("the border's SGR sequence is exported for the footer to match", async () => {
+  const ui = mount({ mode: "256color" });
+  assert.equal(sessionColorAnsi(), undefined);
+  await ui.run("blue");
+  assert.equal(sessionColorAnsi(), ui.border(), "same sequence, same color depth");
+  await ui.run("off");
+  assert.equal(sessionColorAnsi(), undefined);
 });
 
 test("completions cover the palette plus auto/off, filtered by prefix", () => {

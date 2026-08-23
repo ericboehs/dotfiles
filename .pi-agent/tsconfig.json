@@ -20,6 +20,10 @@
     // types — it cannot emit code. This flag rejects the syntax that would
     // otherwise blow up at load time (parameter properties, enums, namespaces).
     "erasableSyntaxOnly": true,
+    // ...and the same loader resolves import specifiers literally, so one
+    // extension importing another writes "./color.ts". Only legal alongside
+    // noEmit, which is the point of this config.
+    "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
   "include": ["extensions/**/*.ts"]

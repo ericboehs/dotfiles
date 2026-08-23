@@ -315,6 +315,43 @@ test("falls back to the pi-claude-link peer name, dimmed", async () => {
   }
 });
 
+/**
+ * Set the session color /color would have stored, and clear it afterwards.
+ * The footer reads it through color.ts, which keeps it on globalThis so it
+ * survives /reload.
+ */
+function withSessionColor(ansi) {
+  globalThis.__piSessionColor = { spec: "blue", ansi };
+  return () => {
+    delete globalThis.__piSessionColor;
+  };
+}
+
+test("a /color'd session paints its own name to match the editor border", async () => {
+  const restore = withSessionColor("\x1B[38;2;95;135;255m");
+  try {
+    const ui = await mount({ sessionName: "footer-work" });
+    await ui.settled(80);
+    assert.match(ui.raw(80)[0], /\x1B\[38;2;95;135;255mfooter-work\x1B\[39m$/);
+  } finally {
+    restore();
+  }
+});
+
+test("a derived peer name stays dim, session color or not", async () => {
+  const restorePeer = withPeerRegistry("pi-dotfiles");
+  const restoreColor = withSessionColor("\x1B[38;2;95;135;255m");
+  try {
+    const ui = await mount({ sessionName: undefined });
+    await ui.settled(80);
+    // Nobody named this session; coloring it would claim otherwise.
+    assert.match(ui.raw(80)[0], /\x1B\[2mpi-dotfiles\x1B\[22m$/);
+  } finally {
+    restoreColor();
+    restorePeer();
+  }
+});
+
 test("no peer registry means no right-hand segment at all", async () => {
   const restore = withPeerRegistry(undefined);
   try {
