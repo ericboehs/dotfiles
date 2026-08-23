@@ -27,7 +27,7 @@ import type {
   ExtensionContext,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 const GIT_TTL_MS = 5_000;
 const GIT_TIMEOUT_MS = 1_000;
@@ -316,6 +316,75 @@ function color(code: number, text: string): string {
   return text ? `\x1b[${code}m${text}\x1b[39m` : "";
 }
 
+/** Widget key for the scrollback banner, so it can be cleared by key later. */
+const SCROLLBACK_WIDGET_KEY = "footer-scrollback";
+
+/**
+ * Centered "↓ scrolled" banner rendered directly above the editor while the
+ * transcript viewport is parked above the bottom.
+ *
+ * Fullscreen mode only: in regular mode the terminal owns the scrollback
+ * buffer, so pi has no idea where the user is scrolled. Scrolling calls
+ * requestRender() internally, so reading the flag here updates live — no
+ * polling needed. isFollowingOutput lives on TuiAltScreen rather than the
+ * base TUI interface extensions are handed, hence the runtime shape check
+ * instead of a blind cast.
+ */
+/** Shared counter for assistant messages that arrived while scrolled up. */
+interface ScrollbackState {
+  unseen: number;
+}
+
+function scrollbackWidget(tui: TUI, state: ScrollbackState): Component {
+  return {
+    invalidate(): void {},
+    render(width: number): string[] {
+      if (tui.mode !== "fullscreen") return [];
+      const alt = tui as TUI & { isFollowingOutput?: boolean };
+      if (alt.isFollowingOutput !== false) {
+        // Back at the bottom: everything has been seen.
+        state.unseen = 0;
+        return [];
+      }
+      const count = state.unseen;
+      const noun = count === 1 ? "message" : "messages";
+      const text = color(
+        YELLOW,
+        count > 0 ? `${count} new ${noun} · click to return ↓` : "scrolled · click to return ↓",
+      );
+      const pad = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
+      return [`${" ".repeat(pad)}${text}`];
+    },
+  };
+}
+
+/** SGR left-button press: \x1b[<0;COL;ROWM (release is the same with trailing m). */
+const MOUSE_PRESS_RE = /\x1b\[<0;(\d+);(\d+)M/g;
+
+/** Column reserved for the fullscreen scrollbar; clicks there stay scrollbar-only. */
+function attachScrollbackClick(tui: TUI): () => void {
+  // TuiAltScreen installs its own input listener at construction time and that
+  // handler consumes every mouse event, so anything registered later via
+  // tui.addInputListener() never sees one. Read the same bytes off stdin
+  // directly instead — Node delivers every chunk to each "data" listener.
+  const stream = process.stdin;
+  if (!stream || typeof stream.on !== "function") return () => {};
+  const onClick = (chunk: Buffer | string): void => {
+    const alt = tui as TUI & { isFollowingOutput?: boolean; scrollToBottom?: () => void };
+    if (alt.isFollowingOutput !== false || typeof alt.scrollToBottom !== "function") return;
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    MOUSE_PRESS_RE.lastIndex = 0;
+    const match = MOUSE_PRESS_RE.exec(text);
+    if (!match) return;
+    // Skip the scrollbar's column; everything else jumps to the bottom.
+    if (Number(match[1]) < tui.terminal.columns) alt.scrollToBottom();
+  };
+  stream.on("data", onClick);
+  return () => {
+    stream.removeListener("data", onClick);
+  };
+}
+
 function shortProvider(provider: string | undefined): string {
   if (!provider) return "";
   return PROVIDER_NAMES[provider] ?? provider;
@@ -517,6 +586,12 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let enabled = true;
   let bypassed = false;
   let repaint: (() => void) | undefined;
+  /** Live widget state while the scrollback banner is mounted. Its "unseen"
+   * field is the single source of truth for the new-message count; renders
+   * zero it when you return to the bottom. */
+  let unseenState: ScrollbackState | undefined;
+  /** Live TUI while the scrollback widget is mounted, for message_start checks. */
+  let scrollTui: TUI | undefined;
   // Only a cold start has a boot time worth showing; after /reload or a session
   // switch, uptime is however long the process has been sitting there.
   let coldStart = false;
@@ -528,8 +603,24 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (!ctx.hasUI) return;
     if (!enabled) {
       ctx.ui.setFooter(undefined);
+      ctx.ui.setWidget(SCROLLBACK_WIDGET_KEY, undefined);
       return;
     }
+    ctx.ui.setWidget(SCROLLBACK_WIDGET_KEY, (tui) => {
+      // Click-to-jump shares the widget's lifecycle: dispose() detaches it.
+      const removeListener = tui.mode === "fullscreen" ? attachScrollbackClick(tui) : () => {};
+      scrollTui = tui;
+      const scrollbackState: ScrollbackState = { unseen: 0 };
+      unseenState = scrollbackState;
+      return {
+        ...scrollbackWidget(tui, scrollbackState),
+        dispose: () => {
+          removeListener();
+          scrollTui = undefined;
+          if (unseenState === scrollbackState) unseenState = undefined;
+        },
+      };
+    });
 
     ctx.ui.setFooter((tui, theme, footerData) => {
       const requestRender = () => tui.requestRender();
@@ -704,9 +795,49 @@ export default function footerExtension(pi: ExtensionAPI): void {
     },
   });
 
+  // Count assistant content that arrives while the user is scrolled up, so
+  // the banner can say "2 new messages" instead of just "scrolled".
+  //
+  // message_start alone isn't enough: it only fires when a message BEGINS, so
+  // scrolling up mid-response would never count the rest of that response.
+  // message_update chunks are shallow clones ({...partialMessage}), so instead
+  // of deduping by identity we count each streamed message at most once via
+  // this flag, reset on every assistant message_start.
+  let streamCounted = false;
+  const bumpUnseen = (): void => {
+    if (!unseenState) return;
+    unseenState.unseen += 1;
+    repaint?.();
+  };
+  const isScrolledUp = (): boolean => {
+    if (!scrollTui) return false;
+    const alt = scrollTui as TUI & { isFollowingOutput?: boolean };
+    return alt.isFollowingOutput === false;
+  };
+  pi.on("message_start", async (event) => {
+    if (event.message.role !== "assistant") return undefined;
+    streamCounted = false;
+    // A message beginning while already scrolled up counts here; marking it
+    // counted stops its streaming chunks from counting it a second time.
+    if (isScrolledUp()) {
+      bumpUnseen();
+      streamCounted = true;
+    }
+    return undefined;
+  });
+  pi.on("message_update", async (event) => {
+    if (event.message.role !== "assistant" || streamCounted || !isScrolledUp()) return undefined;
+    // Counts a message that began before the user scrolled up exactly once:
+    // its first chunk after scrolling marks it counted.
+    streamCounted = true;
+    bumpUnseen();
+    return undefined;
+  });
+
   pi.on("session_start", async (event, ctx) => {
     // The guardian's bypass resets when the session runtime reloads.
     bypassed = false;
+    if (unseenState) unseenState.unseen = 0;
     coldStart = event.reason === "startup";
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer
@@ -737,6 +868,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
   pi.on("model_select", async (_event, ctx) => apply(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (ctx.hasUI) ctx.ui.setFooter(undefined);
+    if (ctx.hasUI) {
+      ctx.ui.setFooter(undefined);
+      ctx.ui.setWidget(SCROLLBACK_WIDGET_KEY, undefined);
+    }
   });
 }

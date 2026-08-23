@@ -100,9 +100,9 @@ export default function (pi: ExtensionAPI) {
       // The path is included even though the image is attached inline: it makes
       // the file reachable to tools (re-read a region at full resolution, sips,
       // copy it somewhere) instead of being a one-shot bitmap. Saying it is
-      // already attached keeps the agent from spending a re-read to look at
-      // what it can already see.
-      const label = `Latest in iCloud Downloads: "${found.path}" (${when}), attached below`;
+      // attached keeps the agent from spending a re-read to look at what it can
+      // already see.
+      const label = `Latest in iCloud Downloads: "${found.path}" (${when}), attached`;
 
       if (!mimeType) {
         // Not an image — nothing is attached, so the path is the whole payload.
