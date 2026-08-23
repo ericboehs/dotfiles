@@ -350,7 +350,9 @@ function scrollbackWidget(tui: TUI, state: ScrollbackState): Component {
       const noun = count === 1 ? "message" : "messages";
       const text = color(
         YELLOW,
-        count > 0 ? `${count} new ${noun} · click to return ↓` : "scrolled · click to return ↓",
+        count > 0
+          ? `${count} new ${noun} · ${SCROLLBACK_CLICK_LABEL}`
+          : `scrolled · ${SCROLLBACK_CLICK_LABEL}`,
       );
       const pad = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
       return [`${" ".repeat(pad)}${text}`];
@@ -361,7 +363,26 @@ function scrollbackWidget(tui: TUI, state: ScrollbackState): Component {
 /** SGR left-button press: \x1b[<0;COL;ROWM (release is the same with trailing m). */
 const MOUSE_PRESS_RE = /\x1b\[<0;(\d+);(\d+)M/g;
 
-/** Column reserved for the fullscreen scrollbar; clicks there stay scrollbar-only. */
+/** Trailing half of the banner text, used to locate its row in the last frame. */
+const SCROLLBACK_CLICK_LABEL = "click to return \u2193";
+
+const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+/**
+ * Hit test for the banner: the click has to land on the banner's own row and
+ * within its printed characters. Anything else — including a press that starts
+ * a text selection in the transcript — is left alone.
+ */
+function isBannerHit(screen: string[] | undefined, col: number, row: number): boolean {
+  const line = screen?.[row];
+  if (!line) return false;
+  const plain = line.replace(ANSI_RE, "");
+  if (!plain.includes(SCROLLBACK_CLICK_LABEL)) return false;
+  const start = plain.length - plain.trimStart().length;
+  const end = plain.trimEnd().length;
+  return col >= start && col < end;
+}
+
 function attachScrollbackClick(tui: TUI): () => void {
   // TuiAltScreen installs its own input listener at construction time and that
   // handler consumes every mouse event, so anything registered later via
@@ -370,14 +391,21 @@ function attachScrollbackClick(tui: TUI): () => void {
   const stream = process.stdin;
   if (!stream || typeof stream.on !== "function") return () => {};
   const onClick = (chunk: Buffer | string): void => {
-    const alt = tui as TUI & { isFollowingOutput?: boolean; scrollToBottom?: () => void };
+    const alt = tui as TUI & {
+      isFollowingOutput?: boolean;
+      scrollToBottom?: () => void;
+      previousScreen?: string[];
+    };
     if (alt.isFollowingOutput !== false || typeof alt.scrollToBottom !== "function") return;
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     MOUSE_PRESS_RE.lastIndex = 0;
-    const match = MOUSE_PRESS_RE.exec(text);
-    if (!match) return;
-    // Skip the scrollbar's column; everything else jumps to the bottom.
-    if (Number(match[1]) < tui.terminal.columns) alt.scrollToBottom();
+    // A chunk can carry more than one event; any of them may be the banner.
+    for (let match = MOUSE_PRESS_RE.exec(text); match; match = MOUSE_PRESS_RE.exec(text)) {
+      // SGR coordinates are 1-based; previousScreen is indexed by screen row.
+      if (!isBannerHit(alt.previousScreen, Number(match[1]) - 1, Number(match[2]) - 1)) continue;
+      alt.scrollToBottom();
+      return;
+    }
   };
   stream.on("data", onClick);
   return () => {
