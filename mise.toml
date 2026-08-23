@@ -392,7 +392,7 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:claude"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:pi-assistant", "bootstrap:claude"]
 
 [tasks."bootstrap:linux-shims"]
 description = "Debian binary-name shims, lsd fallback, zsh login shell"
@@ -767,6 +767,79 @@ if [ -x "$pi_bundle" ]; then
 else
   echo "bootstrap:pi: bin/pi-bundle not found, staying on the stock entrypoint" >&2
 fi
+'''
+
+[tasks."bootstrap:pi-assistant"]
+description = "Link the ~/.pi/assistant profile from its private source, when one is configured"
+depends = ["bootstrap:pi"]
+run = '''
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+
+# `pia` is a second pi profile for life and work operations — mail, calendar,
+# reminders, messages, notes, timesheets — kept apart from the coding profile
+# so neither one carries the other's skills, sessions, or memory. Pi has no
+# profile flag; PI_CODING_AGENT_DIR pointing at a second agent directory is
+# the whole mechanism, and the `pia` shell function sets it.
+#
+# The profile's content (persona, skill list, workflow prompts) names people,
+# internal hosts, and systems. This directory is published, so only the
+# mechanism lives here. Name the source by writing its path into
+# .pi-agent/assistant-source, which the .pi-agent/.gitignore already excludes.
+root="${MISE_PROJECT_ROOT:-$PWD}"
+pointer="$root/.pi-agent/assistant-source"
+source_dir="${PI_ASSISTANT_SOURCE:-}"
+if [ -z "$source_dir" ] && [ -f "$pointer" ]; then
+  source_dir="$(sed -e '1q' -e 's/[[:space:]]*$//' "$pointer")"
+fi
+case "$source_dir" in
+  "~/"*) source_dir="$HOME/${source_dir#\~/}" ;;
+esac
+
+if [ -z "$source_dir" ]; then
+  echo "bootstrap:pi-assistant: no source configured, skipping"
+  exit 0
+fi
+if [ ! -d "$source_dir" ]; then
+  echo "bootstrap:pi-assistant: $source_dir is not a directory" >&2
+  exit 1
+fi
+
+profile="$HOME/.pi/assistant"
+mkdir -p "$profile"
+
+# What makes this profile itself. AGENTS.md is purpose-written: the coding
+# profile's file is about Ruby and commits, which is noise for an assistant.
+for name in settings.json AGENTS.md approval-guardian.json prompts; do
+  [ -e "$source_dir/$name" ] || continue
+  target="$profile/$name"
+  if [ -e "$target" ] && [ ! -L "$target" ]; then
+    mv "$target" "$target.bak"
+    echo "bootstrap:pi-assistant: kept the previous $name at $target.bak" >&2
+  fi
+  ln -sfn "$source_dir/$name" "$target"
+done
+
+# Shared with the coding profile on purpose. Credentials so the assistant does
+# not need a second login, custom providers and keybindings so both profiles
+# behave the same, and the package trees because both settings files pin the
+# same versions — installing them twice buys nothing. Sessions, memory, and
+# trust stay per-profile, which is the reason the split exists.
+for name in auth.json models.json keybindings.json npm git bin; do
+  [ -e "$HOME/.pi/agent/$name" ] || continue
+  target="$profile/$name"
+  if [ -e "$target" ] && [ ! -L "$target" ]; then
+    mv "$target" "$target.bak"
+    echo "bootstrap:pi-assistant: kept the previous $name at $target.bak" >&2
+  fi
+  ln -sfn "$HOME/.pi/agent/$name" "$target"
+done
+
+# The same tracked extensions the coding profile discovers. Linking the
+# directory rather than each file means a new extension lands in both profiles
+# on the next pull, with no second list to forget.
+ln -sfn "$root/.pi-agent/extensions" "$profile/extensions"
+
+echo "bootstrap:pi-assistant: linked $profile from $source_dir"
 '''
 
 [tasks."bootstrap:claude"]
