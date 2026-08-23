@@ -22,6 +22,7 @@ export interface ScheduledTask {
   intervalMs?: number;
   dailyAt?: string;
   cronExpr?: string;
+  paused?: boolean;
 }
 
 export interface CronFields {
@@ -282,6 +283,10 @@ export function normalizeTasksForResume(
   let changed = false;
 
   for (const task of tasks) {
+    if (task.paused) {
+      normalized.push(task);
+      continue;
+    }
     if (task.kind === "once") {
       if (task.nextRunAt <= now) {
         changed = true;
@@ -387,12 +392,13 @@ function formatDuration(milliseconds: number): string {
 
 function formatTask(task: ScheduledTask): string {
   const when = new Date(task.nextRunAt).toLocaleString();
+  const next = task.paused ? "paused" : `next ${when}`;
   if (task.kind === "interval") {
-    return `${task.id} · every ${formatDuration(task.intervalMs ?? 0)} · next ${when} · ${task.prompt}`;
+    return `${task.id} · every ${formatDuration(task.intervalMs ?? 0)} · ${next} · ${task.prompt}`;
   }
-  if (task.kind === "daily") return `${task.id} · daily ${task.dailyAt} · next ${when} · ${task.prompt}`;
-  if (task.kind === "cron") return `${task.id} · cron ${task.cronExpr} · next ${when} · ${task.prompt}`;
-  return `${task.id} · once ${when} · ${task.prompt}`;
+  if (task.kind === "daily") return `${task.id} · daily ${task.dailyAt} · ${next} · ${task.prompt}`;
+  if (task.kind === "cron") return `${task.id} · cron ${task.cronExpr} · ${next} · ${task.prompt}`;
+  return `${task.id} · once ${task.paused ? `paused, was ${when}` : when} · ${task.prompt}`;
 }
 
 function makeTaskId(existing: ScheduledTask[]): string {
@@ -420,8 +426,15 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
 
   const updateStatus = (ctx = activeCtx) => {
     if (!ctx?.hasUI) return;
-    const count = new Set([...tasks.map((task) => task.id), ...pending.keys()]).size;
-    ctx.ui.setStatus("session-scheduler", count > 0 ? `⏰ ${count}` : undefined);
+    const active = new Set([
+      ...tasks.filter((task) => !task.paused).map((task) => task.id),
+      ...pending.keys(),
+    ]).size;
+    const paused = tasks.filter((task) => task.paused).length;
+    const label = active > 0 || paused > 0
+      ? `⏰ ${active}${paused > 0 ? ` ⏸${paused}` : ""}`
+      : undefined;
+    ctx.ui.setStatus("session-scheduler", label);
   };
 
   const persist = () => {
@@ -509,7 +522,9 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     const restored = normalizeTasksForResume(readSnapshot(ctx));
     tasks = restored.tasks;
     const runtimeGeneration = generation;
-    for (const task of tasks) armTask(task, ctx, runtimeGeneration);
+    for (const task of tasks) {
+      if (!task.paused) armTask(task, ctx, runtimeGeneration);
+    }
     if (restored.changed) persist();
     updateStatus(ctx);
   };
@@ -523,7 +538,7 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     };
     tasks.push(complete);
     persist();
-    armTask(complete, ctx, generation);
+    if (!complete.paused) armTask(complete, ctx, generation);
     updateStatus(ctx);
     return complete;
   };
@@ -543,21 +558,65 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     });
   };
 
-  const removeTask = (ctx: ExtensionContext, idPrefix: string) => {
+  const findTask = (idPrefix: string) => {
     const matches = tasks.filter((task) => task.id.startsWith(idPrefix));
     if (matches.length === 0) throw new Error(`No scheduled task matches ${idPrefix}`);
     if (matches.length > 1) throw new Error(`Task prefix ${idPrefix} is ambiguous`);
     const task = matches[0];
     if (!task) throw new Error(`No scheduled task matches ${idPrefix}`);
+    return task;
+  };
 
-    tasks = tasks.filter((candidate) => candidate.id !== task.id);
-    pending.delete(task.id);
-    const timer = timers.get(task.id);
+  const disarm = (id: string) => {
+    pending.delete(id);
+    const timer = timers.get(id);
     if (timer) clearTimeout(timer);
-    timers.delete(task.id);
+    timers.delete(id);
+  };
+
+  const removeTask = (ctx: ExtensionContext, idPrefix: string) => {
+    const task = findTask(idPrefix);
+    tasks = tasks.filter((candidate) => candidate.id !== task.id);
+    disarm(task.id);
     persist();
     updateStatus(ctx);
     return task;
+  };
+
+  const setPaused = (ctx: ExtensionContext, target: string, paused: boolean) => {
+    const all = /^(all|\*)$/i.test(target);
+    const selected = all ? tasks.filter((task) => Boolean(task.paused) !== paused) : [findTask(target)];
+    if (selected.length === 0) {
+      return { changed: [] as ScheduledTask[], expired: [] as ScheduledTask[] };
+    }
+
+    const now = Date.now();
+    const changed: ScheduledTask[] = [];
+    const expired: ScheduledTask[] = [];
+
+    for (const task of selected) {
+      if (paused) {
+        disarm(task.id);
+        const updated = { ...task, paused: true };
+        tasks = tasks.map((candidate) => (candidate.id === task.id ? updated : candidate));
+        changed.push(updated);
+        continue;
+      }
+
+      const revived = normalizeTasksForResume([{ ...task, paused: false }], now).tasks[0];
+      if (!revived) {
+        tasks = tasks.filter((candidate) => candidate.id !== task.id);
+        expired.push(task);
+        continue;
+      }
+      tasks = tasks.map((candidate) => (candidate.id === task.id ? revived : candidate));
+      armTask(revived, ctx, generation);
+      changed.push(revived);
+    }
+
+    persist();
+    updateStatus(ctx);
+    return { changed, expired };
   };
 
   const showUsage = (ctx: ExtensionContext) => {
@@ -572,6 +631,7 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
         "  /schedule cron <m h dom mon dow|@daily> <prompt>",
         "  /schedule once <duration|HH:MM|ISO> <prompt>",
         "  /schedule list | cancel <id> | clear",
+        "  /schedule pause <id|all> | resume <id|all>",
         "  (:: before the prompt is optional)",
       ].join("\n"),
       "warning",
@@ -609,6 +669,30 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
 
       if (/^(list|ls)$/i.test(input)) {
         notice(ctx, tasks.length > 0 ? tasks.map(formatTask).join("\n") : "No scheduled tasks in this session");
+        return;
+      }
+
+      const toggle = input.match(/^(pause|resume|unpause)\s+(\S+)$/i);
+      if (toggle?.[1] && toggle[2]) {
+        const paused = toggle[1].toLowerCase() === "pause";
+        try {
+          const { changed, expired } = setPaused(ctx, toggle[2], paused);
+          const lines: string[] = [];
+          if (changed.length > 0) {
+            lines.push(
+              paused
+                ? `Paused ${changed.length} task(s): ${changed.map((task) => task.id).join(", ")}`
+                : changed.map((task) => `Resumed ${task.id}; next ${new Date(task.nextRunAt).toLocaleString()}`).join("\n"),
+            );
+          }
+          for (const task of expired) {
+            lines.push(`Dropped ${task.id}: its one-shot time passed while paused`);
+          }
+          if (lines.length === 0) lines.push(paused ? "Nothing to pause" : "Nothing to resume");
+          notice(ctx, lines.join("\n"), expired.length > 0 ? "warning" : "info");
+        } catch (error) {
+          notice(ctx, error instanceof Error ? error.message : String(error), "error");
+        }
         return;
       }
 

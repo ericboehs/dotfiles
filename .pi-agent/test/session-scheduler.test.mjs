@@ -327,3 +327,115 @@ test("a cron task whose expression went bad is dropped, not respun", () => {
   assert.deepEqual(result.tasks, [], "cannot advance, so it is discarded");
   assert.equal(result.changed, true);
 });
+
+test("/schedule pause stops a task firing but keeps it listed", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "once 30s ping");
+  const id = latestTasks(ui)[0].id;
+
+  await ui.run("schedule", `pause ${id}`);
+  assert.equal(latestTasks(ui)[0].paused, true);
+  assert.match(ui.notices.at(-1).message, /Paused 1 task/);
+
+  await ui.run("schedule", "list");
+  assert.match(ui.notices.at(-1).message, /paused/);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(ui.sent, [], "a paused task must not fire");
+});
+
+test("/schedule resume re-arms and recomputes the next run", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "daily 9a morning report");
+  const id = latestTasks(ui)[0].id;
+
+  await ui.run("schedule", `pause ${id}`);
+  await ui.run("schedule", `resume ${id}`);
+
+  const task = latestTasks(ui)[0];
+  assert.equal(task.paused, false);
+  assert.ok(task.nextRunAt > Date.now(), "next run is back in the future");
+  assert.match(ui.notices.at(-1).message, /Resumed/);
+});
+
+test("pause and resume accept 'all'", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "hourly a");
+  await ui.run("schedule", "daily 9a b");
+  await ui.run("schedule", "pause all");
+  assert.deepEqual(latestTasks(ui).map((task) => task.paused), [true, true]);
+
+  await ui.run("schedule", "resume all");
+  assert.deepEqual(latestTasks(ui).map((task) => task.paused), [false, false]);
+});
+
+test("pausing is idempotent and reports when there is nothing to do", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "hourly a");
+  await ui.run("schedule", "pause all");
+  await ui.run("schedule", "pause all");
+  assert.match(ui.notices.at(-1).message, /Nothing to pause/);
+});
+
+test("a paused task survives resume without being advanced or dropped", async (t) => {
+  const stale = {
+    id: "deadbeef",
+    kind: "once",
+    prompt: "held",
+    createdAt: Date.now() - 10_000,
+    nextRunAt: Date.now() - 5_000,
+    paused: true,
+  };
+  const ui = await mount({ branch: [snapshot("session-a", [stale])] });
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "list");
+  assert.match(ui.notices.at(-1).message, /deadbeef/, "kept despite being overdue");
+  assert.deepEqual(ui.sent, [], "and it did not fire on restore");
+});
+
+test("resuming an overdue one-shot drops it instead of firing late", async (t) => {
+  const stale = {
+    id: "deadbeef",
+    kind: "once",
+    prompt: "held",
+    createdAt: Date.now() - 10_000,
+    nextRunAt: Date.now() - 5_000,
+    paused: true,
+  };
+  const ui = await mount({ branch: [snapshot("session-a", [stale])] });
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "resume deadbeef");
+  assert.deepEqual(latestTasks(ui), []);
+  assert.match(ui.notices.at(-1).message, /passed while paused/);
+  assert.deepEqual(ui.sent, []);
+});
+
+test("resuming an overdue recurring task advances it rather than dropping it", async (t) => {
+  const stale = {
+    id: "cafe1234",
+    kind: "interval",
+    prompt: "tick",
+    createdAt: Date.now() - 600_000,
+    nextRunAt: Date.now() - 300_000,
+    intervalMs: 60_000,
+    paused: true,
+  };
+  const ui = await mount({ branch: [snapshot("session-a", [stale])] });
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "resume cafe1234");
+  const task = latestTasks(ui)[0];
+  assert.equal(task.id, "cafe1234");
+  assert.ok(task.nextRunAt > Date.now());
+  assert.deepEqual(ui.sent, [], "no catch-up burst");
+});

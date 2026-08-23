@@ -65,6 +65,34 @@ since an update leaves the bundle stale and every launch ~115ms slower until it
 is rebuilt. Concurrent pi instances serialize on a lock directory; output lands
 in `~/.pi/agent/auto-bundle.log`. Set `PI_NO_AUTO_BUNDLE=1` to opt out.
 
+## Session color
+
+`extensions/color.ts` adds `/color`, Claude Code's trick for telling four
+identical panes apart:
+
+```text
+/color              # picker
+/color blue         # red orange yellow green cyan blue purple pink gray
+/color #ff0088      # any hex, long or short (#f08)
+/color 204          # xterm palette index; bare digits beat hex shorthand
+/color auto         # derived from the session name, stable across /reload
+/color list         # the palette, swatched
+/color off          # back to the theme
+```
+
+It recolors the editor border only, by cloning the live theme with the seven
+thinking-level tokens overwritten — nothing else in pi reads those, so the
+transcript, tools and syntax colors stay exactly as the theme author wrote
+them. `bashMode` is left alone, so `!` still flips the border to its own color.
+Like Claude's, the choice is not persisted: it lives in the process (through
+`/reload`, via a `globalThis` stash) and dies with it.
+
+Two side effects of handing pi a theme instance instead of a name, both
+cleared by `/color off`: the theme file watcher stops, so editing the active
+custom theme's JSON no longer hot-reloads, and `light/dark` auto-switching
+stops following the terminal. Picking a theme in `/settings` drops the tint;
+the next `/color` re-tints from whatever is current.
+
 ## Session scheduler
 
 `extensions/session-scheduler.ts` provides in-process, session-scoped prompts
@@ -78,8 +106,16 @@ without registering an LLM tool or adding anything to model context:
 /schedule cron @hourly check status
 /schedule once 30m check the build
 /schedule list
+/schedule pause <id|all>
+/schedule resume <id|all>
 /schedule cancel <id>
 ```
+
+`pause` disarms a task's timer but keeps it in the list, so it survives session
+resume without firing or drifting. `resume` recomputes the next occurrence rather
+than replaying what was missed: a recurring task advances to its next future slot,
+and a one-shot whose time passed while paused is dropped with a warning instead of
+firing late.
 
 `cron` takes a standard 5-field crontab expression (minute, hour, day-of-month,
 month, day-of-week) with ranges, lists, `*/n` steps, and `jan`/`mon` style names,
