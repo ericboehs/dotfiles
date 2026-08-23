@@ -3,11 +3,20 @@ import test from "node:test";
 
 import sessionScheduler, {
   advanceRecurringTask,
+  nextCronRun,
   nextDailyRun,
   normalizeTasksForResume,
   parseClock,
+  parseCron,
   parseDuration,
 } from "../extensions/session-scheduler.ts";
+
+function cronAt(expr, from) {
+  const fields = parseCron(expr);
+  assert.ok(fields, `expected ${expr} to parse`);
+  const next = nextCronRun(fields, from);
+  return next === undefined ? undefined : new Date(next);
+}
 
 function snapshot(sessionId, tasks) {
   return {
@@ -216,4 +225,105 @@ test("an overdue one-shot is discarded on resume instead of catching up", async 
 
   assert.deepEqual(ui.sent, []);
   assert.deepEqual(latestTasks(ui), []);
+});
+
+test("parses standard 5-field cron, with names and steps", () => {
+  assert.deepEqual([...parseCron("0 9 * * *").hour], [9]);
+  assert.deepEqual([...parseCron("*/15 * * * *").minute], [0, 15, 30, 45]);
+  assert.deepEqual([...parseCron("0 0 * * mon-fri").dow], [1, 2, 3, 4, 5]);
+  assert.deepEqual([...parseCron("0 0 1 jan,jul *").month], [1, 7]);
+  assert.deepEqual([...parseCron("0 0 * * 7").dow], [0], "day 7 normalizes to Sunday");
+  assert.deepEqual([...parseCron("5/15 * * * *").minute], [5, 20, 35, 50]);
+});
+
+test("expands @macros", () => {
+  assert.deepEqual([...parseCron("@hourly").minute], [0]);
+  assert.deepEqual([...parseCron("@daily").hour], [0]);
+  assert.deepEqual([...parseCron("@weekly").dow], [0]);
+  assert.equal(parseCron("@nope"), undefined);
+});
+
+test("rejects malformed cron rather than silently accepting it", () => {
+  assert.equal(parseCron("* * * *"), undefined, "4 fields");
+  assert.equal(parseCron("* * * * * *"), undefined, "6 fields (seconds unsupported)");
+  assert.equal(parseCron("60 * * * *"), undefined, "minute out of range");
+  assert.equal(parseCron("0 24 * * *"), undefined, "hour out of range");
+  assert.equal(parseCron("0 0 * * xyz"), undefined, "bad day name");
+  assert.equal(parseCron("0 0 * * 5-1"), undefined, "inverted range");
+  assert.equal(parseCron("*/0 * * * *"), undefined, "zero step");
+});
+
+test("computes the next cron occurrence in local time", () => {
+  assert.equal(cronAt("0 9 * * *", new Date(2026, 7, 22, 8, 30)).getHours(), 9);
+  assert.equal(cronAt("0 9 * * *", new Date(2026, 7, 22, 9, 30)).getDate(), 23, "rolls to tomorrow");
+
+  const quarter = cronAt("*/15 * * * *", new Date(2026, 7, 22, 10, 7));
+  assert.equal(quarter.getMinutes(), 15);
+
+  const yearly = cronAt("@yearly", new Date(2026, 7, 22, 10, 0));
+  assert.equal(yearly.getFullYear(), 2027);
+  assert.equal(yearly.getMonth(), 0);
+  assert.equal(yearly.getDate(), 1);
+});
+
+test("dom and dow are OR'd when both are restricted, per Vixie cron", () => {
+  // The 13th, or any Friday. 2026-08-22 is a Saturday.
+  const next = cronAt("0 0 13 * fri", new Date(2026, 7, 22, 12, 0));
+  assert.equal(next.getDate(), 28, "next Friday, not the 13th");
+  assert.equal(next.getDay(), 5);
+
+  // Restricted dom with wildcard dow stays an AND, so it must be the 13th.
+  const domOnly = cronAt("0 0 13 * *", new Date(2026, 7, 22, 12, 0));
+  assert.equal(domOnly.getDate(), 13);
+  assert.equal(domOnly.getMonth(), 8, "September");
+});
+
+test("an impossible cron date terminates instead of spinning", () => {
+  assert.equal(cronAt("0 0 30 2 *", new Date(2026, 7, 22)), undefined, "February 30th");
+});
+
+test("/schedule cron creates a task and survives resume", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "cron 0 9 * * 1-5 :: weekday standup");
+  const [task] = latestTasks(ui);
+  assert.equal(task.kind, "cron");
+  assert.equal(task.cronExpr, "0 9 * * 1-5");
+  assert.equal(task.prompt, "weekday standup");
+  assert.equal(new Date(task.nextRunAt).getHours(), 9);
+
+  await ui.run("schedule", "list");
+  assert.match(ui.notices.at(-1).message, /cron 0 9 \* \* 1-5/);
+});
+
+test("/schedule cron accepts an @macro and rejects junk", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "cron @daily nightly summary");
+  assert.equal(latestTasks(ui)[0].cronExpr, "@daily");
+
+  await ui.run("schedule", "cron 99 * * * * broken");
+  assert.equal(ui.notices.at(-1).level, "error");
+  assert.equal(latestTasks(ui).length, 1, "the bad expression created nothing");
+});
+
+test("a recurring cron task advances past its fire time", () => {
+  const fields = parseCron("0 9 * * *");
+  const first = nextCronRun(fields, new Date(2026, 7, 22, 8, 0));
+  const task = { id: "c", kind: "cron", prompt: "x", createdAt: 0, nextRunAt: first, cronExpr: "0 9 * * *" };
+  const advanced = advanceRecurringTask(task, first);
+  assert.ok(advanced.nextRunAt > first);
+  assert.equal(new Date(advanced.nextRunAt).getDate(), 23);
+});
+
+test("a cron task whose expression went bad is dropped, not respun", () => {
+  const now = 10_000;
+  const result = normalizeTasksForResume(
+    [{ id: "bad", kind: "cron", prompt: "x", createdAt: 0, nextRunAt: 1_000, cronExpr: "0 0 30 2 *" }],
+    now,
+  );
+  assert.deepEqual(result.tasks, [], "cannot advance, so it is discarded");
+  assert.equal(result.changed, true);
 });

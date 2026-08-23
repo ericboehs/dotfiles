@@ -10,7 +10,7 @@ const MAX_TASKS = 50;
 const MIN_INTERVAL_MS = 60_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-type ScheduleKind = "interval" | "daily" | "once";
+type ScheduleKind = "interval" | "daily" | "once" | "cron";
 type NoticeLevel = "info" | "warning" | "error";
 
 export interface ScheduledTask {
@@ -21,6 +21,17 @@ export interface ScheduledTask {
   nextRunAt: number;
   intervalMs?: number;
   dailyAt?: string;
+  cronExpr?: string;
+}
+
+export interface CronFields {
+  minute: Set<number>;
+  hour: Set<number>;
+  dom: Set<number>;
+  month: Set<number>;
+  dow: Set<number>;
+  domRestricted: boolean;
+  dowRestricted: boolean;
 }
 
 interface SchedulerSnapshot {
@@ -78,6 +89,164 @@ export function parseClock(value: string): string | undefined {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+const CRON_MACROS: Record<string, string> = {
+  "@yearly": "0 0 1 1 *",
+  "@annually": "0 0 1 1 *",
+  "@monthly": "0 0 1 * *",
+  "@weekly": "0 0 * * 0",
+  "@daily": "0 0 * * *",
+  "@midnight": "0 0 * * *",
+  "@hourly": "0 * * * *",
+};
+
+const MONTH_NAMES: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+
+const DOW_NAMES: Record<string, number> = {
+  sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
+};
+
+function resolveCronValue(token: string | undefined, names?: Record<string, number>): number | undefined {
+  if (token === undefined) return undefined;
+  const text = token.trim().toLowerCase();
+  if (/^\d+$/.test(text)) return Number(text);
+  return names ? names[text] : undefined;
+}
+
+function parseCronField(
+  spec: string,
+  min: number,
+  max: number,
+  names?: Record<string, number>,
+): Set<number> | undefined {
+  const values = new Set<number>();
+
+  for (const part of spec.split(",")) {
+    const piece = part.trim();
+    if (!piece) return undefined;
+
+    const segments = piece.split("/");
+    if (segments.length > 2) return undefined;
+    const rangeText = segments[0];
+    const stepText = segments[1];
+    if (rangeText === undefined) return undefined;
+
+    let step = 1;
+    if (stepText !== undefined) {
+      if (!/^\d+$/.test(stepText)) return undefined;
+      step = Number(stepText);
+      if (step < 1) return undefined;
+    }
+
+    let low: number;
+    let high: number;
+    if (rangeText === "*") {
+      low = min;
+      high = max;
+    } else {
+      const bounds = rangeText.split("-");
+      if (bounds.length > 2) return undefined;
+      const first = resolveCronValue(bounds[0], names);
+      if (first === undefined) return undefined;
+      if (bounds.length === 1) {
+        low = first;
+        high = stepText === undefined ? first : max;
+      } else {
+        const second = resolveCronValue(bounds[1], names);
+        if (second === undefined) return undefined;
+        low = first;
+        high = second;
+      }
+    }
+
+    if (low < min || high > max || low > high) return undefined;
+    for (let value = low; value <= high; value += step) values.add(value);
+  }
+
+  return values.size > 0 ? values : undefined;
+}
+
+export function parseCron(expr: string): CronFields | undefined {
+  const trimmed = expr.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  const expanded = trimmed.startsWith("@") ? CRON_MACROS[trimmed] : trimmed;
+  if (!expanded) return undefined;
+
+  const parts = expanded.split(/\s+/);
+  if (parts.length !== 5) return undefined;
+
+  const minute = parseCronField(parts[0] ?? "", 0, 59);
+  const hour = parseCronField(parts[1] ?? "", 0, 23);
+  const dom = parseCronField(parts[2] ?? "", 1, 31);
+  const month = parseCronField(parts[3] ?? "", 1, 12, MONTH_NAMES);
+  const dowRaw = parseCronField(parts[4] ?? "", 0, 7, DOW_NAMES);
+  if (!minute || !hour || !dom || !month || !dowRaw) return undefined;
+
+  return {
+    minute,
+    hour,
+    dom,
+    month,
+    dow: new Set([...dowRaw].map((value) => (value === 7 ? 0 : value))),
+    domRestricted: (parts[2] ?? "*") !== "*",
+    dowRestricted: (parts[4] ?? "*") !== "*",
+  };
+}
+
+function cronDayMatches(date: Date, fields: CronFields): boolean {
+  const domOk = fields.dom.has(date.getDate());
+  const dowOk = fields.dow.has(date.getDay());
+  return fields.domRestricted && fields.dowRestricted ? domOk || dowOk : domOk && dowOk;
+}
+
+function nextInSet(values: Set<number>, current: number): number | undefined {
+  let best: number | undefined;
+  for (const value of values) {
+    if (value > current && (best === undefined || value < best)) best = value;
+  }
+  return best;
+}
+
+export function nextCronRun(fields: CronFields, from: Date = new Date()): number | undefined {
+  const cursor = new Date(from.getTime());
+  cursor.setSeconds(0, 0);
+  cursor.setMinutes(cursor.getMinutes() + 1);
+
+  for (let guard = 0; guard < 20_000; guard += 1) {
+    if (!fields.month.has(cursor.getMonth() + 1)) {
+      cursor.setMonth(cursor.getMonth() + 1, 1);
+      cursor.setHours(0, 0, 0, 0);
+      continue;
+    }
+    if (!cronDayMatches(cursor, fields)) {
+      cursor.setDate(cursor.getDate() + 1);
+      cursor.setHours(0, 0, 0, 0);
+      continue;
+    }
+    if (!fields.hour.has(cursor.getHours())) {
+      const hour = nextInSet(fields.hour, cursor.getHours());
+      if (hour === undefined) {
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(0, 0, 0, 0);
+      } else {
+        cursor.setHours(hour, 0, 0, 0);
+      }
+      continue;
+    }
+    if (!fields.minute.has(cursor.getMinutes())) {
+      const minute = nextInSet(fields.minute, cursor.getMinutes());
+      if (minute === undefined) cursor.setHours(cursor.getHours() + 1, 0, 0, 0);
+      else cursor.setMinutes(minute, 0, 0);
+      continue;
+    }
+    return cursor.getTime();
+  }
+
+  return undefined;
+}
+
 export function nextDailyRun(dailyAt: string, now = new Date()): number {
   const [hourText, minuteText] = dailyAt.split(":");
   const hour = Number(hourText);
@@ -96,6 +265,11 @@ export function advanceRecurringTask(task: ScheduledTask, now: number): Schedule
   }
   if (task.kind === "daily" && task.dailyAt) {
     return { ...task, nextRunAt: nextDailyRun(task.dailyAt, new Date(now)) };
+  }
+  if (task.kind === "cron" && task.cronExpr) {
+    const fields = parseCron(task.cronExpr);
+    const next = fields ? nextCronRun(fields, new Date(now)) : undefined;
+    return next === undefined ? task : { ...task, nextRunAt: next };
   }
   return task;
 }
@@ -118,8 +292,9 @@ export function normalizeTasksForResume(
     }
 
     if (task.nextRunAt <= now) {
-      normalized.push(advanceRecurringTask(task, now));
+      const advanced = advanceRecurringTask(task, now);
       changed = true;
+      if (advanced.nextRunAt > now) normalized.push(advanced);
     } else {
       normalized.push(task);
     }
@@ -145,6 +320,7 @@ function isScheduledTask(value: unknown): value is ScheduledTask {
     return typeof task.intervalMs === "number" && task.intervalMs >= MIN_INTERVAL_MS;
   }
   if (task.kind === "daily") return typeof task.dailyAt === "string" && parseClock(task.dailyAt) !== undefined;
+  if (task.kind === "cron") return typeof task.cronExpr === "string" && parseCron(task.cronExpr) !== undefined;
   return true;
 }
 
@@ -215,6 +391,7 @@ function formatTask(task: ScheduledTask): string {
     return `${task.id} · every ${formatDuration(task.intervalMs ?? 0)} · next ${when} · ${task.prompt}`;
   }
   if (task.kind === "daily") return `${task.id} · daily ${task.dailyAt} · next ${when} · ${task.prompt}`;
+  if (task.kind === "cron") return `${task.id} · cron ${task.cronExpr} · next ${when} · ${task.prompt}`;
   return `${task.id} · once ${when} · ${task.prompt}`;
 }
 
@@ -310,8 +487,12 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
       if (!pending.has(current.id)) pending.set(current.id, { ...current });
       if (current.kind !== "once") {
         const advanced = advanceRecurringTask(current, now);
-        tasks[index] = advanced;
-        armTask(advanced, ctx, runtimeGeneration);
+        if (advanced.nextRunAt > now) {
+          tasks[index] = advanced;
+          armTask(advanced, ctx, runtimeGeneration);
+        } else {
+          tasks.splice(index, 1);
+        }
       }
       persist();
       updateStatus(ctx);
@@ -388,6 +569,7 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
         "  /schedule every <duration> <prompt>",
         "  /schedule hourly <prompt>",
         "  /schedule daily <HH:MM|9a> <prompt>",
+        "  /schedule cron <m h dom mon dow|@daily> <prompt>",
         "  /schedule once <duration|HH:MM|ISO> <prompt>",
         "  /schedule list | cancel <id> | clear",
         "  (:: before the prompt is optional)",
@@ -494,6 +676,29 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
             nextRunAt: nextDailyRun(dailyAt),
           });
           notice(ctx, `Scheduled ${task.id} daily at ${dailyAt}; next ${new Date(task.nextRunAt).toLocaleString()}`);
+        } catch (error) {
+          notice(ctx, error instanceof Error ? error.message : String(error), "error");
+        }
+        return;
+      }
+
+      const cron = input.match(/^cron\s+(@\w+|(?:\S+\s+){4}\S+)\s+([\s\S]+)$/i);
+      if (cron?.[1] && cron[2]) {
+        const expr = cron[1].trim().replace(/\s+/g, " ").toLowerCase();
+        const fields = parseCron(expr);
+        const prompt = stripPromptDelimiter(cron[2]);
+        if (!fields || !prompt) {
+          notice(ctx, "Cron syntax: /schedule cron <m h dom mon dow> <prompt>, or an @macro", "error");
+          return;
+        }
+        const nextRunAt = nextCronRun(fields);
+        if (nextRunAt === undefined) {
+          notice(ctx, `Cron expression ${expr} never matches a real date`, "error");
+          return;
+        }
+        try {
+          const task = addTask(ctx, { kind: "cron", cronExpr: expr, prompt, nextRunAt });
+          notice(ctx, `Scheduled ${task.id} cron ${expr}; next ${new Date(task.nextRunAt).toLocaleString()}`);
         } catch (error) {
           notice(ctx, error instanceof Error ? error.message : String(error), "error");
         }

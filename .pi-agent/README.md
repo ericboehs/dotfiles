@@ -74,10 +74,20 @@ without registering an LLM tool or adding anything to model context:
 /loop 15m check CI
 /schedule hourly check status
 /schedule daily 9a write a morning summary
+/schedule cron 0 9 * * 1-5 weekday standup
+/schedule cron @hourly check status
 /schedule once 30m check the build
 /schedule list
 /schedule cancel <id>
 ```
+
+`cron` takes a standard 5-field crontab expression (minute, hour, day-of-month,
+month, day-of-week) with ranges, lists, `*/n` steps, and `jan`/`mon` style names,
+plus the `@hourly`, `@daily`, `@weekly`, `@monthly` and `@yearly` macros. When
+both day-of-month and day-of-week are restricted they are OR'd, matching Vixie
+cron. There is no seconds field — a 6-field expression is rejected rather than
+reinterpreted, and an expression that can never match (`0 0 30 2 *`) is refused
+at creation.
 
 Schedules live in custom session entries, so they restore when you resume that
 session and are not inherited by `/new`, `/fork` or `/clone`. Pi must be running;
