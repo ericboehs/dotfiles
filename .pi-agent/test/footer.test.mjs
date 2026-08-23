@@ -518,6 +518,36 @@ test("each cold start appends one record", async () => {
     // the version lookup degrades to "" instead of throwing. In a real launch
     // it resolves through the symlink to the installed package.
     assert.equal(typeof record.v, "string");
+    assert.ok(Number.isFinite(record.load), "load average belongs on every record");
+    assert.equal(record.since, undefined, "nothing to measure against on the first record");
+  });
+});
+
+test("a record measures the gap back to the previous launch", async () => {
+  await withBootLog(async (log) => {
+    const earlier = new Date(Date.now() - 90_000).toISOString();
+    writeFileSync(log, `${JSON.stringify({ t: earlier, ms: 700, v: "", cwd: "" })}\n`);
+
+    const ui = await mount(COLD_START);
+    ui.plain();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const record = JSON.parse(readFileSync(log, "utf8").trim().split("\n").at(-1));
+    assert.ok(record.since >= 89 && record.since <= 92, `since was ${record.since}`);
+  });
+});
+
+test("a half-written previous line does not cost the new record its gap", async () => {
+  await withBootLog(async (log) => {
+    const earlier = new Date(Date.now() - 30_000).toISOString();
+    writeFileSync(log, `${JSON.stringify({ t: earlier, ms: 700, v: "", cwd: "" })}\n{"t":"2026-0\n`);
+
+    const ui = await mount(COLD_START);
+    ui.plain();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const record = JSON.parse(readFileSync(log, "utf8").trim().split("\n").at(-1));
+    assert.ok(record.since >= 29 && record.since <= 32, "should walk back past the torn line");
   });
 });
 
@@ -536,6 +566,39 @@ test("/boot stats reports nearest-rank percentiles over the log", async () => {
 
     await ui.run("boot", "stats 3");
     assert.match(ui.notices.at(-1).message, /^3 launches · p50 600ms/, "should take the last 3 written");
+  });
+});
+
+test("/boot stats splits relaunch bursts from one-off launches", async () => {
+  await withBootLog(async (log) => {
+    // A benchmark burst (fast, warm cache) next to real launches (slow). Left
+    // undivided these average into a number that describes neither.
+    const records = [
+      ...[500, 510, 520, 530].map((ms) => ({ ms, since: 5, load: 2 })),
+      ...[900, 950, 850].map((ms) => ({ ms, since: 600, load: 8 })),
+    ];
+    writeFileSync(log, records.map((r) => JSON.stringify({ t: "", v: "", cwd: "", ...r })).join("\n") + "\n");
+
+    const ui = await mount();
+    await ui.run("boot", "stats");
+    const [summary, cohorts] = ui.notices.at(-1).message.split("\n");
+    assert.match(summary, /^7 launches · p50 530ms/);
+    assert.equal(
+      cohorts,
+      "burst <70s (n=4) p50 510ms · min 500ms · max 530ms" +
+        " · isolated (n=3) p50 900ms · min 850ms · max 950ms" +
+        " · load p50 2.00",
+    );
+  });
+});
+
+test("/boot stats stays one line for records logged before gaps were recorded", async () => {
+  await withBootLog(async (log) => {
+    writeFileSync(log, [600, 700].map((ms) => JSON.stringify({ t: "", ms, v: "", cwd: "" })).join("\n") + "\n");
+
+    const ui = await mount();
+    await ui.run("boot", "stats");
+    assert.doesNotMatch(ui.notices.at(-1).message, /\n/, "no cohorts to report, so no second line");
   });
 });
 

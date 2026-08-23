@@ -18,8 +18,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { appendFile, readFile, realpath, stat, writeFile, access, constants } from "node:fs/promises";
-import { homedir } from "node:os";
+import { appendFile, readFile, realpath, writeFile, access, constants } from "node:fs/promises";
+import { homedir, loadavg } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import type {
@@ -66,9 +66,18 @@ const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
  * `interactiveMode.init()` — so `process.uptime()` there is genuinely
  * exec-to-first-paint, node bootstrap and extension loading included. Run
  * `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi` for the phase-by-phase breakdown.
+ *
+ * Each record also carries `since` (seconds since the previous cold start) and
+ * `load` (1-minute load average at first paint). Without them the log is not
+ * interpretable: relaunching pi a few times in a row runs ~300ms faster than a
+ * one-off launch, purely from a warm page cache and an idle machine, so a
+ * benchmark burst and a real launch look like a regression sitting next to a
+ * fix. `/boot stats` splits the two cohorts on BOOT_BURST_WINDOW_S.
  */
 const BOOT_LOG_FILE = "boot-times.jsonl";
 const BOOT_STATS_DEFAULT = 50;
+/** Launches this close to the previous one are "burst": warm cache, same sitting. */
+const BOOT_BURST_WINDOW_S = 70;
 /** Trim to this many records once the log crosses the size check below. */
 const BOOT_LOG_KEEP = 1_000;
 const BOOT_LOG_MAX_BYTES = 200_000;
@@ -558,27 +567,81 @@ async function rebuildBundle(version: string): Promise<void> {
  */
 async function recordBoot(ms: number, cwd: string): Promise<void> {
   const file = bootLogPath();
-  await appendFile(file, `${JSON.stringify({ t: new Date().toISOString(), ms, v: await piVersion(), cwd })}\n`);
+  // Read before appending: `since` needs the previous record's timestamp, and
+  // the trim below can reuse the same read instead of a second stat + read.
+  const existing = await readFile(file, "utf8").catch(() => "");
+  const lines = existing.split("\n").filter(Boolean);
+  const now = Date.now();
+  const previous = lastBootTime(lines);
+  const line = `${JSON.stringify({
+    t: new Date(now).toISOString(),
+    ms,
+    v: await piVersion(),
+    cwd,
+    // Both are for reading the log later, not for anything at runtime: they are
+    // what separates "this build got slower" from "this launch was unlucky".
+    since: previous === undefined ? undefined : Math.round((now - previous) / 1_000),
+    load: Math.round((loadavg()[0] ?? 0) * 100) / 100,
+  })}\n`;
+  await appendFile(file, line);
   // Concurrent pi processes can race this and drop a line or two. Fine: it is a
   // trend log, not an audit log.
-  const { size } = await stat(file);
-  if (size <= BOOT_LOG_MAX_BYTES) return;
-  const kept = (await readFile(file, "utf8")).split("\n").filter(Boolean).slice(-BOOT_LOG_KEEP);
+  if (existing.length + line.length <= BOOT_LOG_MAX_BYTES) return;
+  const kept = [...lines, line.trimEnd()].slice(-BOOT_LOG_KEEP);
   await writeFile(file, `${kept.join("\n")}\n`);
 }
 
-async function readBoots(limit: number): Promise<number[]> {
-  const out: number[] = [];
+/** Epoch ms of the newest parseable record, or undefined for an empty log. */
+function lastBootTime(lines: readonly string[]): number | undefined {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const t = (JSON.parse(lines[index] as string) as { t?: unknown }).t;
+      if (typeof t !== "string") continue;
+      const parsed = Date.parse(t);
+      if (Number.isFinite(parsed)) return parsed;
+    } catch {
+      // Half-written line from a racing process; keep walking back.
+    }
+  }
+  return undefined;
+}
+
+interface BootRecord {
+  ms: number;
+  /** Seconds since the previous cold start; absent on records written before this was logged. */
+  since?: number;
+  /** 1-minute load average at first paint; absent on older records. */
+  load?: number;
+}
+
+async function readBoots(limit: number): Promise<BootRecord[]> {
+  const out: BootRecord[] = [];
   for (const line of (await readFile(bootLogPath(), "utf8")).split("\n")) {
     if (!line) continue;
     try {
-      const ms = (JSON.parse(line) as { ms?: unknown }).ms;
-      if (typeof ms === "number" && Number.isFinite(ms)) out.push(ms);
+      const entry = JSON.parse(line) as { ms?: unknown; since?: unknown; load?: unknown };
+      if (typeof entry.ms !== "number" || !Number.isFinite(entry.ms)) continue;
+      out.push({
+        ms: entry.ms,
+        since: typeof entry.since === "number" && Number.isFinite(entry.since) ? entry.since : undefined,
+        load: typeof entry.load === "number" && Number.isFinite(entry.load) ? entry.load : undefined,
+      });
     } catch {
       // Half-written line from a racing process.
     }
   }
   return out.slice(-limit);
+}
+
+/** "p50 743ms · min 488ms · max 2.08s" over one cohort, or "" when it is empty. */
+function cohortSummary(values: readonly number[]): string {
+  if (values.length === 0) return "";
+  const sorted = [...values].sort((a, b) => a - b);
+  return (
+    `p50 ${formatMs(percentile(sorted, 50))}` +
+    ` · min ${formatMs(sorted[0] as number)}` +
+    ` · max ${formatMs(sorted[sorted.length - 1] as number)}`
+  );
 }
 
 /** Nearest-rank percentile over an ascending list. */
@@ -794,7 +857,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
       if (/^stats\b/.test(argument)) {
         const requested = Number.parseInt(argument.slice("stats".length).trim(), 10);
         const limit = Number.isFinite(requested) && requested > 0 ? requested : BOOT_STATS_DEFAULT;
-        let boots: number[] = [];
+        let boots: BootRecord[] = [];
         try {
           boots = await readBoots(limit);
         } catch {
@@ -804,12 +867,24 @@ export default function footerExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("No boot times recorded yet", "warning");
           return;
         }
-        const sorted = [...boots].sort((a, b) => a - b);
+        const sorted = boots.map((boot) => boot.ms).sort((a, b) => a - b);
+        // Compare like with like: a burst of relaunches and a one-off launch
+        // differ by more than most changes worth measuring, so an undivided p50
+        // mostly reports how you happened to be using pi that day.
+        const burst = boots.filter((boot) => boot.since !== undefined && boot.since < BOOT_BURST_WINDOW_S);
+        const isolated = boots.filter((boot) => boot.since !== undefined && boot.since >= BOOT_BURST_WINDOW_S);
+        const loads = boots.map((boot) => boot.load).filter((load): load is number => load !== undefined);
+        const cohorts = [
+          burst.length > 0 ? `burst <${BOOT_BURST_WINDOW_S}s (n=${burst.length}) ${cohortSummary(burst.map((b) => b.ms))}` : "",
+          isolated.length > 0 ? `isolated (n=${isolated.length}) ${cohortSummary(isolated.map((b) => b.ms))}` : "",
+          loads.length > 0 ? `load p50 ${percentile([...loads].sort((a, b) => a - b), 50).toFixed(2)}` : "",
+        ].filter(Boolean);
         ctx.ui.notify(
           `${boots.length} launches · p50 ${formatMs(percentile(sorted, 50))}` +
             ` · p95 ${formatMs(percentile(sorted, 95))}` +
             ` · min ${formatMs(sorted[0] ?? 0)} · max ${formatMs(sorted[sorted.length - 1] ?? 0)}` +
-            (bootMs === undefined ? "" : ` · this one ${formatMs(bootMs)}`),
+            (bootMs === undefined ? "" : ` · this one ${formatMs(bootMs)}`) +
+            (cohorts.length > 0 ? `\n${cohorts.join(" · ")}` : ""),
           "info",
         );
         return;

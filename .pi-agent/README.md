@@ -65,6 +65,23 @@ since an update leaves the bundle stale and every launch ~115ms slower until it
 is rebuilt. Concurrent pi instances serialize on a lock directory; output lands
 in `~/.pi/agent/auto-bundle.log`. Set `PI_NO_AUTO_BUNDLE=1` to opt out.
 
+Every cold start is appended to `boot-times.jsonl` with the gap back to the
+previous launch and the 1-minute load average, and `/boot stats` reports the
+two cohorts separately. This is not decoration: relaunching pi a few times in a
+row boots ~350ms faster than a one-off launch, purely from a warm page cache
+and an idle machine. Measured on one machine, same commit, minutes apart:
+
+| launch | gap since previous | boot |
+| --- | --- | --- |
+| one-off | 743s | 972ms |
+| relaunch | 13s | 600ms |
+| relaunch | 6s | 607ms |
+
+That spread is wider than most changes worth measuring, so an undivided p50
+mostly reports how you happened to be using pi that day — and a benchmark burst
+sitting next to real launches reads as a regression that was never there.
+Compare cohort to cohort.
+
 ## Session color
 
 `extensions/color.ts` adds `/color`, Claude Code's trick for telling four
