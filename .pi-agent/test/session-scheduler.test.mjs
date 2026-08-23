@@ -26,10 +26,12 @@ function snapshot(sessionId, tasks) {
   };
 }
 
-async function mount({ branch = [], idle = true, sessionId = "session-a" } = {}) {
+async function mount({ branch = [], idle = true, sessionId = "session-a", persisted = true } = {}) {
   const handlers = {};
   const commands = {};
-  const entries = [...branch];
+  const entries = persisted
+    ? [{ type: "message", message: { role: "assistant", content: [] } }, ...branch]
+    : [...branch];
   const sent = [];
   const notices = [];
   const statuses = [];
@@ -438,4 +440,24 @@ test("resuming an overdue recurring task advances it rather than dropping it", a
   assert.equal(task.id, "cafe1234");
   assert.ok(task.nextRunAt > Date.now());
   assert.deepEqual(ui.sent, [], "no catch-up burst");
+});
+
+test("warns when the session has not been written to disk yet", async (t) => {
+  const ui = await mount({ persisted: false });
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "daily 9a morning report");
+  const warning = ui.notices.find((n) => /no model reply yet/.test(n.message));
+  assert.ok(warning, "expected an unsaved-session warning");
+  assert.equal(warning.level, "warning");
+  assert.match(ui.notices.at(-1).message, /^Scheduled /, "the confirmation still comes last");
+  assert.equal(latestTasks(ui).length, 1, "the task is still created");
+});
+
+test("stays quiet once the session has an assistant message", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "daily 9a morning report");
+  assert.equal(ui.notices.filter((n) => /no model reply yet/.test(n.message)).length, 0);
 });

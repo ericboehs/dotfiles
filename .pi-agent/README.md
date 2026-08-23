@@ -134,6 +134,7 @@ One edge case, from pi's `SessionManager._persist`: pi does not create the sessi
 file until the session holds at least one assistant message. A schedule made
 before that is buffered in memory and is written out with the first reply — but a
 schedule made in a session that never prompts the model is lost on exit.
+`/schedule` warns when it detects this state, and the task is still created.
 
 Intentionally left as machine-local runtime state:
 

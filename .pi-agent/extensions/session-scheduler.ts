@@ -356,6 +356,13 @@ function readSnapshot(ctx: ExtensionContext): ScheduledTask[] {
   return [];
 }
 
+function sessionHasAssistantMessage(ctx: ExtensionContext): boolean {
+  return ctx.sessionManager.getBranch().some((entry) => {
+    const candidate = entry as { type?: unknown; message?: { role?: unknown } };
+    return candidate.type === "message" && candidate.message?.role === "assistant";
+  });
+}
+
 function parseOnceTime(value: string, now = Date.now()): number | undefined {
   const duration = parseDuration(value);
   if (duration !== undefined) return now + duration;
@@ -540,6 +547,13 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     persist();
     if (!complete.paused) armTask(complete, ctx, generation);
     updateStatus(ctx);
+    if (!sessionHasAssistantMessage(ctx)) {
+      notice(
+        ctx,
+        "This session has no model reply yet, so pi has not written it to disk. The schedule is held in memory and saves with the first reply — quit before that and it is lost.",
+        "warning",
+      );
+    }
     return complete;
   };
 
