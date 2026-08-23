@@ -41,6 +41,20 @@ WIKI_DIR     = File.expand_path("~/Documents/Wiki/AI Sessions")
 # compares it against its own `hostname -s`.
 HOST = Socket.gethostname.split(".").first
 
+# The subagent marker below is only meaningful where pi-approval-guardian is
+# installed. Without it every session records zero direct prompts, which reads
+# as "all subagents" and would silently erase a whole machine from the daily
+# note -- the GFE has no packages at all, so this is a live case, not a
+# hypothetical. Detect the package rather than its config file: mise links
+# ~/.pi/agent/approval-guardian.json onto hosts that never installed the
+# package, so the config file's presence proves nothing.
+GUARDIAN_AVAILABLE = begin
+  settings = JSON.parse(File.read(File.expand_path("~/.pi/agent/settings.json")))
+  Array(settings["packages"]).any? { |p| p.to_s.include?("approval-guardian") }
+rescue StandardError
+  false
+end
+
 # Mirrors log-session.sh's argument summary: one representative field, clipped.
 # Ordered by how much the field tells you about what the call actually did.
 TOOL_ARG_KEYS = %w[command file_path path pattern query url message prompt].freeze
@@ -123,12 +137,17 @@ def render(path)
   # `approval-guardian-direct-user-input` entry per prompt that came from a
   # person (TUI typing or `pi -p`), and zero for a spawned subagent.
   #
-  # Emitted as a raw count, not a "subagent: yes/no" verdict, so that if the
-  # guardian package is ever removed the failure is visible (every session
-  # reads 0) instead of silently emptying the daily note.
-  direct_prompts = records.count do |r|
-    r["type"] == "custom" && r["customType"] == "approval-guardian-direct-user-input"
-  end
+  # Emitted as a raw count, not a "subagent: yes/no" verdict -- and as
+  # "unknown" rather than a confident 0 where the guardian can't answer, so a
+  # machine without it reads as unclassified instead of as all-subagents.
+  direct_prompts =
+    if GUARDIAN_AVAILABLE
+      records.count do |r|
+        r["type"] == "custom" && r["customType"] == "approval-guardian-direct-user-input"
+      end
+    else
+      "unknown (no pi-approval-guardian on #{HOST})"
+    end
 
   out = [] # body only; the header is prepended once the turn count is known
 
