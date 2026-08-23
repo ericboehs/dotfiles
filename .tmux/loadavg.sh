@@ -29,6 +29,9 @@ color() {
   band=$(awk -v v="$v" -v n="$ncpu" \
     'BEGIN { print (v+0 > n+0) ? "crit" : (v+0 >= n/2) ? "warn" : "ok" }')
 
+  # Both sources report two decimals; the second one only ever adds width.
+  v=$(printf '%.1f' "$v")
+
   case $band in
     crit) printf '#[fg=%s]%s#[fg=%s]' "${crit_fg:-red}" "$v" "${base_fg:-default}" ;;
     warn) printf '#[fg=%s]%s#[fg=%s]' "${warn_fg:-yellow}" "$v" "${base_fg:-default}" ;;
@@ -36,4 +39,4 @@ color() {
   esac
 }
 
-printf '%s, %s, %s' "$(color "$one")" "$(color "$five")" "$(color "$fifteen")"
+printf '%s %s %s' "$(color "$one")" "$(color "$five")" "$(color "$fifteen")"
