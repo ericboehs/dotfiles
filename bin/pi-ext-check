@@ -31,13 +31,26 @@ while [ -L "$target" ]; do
     *) target="$(dirname "$target")/$link" ;;
   esac
 done
-REPO="$(cd "$(dirname "$target")/.." && pwd)"
+# -P, not a plain cd: invoked as ~/bin/pi-ext-check the script itself is not a
+# symlink (the *directory* is), so the loop above leaves it alone and bash's
+# logical cd strips the `..` textually -- landing in $HOME instead of the repo.
+# -P resolves ~/bin to bin/ before processing `..`.
+REPO="$(cd -P "$(dirname "$target")/.." && pwd)"
 PI_AGENT="$REPO/.pi-agent"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+
+# Both checks below treat "nothing to check" as success -- tsc is happy with an
+# empty project and `node --test` reports 0 tests and exits 0 -- so a $PI_AGENT
+# pointing somewhere wrong printed two green checks for having done nothing.
+# Refuse to run at all rather than pass vacuously.
+if [ ! -d "$PI_AGENT/extensions" ]; then
+  echo -e "${RED}❌ no extensions at $PI_AGENT/extensions${NC}" >&2
+  exit 1
+fi
 
 if ! command -v npm >/dev/null; then
   echo -e "${RED}❌ npm is not on PATH${NC}" >&2
@@ -83,7 +96,11 @@ fi
 
 if [[ "$MODE" != "--typecheck-only" ]]; then
   echo "Running $PI_AGENT/test..."
-  if (cd "$PI_AGENT" && node --test test/*.test.mjs); then
+  tests=("$PI_AGENT"/test/*.test.mjs)
+  if [ ! -e "${tests[0]}" ]; then
+    echo -e "${RED}❌ no test files at $PI_AGENT/test${NC}" >&2
+    status=1
+  elif (cd "$PI_AGENT" && node --test test/*.test.mjs); then
     echo -e "${GREEN}✅ tests passed${NC}"
   else
     echo -e "${RED}❌ tests failed${NC}"
