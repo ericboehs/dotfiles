@@ -732,6 +732,25 @@ done < "$sources"
 printf 'bootstrap:pi: '
 pi --version
 
+# pi shells out to `fd --version` and `rg --version` on every TUI launch to find
+# out whether they exist, and downloads its own copies if they do not. Both are
+# already installed here, and getToolPath() checks ~/.pi/agent/bin before it
+# probes PATH — so seeding that directory turns three spawnSync calls into two
+# existsSync hits, worth ~17ms a launch. Symlinks, not copies: they should track
+# whatever Homebrew upgrades to.
+pi_tools="$HOME/.pi/agent/bin"
+mkdir -p "$pi_tools"
+for tool in fd rg; do
+  tool_path="$(command -v "$tool" || true)"
+  if [ -n "$tool_path" ]; then
+    ln -sfn "$tool_path" "$pi_tools/$tool"
+  elif [ -L "$pi_tools/$tool" ] && [ ! -e "$pi_tools/$tool" ]; then
+    # Uninstalled since the last run: a dangling link here would shadow the
+    # PATH probe and leave pi with no working tool at all.
+    rm -f "$pi_tools/$tool"
+  fi
+done
+
 # pi's Node build loads 177 ES modules before it paints the first frame.
 # bin/pi-bundle collapses them into one file and repoints the `pi` bin at
 # bin/pi-launch, which is worth ~115ms per launch. Strictly an optimization:

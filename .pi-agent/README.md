@@ -90,6 +90,30 @@ Interleaved A/B on one machine, best of 6 launches each:
 | bundle only | 590ms |
 | bundle + compile cache | 528ms |
 
+`bootstrap:pi` also symlinks the system `fd` and `rg` into `~/.pi/agent/bin`.
+pi probes for both with `spawnSync(tool, ["--version"])` on every TUI launch and
+downloads its own copies if they are missing, but `getToolPath()` checks that
+directory first — so seeding it turns three spawns into two `existsSync` hits,
+worth ~17ms.
+
+What is left, from `node --cpu-prof` over a 552ms launch (default sampling
+interval; `--cpu-prof-interval 100` inflates blocking syscalls badly enough to
+report a 339ms `spawnSync` that is really 17ms):
+
+| | cost |
+| --- | --- |
+| evaluating the bundle | ~149ms |
+| idle, waiting on I/O | ~106ms |
+| `!security find-generic-password` for the Copilot key in `auth.json` | 24ms |
+| compiling the extensions | 22ms |
+| `mergeModels` over `models.<host>.json` | 14ms |
+| `probeTmuxHyperlinks` | 14ms |
+| grapheme width measurement | 12ms |
+| GC | 11ms |
+
+Nothing below the top two is worth chasing, and both belong to pi rather than
+to anything configured here.
+
 Every cold start is appended to `boot-times.jsonl` with the gap back to the
 previous launch and the 1-minute load average, and `/boot stats` reports the
 two cohorts separately. This is not decoration: relaunching pi a few times in a
