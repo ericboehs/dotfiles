@@ -19,11 +19,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // GUI or a login shell whose PATH lacks ~/bin, and a silently-unfound converter
 // would look exactly like "logging works" until checkin came up empty.
 // ~/bin is this repo's own bin/ (symlinked by mise), so it is the real home.
-const SYNC_BIN =
-  [
-    join(homedir(), "bin", "pi-session-sync"),
-    join(homedir(), ".local", "bin", "pi-session-sync"),
-  ].find((p) => existsSync(p)) ?? "pi-session-sync";
+//
+// A ~/.local/bin fallback used to sit second in this list, from when the
+// converter lived there before being tracked. It is gone on purpose: that
+// directory sorts *ahead* of ~/bin on PATH, so a leftover copy would shadow
+// the tracked script and quietly keep rendering from a stale version.
+const TRACKED_SYNC_BIN = join(homedir(), "bin", "pi-session-sync");
+const SYNC_BIN = existsSync(TRACKED_SYNC_BIN)
+  ? TRACKED_SYNC_BIN
+  : "pi-session-sync";
 
 export default function (pi: ExtensionAPI) {
   let sessionFile: string | undefined;
