@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Print GPU utilization for the status bar, on the same three-band scale as
-# loadavg.sh so the two numbers next to each other mean the same thing:
+# Print GPU utilization and GPU memory in use for the status bar. The
+# percentage rides the same three-band scale as loadavg.sh, so the numbers next
+# to each other mean the same thing:
 #
 #   < 60%   quiet, same grey as the rest of the status bar
 #   >= 60%  yellow, the GPU is working
 #   >= 90%  red, the GPU is the bottleneck
+#
+# Memory stays grey: on unified memory it is a size, not a pressure reading.
 #
 # Prints nothing at all when no GPU can be read, so a box without one — or a
 # Linux VM — just gets the load average where this would be.
@@ -20,32 +23,54 @@ ttl=${GPU_INTERVAL:-5}
 cache=${TMPDIR:-/tmp}/tmux-gpu.$(id -u)
 
 read_gpu() {
-  # macOS: the accelerator publishes utilization in the IORegistry, which is
-  # readable without sudo. powermetrics has the same number but needs root.
+  # Each branch prints "<percent> <bytes-in-use>", the second field empty when
+  # only the percentage is available.
+
+  # macOS: the accelerator publishes both in the IORegistry, readable without
+  # sudo. powermetrics has the same numbers but needs root. One ioreg call
+  # covers both, so the two never disagree about when they were sampled.
   if [[ $OSTYPE == darwin* ]]; then
-    ioreg -r -d 1 -w 0 -c IOAccelerator 2>/dev/null |
-      sed -n 's/.*"Device Utilization %"=\([0-9]*\).*/\1/p' | head -1
+    ioreg -r -d 1 -w 0 -c IOAccelerator 2>/dev/null | tr ',' '\n' | awk '
+      /"Device Utilization %"=/  { if (u == "") { sub(/.*=/, ""); u = $0 } }
+      /"In use system memory"=/  { if (m == "") { sub(/.*=/, ""); sub(/[^0-9].*/, ""); m = $0 } }
+      END { print u, m }'
     return
   fi
 
   # Linux, NVIDIA. Costs ~100ms, which the cache below now pays only every ttl.
+  # memory.used is MiB, so scale it to bytes like everyone else.
   if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1
+    nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null |
+      awk -F', *' 'NR == 1 { print $1, $2 * 1048576 }'
     return
   fi
 
-  # Linux, AMD and recent Intel: amdgpu/i915 export the same percentage via drm.
-  local f
+  # Linux, AMD and recent Intel: amdgpu/i915 export the same percentage via drm,
+  # and amdgpu the VRAM figure alongside it.
+  local f mem
   for f in /sys/class/drm/card*/device/gpu_busy_percent; do
-    [[ -r $f ]] && { cat "$f"; return; }
+    [[ -r $f ]] || continue
+    mem=$(cat "${f%/*}/mem_info_vram_used" 2>/dev/null)
+    printf '%s %s\n' "$(cat "$f")" "$mem"
+    return
   done
 }
 
-# The cache holds "<sampled-at> <percent>", so checking its age needs no stat(1),
-# whose flags differ between macOS and Linux. A machine with no GPU caches the
-# empty answer too, and so stops re-probing for one every second.
+# Bytes to the shortest honest size: 815710208 -> 0.8G, 11013603328 -> 11G.
+human() {
+  awk -v b="$1" 'BEGIN {
+    g = b / 1073741824
+    if (g >= 10) printf "%dG", g + 0.5
+    else if (g >= 0.05) printf "%.1fG", g
+    else printf ""
+  }'
+}
+
+# The cache holds "<sampled-at> <percent> <bytes>", so checking its age needs no
+# stat(1), whose flags differ between macOS and Linux. A machine with no GPU
+# caches the empty answer too, and so stops re-probing for one every second.
 now=$(printf '%(%s)T' -1)
-read -r stamp gpu 2>/dev/null <"$cache"
+read -r stamp gpu mem 2>/dev/null <"$cache"
 
 if [[ ! $stamp =~ ^[0-9]+$ ]] || ((now - stamp >= ttl)); then
   # Every attached client redraws its own status, so the expiry lands on all of
@@ -68,14 +93,13 @@ if [[ ! $stamp =~ ^[0-9]+$ ]] || ((now - stamp >= ttl)); then
   fi
 
   if [[ -n $sample ]]; then
-    fresh=$(read_gpu)
-    fresh=${fresh//[[:space:]]/}
+    read -r fresh fresh_mem < <(read_gpu)
     # Write via a temp file so a reader can never catch a half-written line.
-    printf '%s %s\n' "$now" "$fresh" >"$cache.$$" && mv -f "$cache.$$" "$cache"
+    printf '%s %s %s\n' "$now" "$fresh" "$fresh_mem" >"$cache.$$" && mv -f "$cache.$$" "$cache"
     # Then keep showing what every other client is showing, and let the new
-    # number land on the next tick, so no two clients are ever a redraw out of
+    # numbers land on the next tick, so no two clients are ever a redraw out of
     # step. Only a cold start, with nothing cached, prints its own sample.
-    [[ $gpu =~ ^[0-9]+$ ]] || gpu=$fresh
+    [[ $gpu =~ ^[0-9]+$ ]] || { gpu=$fresh; mem=$fresh_mem; }
   fi
 fi
 
@@ -97,6 +121,9 @@ fi
 
 # Reset to @time_fg rather than "default", for the same reason loadavg.sh does:
 # "default" would jump back to the brighter status-style fg. The trailing space
-# lives here so the separator disappears along with the number when there is no
+# lives here so the separator disappears along with the numbers when there is no
 # GPU to report.
-printf '#[fg=%s]%s%%#[fg=%s] ' "$fg" "$gpu" "${base_fg:-default}"
+base_fg=${base_fg:-default}
+printf '#[fg=%s]%s%%#[fg=%s]' "$fg" "$gpu" "$base_fg"
+[[ $mem =~ ^[0-9]+$ ]] && printf ' %s' "$(human "$mem")"
+printf ' '
