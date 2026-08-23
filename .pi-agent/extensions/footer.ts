@@ -446,10 +446,16 @@ function shortThinking(level: string): string {
   return THINKING_NAMES[level] ?? level;
 }
 
-/** 0 → "0", 12_300 → "12.3k", 1_000_000 → "1m" (pi-footer's "default" token format). */
+/**
+ * 0 → "0", 12_300 → "12.3k", 123_400 → "123k", 1_000_000 → "1m".
+ *
+ * Caps at 3 significant digits: at 100k the tenths place becomes a 4th digit of
+ * jittery noise, so it is dropped.
+ */
 function formatCount(value: number): string {
   if (value < 1_000) return `${value}`;
-  if (value < 1_000_000) return `${trimFixed(value / 1_000, 1)}k`;
+  if (value < 100_000) return `${trimFixed(value / 1_000, 1)}k`;
+  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
   return `${trimFixed(value / 1_000_000, 1)}m`;
 }
 
