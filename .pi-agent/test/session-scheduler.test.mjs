@@ -148,6 +148,24 @@ test("/once creates a one-shot task and warns that the session must stay open", 
   assert.deepEqual(ui.sent, [], "scheduling must not wake the model");
 });
 
+test("/once and /loop share one help that draws the line at /schedule", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  for (const command of ["once", "loop"]) {
+    await ui.run(command, "help");
+    const help = ui.notices.at(-1).message;
+    assert.equal(ui.notices.at(-1).level, "info", `${command} help is not an error`);
+    assert.match(help, /need pi open/, "the session-scoped caveat is the whole point");
+    assert.match(help, /dropped rather than replayed/);
+    assert.match(help, /use \/schedule/, "help names the durable alternative");
+    assert.match(help, /may lead or trail/, "the one genuinely surprising parse rule");
+    assert.match(help, /1m minimum/);
+  }
+
+  assert.equal(latestTasks(ui).length, 0, "asking for help does not schedule anything");
+});
+
 test("/once points at /schedule rather than silently doing nothing on junk", async (t) => {
   const ui = await mount();
   t.after(ui.shutdown);

@@ -251,4 +251,48 @@ test("bare /schedule explains itself and points at the session-scoped commands",
   await ui.run("");
   assert.match(ui.last().message, /use \/once and \/loop/);
   assert.match(ui.last().message, /without an open session/);
+  assert.match(ui.last().message, /\/schedule help/, "the terse usage advertises the detailed help");
+});
+
+test("/schedule help documents every option the parser accepts", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("help");
+  const help = ui.last().message;
+
+  // The usage line lists flag names; help has to say what each one is for, or
+  // the flags are undiscoverable. Keep the two from drifting apart.
+  for (const flag of ["--name", "--model", "--cwd", "--tools", "--deliver", "--misfire", "--timeout"]) {
+    assert.match(help, new RegExp(`${flag}\\b`), `${flag} is undocumented`);
+  }
+  for (const subcommand of ["list", "show", "runs", "run", "pause", "resume", "remove"]) {
+    assert.match(help, new RegExp(`\\b${subcommand}\\b`), `${subcommand} is undocumented`);
+  }
+});
+
+test("/schedule help explains the choices a caller cannot guess", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("help");
+  const help = ui.last().message;
+
+  assert.match(help, /must come before the schedule/, "flag position is not guessable");
+  assert.match(help, /skip[\s\S]*always[\s\S]*catch up/, "misfire policies are enumerated");
+  assert.match(help, /Off by default/, "tools defaulting off is a safety property worth stating");
+  assert.match(help, /stdin/, "deliver is the only way output leaves an unattended run");
+  assert.match(help, /default 2h/);
+  assert.match(help, /default 15m/);
+});
+
+test("help is informational, while misuse is a warning", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("help");
+  assert.equal(ui.last().level, "info");
+
+  await ui.run("");
+  assert.equal(ui.last().level, "warning");
 });

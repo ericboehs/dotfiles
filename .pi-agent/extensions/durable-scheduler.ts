@@ -164,9 +164,68 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "Options go first: --name --model --cwd --tools --deliver --misfire --timeout",
         "  /schedule --name grades --model cerebras/gpt-oss-120b:low daily 15:30 :: check grades",
         "",
+        "/schedule help explains what each option does.",
         "For timers that fire into this conversation, use /once and /loop.",
       ].join("\n"),
       "warning",
+    );
+  };
+
+  const showHelp = (ctx: ExtensionContext) => {
+    notice(
+      ctx,
+      [
+        "/schedule \u2014 tasks that run without an open session.",
+        "",
+        "A per-minute agent runs 'pi-scheduler check'. When a task is due it spawns a",
+        "fresh pi with no session, extensions or skills, so a run behaves the same in",
+        "three months as it does today. Nothing stays resident between ticks.",
+        "",
+        "SCHEDULES                        :: separates the schedule from the prompt",
+        "  daily 15:30   daily 9a         every day at that local time",
+        "  every 30m     hourly           repeating; 1m minimum",
+        "  cron 30 15 * * 1-5             5-field crontab, or @daily @hourly @weekly",
+        "  once 2h       once 20:00       fires one time, then retires",
+        "",
+        "OPTIONS  (all optional, and all must come before the schedule)",
+        "  --name <name>       what you call it in show/run/remove; else a short id",
+        "  --model <model>     which model runs it, e.g. cerebras/gpt-oss-120b:low.",
+        "                      Worth setting: runs are isolated, so there is no",
+        "                      session to inherit a model from, and a summarising",
+        "                      job rarely needs an expensive one.",
+        "  --cwd <dir>         directory to run in (default: this session's)",
+        "  --tools             allow tool use. Off by default, so a scheduled run",
+        "                      cannot touch the filesystem or network unasked.",
+        "  --deliver <cmd>     shell command receiving the output on stdin and in",
+        "                      $PI_SCHEDULER_OUTPUT. Without it the only trace of a",
+        "                      run is '/schedule runs <id>', since nobody is watching.",
+        "  --misfire <policy>  what a late run does after sleep or shutdown:",
+        "                        skip     never run late",
+        "                        always   run however late",
+        "                        <dur>    catch up within this window (default 2h)",
+        "                      Late runs coalesce into one; a week away does not",
+        "                      replay a week of runs.",
+        "  --timeout <dur>     give up on a run after this long (default 15m)",
+        "",
+        "MANAGING",
+        "  list [all]          soonest first; 'all' includes paused tasks",
+        "  show <id>           schedule, model, delivery, last and next run",
+        "  runs <id>           recent history, including failures and skips",
+        "  run <id>            run now, ignoring the schedule",
+        "  pause <id> | resume <id>",
+        "                      resume rolls forward to the next future slot rather",
+        "                      than replaying what was missed",
+        "  remove <id>         delete the task and its history",
+        "",
+        "EXAMPLE",
+        "  /schedule --name grades --model cerebras/gpt-oss-120b:low",
+        "    --deliver 'fnox exec -- slack-noti'",
+        "    cron 30 15 * * 1-5 :: Summarize today's grades, flag anything under 80.",
+        "",
+        "Same tasks from the shell: pi-scheduler (add, list, run, runs, install).",
+        "Timers that fire into this conversation instead: /once and /loop.",
+      ].join("\n"),
+      "info",
     );
   };
 
@@ -174,7 +233,11 @@ export default function durableScheduler(pi: ExtensionAPI): void {
     description: "Manage durable tasks that run headlessly, even with pi closed",
     handler: async (args, ctx) => {
       const input = args.trim();
-      if (!input || input === "help") {
+      if (input === "help") {
+        showHelp(ctx);
+        return;
+      }
+      if (!input) {
         showUsage(ctx);
         return;
       }

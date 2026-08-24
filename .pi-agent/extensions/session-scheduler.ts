@@ -408,9 +408,48 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
         "  /loop list | cancel <id> | clear",
         "  /loop pause <id|all> | resume <id|all>",
         "  (:: before the prompt is optional)",
+        "/once help or /loop help explains the forms in full.",
         "Use /schedule for tasks that must run without an open session.",
       ].join("\n"),
       "warning",
+    );
+  };
+
+  const showHelp = (ctx: ExtensionContext) => {
+    notice(
+      ctx,
+      [
+        "/once and /loop \u2014 timers that fire a prompt into this conversation.",
+        "",
+        "They live in this session: they need pi open, they stop when it exits, and",
+        "anything missed while it was closed is dropped rather than replayed. For work",
+        "that must happen whether or not you are here, use /schedule.",
+        "",
+        "/once \u2014 fire one time",
+        "  /once 15m check whether the deploy finished",
+        "  /once at 8p check in on this",
+        "  /once remind me about the PR in 2h",
+        "  The time may lead or trail. A leading time wins when it parses, so",
+        "  '/once 8p check in on this' keeps the prompt's own 'in'.",
+        "",
+        "/loop \u2014 fire repeatedly (1m minimum)",
+        "  /loop 15m check CI",
+        "  /loop review the deploy every 1h",
+        "",
+        "TIMES   /once takes 30s 15m 2h 1d, or 9a 8p 15:30, or an ISO timestamp",
+        "        /loop takes a duration only, 1m or longer",
+        "",
+        "MANAGING",
+        "  /once list | cancel <id>              one-shots only",
+        "  /loop list | cancel <id> | clear      every timer in this session",
+        "  /loop pause <id|all> | resume <id|all>",
+        "  pause keeps a task but disarms it; resume moves to the next future slot",
+        "  rather than firing for everything missed while it was paused.",
+        "",
+        "Timers restore when you resume this session, and are not inherited by /new,",
+        "/fork or /clone. (:: before the prompt is optional.)",
+      ].join("\n"),
+      "info",
     );
   };
 
@@ -493,6 +532,10 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     description: "Run a prompt once later in this session, for example /once 15m check the build",
     handler: async (args, ctx) => {
       const input = args.trim();
+      if (input === "help") {
+        showHelp(ctx);
+        return;
+      }
       if (await handleManagement(input, ctx, { onlyOnce: true })) return;
 
       const parsed = parseOnceCommand(input);
@@ -512,7 +555,11 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     description: "Repeat a prompt in this session, for example /loop 5m check the deploy",
     handler: async (args, ctx) => {
       const input = args.trim();
-      if (!input || input === "help") {
+      if (input === "help") {
+        showHelp(ctx);
+        return;
+      }
+      if (!input) {
         showUsage(ctx);
         return;
       }
