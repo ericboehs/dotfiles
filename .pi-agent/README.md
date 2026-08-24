@@ -168,168 +168,21 @@ the next `/color` re-tints from whatever is current.
 
 ## Schedulers
 
-Scheduling is split by *what the task needs to survive*, which is the one
-distinction that actually changes the implementation. Naming follows Claude
-Code, which draws the same line between `/loop` and `/schedule`.
+Moved out to its own package: **[pi-scheduler](https://github.com/ericboehs/pi-scheduler)**,
+installed from `packages` in the per-host settings. `/once` and `/loop` are
+session timers that fire a prompt into the current conversation; `/schedule`
+plus the `pi-scheduler` CLI are durable tasks that run in their own `pi -p`
+whether or not pi is open. Neither registers an LLM tool or adds anything to
+model context. The full reference lives in that repo's README.
 
-| | `/once`, `/loop` | `/schedule` |
-|---|---|---|
-| Runs in | this conversation | a fresh isolated `pi -p` |
-| Needs pi open | yes | no |
-| Survives quitting pi | no | yes |
-| Model | whatever the session is using | per task |
-| Stored in | a custom session entry | `~/.pi/agent/scheduler/tasks.json` |
-| Missed fires | dropped | caught up once, within a grace window |
+`bin/pi-scheduler` here is a two-line shim: `~/bin` is a symlink to `bin/`, so
+the shim is what keeps the command on PATH on every host without each one
+needing a hand-made symlink into `~/.pi/agent/git`. It **execs** the package's
+CLI rather than wrapping it, because `pi-scheduler install` bakes an absolute
+path into the launchd job and that path must be the package's, not the shim's.
 
-Shared schedule parsing lives in `extensions/lib/schedule-core.ts` so a `daily
-15:30` means the same thing in both, and in `bin/pi-scheduler`. Neither
-extension registers an LLM tool or adds anything to model context.
+The registry stays machine-local at `~/.pi/agent/scheduler/` — see below.
 
-### Session timers: `/once` and `/loop`
-
-`extensions/session-scheduler.ts`. In-process timers that fire a prompt into
-the current conversation.
-
-```text
-/once 15m check whether the deploy finished
-/once at 8p check in on this
-/once remind me about the PR in 2h
-/once list | cancel <id>
-/loop 15m check CI
-/loop review the deploy every 1h
-/loop list | cancel <id> | clear
-/loop pause <id|all> | resume <id|all>
-```
-
-`/once` is the one-shot counterpart to `/loop`. The time may lead (`/once 15m
-check the build`, with an optional `in`/`at`) or trail (`/once check the build
-in 15m`); the leading form wins when its first token parses as a time, so
-`/once 8p check in on this` keeps the prompt's own "in" intact. `/once list`
-and `/once cancel` are scoped to one-shots; `/loop list` shows every timer.
-
-`pause` disarms a task's timer but keeps it in the list, so it survives session
-resume without firing or drifting. `resume` recomputes the next occurrence rather
-than replaying what was missed: a recurring task advances to its next future slot,
-and a one-shot whose time passed while paused is dropped with a warning instead of
-firing late.
-
-### Durable tasks: `/schedule`
-
-`extensions/durable-scheduler.ts` plus `bin/pi-scheduler`. These run whether or
-not pi is open, which is the point: a weekday grade check at 15:30 cannot
-depend on a terminal being left running.
-
-```text
-/schedule --name grades --model cerebras/gpt-oss-120b:low daily 15:30 :: check the kids' grades
-/schedule cron 30 15 * * 1-5 :: weekday grade check
-/schedule --misfire always once 8p :: check in on the deploy
-/schedule list [all] | show <id> | runs <id>
-/schedule run <id> | pause <id> | resume <id> | remove <id>
-```
-
-`/schedule run` fires a task now, exactly as the timer would: **its own pi, its
-own cwd and model, not this conversation and not this conversation's context.**
-It does not block the session — a task's timeout defaults to 15 minutes, and
-waiting that long to watch an unattended job is the wrong trade — so the footer
-shows what is in flight and the output arrives as a notice when it lands,
-without joining the conversation. `runs` (plural) is the read-only history.
-
-Options go **first**, before the schedule: `--name --model --cwd
---with/--without --deliver --misfire --timeout`. Flags are only recognized
-while they lead,
-because the schedule itself is variable length (a cron expression is five bare
-words) and there is otherwise no reliable place to stop scanning — so a prompt
-containing `--force` is never mistaken for an option.
-
-The same tasks are managed from the shell, which is also where `install` lives:
-
-```sh
-pi-scheduler install          # per-minute launchd job, or systemd --user timer
-pi-scheduler list
-pi-scheduler add daily 15:30 :: check grades --name grades --model cerebras/gpt-oss-120b:low
-pi-scheduler run grades       # ignore the schedule and run now
-pi-scheduler runs grades      # recent history
-pi-scheduler check            # what the timer calls
-```
-
-**Nothing stays resident.** A launchd job (or systemd timer on Linux) runs
-`pi-scheduler check` every 60s; it reads one JSON file and exits, measured at
-~73ms when nothing is due, so interactive pi startup is untouched. pi is only
-spawned when a task is actually due — a due run measured end to end at ~0.65s
-against `cerebras/gpt-oss-120b:low`.
-
-Each run is a fresh `pi -p` that loads **what an interactive pi would**: your
-extensions, skills, prompt templates, and the `AGENTS.md` of the directory the
-task was created in. A task records its cwd at creation, so project context is
-the context you had in mind when you wrote the prompt. That means the prompt
-can simply be a slash command:
-
-```sh
-cd ~/Code/some/repo
-pi-scheduler add --name checkin daily 9a :: /checkin
-```
-
-Full discovery costs about 0.3s more at startup than a stripped one, which is
-nothing for something that runs once a day, and the alternative — a scheduled
-run that behaves unlike the pi you tested the prompt in — is a worse trade.
-
-`--without` strips pieces back out: `extensions`, `skills`, `templates`,
-`context`, `tools`. `--without tools` makes a run answer-only, worth doing for
-anything that just summarizes. `--with` is the inverse allowlist, and `--with
-none` is a bare pi — fastest, and immune to a broken extension. Themes have no
-switch and are always off: there is no TUI to theme, and `--no-session` is
-always passed so an unattended daily job cannot grow a session file forever.
-
-Runs are never messages into an existing session: pi appends to session JSONL
-without file locking, so writing into a session that might be open in a
-terminal risks interleaved entries. Each run is its own pi, which is also why
-a task carries its own `--model` rather than inheriting whatever a human left
-selected three days ago.
-
-`--deliver` is a shell command that receives the output on stdin and in
-`$PI_SCHEDULER_OUTPUT`; the prompt and the result both travel by stdin rather
-than argv, so neither shows up in `ps`. Collect data with a deterministic
-script first and let the model only summarize it:
-
-```sh
-pi-scheduler add --name grades --model cerebras/gpt-oss-120b:low \
-  --deliver 'fnox exec -- slack-noti' \
-  cron 30 15 * * 1-5 :: 'Summarize these grades and flag anything below 80.'
-```
-
-`--misfire` decides what a late run does, because the Mac sleeps: `skip` never
-runs late, `always` always does, and a duration (default `2h`) is the window
-within which a catch-up is still wanted. Late runs **coalesce** — one catch-up,
-never a replay of every missed slot.
-
-The registry is `~/.pi/agent/scheduler/`, mode 0700 with 0600 files, since
-prompts and run output are routinely private. Read-modify-write goes through a
-`mkdir` mutex held only for the JSON round trip; the agent run itself happens
-outside the lock, guarded instead by a claim recorded on the task, so two
-overlapping ticks cannot double-run one job and a runner that dies has its
-claim reclaimed rather than wedging the task forever.
-
-### Cron syntax
-
-Both schedulers take a standard 5-field crontab expression (minute, hour, day-of-month,
-month, day-of-week) with ranges, lists, `*/n` steps, and `jan`/`mon` style names,
-plus the `@hourly`, `@daily`, `@weekly`, `@monthly` and `@yearly` macros. When
-both day-of-month and day-of-week are restricted they are OR'd, matching Vixie
-cron. There is no seconds field — a 6-field expression is rejected rather than
-reinterpreted, and an expression that can never match (`0 0 30 2 *`) is refused
-at creation.
-
-Session timers live in custom session entries, so they restore when you resume
-that session and are not inherited by `/new`, `/fork` or `/clone`. Pi must be
-running; missed fires are skipped rather than replayed after resume. Recurring
-intervals have a one-minute minimum, in both schedulers.
-
-One edge case for session timers, from pi's `SessionManager._persist`: pi does
-not create the session file until the session holds at least one assistant
-message. A timer set before that is buffered in memory and is written out with
-the first reply — but one set in a session that never prompts the model is lost
-on exit. `/once` and `/loop` warn when they detect this state, and the task is
-still created. `/schedule` is immune, since it writes to its own registry.
 
 Intentionally left as machine-local runtime state:
 

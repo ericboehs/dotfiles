@@ -11,7 +11,7 @@
 extensions/*
 !extensions/*.ts
 # One level of subdirectory, .ts only. pi discovers extensions/<name>/index.ts
-# as an extension and an import like "./lib/schedule-core.ts" resolves inside
+# as an extension and an import like "./lib/helper.ts" resolves inside
 # the same directory — and that directory is now published as a whole symlink,
 # so a helper left untracked here is not merely missing on another host: pi
 # aborts the entire launch when an extension's import cannot resolve.
