@@ -1,9 +1,10 @@
 /**
  * Minimal footer/statusline for pi — a lean replacement for the pi-footer package.
  *
- * Renders one line:
+ * Renders a main line:
  *   dir provider model thinking branch* ⇣⇡ ctx/window $cost [inline statuses] ⚡boot bypass   session-name
  * plus an optional dim row of other extension statuses (from ctx.ui.setStatus).
+ * A pending-update notice is a separate right-aligned widget above the prompt.
  * The boot timer shows until the first message; "bypass" replaces it as the
  * right-most main-line marker while Approval Guardian is bypassed.
  *
@@ -331,8 +332,9 @@ function paint(ansi: string, text: string): string {
   return text ? `${ansi}${text}\x1b[39m` : "";
 }
 
-/** Widget key for the scrollback banner, so it can be cleared by key later. */
+/** Widget keys, so the footer toggle and shutdown can clear both additions. */
 const SCROLLBACK_WIDGET_KEY = "footer-scrollback";
+const UPDATE_WIDGET_KEY = "footer-update";
 
 /**
  * Centered "↓ scrolled" banner rendered directly above the editor while the
@@ -707,6 +709,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (!enabled) {
       ctx.ui.setFooter(undefined);
       ctx.ui.setWidget(SCROLLBACK_WIDGET_KEY, undefined);
+      ctx.ui.setWidget(UPDATE_WIDGET_KEY, undefined);
       return;
     }
     ctx.ui.setWidget(SCROLLBACK_WIDGET_KEY, (tui) => {
@@ -724,6 +727,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
         },
       };
     });
+    ctx.ui.setWidget(UPDATE_WIDGET_KEY, (tui) => ({
+      invalidate(): void {},
+      render(width: number): string[] {
+        if (width <= 0 || !update.read(() => tui.requestRender())) return [];
+        return [alignRight(color(GREEN, "Update installed · Restart to update"), width)];
+      },
+    }));
 
     ctx.ui.setFooter((tui, theme, footerData) => {
       const requestRender = () => tui.requestRender();
@@ -750,7 +760,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
             void recordBoot(bootMs, ctx.cwd).catch(() => {});
           }
           const showBoot = bootMs !== undefined && !bootCleared;
-          const updated = update.read(requestRender);
 
           const left: string[] = [
             color(BLUE, basename(ctx.cwd)),
@@ -768,7 +777,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
             ...INLINE_STATUS_KEYS.map((key) => statuses.get(key) ?? ""),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
-            updated ? color(GREEN, "Update installed · Restart to update") : "",
             // Last before the flex gap, so it sits closest to the right edge.
             bypassed ? color(BRIGHT_RED, "bypass") : "",
           ];
@@ -791,13 +799,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
               padBetween(leftLine, right, width)
             : truncateToWidth(leftLine, width, "…");
 
+          const lines = [mainLine];
           const extra: string[] = [];
           for (const [key, value] of statuses) {
             if (!value || (INLINE_STATUS_KEYS as readonly string[]).includes(key)) continue;
             extra.push(value);
           }
-          if (extra.length === 0) return [mainLine];
-          return [mainLine, truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…")];
+          if (extra.length > 0) {
+            lines.push(truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…"));
+          }
+          return lines;
         },
       };
     });
@@ -806,6 +817,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
   function padBetween(left: string, right: string, width: number): string {
     const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
     return truncateToWidth(`${left}${" ".repeat(gap)}${right}`, width, "…");
+  }
+
+  function alignRight(text: string, width: number): string {
+    const fitted = truncateToWidth(text, width, "…");
+    return `${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}${fitted}`;
   }
 
   /**
@@ -991,6 +1007,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) {
       ctx.ui.setFooter(undefined);
       ctx.ui.setWidget(SCROLLBACK_WIDGET_KEY, undefined);
+      ctx.ui.setWidget(UPDATE_WIDGET_KEY, undefined);
     }
   });
 }

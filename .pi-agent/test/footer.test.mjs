@@ -70,8 +70,15 @@ async function mount(overrides = {}) {
     handlers: {},
   };
 
-  footer(pi);
-  await pi.handlers.session_start(overrides.sessionStart ?? {}, ctx);
+  const previousBootVersion = globalThis.__piFooterBootVersion;
+  if (overrides.updateInstalled) globalThis.__piFooterBootVersion = "older-version";
+  try {
+    footer(pi);
+    await pi.handlers.session_start(overrides.sessionStart ?? {}, ctx);
+  } finally {
+    if (previousBootVersion === undefined) delete globalThis.__piFooterBootVersion;
+    else globalThis.__piFooterBootVersion = previousBootVersion;
+  }
 
   const component = factory(
     { requestRender: () => { renders += 1; } },
@@ -276,6 +283,18 @@ test("session name is right-aligned and statuses split inline vs status row", as
   assert.match(main, /codex 12% copilot 40% +footer-work$/);
   assert.equal(statusRow, "3s");
   assert.equal(main.length, 120);
+});
+
+test("update notice is a right-aligned widget above the prompt", async () => {
+  const ui = await mount({ updateInstalled: true });
+  const [main] = await ui.settled(80);
+  const widgetFactory = ui.widgets.find(({ key }) => key === "footer-update")?.content;
+  const widget = widgetFactory({ requestRender: () => {} });
+  const message = "Update installed · Restart to update";
+
+  assert.equal(main, "dotfiles or ox hi master* 41.2k/1m $0.5123");
+  assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
+  assert.match(widget.render(80)[0], /\x1B\[32mUpdate installed · Restart to update\x1B\[39m$/);
 });
 
 /**

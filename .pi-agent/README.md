@@ -57,8 +57,9 @@ something pi tries to load.
 `extensions/footer.ts` renders the status line (dir, provider, model, git,
 context/cost, boot time) plus `/bypass`, `/boot` and `/footer`. It also watches
 pi's on-disk version: when an install lands while instances are running — via
-`pi update`, `npm i -g`, anything — each running footer shows a green
-"Update installed · Restart to update" segment within ~30s, like Claude Code.
+`pi update`, `npm i -g`, anything — each running footer shows a green, right-aligned
+"Update installed · Restart to update" line above the prompt within ~30s, like
+Claude Code.
 
 The same detection kicks off `bin/pi-bundle` in a detached background process,
 since an update leaves the bundle stale and every launch ~115ms slower until it
