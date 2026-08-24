@@ -227,6 +227,13 @@ depend on a terminal being left running.
 /schedule run <id> | pause <id> | resume <id> | remove <id>
 ```
 
+`/schedule run` fires a task now, exactly as the timer would: **its own pi, its
+own cwd and model, not this conversation and not this conversation's context.**
+It does not block the session — a task's timeout defaults to 15 minutes, and
+waiting that long to watch an unattended job is the wrong trade — so the footer
+shows what is in flight and the output arrives as a notice when it lands,
+without joining the conversation. `runs` (plural) is the read-only history.
+
 Options go **first**, before the schedule: `--name --model --cwd
 --with/--without --deliver --misfire --timeout`. Flags are only recognized
 while they lead,

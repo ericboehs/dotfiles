@@ -26,6 +26,7 @@ function withTempDir(t) {
 function mount() {
   const commands = {};
   const notices = [];
+  const statuses = [];
   let registeredTools = 0;
 
   const ctx = {
@@ -34,7 +35,7 @@ function mount() {
     ui: {
       notify: (message, level = "info") => notices.push({ message, level }),
       confirm: async () => true,
-      setStatus: () => {},
+      setStatus: (key, text) => statuses.push({ key, text }),
     },
   };
 
@@ -47,6 +48,7 @@ function mount() {
   return {
     commands,
     notices,
+    statuses,
     registeredTools,
     last: () => notices.at(-1),
     run: (args = "") => commands.schedule.handler(args, ctx),
@@ -352,6 +354,87 @@ test("a misspelled feature is refused and names the ones that exist", async (t) 
   assert.match(ui.last().message, /--without does not know "skillz"/);
   assert.match(ui.last().message, /skills/);
   assert.deepEqual(readRegistry().tasks, []);
+});
+
+test("/schedule help says where run actually runs, which is the ambiguous part", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("help");
+  const help = ui.last().message;
+  assert.match(help, /its own pi/, "not this session");
+  assert.match(help, /not this conversation/);
+  assert.match(help, /stays usable while it runs/, "it does not block for the 15m timeout");
+});
+
+test("/schedule run returns immediately rather than blocking the conversation", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+  await ui.run("--name slow daily 9a :: x");
+
+  // Point the runner at something that takes a while. If run() awaited it, the
+  // handler below would not come back for a second.
+  const previous = process.env.PI_SCHEDULER_PI_BIN;
+  process.env.PI_SCHEDULER_PI_BIN = "/bin/sleep";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_SCHEDULER_PI_BIN;
+    else process.env.PI_SCHEDULER_PI_BIN = previous;
+  });
+
+  const startedAt = Date.now();
+  await ui.run("run slow");
+  const elapsed = Date.now() - startedAt;
+
+  assert.ok(elapsed < 500, `handler should return promptly, took ${elapsed}ms`);
+  assert.match(ui.last().message, /its own pi, not this session/);
+  assert.deepEqual(
+    ui.statuses.at(-1),
+    { key: "schedule", text: "running slow" },
+    "the footer says something is in flight, since the notice has scrolled",
+  );
+});
+
+test("/schedule run claims the task, so the next tick cannot double-run it", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+  await ui.run("--name once-only daily 9a :: x");
+
+  const previous = process.env.PI_SCHEDULER_PI_BIN;
+  process.env.PI_SCHEDULER_PI_BIN = "/bin/sleep";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_SCHEDULER_PI_BIN;
+    else process.env.PI_SCHEDULER_PI_BIN = previous;
+  });
+
+  await ui.run("run once-only");
+  assert.ok(readRegistry().tasks[0].runningSince > 0, "claimed before the run starts");
+
+  await ui.run("run once-only");
+  assert.equal(ui.last().level, "error");
+  assert.match(ui.last().message, /already running/);
+});
+
+test("run and runs are different commands, and neither shadows the other", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+  await ui.run("--name grades daily 9a :: x");
+
+  // `runs?` once matched both, so `run` silently showed history and never ran
+  // anything -- the sort of failure you notice at 3:30pm, not at the prompt.
+  await ui.run("runs grades");
+  assert.match(ui.last().message, /No runs recorded yet/);
+  assert.equal(readRegistry().tasks[0].runningSince, undefined, "history is read-only");
+
+  const previous = process.env.PI_SCHEDULER_PI_BIN;
+  process.env.PI_SCHEDULER_PI_BIN = "/bin/sleep";
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_SCHEDULER_PI_BIN;
+    else process.env.PI_SCHEDULER_PI_BIN = previous;
+  });
+
+  await ui.run("run grades");
+  assert.match(ui.last().message, /Running grades/);
+  assert.ok(readRegistry().tasks[0].runningSince > 0, "run actually starts something");
 });
 
 test("/schedule remove takes the task out of the registry", async (t) => {

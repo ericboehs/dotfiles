@@ -186,7 +186,8 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "  /schedule [options] cron <m h dom mon dow|@daily> :: <prompt>",
         "  /schedule [options] once <duration|HH:MM|ISO> :: <prompt>",
         "  /schedule list [all] | show <id> | runs <id>",
-        "  /schedule run <id> | pause <id> | resume <id> | remove <id>",
+        "  /schedule run <id>   run now, in its own pi (not this session)",
+        "  /schedule pause <id> | resume <id> | remove <id>",
         "",
         "Options go first: --name --model --cwd --with/--without --deliver",
         "                  --misfire --timeout",
@@ -255,7 +256,12 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "  list [all]          soonest first; 'all' includes paused tasks",
         "  show <id>           schedule, model, delivery, last and next run",
         "  runs <id>           recent history, including failures and skips",
-        "  run <id>            run now, ignoring the schedule",
+        "  run <id>            run now, ignoring the schedule. Runs exactly as the",
+        "                      timer would: its own pi, its own cwd and model, not",
+        "                      this conversation and not this conversation's",
+        "                      context. Your session stays usable while it runs,",
+        "                      and the output is printed here when it finishes",
+        "                      without becoming part of the conversation.",
         "  pause <id> | resume <id>",
         "                      resume rolls forward to the next future slot rather",
         "                      than replaying what was missed",
@@ -319,7 +325,9 @@ export default function durableScheduler(pi: ExtensionAPI): void {
           return;
         }
 
-        const runs = input.match(/^runs?\s+(\S+)$/i);
+        // Strictly `runs`, not `runs?`: the lenient form also matched `run x`
+        // and returned history instead of running the task.
+        const runs = input.match(/^(?:runs|history)\s+(\S+)$/i);
         if (runs?.[1]) {
           const task = findTask(readRegistry().tasks, runs[1]);
           const records = readRuns(task.id, 10);
@@ -353,26 +361,35 @@ export default function durableScheduler(pi: ExtensionAPI): void {
             return task;
           });
 
-          notice(ctx, `Running ${claimed.name ?? claimed.id} headlessly…`);
+          notice(ctx, `Running ${claimed.name ?? claimed.id}… (its own pi, not this session)`);
           const startedAt = Date.now();
-          let outcome;
-          try {
-            outcome = await runTask(claimed);
-          } catch (error) {
-            outcome = {
-              status: "error" as const,
-              output: "",
-              error: error instanceof Error ? error.message : String(error),
-            };
-          }
-          settleRun(claimed.id, claimed.nextRunAt, startedAt, outcome);
-          notice(
-            ctx,
-            `${claimed.name ?? claimed.id} ${outcome.status}`
-            + `${outcome.error ? `: ${outcome.error}` : ""}`
-            + `${outcome.output ? `\n${outcome.output}` : ""}`,
-            outcome.status === "ok" ? "info" : "error",
-          );
+
+          // Deliberately not awaited. A task's timeout defaults to 15m, and
+          // blocking the conversation that long to watch an unattended job is
+          // the wrong trade; the result arrives as a notice when it lands.
+          void (async () => {
+            let outcome;
+            try {
+              outcome = await runTask(claimed);
+            } catch (error) {
+              outcome = {
+                status: "error" as const,
+                output: "",
+                error: error instanceof Error ? error.message : String(error),
+              };
+            }
+            settleRun(claimed.id, claimed.nextRunAt, startedAt, outcome);
+            if (ctx.hasUI) ctx.ui.setStatus("schedule", "");
+            notice(
+              ctx,
+              `${claimed.name ?? claimed.id} ${outcome.status}`
+              + `${outcome.error ? `: ${outcome.error}` : ""}`
+              + `${outcome.output ? `\n${outcome.output}` : ""}`,
+              outcome.status === "ok" ? "info" : "error",
+            );
+          })();
+
+          if (ctx.hasUI) ctx.ui.setStatus("schedule", `running ${claimed.name ?? claimed.id}`);
           return;
         }
 
