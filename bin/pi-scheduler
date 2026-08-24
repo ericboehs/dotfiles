@@ -1,0 +1,553 @@
+#!/usr/bin/env node
+/**
+ * pi-scheduler — run pi's durable scheduled tasks without an open session.
+ *
+ * `check` is the whole point: a LaunchAgent wakes it once a minute, it looks at
+ * ~/.pi/agent/scheduler/tasks.json, and it exits immediately unless something
+ * is due. Nothing stays resident, so interactive pi startup is untouched and
+ * the idle cost is one short-lived node process per minute.
+ *
+ * The registry, the schedule maths and the runner are shared with the
+ * /schedule slash command in .pi-agent/extensions, so both agree on when a
+ * task is due and what "run it" means.
+ *
+ * Usage: pi-scheduler <command> [options]
+ *
+ *   check                     run whatever is due (what launchd calls)
+ *   list [--all]              show tasks
+ *   show <id|name>            show one task in full
+ *   add <spec> <prompt>       daily 15:30 / cron 0 9 * * 1-5 / every 2h / once 8p
+ *   edit <id|name> [flags]    change model, prompt, delivery, schedule
+ *   run <id|name>             run now, ignoring the schedule
+ *   runs <id|name> [-n N]     recent run history
+ *   pause|resume <id|name>
+ *   remove <id|name>
+ *   install|uninstall         manage the per-minute tick (launchd or systemd)
+ *
+ * Flags for add/edit:
+ *   --name <name>        stable handle, nicer than the generated id
+ *   --model <ref>        pi --model pattern, e.g. cerebras/gpt-oss-120b:low
+ *   --cwd <dir>          working directory for the run (default: $HOME)
+ *   --tools              allow built-in tools (off by default)
+ *   --no-tools
+ *   --deliver <shell>    receives the output on stdin and in $PI_SCHEDULER_OUTPUT
+ *   --no-deliver
+ *   --misfire <policy>   skip | always | a duration such as 2h (default 2h)
+ *   --timeout <duration> kill the run after this long (default 15m)
+ *   --prompt <text>      edit only: replace the prompt
+ *   --schedule <spec>    edit only: replace the schedule
+ */
+
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+import {
+  describeSchedule,
+  firstRunAfter,
+  formatDuration,
+  parseDuration,
+  parseScheduleSpec,
+} from "../.pi-agent/extensions/lib/schedule-core.ts";
+import {
+  DEFAULT_MISFIRE_GRACE_MS,
+  DEFAULT_TIMEOUT_MS,
+  MAX_DURABLE_TASKS,
+  appendRun,
+  claimTask,
+  findTask,
+  forgetRuns,
+  formatTask,
+  makeTaskId,
+  pruneRuns,
+  readRegistry,
+  readRuns,
+  releaseTask,
+  schedulerDir,
+  selectDue,
+  settleRun,
+  writeRegistry,
+  withRegistry,
+} from "../.pi-agent/extensions/lib/task-registry.ts";
+import { piArgsFor, runTask } from "../.pi-agent/extensions/lib/runner.ts";
+
+const SELF = fileURLToPath(import.meta.url);
+const LABEL = "com.ericboehs.pi-scheduler";
+const PLIST = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+const SYSTEMD_DIR = join(homedir(), ".config", "systemd", "user");
+const SYSTEMD_UNIT = "pi-scheduler";
+
+/**
+ * Node must be named absolutely, never resolved from PATH.
+ *
+ * launchd and systemd start jobs with a minimal environment that does not
+ * include mise's shim directory, so a `#!/usr/bin/env node` shebang either
+ * finds nothing (no node on PATH at all) or silently finds an older node than
+ * the one this was tested against. process.execPath is the interpreter
+ * currently running, which is exactly the one the installer was invoked with.
+ */
+const NODE = process.execPath;
+
+/** Unflagged TypeScript type stripping, which this script relies on to import lib/*.ts. */
+const MIN_NODE = [22, 18, 0];
+
+function die(message) {
+  process.stderr.write(`pi-scheduler: ${message}\n`);
+  process.exit(1);
+}
+
+function usage() {
+  const text = [
+    "Usage: pi-scheduler <command> [options]",
+    "",
+    "  check                     run whatever is due (called by launchd)",
+    "  list [--all]              show tasks",
+    "  show <id|name>            show one task in full",
+    "  add <spec> <prompt>       daily 15:30 | cron 0 9 * * 1-5 | every 2h | once 8p",
+    "  edit <id|name> [flags]    change model, prompt, delivery, schedule",
+    "  run <id|name>             run now, ignoring the schedule",
+    "  runs <id|name> [-n N]     recent run history",
+    "  pause|resume <id|name>",
+    "  remove <id|name>",
+    "  prune                     drop run logs for tasks that no longer exist",
+    "  install|uninstall         manage the per-minute tick (launchd or systemd)",
+    "",
+    "Flags: --name --model --cwd --tools/--no-tools --deliver/--no-deliver",
+    "       --misfire <skip|always|2h> --timeout <15m> --prompt --schedule",
+  ].join("\n");
+  process.stdout.write(`${text}\n`);
+}
+
+/** Split flags out of an argv tail, leaving the positional words untouched. */
+function parseFlags(argv) {
+  const flags = {};
+  const rest = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      rest.push(...argv.slice(index + 1));
+      break;
+    }
+    if (arg === "--tools") { flags.tools = true; continue; }
+    if (arg === "--no-tools") { flags.tools = false; continue; }
+    if (arg === "--no-deliver") { flags.deliver = null; continue; }
+    if (arg === "--all") { flags.all = true; continue; }
+    if (arg === "-n") { flags.limit = Number(argv[++index]); continue; }
+    if (arg?.startsWith("--")) {
+      const [name, inline] = arg.slice(2).split(/=(.*)/s);
+      const value = inline ?? argv[++index];
+      if (value === undefined) die(`--${name} needs a value`);
+      flags[name] = value;
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { flags, rest };
+}
+
+function parseMisfire(value) {
+  if (value === undefined) return undefined;
+  if (value === "skip" || value === "always") return value;
+  const ms = parseDuration(value);
+  if (ms === undefined) die(`--misfire wants skip, always, or a duration such as 2h`);
+  return ms;
+}
+
+function applyFlags(task, flags) {
+  if (flags.name !== undefined) task.name = flags.name;
+  if (flags.model !== undefined) task.model = flags.model;
+  if (flags.cwd !== undefined) task.cwd = flags.cwd;
+  if (flags.tools !== undefined) task.tools = flags.tools;
+  if (flags.deliver === null) delete task.deliver;
+  else if (flags.deliver !== undefined) task.deliver = flags.deliver;
+  const misfire = parseMisfire(flags.misfire);
+  if (misfire !== undefined) task.misfire = misfire;
+  if (flags.timeout !== undefined) {
+    const ms = parseDuration(flags.timeout);
+    if (ms === undefined) die("--timeout wants a duration such as 15m");
+    task.timeoutMs = ms;
+  }
+  return task;
+}
+
+async function commandCheck() {
+  const claimed = withRegistry((registry) => {
+    const now = Date.now();
+    const toRun = [];
+    let dirty = false;
+
+    for (const decision of selectDue(registry.tasks, now)) {
+      const index = registry.tasks.findIndex((candidate) => candidate.id === decision.task.id);
+      if (index < 0) continue;
+      dirty = true;
+
+      if (decision.skip) {
+        appendRun(decision.task.id, {
+          runId: `${now}`,
+          startedAt: now,
+          endedAt: now,
+          scheduledFor: decision.scheduledFor,
+          status: "skipped",
+          error: `${formatDuration(now - decision.scheduledFor)} late, past the catch-up window`,
+        });
+        const released = releaseTask(decision.task, now, "skipped");
+        if (released) registry.tasks[index] = released;
+        else registry.tasks.splice(index, 1);
+        continue;
+      }
+
+      const claim = claimTask(decision.task, now, process.pid);
+      registry.tasks[index] = claim;
+      toRun.push({ task: claim, scheduledFor: decision.scheduledFor });
+    }
+
+    // Idle ticks must not touch the file: rewriting tasks.json 1440 times a
+    // day for nothing is both pointless IO and a needless window for a torn
+    // read by a concurrent /schedule.
+    if (dirty) writeRegistry(registry);
+    return toRun;
+  });
+
+  // Sequential on purpose: several agent runs at once on a laptop is a worse
+  // failure mode than a task starting a minute late.
+  for (const { task, scheduledFor } of claimed) {
+    const startedAt = Date.now();
+    let outcome;
+    try {
+      outcome = await runTask(task);
+    } catch (error) {
+      // Never leave a claim behind: an unreleased task is invisible to every
+      // later tick until CLAIM_STALE_MS elapses.
+      outcome = { status: "error", output: "", error: error instanceof Error ? error.message : String(error) };
+    }
+    settleRun(task.id, scheduledFor, startedAt, outcome);
+    process.stdout.write(
+      `${new Date().toISOString()} ${task.name ?? task.id} ${outcome.status}`
+      + `${outcome.error ? ` — ${outcome.error}` : ""}\n`,
+    );
+  }
+}
+
+async function commandRun(selector) {
+  const task = findTask(readRegistry().tasks, selector);
+  const startedAt = Date.now();
+  process.stderr.write(`Running ${task.name ?? task.id}…\n`);
+  const outcome = await runTask(task);
+  settleRun(task.id, task.nextRunAt, startedAt, outcome);
+  if (outcome.output) process.stdout.write(`${outcome.output}\n`);
+  if (outcome.error) process.stderr.write(`${outcome.error}\n`);
+  if (outcome.status !== "ok") process.exitCode = 1;
+}
+
+function commandList(flags) {
+  const tasks = readRegistry().tasks
+    .filter((task) => flags.all || !task.paused)
+    .sort((a, b) => a.nextRunAt - b.nextRunAt);
+  if (tasks.length === 0) {
+    process.stdout.write("No scheduled tasks\n");
+    return;
+  }
+  for (const task of tasks) process.stdout.write(`${formatTask(task)}\n`);
+}
+
+function commandShow(selector) {
+  const task = findTask(readRegistry().tasks, selector);
+  const lines = [
+    `id          ${task.id}`,
+    `name        ${task.name ?? "—"}`,
+    `schedule    ${describeSchedule(task)}`,
+    `next run    ${task.paused ? "paused" : new Date(task.nextRunAt).toLocaleString()}`,
+    `model       ${task.model ?? "pi default"}`,
+    `tools       ${task.tools ? "enabled" : "disabled"}`,
+    `cwd         ${task.cwd ?? homedir()}`,
+    `deliver     ${task.deliver ?? "—"}`,
+    `misfire     ${task.misfire ?? formatDuration(DEFAULT_MISFIRE_GRACE_MS)}`,
+    `timeout     ${formatDuration(task.timeoutMs ?? DEFAULT_TIMEOUT_MS)}`,
+    `last run    ${task.lastRunAt ? `${new Date(task.lastRunAt).toLocaleString()} (${task.lastStatus})` : "never"}`,
+    `command     pi ${piArgsFor(task).join(" ")}`,
+    "prompt",
+    task.prompt.replace(/^/gm, "  "),
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+function commandRuns(selector, limit) {
+  // One-shots leave the registry as soon as they finish, so fall back to the
+  // raw id: the run log is the only surviving trace of a reminder that failed.
+  const tasks = readRegistry().tasks;
+  const taskId = tasks.some((task) => task.id === selector)
+    ? selector
+    : (() => {
+        try {
+          return findTask(tasks, selector).id;
+        } catch (error) {
+          if (readRuns(selector, 1).length > 0) return selector;
+          throw error;
+        }
+      })();
+
+  const records = readRuns(taskId, Number.isFinite(limit) ? limit : 10);
+  if (records.length === 0) {
+    process.stdout.write("No runs recorded\n");
+    return;
+  }
+  for (const record of records) {
+    process.stdout.write(
+      `${new Date(record.startedAt).toLocaleString()} · ${record.status}`
+      + ` · ${formatDuration(record.endedAt - record.startedAt)}`
+      + `${record.error ? ` · ${record.error.split("\n")[0]}` : ""}\n`,
+    );
+  }
+}
+
+function commandPrune() {
+  const removed = pruneRuns(readRegistry().tasks);
+  process.stdout.write(`Removed ${removed} orphaned run log(s)\n`);
+}
+
+function commandAdd(rest, flags) {
+  const spec = rest.join(" ").trim();
+  if (!spec) die("add needs a schedule and a prompt");
+  const parsed = parseScheduleSpec(spec);
+  if (parsed.error) die(parsed.error);
+
+  withRegistry((registry) => {
+    if (registry.tasks.length >= MAX_DURABLE_TASKS) {
+      die(`already at ${MAX_DURABLE_TASKS} scheduled tasks`);
+    }
+    if (flags.name && registry.tasks.some((task) => task.name === flags.name)) {
+      die(`a task named ${flags.name} already exists`);
+    }
+    const task = applyFlags({
+      ...parsed.schedule,
+      id: makeTaskId(registry.tasks),
+      prompt: parsed.prompt,
+      createdAt: Date.now(),
+      nextRunAt: parsed.nextRunAt,
+    }, flags);
+    registry.tasks.push(task);
+    writeRegistry(registry);
+    process.stdout.write(`${formatTask(task)}\n`);
+  });
+
+  if (!existsSync(PLIST) && process.platform === "darwin") {
+    process.stderr.write("Note: the scheduler tick is not installed; run pi-scheduler install\n");
+  }
+}
+
+function commandEdit(selector, flags) {
+  withRegistry((registry) => {
+    const existing = findTask(registry.tasks, selector);
+    const index = registry.tasks.indexOf(existing);
+    const task = applyFlags({ ...existing }, flags);
+
+    if (flags.prompt !== undefined) task.prompt = flags.prompt;
+    if (flags.schedule !== undefined) {
+      const parsed = parseScheduleSpec(`${flags.schedule} placeholder`);
+      if (parsed.error) die(parsed.error);
+      delete task.intervalMs;
+      delete task.dailyAt;
+      delete task.cronExpr;
+      Object.assign(task, parsed.schedule);
+      const next = firstRunAfter(task) ?? parsed.nextRunAt;
+      task.nextRunAt = next;
+    }
+
+    registry.tasks[index] = task;
+    writeRegistry(registry);
+    process.stdout.write(`${formatTask(task)}\n`);
+  });
+}
+
+function commandSetPaused(selector, paused) {
+  withRegistry((registry) => {
+    const existing = findTask(registry.tasks, selector);
+    const index = registry.tasks.indexOf(existing);
+    const task = { ...existing, paused };
+    // Resuming a task whose slot passed while it slept should not fire a burst.
+    if (!paused && task.nextRunAt <= Date.now()) {
+      task.nextRunAt = firstRunAfter(task) ?? task.nextRunAt;
+    }
+    registry.tasks[index] = task;
+    writeRegistry(registry);
+    process.stdout.write(`${formatTask(task)}\n`);
+  });
+}
+
+function commandRemove(selector) {
+  withRegistry((registry) => {
+    const task = findTask(registry.tasks, selector);
+    registry.tasks = registry.tasks.filter((candidate) => candidate.id !== task.id);
+    writeRegistry(registry);
+    forgetRuns(task.id);
+    process.stdout.write(`Removed ${task.name ?? task.id}\n`);
+  });
+}
+
+/**
+ * launchd and systemd both start jobs with a bare environment, so the PATH the
+ * task's own `deliver` command and any tools will see is captured at install
+ * time rather than inherited. Reinstall after moving node, pi or mise.
+ */
+function checkNodeVersion() {
+  const actual = process.versions.node.split(".").map(Number);
+  for (let index = 0; index < MIN_NODE.length; index += 1) {
+    if ((actual[index] ?? 0) > MIN_NODE[index]) return;
+    if ((actual[index] ?? 0) < MIN_NODE[index]) {
+      die(
+        `node ${process.versions.node} at ${NODE} cannot strip TypeScript;`
+        + ` need >= ${MIN_NODE.join(".")}. Re-run under a newer node, for example`
+        + ` \`mise exec node@lts -- pi-scheduler install\`.`,
+      );
+    }
+  }
+}
+
+function installLaunchd(logPath) {
+  mkdirSync(dirname(PLIST), { recursive: true });
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${NODE}</string>
+    <string>${SELF}</string>
+    <string>check</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${process.env.PATH ?? "/usr/bin:/bin"}</string>
+    <key>HOME</key>
+    <string>${homedir()}</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${logPath}</string>
+  <key>StandardErrorPath</key>
+  <string>${logPath}</string>
+</dict>
+</plist>
+`;
+  writeFileSync(PLIST, plist);
+
+  const domain = `gui/${process.getuid?.() ?? ""}`;
+  spawnSync("launchctl", ["bootout", `${domain}/${LABEL}`], { stdio: "ignore" });
+  const result = spawnSync("launchctl", ["bootstrap", domain, PLIST], { encoding: "utf8" });
+  if (result.error) die(`launchctl not found: ${result.error.message}`);
+  if (result.status !== 0) die(`launchctl bootstrap failed: ${result.stderr?.trim()}`);
+  process.stdout.write(`Installed ${LABEL} via launchd; logging to ${logPath}\n`);
+}
+
+function installSystemd() {
+  mkdirSync(SYSTEMD_DIR, { recursive: true });
+  writeFileSync(join(SYSTEMD_DIR, `${SYSTEMD_UNIT}.service`), `[Unit]
+Description=Run due pi scheduled tasks
+
+[Service]
+Type=oneshot
+Environment=PATH=${process.env.PATH ?? "/usr/bin:/bin"}
+ExecStart=${NODE} ${SELF} check
+`);
+  // Persistent=true is the systemd equivalent of launchd firing after wake:
+  // a laptop that was suspended over the scheduled minute still gets its tick.
+  writeFileSync(join(SYSTEMD_DIR, `${SYSTEMD_UNIT}.timer`), `[Unit]
+Description=Check for due pi scheduled tasks every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`);
+
+  const reload = spawnSync("systemctl", ["--user", "daemon-reload"], { encoding: "utf8" });
+  if (reload.error) die(`systemctl not found: ${reload.error.message}`);
+  const enable = spawnSync(
+    "systemctl",
+    ["--user", "enable", "--now", `${SYSTEMD_UNIT}.timer`],
+    { encoding: "utf8" },
+  );
+  if (enable.status !== 0) die(`systemctl enable failed: ${enable.stderr?.trim()}`);
+  process.stdout.write(
+    `Installed ${SYSTEMD_UNIT}.timer via systemd --user; logs in journalctl --user -u ${SYSTEMD_UNIT}\n`
+    + `If tasks must run while you are logged out: sudo loginctl enable-linger ${process.env.USER ?? ""}\n`,
+  );
+}
+
+function commandInstall() {
+  checkNodeVersion();
+  const logPath = join(schedulerDir(), "launchd.log");
+  mkdirSync(schedulerDir(), { recursive: true, mode: 0o700 });
+
+  if (process.platform === "darwin") installLaunchd(logPath);
+  else if (process.platform === "linux") installSystemd();
+  else die(`no scheduler integration for ${process.platform}; run \`pi-scheduler check\` from cron yourself`);
+
+  process.stdout.write(`Checking every 60s using ${NODE}\n`);
+}
+
+function commandUninstall() {
+  if (process.platform === "darwin") {
+    const domain = `gui/${process.getuid?.() ?? ""}`;
+    spawnSync("launchctl", ["bootout", `${domain}/${LABEL}`], { stdio: "ignore" });
+    try {
+      unlinkSync(PLIST);
+    } catch {
+      // Already gone.
+    }
+  } else if (process.platform === "linux") {
+    spawnSync("systemctl", ["--user", "disable", "--now", `${SYSTEMD_UNIT}.timer`], { stdio: "ignore" });
+    for (const suffix of ["timer", "service"]) {
+      try {
+        unlinkSync(join(SYSTEMD_DIR, `${SYSTEMD_UNIT}.${suffix}`));
+      } catch {
+        // Already gone.
+      }
+    }
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+  }
+  process.stdout.write(`Removed the scheduler tick; tasks are kept in ${schedulerDir()}\n`);
+}
+
+async function main() {
+  const [command, ...argv] = process.argv.slice(2);
+  const { flags, rest } = parseFlags(argv);
+
+  switch (command) {
+    case "check": return commandCheck();
+    case "list": case "ls": return commandList(flags);
+    case "show": return commandShow(rest[0] ?? die("show needs a task"));
+    case "add": case "create": return commandAdd(rest, flags);
+    case "edit": case "update": return commandEdit(rest[0] ?? die("edit needs a task"), flags);
+    case "run": return commandRun(rest[0] ?? die("run needs a task"));
+    case "runs": case "history": return commandRuns(rest[0] ?? die("runs needs a task"), flags.limit);
+    case "pause": return commandSetPaused(rest[0] ?? die("pause needs a task"), true);
+    case "resume": return commandSetPaused(rest[0] ?? die("resume needs a task"), false);
+    case "remove": case "rm": case "delete": return commandRemove(rest[0] ?? die("remove needs a task"));
+    case "prune": return commandPrune();
+    case "install": return commandInstall();
+    case "uninstall": return commandUninstall();
+    case undefined: case "help": case "-h": case "--help": return usage();
+    default: return die(`unknown command ${command}`);
+  }
+}
+
+try {
+  await main();
+} catch (error) {
+  die(error instanceof Error ? error.message : String(error));
+}
