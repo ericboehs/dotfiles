@@ -4,18 +4,18 @@
  * A scheduled run is a fresh, isolated `pi -p` process, never a message into an
  * existing session: pi appends to session JSONL without locking, so writing
  * into a session that might be open in a terminal risks interleaved entries.
- * Isolation also means the run cannot inherit whatever model, cwd or context a
+ * Isolation also means the run cannot inherit whatever model or context a
  * human happened to leave in a session three days ago.
  *
- * Discovery is off by default (`--no-extensions`, `--no-skills`,
- * `--no-prompt-templates`, `--no-context-files`) because a scheduled prompt
- * should behave the same in six months, and because it cuts startup to roughly
- * a second. A task can opt back in per feature via `enable`, which is how a
- * prompt like `/checkin` or one that leans on a skill gets what it needs.
- * Themes are always off: there is no TUI to theme.
+ * Discovery is on by default — the same extensions, skills, prompt templates
+ * and AGENTS.md an interactive pi would load — because a scheduled prompt
+ * should behave like the pi you would have typed it into. That is also what
+ * makes `/checkin` work as a scheduled prompt. `without` strips pieces back
+ * out. Themes are always off: there is no TUI to theme.
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 
 import {
@@ -114,7 +114,10 @@ export async function runTask(
 ): Promise<RunOutcome> {
   const piBin = options.piBin ?? process.env.PI_SCHEDULER_PI_BIN ?? "pi";
   const env = options.env ?? process.env;
-  const cwd = task.cwd ?? homedir();
+  // A task records the directory it was created in, so project extensions and
+  // AGENTS.md resolve the way they did when the prompt was written. $HOME is
+  // only the fallback for a task whose directory has since gone away.
+  const cwd = existsSync(task.cwd ?? "") ? (task.cwd as string) : homedir();
   const timeoutMs = task.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let result: CaptureResult;

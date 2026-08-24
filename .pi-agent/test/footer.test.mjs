@@ -39,6 +39,8 @@ async function mount(overrides = {}) {
   const sent = [];
   const notices = [];
   const widgets = [];
+  const guardianRequests = [];
+  const eventHandlers = new Map();
 
   const ctx = {
     hasUI: true,
@@ -55,7 +57,28 @@ async function mount(overrides = {}) {
     },
   };
 
+  const events = {
+    on: (name, handler) => {
+      const handlers = eventHandlers.get(name) ?? [];
+      handlers.push(handler);
+      eventHandlers.set(name, handlers);
+    },
+    emit: (name, data) => {
+      if (
+        name === "approval-guardian:set-temporary-bypass" &&
+        overrides.guardianEventSupport !== false
+      ) {
+        guardianRequests.push(data.active);
+        data.handled = true;
+        events.emit("approval-guardian:temporary-bypass-state", { active: data.active });
+        return;
+      }
+      for (const handler of eventHandlers.get(name) ?? []) handler(data);
+    },
+  };
+
   const pi = {
+    events,
     exec: async (command, args, options) => {
       execCalls.push({ command, args, options });
       const stdout = args[0] === "rev-list" ? revList : porcelain;
@@ -120,6 +143,7 @@ async function mount(overrides = {}) {
     sent,
     notices,
     widgets,
+    guardianRequests,
     ctx,
     /** Run a registered slash command with the same ctx pi would pass. */
     run: (name, args = "") => pi.commands[name].handler(args, ctx),
@@ -448,15 +472,13 @@ test("/bypass drives the guardian and shows a bright red marker", async () => {
   assert.doesNotMatch(ui.plain()[0], /bypass/);
 
   await ui.run("bypass");
-  assert.deepEqual(ui.sent, [
-    { text: "/approval-guardian bypass", options: { expandPromptTemplates: true } },
-  ]);
+  assert.deepEqual(ui.guardianRequests, [true]);
   // Last segment before the flex gap, after cost and the inline statuses.
   assert.match(ui.plain()[0], /\$0\.5123 codex 12% bypass$/);
   assert.match(ui.raw()[0], /\x1B\[91mbypass\x1B\[39m/, "bright red");
 
   await ui.run("bypass");
-  assert.equal(ui.sent.at(-1).text, "/approval-guardian enable");
+  assert.deepEqual(ui.guardianRequests, [true, false]);
   assert.doesNotMatch(ui.plain()[0], /bypass/);
 });
 
@@ -464,23 +486,32 @@ test("/bypass takes explicit on/off and rejects anything else", async () => {
   const ui = await mount();
 
   await ui.run("bypass", "off");
-  assert.deepEqual(ui.sent, [], "already enabled, nothing to do");
+  assert.deepEqual(ui.guardianRequests, [], "already enabled, nothing to do");
   assert.match(ui.notices.at(-1).message, /already enabled/);
 
   await ui.run("bypass", "on");
-  assert.equal(ui.sent.at(-1).text, "/approval-guardian bypass");
+  assert.deepEqual(ui.guardianRequests, [true]);
   await ui.run("bypass", "on");
-  assert.equal(ui.sent.length, 1, "already bypassed, nothing to do");
+  assert.equal(ui.guardianRequests.length, 1, "already bypassed, nothing to do");
 
   await ui.run("bypass", "maybe");
   assert.match(ui.notices.at(-1).message, /Usage: \/bypass/);
-  assert.equal(ui.sent.length, 1);
+  assert.equal(ui.guardianRequests.length, 1);
 });
 
 test("/bypass refuses to run without the guardian loaded", async () => {
   const ui = await mount({ commands: [{ name: "footer" }] });
   await ui.run("bypass");
-  assert.deepEqual(ui.sent, [], "must not reach the LLM as a plain message");
+  assert.deepEqual(ui.guardianRequests, [], "must not reach Guardian control");
+  assert.equal(ui.notices.at(-1).level, "error");
+  assert.doesNotMatch(ui.plain()[0], /bypass/);
+});
+
+test("/bypass refuses a guardian without immediate control support", async () => {
+  const ui = await mount({ guardianEventSupport: false });
+  await ui.run("bypass");
+  assert.deepEqual(ui.guardianRequests, []);
+  assert.match(ui.notices.at(-1).message, /does not support immediate bypass/);
   assert.equal(ui.notices.at(-1).level, "error");
   assert.doesNotMatch(ui.plain()[0], /bypass/);
 });

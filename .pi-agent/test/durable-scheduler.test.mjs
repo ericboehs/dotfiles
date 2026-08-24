@@ -8,7 +8,7 @@ import durableScheduler, {
   parseLeadingFlags,
   tokenize,
 } from "../extensions/durable-scheduler.ts";
-import { readRegistry, writeRegistry, FEATURES } from "../extensions/lib/task-registry.ts";
+import { readRegistry, writeRegistry } from "../extensions/lib/task-registry.ts";
 import { piArgsFor } from "../extensions/lib/runner.ts";
 
 function withTempDir(t) {
@@ -30,6 +30,7 @@ function mount() {
 
   const ctx = {
     hasUI: true,
+    cwd: "/tmp/some-project",
     ui: {
       notify: (message, level = "info") => notices.push({ message, level }),
       confirm: async () => true,
@@ -113,7 +114,15 @@ test("/schedule writes a durable task with its own model and delivery", async (t
   assert.equal(task.model, "cerebras/gpt-oss-120b:low");
   assert.equal(task.deliver, "slack-noti");
   assert.equal(task.prompt, "check the kids' grades");
-  assert.equal(task.tools, undefined, "tools stay off unless asked for");
+  assert.equal(task.without, undefined, "a full pi by default, like the one you typed into");
+});
+
+test("a task records the directory it was created in", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name here daily 9a :: x");
+  assert.equal(readRegistry().tasks[0].cwd, "/tmp/some-project", "project extensions and AGENTS.md should be the ones in mind at creation");
 });
 
 test("/schedule reports the catch-up policy it chose, since the Mac sleeps", async (t) => {
@@ -222,21 +231,84 @@ test("/schedule show explains what the run will actually be", async (t) => {
   const shown = ui.last().message;
   assert.match(shown, /schedule\s+daily 15:30/);
   assert.match(shown, /model\s+cerebras\/gpt-oss-120b:low/);
-  assert.match(shown, /runs with\s+nothing \(bare pi, no tools\)/);
+  assert.match(shown, /runs with\s+everything, same as an interactive pi/);
   assert.match(shown, /last run\s+never/);
 });
 
-test("--with re-enables discovery, so a task can run a skill or a /template", async (t) => {
+test("a scheduled run gets the same setup as an interactive pi, by default", async (t) => {
   withTempDir(t);
   const ui = mount();
 
-  await ui.run("--name checkin --with templates,tools daily 9a :: /checkin");
-  const [task] = readRegistry().tasks;
-  assert.deepEqual(task.enable, ["templates", "tools"]);
-  assert.equal(task.tools, true, "--with settles tools too, rather than leaving it stale");
+  await ui.run("--name checkin daily 9a :: /checkin");
+  const args = piArgsFor(readRegistry().tasks[0]);
 
-  await ui.run("show checkin");
-  assert.match(ui.last().message, /runs with\s+templates, tools/);
+  for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-tools"]) {
+    assert.ok(!args.includes(flag), `${flag} should not be passed by default`);
+  }
+  // No TUI to theme, and an unattended daily job should not grow a session file.
+  assert.ok(args.includes("--no-themes"));
+  assert.ok(args.includes("--no-session"));
+});
+
+test("--without strips one piece and leaves the rest of the setup alone", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name summary --without tools daily 9a :: summarize this");
+  const task = readRegistry().tasks[0];
+  assert.deepEqual(task.without, ["tools"]);
+
+  const args = piArgsFor(task);
+  assert.ok(args.includes("--no-tools"), "answer-only, as asked");
+  assert.ok(!args.includes("--no-skills"), "everything else is still loaded");
+
+  await ui.run("show summary");
+  assert.match(ui.last().message, /runs with\s+everything except tools/);
+});
+
+test("--with is an allowlist, so --with none is a bare pi", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name bare --with none daily 9a :: x");
+  const args = piArgsFor(readRegistry().tasks[0]);
+  for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-tools"]) {
+    assert.ok(args.includes(flag), `--with none should pass ${flag}`);
+  }
+
+  await ui.run("--name narrow --with templates,tools daily 9a :: /checkin");
+  const narrow = piArgsFor(readRegistry().tasks.find((task) => task.name === "narrow"));
+  assert.ok(!narrow.includes("--no-prompt-templates"));
+  assert.ok(!narrow.includes("--no-tools"));
+  assert.ok(narrow.includes("--no-skills"), "anything not named is off");
+
+  await ui.run("show narrow");
+  assert.match(ui.last().message, /everything except extensions, skills, context/);
+});
+
+test("a task written before the default flipped keeps the setup it was given", async (t) => {
+  withTempDir(t);
+  mount();
+  // Old inverted field: an allowlist of what to switch on. Reading it as
+  // "nothing disabled" would hand an old task tools it was never given.
+  writeRegistry({
+    version: 1,
+    tasks: [{
+      id: "bbbb2222",
+      name: "legacy",
+      kind: "daily",
+      dailyAt: "09:00",
+      prompt: "x",
+      enable: ["templates"],
+      createdAt: 0,
+      nextRunAt: Date.now() + 60_000,
+    }],
+  });
+
+  const args = piArgsFor(readRegistry().tasks[0]);
+  assert.ok(args.includes("--no-tools"), "legacy task had no tools and must not gain them");
+  assert.ok(args.includes("--no-skills"));
+  assert.ok(!args.includes("--no-prompt-templates"), "what it did have is preserved");
 });
 
 test("--with all turns everything on, and singular or plural spellings both work", async (t) => {
@@ -244,67 +316,42 @@ test("--with all turns everything on, and singular or plural spellings both work
   const ui = mount();
 
   await ui.run("--name everything --with all daily 9a :: x");
-  assert.deepEqual(readRegistry().tasks[0].enable, FEATURES.slice());
+  assert.deepEqual(readRegistry().tasks[0].without, [], "nothing switched off");
 
-  await ui.run("--name loose --with skill,TEMPLATE,tools daily 9a :: x");
+  await ui.run("--name loose --without skill,TEMPLATE,tools daily 9a :: x");
   assert.deepEqual(
-    readRegistry().tasks.find((task) => task.name === "loose").enable,
+    readRegistry().tasks.find((task) => task.name === "loose").without,
     ["skills", "templates", "tools"],
     "singular and shouty spellings are accepted; nobody should have to guess plurality",
   );
 
   // Spaces inside the list need quoting, same as --deliver, because the slash
   // command is tokenized on whitespace before flags are read.
-  await ui.run("--name spaced --with 'skills, tools' daily 9a :: x");
+  await ui.run("--name spaced --without 'skills, tools' daily 9a :: x");
   assert.deepEqual(
-    readRegistry().tasks.find((task) => task.name === "spaced").enable,
+    readRegistry().tasks.find((task) => task.name === "spaced").without,
     ["skills", "tools"],
   );
 });
 
-test("show warns when discovery is on but tools are not, since skills would be inert", async (t) => {
+test("show names what is missing, so an inert skill is visible before 9am", async (t) => {
   withTempDir(t);
   const ui = mount();
 
-  await ui.run("--name quiet --with skills daily 9a :: x");
+  await ui.run("--name quiet --without tools,extensions daily 9a :: x");
   await ui.run("show quiet");
-  assert.match(ui.last().message, /runs with\s+skills \(but no tools\)/);
+  assert.match(ui.last().message, /runs with\s+everything except extensions, tools/);
 });
 
 test("a misspelled feature is refused and names the ones that exist", async (t) => {
   withTempDir(t);
   const ui = mount();
 
-  await ui.run("--with skillz daily 9a :: x");
+  await ui.run("--without skillz daily 9a :: x");
   assert.equal(ui.last().level, "error");
-  assert.match(ui.last().message, /does not know "skillz"/);
+  assert.match(ui.last().message, /--without does not know "skillz"/);
   assert.match(ui.last().message, /skills/);
   assert.deepEqual(readRegistry().tasks, []);
-});
-
-test("discovery flags become the pi arguments the run is actually launched with", async (t) => {
-  withTempDir(t);
-  const ui = mount();
-
-  await ui.run("--name bare daily 9a :: x");
-  await ui.run("--name rich --with templates,tools daily 9a :: /checkin");
-  const tasks = readRegistry().tasks;
-  const bare = piArgsFor(tasks.find((task) => task.name === "bare"));
-  const rich = piArgsFor(tasks.find((task) => task.name === "rich"));
-
-  for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-tools"]) {
-    assert.ok(bare.includes(flag), `default run should pass ${flag}`);
-  }
-  assert.ok(!rich.includes("--no-prompt-templates"), "templates were asked for");
-  assert.ok(!rich.includes("--no-tools"), "tools were asked for");
-  assert.ok(rich.includes("--no-skills"), "skills were not asked for and stay off");
-
-  // No TUI to theme and nothing should accumulate a session file, whatever else
-  // is enabled.
-  for (const args of [bare, rich]) {
-    assert.ok(args.includes("--no-themes"));
-    assert.ok(args.includes("--no-session"));
-  }
 });
 
 test("/schedule remove takes the task out of the registry", async (t) => {
@@ -345,7 +392,7 @@ test("/schedule help documents every option the parser accepts", async (t) => {
 
   // The usage line lists flag names; help has to say what each one is for, or
   // the flags are undiscoverable. Keep the two from drifting apart.
-  for (const flag of ["--name", "--model", "--cwd", "--with", "--tools", "--deliver", "--misfire", "--timeout"]) {
+  for (const flag of ["--name", "--model", "--cwd", "--with", "--without", "--deliver", "--misfire", "--timeout"]) {
     assert.match(help, new RegExp(`${flag}\\b`), `${flag} is undocumented`);
   }
   for (const subcommand of ["list", "show", "runs", "run", "pause", "resume", "remove"]) {
@@ -362,8 +409,8 @@ test("/schedule help explains the choices a caller cannot guess", async (t) => {
 
   assert.match(help, /must come before the schedule/, "flag position is not guessable");
   assert.match(help, /skip[\s\S]*always[\s\S]*catch up/, "misfire policies are enumerated");
-  assert.match(help, /Default is none/, "discovery defaulting off is a safety property worth stating");
-  assert.match(help, /inert without tools/, "skills without tools is the trap worth naming");
+  assert.match(help, /what an interactive pi would/, "the default is the whole mental model");
+  assert.match(help, /answer-only/, "--without tools is the safety valve worth naming");
   assert.match(help, /\/checkin/, "running a prompt template is the non-obvious capability");
   assert.match(help, /stdin/, "deliver is the only way output leaves an unattended run");
   assert.match(help, /default 2h/);

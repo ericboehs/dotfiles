@@ -227,8 +227,9 @@ depend on a terminal being left running.
 /schedule run <id> | pause <id> | resume <id> | remove <id>
 ```
 
-Options go **first**, before the schedule: `--name --model --cwd --with
---deliver --misfire --timeout`. Flags are only recognized while they lead,
+Options go **first**, before the schedule: `--name --model --cwd
+--with/--without --deliver --misfire --timeout`. Flags are only recognized
+while they lead,
 because the schedule itself is variable length (a cron expression is five bare
 words) and there is otherwise no reliable place to stop scanning — so a prompt
 containing `--force` is never mistaken for an option.
@@ -250,28 +251,33 @@ pi-scheduler check            # what the timer calls
 spawned when a task is actually due — a due run measured end to end at ~0.65s
 against `cerebras/gpt-oss-120b:low`.
 
-Each run is a fresh `pi -p --no-session` with discovery off by default
-(`--no-extensions --no-skills --no-prompt-templates --no-context-files
---no-tools`), which keeps a run reproducible and starts it in about a second.
-`--with` turns pieces back on when the prompt needs your setup:
+Each run is a fresh `pi -p` that loads **what an interactive pi would**: your
+extensions, skills, prompt templates, and the `AGENTS.md` of the directory the
+task was created in. A task records its cwd at creation, so project context is
+the context you had in mind when you wrote the prompt. That means the prompt
+can simply be a slash command:
 
 ```sh
-pi-scheduler add --name checkin --with templates,tools --cwd ~/Code/some/repo \
-  daily 9a :: /checkin
+cd ~/Code/some/repo
+pi-scheduler add --name checkin daily 9a :: /checkin
 ```
 
-That runs a **prompt template as the scheduled prompt** — `/checkin` expands
-exactly as it would if you typed it. `--with` takes `extensions`, `skills`,
-`templates`, `context` (AGENTS.md), `tools`, plus `all` and `none`. Most of
-them are inert without `tools`, since a skill that cannot run a command can
-only talk about running one; `show` says `skills (but no tools)` rather than
-letting that pass silently. Themes have no `--with`: there is no TUI to theme.
+Full discovery costs about 0.3s more at startup than a stripped one, which is
+nothing for something that runs once a day, and the alternative — a scheduled
+run that behaves unlike the pi you tested the prompt in — is a worse trade.
+
+`--without` strips pieces back out: `extensions`, `skills`, `templates`,
+`context`, `tools`. `--without tools` makes a run answer-only, worth doing for
+anything that just summarizes. `--with` is the inverse allowlist, and `--with
+none` is a bare pi — fastest, and immune to a broken extension. Themes have no
+switch and are always off: there is no TUI to theme, and `--no-session` is
+always passed so an unattended daily job cannot grow a session file forever.
 
 Runs are never messages into an existing session: pi appends to session JSONL
 without file locking, so writing into a session that might be open in a
-terminal risks interleaved entries. Isolation also means a task cannot inherit
-whatever model or cwd a human left in a session three days ago — hence
-per-task `--model` and `--cwd`.
+terminal risks interleaved entries. Each run is its own pi, which is also why
+a task carries its own `--model` rather than inheriting whatever a human left
+selected three days ago.
 
 `--deliver` is a shell command that receives the output on stdin and in
 `$PI_SCHEDULER_OUTPUT`; the prompt and the result both travel by stdin rather

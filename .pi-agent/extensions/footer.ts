@@ -92,8 +92,8 @@ const CONTEXT_DANGER_PERCENT = 90;
 /** pi-approval-guardian's persistent below-editor warning, replaced by our marker. */
 const GUARDIAN_COMMAND = "approval-guardian";
 const GUARDIAN_WIDGET_KEY = "approval-guardian-bypass";
-// The guardian awaits waitForIdle() before painting, so a single clear races it.
-const GUARDIAN_CLEAR_DELAYS_MS = [100, 600, 2_500];
+const GUARDIAN_BYPASS_CONTROL_EVENT = "approval-guardian:set-temporary-bypass";
+const GUARDIAN_BYPASS_STATE_EVENT = "approval-guardian:temporary-bypass-state";
 
 const BLUE = 34;
 const MAGENTA = 35;
@@ -730,6 +730,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   const updateReady = update.init().catch(() => {});
   let enabled = true;
   let bypassed = false;
+  let runtimeContext: ExtensionContext | undefined;
   let repaint: (() => void) | undefined;
   /** Live widget state while the scrollback banner is mounted. Its "unseen"
    * field is the single source of truth for the new-message count; renders
@@ -876,14 +877,21 @@ export default function footerExtension(pi: ExtensionAPI): void {
    * visible; the footer marker is just as persistent, so the property holds —
    * but only while the footer is on, hence the `enabled` guard.
    */
-  function suppressGuardianWidget(ctx: ExtensionCommandContext): void {
-    if (!enabled || !ctx.hasUI) return;
-    for (const delay of GUARDIAN_CLEAR_DELAYS_MS) {
-      setTimeout(() => {
-        if (bypassed && enabled) ctx.ui.setWidget(GUARDIAN_WIDGET_KEY, undefined);
-      }, delay).unref?.();
-    }
+  function suppressGuardianWidget(ctx: ExtensionContext | ExtensionCommandContext): void {
+    if (!enabled || !ctx.hasUI || !bypassed) return;
+    ctx.ui.setWidget(GUARDIAN_WIDGET_KEY, undefined);
   }
+
+  pi.events.on(GUARDIAN_BYPASS_STATE_EVENT, (state: unknown) => {
+    if (
+      !state ||
+      typeof state !== "object" ||
+      typeof (state as { active?: unknown }).active !== "boolean"
+    ) return;
+    bypassed = (state as { active: boolean }).active;
+    if (bypassed && runtimeContext) suppressGuardianWidget(runtimeContext);
+    repaint?.();
+  });
 
   pi.registerCommand("bypass", {
     description: "Toggle Approval Guardian bypass, shown in the footer",
@@ -908,12 +916,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      bypassed = next;
-      pi.sendUserMessage(`/${GUARDIAN_COMMAND} ${next ? "bypass" : "enable"}`, {
-        expandPromptTemplates: true,
-      });
+      const request = { active: next, handled: false };
+      pi.events.emit(GUARDIAN_BYPASS_CONTROL_EVENT, request);
+      if (!request.handled) {
+        ctx.ui.notify(
+          "Installed Approval Guardian does not support immediate bypass control; update to the configured fork and /reload",
+          "error",
+        );
+        return;
+      }
       if (next) suppressGuardianWidget(ctx);
-      repaint?.();
     },
   });
 
@@ -1017,6 +1029,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (event, ctx) => {
     await updateReady;
+    runtimeContext = ctx;
     // The guardian's bypass resets when the session runtime reloads.
     bypassed = false;
     if (unseenState) unseenState.unseen = 0;

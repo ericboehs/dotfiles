@@ -52,7 +52,7 @@ export interface ParsedFlags {
   rest: string;
 }
 
-const VALUE_FLAGS = new Set(["name", "model", "cwd", "with", "deliver", "misfire", "timeout"]);
+const VALUE_FLAGS = new Set(["name", "model", "cwd", "with", "without", "deliver", "misfire", "timeout"]);
 const BOOLEAN_FLAGS = new Set(["tools", "no-tools", "no-deliver"]);
 
 /**
@@ -105,16 +105,23 @@ function applyFlags(
   if (typeof flags.name === "string") updated.name = flags.name;
   if (typeof flags.model === "string") updated.model = flags.model;
   if (typeof flags.cwd === "string") updated.cwd = flags.cwd;
-  if (flags.tools === true) updated.tools = true;
-  if (flags["no-tools"] === true) updated.tools = false;
+  if (flags.tools === true) updated.without = (updated.without ?? []).filter((f) => f !== "tools");
+  if (flags["no-tools"] === true) {
+    updated.without = [...new Set([...(updated.without ?? []), "tools" as const])];
+  }
   if (typeof flags.with === "string") {
     const parsed = parseFeatures(flags.with);
-    if ("error" in parsed) throw new Error(parsed.error);
-    updated.enable = parsed.features;
-    // --with is the whole answer, so it also settles tools rather than leaving
-    // a stale --tools from an earlier edit half-applied.
-    updated.tools = parsed.features.includes("tools");
+    if ("error" in parsed) throw new Error(`--with ${parsed.error}`);
+    // An allowlist: everything not named is switched off.
+    updated.without = FEATURES.filter((feature) => !parsed.features.includes(feature));
   }
+  if (typeof flags.without === "string") {
+    const parsed = parseFeatures(flags.without);
+    if ("error" in parsed) throw new Error(`--without ${parsed.error}`);
+    updated.without = parsed.features;
+  }
+  delete updated.enable;
+  delete updated.tools;
   if (flags["no-deliver"] === true) delete updated.deliver;
   if (typeof flags.deliver === "string") updated.deliver = flags.deliver;
 
@@ -140,12 +147,13 @@ function describeMisfire(task: DurableTask): string {
   return `catch up within ${formatDuration(policy)}`;
 }
 
-/** What discovery this run gets back, phrased for someone reading `show`. */
+/** What discovery this run gets, phrased for someone reading `show`. */
 export function describeFeatures(task: DurableTask): string {
   const enabled = enabledFeatures(task);
+  const off = FEATURES.filter((feature) => !enabled.has(feature));
+  if (off.length === 0) return "everything, same as an interactive pi";
   if (enabled.size === 0) return "nothing (bare pi, no tools)";
-  const listed = FEATURES.filter((feature) => enabled.has(feature)).join(", ");
-  return enabled.has("tools") ? listed : `${listed} (but no tools)`;
+  return `everything except ${off.join(", ")}`;
 }
 
 /**
@@ -180,7 +188,8 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "  /schedule list [all] | show <id> | runs <id>",
         "  /schedule run <id> | pause <id> | resume <id> | remove <id>",
         "",
-        "Options go first: --name --model --cwd --with --deliver --misfire --timeout",
+        "Options go first: --name --model --cwd --with/--without --deliver",
+        "                  --misfire --timeout",
         "  /schedule --name grades --model cerebras/gpt-oss-120b:low daily 15:30 :: check grades",
         "",
         "/schedule help explains what each option does.",
@@ -200,6 +209,11 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "minute. When a task is due it starts a fresh pi, which then exits. Nothing",
         "stays resident, and no model runs on the ticks where nothing is due.",
         "",
+        "A run loads what an interactive pi would: your extensions, skills, prompt",
+        "templates, the AGENTS.md of the directory the task was created in, and",
+        "tools. So the prompt can be a slash command, and behaves as if you typed",
+        "it. It does not join an existing session; each run is its own pi.",
+        "",
         "SCHEDULES                        :: separates the schedule from the prompt",
         "  daily 15:30   daily 9a         every day at that local time",
         "  every 30m     hourly           repeating; 1m minimum",
@@ -212,21 +226,20 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "                      Worth setting: runs are isolated, so there is no",
         "                      session to inherit a model from, and a summarising",
         "                      job rarely needs an expensive one.",
-        "  --cwd <dir>         directory to run in (default: this session's)",
-        "  --with <list>       discovery to switch back on, comma separated:",
+        "  --cwd <dir>         directory to run in. Defaults to where you created",
+        "                      the task, so project extensions and AGENTS.md are the",
+        "                      ones you had in mind.",
+        "  --without <list>    drop discovery you do not want, comma separated:",
         "                        extensions  your pi extensions",
         "                        skills      SKILL.md files",
-        "                        templates   prompt templates, so the prompt can be",
-        "                                    a slash command such as /checkin",
+        "                        templates   prompt templates (/checkin and friends)",
         "                        context     AGENTS.md and CLAUDE.md",
-        "                        tools       let the model act, not just answer",
-        "                        all, none",
-        "                      Default is none: a bare pi starts in about a second",
-        "                      and behaves the same in six months. Turn things on",
-        "                      when the prompt needs your setup, and remember most",
-        "                      of them are inert without tools.",
-        "                        --with templates,tools   then prompt: /checkin",
-        "  --tools             shorthand for --with tools",
+        "                        tools       the model's ability to act",
+        "                      --without tools makes a run answer-only, which is",
+        "                      worth doing for anything that just summarises.",
+        "  --with <list>       the inverse: load only what you name, nothing else.",
+        "                      --with none is a bare pi, about 0.3s faster and",
+        "                      immune to a broken extension.",
         "  --deliver <cmd>     shell command receiving the output on stdin and in",
         "                      $PI_SCHEDULER_OUTPUT. Without it the only trace of a",
         "                      run is '/schedule runs <id>', since nobody is watching.",
@@ -297,8 +310,7 @@ export default function durableScheduler(pi: ExtensionAPI): void {
             `next run  ${task.paused ? "paused" : new Date(task.nextRunAt).toLocaleString()}`,
             `model     ${task.model ?? "pi default"}`,
             `runs with ${describeFeatures(task)}`,
-            `cwd       ${task.cwd ?? "$HOME"}`,
-            `deliver   ${task.deliver ?? "—"}`,
+            `cwd       ${task.cwd ?? "$HOME"}`,            `deliver   ${task.deliver ?? "—"}`,
             `misfire   ${describeMisfire(task)}`,
             `timeout   ${formatDuration(task.timeoutMs ?? DEFAULT_TIMEOUT_MS)}`,
             `last run  ${task.lastRunAt ? `${new Date(task.lastRunAt).toLocaleString()} (${task.lastStatus})` : "never"}`,
@@ -423,13 +435,20 @@ export default function durableScheduler(pi: ExtensionAPI): void {
             ...parsed.schedule,
             id: makeTaskId(registry.tasks),
             prompt: parsed.prompt,
+            // Recorded now, not resolved at run time: the run should see the
+            // project you were sitting in when you wrote the prompt.
+            cwd: ctx.cwd,
             createdAt: Date.now(),
             nextRunAt: parsed.nextRunAt,
           }, parsedFlags.flags);
 
           registry.tasks.push(applied);
           writeRegistry(registry);
-          notice(ctx, `${formatTask(applied)}\n${describeMisfire(applied)}`);
+          notice(ctx, [
+            formatTask(applied),
+            describeMisfire(applied),
+            `runs in ${applied.cwd} with ${describeFeatures(applied)}`,
+          ].join("\n"));
         });
       } catch (error) {
         notice(ctx, error instanceof Error ? error.message : String(error), "error");

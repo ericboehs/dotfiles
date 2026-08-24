@@ -64,20 +64,15 @@ export type RunStatus = "ok" | "error" | "timeout" | "skipped";
  * window in milliseconds past `nextRunAt` within which a late run is still
  * wanted. Late runs coalesce: one catch-up, never a replay of every slot.
  */
-/**
- * What this task actually runs with, folding in the legacy `tools` boolean that
- * predates `enable`.
- */
-export function enabledFeatures(task: DurableTask): Set<Feature> {
-  const features = new Set<Feature>(task.enable ?? []);
-  if (task.tools) features.add("tools");
-  return features;
-}
-
 export type MisfirePolicy = "skip" | "always" | number;
 
 /**
- * Discovery a scheduled run can opt back into.
+ * Discovery a scheduled run can switch off.
+ *
+ * The default is everything on, because a scheduled run should behave like the
+ * pi you would have typed the prompt into: your extensions, your skills, your
+ * prompt templates, the project's AGENTS.md. Full discovery costs roughly 0.3s
+ * more at startup, which is nothing for something that runs once a day.
  *
  * Themes are deliberately absent: a headless run has no TUI to theme, so the
  * flag would be a knob that does nothing.
@@ -86,15 +81,15 @@ export const FEATURES = ["extensions", "skills", "templates", "context", "tools"
 export type Feature = (typeof FEATURES)[number];
 
 /**
- * Parse a `--with` list. Returns an error string rather than throwing, so both
- * the slash command and the CLI can report it the same way.
+ * Parse a `--with` / `--without` list. Returns an error string rather than
+ * throwing, so both the slash command and the CLI can report it the same way.
  */
 export function parseFeatures(input: string): { features: Feature[] } | { error: string } {
   const requested = input
     .split(",")
     .map((part) => part.trim().toLowerCase())
     .filter((part) => part.length > 0);
-  if (requested.length === 0) return { error: `--with wants ${FEATURES.join(", ")}, or all` };
+  if (requested.length === 0) return { error: `wants ${FEATURES.join(", ")}, or all / none` };
 
   const features = new Set<Feature>();
   for (const item of requested) {
@@ -107,11 +102,28 @@ export function parseFeatures(input: string): { features: Feature[] } | { error:
       (feature) => feature === item || `${feature}s` === item || feature === `${item}s`,
     );
     if (!match) {
-      return { error: `--with does not know "${item}"; try ${FEATURES.join(", ")}, all or none` };
+      return { error: `does not know "${item}"; try ${FEATURES.join(", ")}, all or none` };
     }
     features.add(match);
   }
   return { features: FEATURES.filter((feature) => features.has(feature)) };
+}
+
+/**
+ * What this task actually runs with: everything, less whatever it turned off.
+ *
+ * `enable` is the older, inverted field, from when scheduled runs defaulted to
+ * a bare pi. Honour it if a registry predates the switch, so a task written
+ * then does not silently gain tools it was never given.
+ */
+export function enabledFeatures(task: DurableTask): Set<Feature> {
+  if (task.without === undefined && task.enable !== undefined) {
+    const legacy = new Set<Feature>(task.enable);
+    if (task.tools) legacy.add("tools");
+    return legacy;
+  }
+  const off = new Set<Feature>(task.without ?? []);
+  return new Set(FEATURES.filter((feature) => !off.has(feature)));
 }
 
 export interface DurableTask extends Schedule {
@@ -121,13 +133,14 @@ export interface DurableTask extends Schedule {
   /** Model pattern as pi's --model takes it, e.g. "cerebras/gpt-oss-120b:low". */
   model?: string;
   cwd?: string;
-  /** Off by default: most scheduled prompts summarize data gathered by `deliver`-style scripts. */
+  /** Legacy: superseded by `without`. Kept so a task written before the flip still runs. */
   tools?: boolean;
   /**
-   * Discovery to switch back on for this run. Empty means a bare pi, which is
-   * reproducible and starts in about a second. Opt in when the prompt needs
-   * your setup — a skill, or a prompt template invoked as `/checkin`.
+   * Discovery switched off for this run. Absent or empty means a full pi — the
+   * same extensions, skills, templates and AGENTS.md you get interactively.
    */
+  without?: Feature[];
+  /** Legacy inverted form of `without`, from when runs defaulted to a bare pi. */
   enable?: Feature[];
   /** Shell command receiving the run output on stdin and in $PI_SCHEDULER_OUTPUT. */
   deliver?: string;

@@ -27,11 +27,12 @@
  * Flags for add/edit:
  *   --name <name>        stable handle, nicer than the generated id
  *   --model <ref>        pi --model pattern, e.g. cerebras/gpt-oss-120b:low
- *   --cwd <dir>          working directory for the run (default: $HOME)
- *   --with <list>        discovery to re-enable: extensions, skills, templates,
- *                        context, tools; or all / none (default none)
- *   --tools              shorthand for --with tools
- *   --no-tools
+ *   --cwd <dir>          working directory (default: where you ran this)
+ *   --without <list>     drop discovery: extensions, skills, templates,
+ *                        context, tools. Default is a full pi.
+ *   --with <list>        inverse: load only these; --with none is a bare pi
+ *   --tools              shorthand for keeping tools (they are on by default)
+ *   --no-tools           shorthand for --without tools
  *   --deliver <shell>    receives the output on stdin and in $PI_SCHEDULER_OUTPUT
  *   --no-deliver
  *   --misfire <policy>   skip | always | a duration such as 2h (default 2h)
@@ -119,7 +120,7 @@ function usage() {
     "  prune                     drop run logs for tasks that no longer exist",
     "  install|uninstall         manage the per-minute tick (launchd or systemd)",
     "",
-    "Flags: --name --model --cwd --with <all|skills,templates,tools,...>",
+    "Flags: --name --model --cwd --without <tools,extensions,...> --with <none|...>",
     "       --tools/--no-tools --deliver/--no-deliver",
     "       --misfire <skip|always|2h> --timeout <15m> --prompt --schedule",
   ].join("\n");
@@ -164,22 +165,30 @@ function parseMisfire(value) {
 /** What discovery this run gets back, phrased for someone reading `show`. */
 function describeFeatures(task) {
   const enabled = enabledFeatures(task);
+  const off = FEATURES.filter((feature) => !enabled.has(feature));
+  if (off.length === 0) return "everything, same as an interactive pi";
   if (enabled.size === 0) return "nothing (bare pi, no tools)";
-  const listed = FEATURES.filter((feature) => enabled.has(feature)).join(", ");
-  return enabled.has("tools") ? listed : `${listed} (but no tools)`;
+  return `everything except ${off.join(", ")}`;
 }
 
 function applyFlags(task, flags) {
   if (flags.name !== undefined) task.name = flags.name;
   if (flags.model !== undefined) task.model = flags.model;
   if (flags.cwd !== undefined) task.cwd = flags.cwd;
-  if (flags.tools !== undefined) task.tools = flags.tools;
+  if (flags.tools === true) task.without = (task.without ?? []).filter((f) => f !== "tools");
+  if (flags.tools === false) task.without = [...new Set([...(task.without ?? []), "tools"])];
   if (flags.with !== undefined) {
     const parsed = parseFeatures(flags.with);
-    if (parsed.error) die(parsed.error);
-    task.enable = parsed.features;
-    task.tools = parsed.features.includes("tools");
+    if (parsed.error) die(`--with ${parsed.error}`);
+    task.without = FEATURES.filter((feature) => !parsed.features.includes(feature));
   }
+  if (flags.without !== undefined) {
+    const parsed = parseFeatures(flags.without);
+    if (parsed.error) die(`--without ${parsed.error}`);
+    task.without = parsed.features;
+  }
+  delete task.enable;
+  delete task.tools;
   if (flags.deliver === null) delete task.deliver;
   else if (flags.deliver !== undefined) task.deliver = flags.deliver;
   const misfire = parseMisfire(flags.misfire);
@@ -344,12 +353,15 @@ function commandAdd(rest, flags) {
       ...parsed.schedule,
       id: makeTaskId(registry.tasks),
       prompt: parsed.prompt,
+      // Where you were standing when you wrote it, so project extensions and
+      // AGENTS.md are the ones you had in mind.
+      cwd: process.cwd(),
       createdAt: Date.now(),
       nextRunAt: parsed.nextRunAt,
     }, flags);
     registry.tasks.push(task);
     writeRegistry(registry);
-    process.stdout.write(`${formatTask(task)}\n`);
+    process.stdout.write(`${formatTask(task)}\nruns in ${task.cwd} with ${describeFeatures(task)}\n`);
   });
 
   if (!existsSync(PLIST) && process.platform === "darwin") {
