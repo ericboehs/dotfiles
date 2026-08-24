@@ -392,7 +392,7 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:pi-assistant", "bootstrap:claude"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:pi-assistant", "bootstrap:va-context", "bootstrap:claude"]
 
 [tasks."bootstrap:linux-shims"]
 description = "Debian binary-name shims, lsd fallback, zsh login shell"
@@ -840,6 +840,53 @@ done
 ln -sfn "$root/.pi-agent/extensions" "$profile/extensions"
 
 echo "bootstrap:pi-assistant: linked $profile from $source_dir"
+'''
+
+[tasks."bootstrap:va-context"]
+description = "Link the work context file above ~/Code/va.ghe.com, when one is configured"
+run = '''
+# Agents load AGENTS.md from every parent directory of the working directory,
+# so one file above the work checkouts covers every repo under them without
+# putting anything inside a repo the team shares. Project .pi/settings.json
+# would not work here: pi reads it from the working directory only, never from
+# an ancestor, so a settings file at that level would apply to exactly one cd.
+#
+# ~/Code/va.ghe.com is not a repo, so the file itself is tracked elsewhere and
+# linked in. It names hosts, systems, and teammates, so "elsewhere" is private:
+# put its path in .pi-agent/va-context-source, which .pi-agent/.gitignore
+# already excludes.
+root="${MISE_PROJECT_ROOT:-$PWD}"
+pointer="$root/.pi-agent/va-context-source"
+source_file="${PI_VA_CONTEXT_SOURCE:-}"
+if [ -z "$source_file" ] && [ -f "$pointer" ]; then
+  source_file="$(sed -e '1q' -e 's/[[:space:]]*$//' "$pointer")"
+fi
+case "$source_file" in
+  "~/"*) source_file="$HOME/${source_file#\~/}" ;;
+esac
+
+if [ -z "$source_file" ]; then
+  echo "bootstrap:va-context: no source configured, skipping"
+  exit 0
+fi
+if [ ! -f "$source_file" ]; then
+  echo "bootstrap:va-context: $source_file is not a file" >&2
+  exit 1
+fi
+
+work_root="$HOME/Code/va.ghe.com"
+if [ ! -d "$work_root" ]; then
+  echo "bootstrap:va-context: no $work_root on this host, skipping"
+  exit 0
+fi
+
+target="$work_root/AGENTS.md"
+if [ -e "$target" ] && [ ! -L "$target" ]; then
+  mv "$target" "$target.bak"
+  echo "bootstrap:va-context: kept the previous AGENTS.md at $target.bak" >&2
+fi
+ln -sfn "$source_file" "$target"
+echo "bootstrap:va-context: linked $target from $source_file"
 '''
 
 [tasks."bootstrap:claude"]

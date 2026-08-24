@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.84.2",
+  "lastChangelogVersion": "0.84.3",
   "packages": [
     "npm:pi-approval-guardian@0.8.0",
     "npm:@nicknisi/pi-stash",
@@ -11,6 +11,7 @@
     "~/Code/github.com/ericboehs/claude-notify/extensions/pi-notify.ts"
   ],
   "skills": [
+    "~/.claude/skills/credentials",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/git-utils/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/gist/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/code-lint/skills",
@@ -24,9 +25,9 @@
     "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/pr-review/skills"
   ],
-  "defaultProvider": "github-copilot",
-  "defaultModel": "claude-opus-5",
-  "defaultThinkingLevel": "xhigh",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "high",
   "theme": "light/dark",
   "steeringMode": "all",
   "transport": "auto",
