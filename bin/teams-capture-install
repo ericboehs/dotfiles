@@ -64,7 +64,9 @@ if [[ ! -x $binary || ! -f $stamp || $(cat "$stamp") != "$source_hash" ]]; then
   trap 'rm -rf "$build_dir"' EXIT
   cp "$source_script" "$build_dir/teams-capture.swift"
   swiftc -O -o "$binary" "$build_dir/teams-capture.swift"
-  codesign --force --sign "$sign_id" --identifier "$bundle_id" "$binary"
+  # No --identifier: giving a bare binary a bundle-style id makes TCC try to
+  # resolve it as an app, fail to find one, and reject the grant.
+  codesign --force --sign "$sign_id" "$binary"
   echo "$source_hash" > "$stamp"
   rebuilt=true
 else
