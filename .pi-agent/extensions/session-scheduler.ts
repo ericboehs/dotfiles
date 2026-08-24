@@ -313,7 +313,7 @@ function isScheduledTask(value: unknown): value is ScheduledTask {
   const task = value as Partial<ScheduledTask>;
   if (
     typeof task.id !== "string" ||
-    !["interval", "daily", "once"].includes(task.kind ?? "") ||
+    !["interval", "daily", "once", "cron"].includes(task.kind ?? "") ||
     typeof task.prompt !== "string" ||
     !task.prompt.trim() ||
     typeof task.createdAt !== "number" ||
@@ -363,7 +363,7 @@ function sessionHasAssistantMessage(ctx: ExtensionContext): boolean {
   });
 }
 
-function parseOnceTime(value: string, now = Date.now()): number | undefined {
+export function parseOnceTime(value: string, now = Date.now()): number | undefined {
   const duration = parseDuration(value);
   if (duration !== undefined) return now + duration;
 
@@ -376,6 +376,34 @@ function parseOnceTime(value: string, now = Date.now()): number | undefined {
 
 function stripPromptDelimiter(value: string): string {
   return value.trim().replace(/^::\s*/, "").trim();
+}
+
+/**
+ * `/once` is deliberately loose about where the time goes, because both
+ * readings are natural in English: "in 15m check the build" and "check the
+ * build in 15m". The leading form wins when its first token parses as a time,
+ * so `/once 8p check in on this` keeps "check in on this" intact instead of
+ * being re-read as a trailing "in on this".
+ */
+export function parseOnceCommand(
+  input: string,
+  now = Date.now(),
+): { nextRunAt: number; prompt: string } | undefined {
+  const text = input.trim();
+  if (!text) return undefined;
+
+  const candidates: Array<[string, string]> = [];
+  const leading = text.match(/^(?:(?:in|at|on)\s+)?(\S+)\s+([\s\S]+)$/i);
+  if (leading?.[1] && leading[2]) candidates.push([leading[1], leading[2]]);
+  const trailing = text.match(/^([\s\S]+?)\s+(?:in|at|on)\s+(\S+)$/i);
+  if (trailing?.[1] && trailing[2]) candidates.push([trailing[2], trailing[1]]);
+
+  for (const [when, promptText] of candidates) {
+    const nextRunAt = parseOnceTime(when, now);
+    const prompt = stripPromptDelimiter(promptText);
+    if (nextRunAt !== undefined && prompt) return { nextRunAt, prompt };
+  }
+  return undefined;
 }
 
 function formatDuration(milliseconds: number): string {
@@ -572,6 +600,17 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
     });
   };
 
+  const addOnce = (ctx: ExtensionContext, nextRunAt: number, prompt: string) => {
+    const task = addTask(ctx, { kind: "once", prompt, nextRunAt });
+    notice(
+      ctx,
+      `Scheduled ${task.id} once at ${new Date(task.nextRunAt).toLocaleString()}`
+      + ` (in ${formatDuration(task.nextRunAt - Date.now())});`
+      + " keep this session open or it will not fire.",
+    );
+    return task;
+  };
+
   const findTask = (idPrefix: string) => {
     const matches = tasks.filter((task) => task.id.startsWith(idPrefix));
     if (matches.length === 0) throw new Error(`No scheduled task matches ${idPrefix}`);
@@ -638,6 +677,9 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
       ctx,
       [
         "Session scheduler:",
+        "  /once <duration|HH:MM|ISO> <prompt>",
+        "  /once <prompt> in <duration>",
+        "  /once list | cancel <id>",
         "  /loop <duration> <prompt>",
         "  /schedule every <duration> <prompt>",
         "  /schedule hourly <prompt>",
@@ -651,6 +693,46 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
       "warning",
     );
   };
+
+  pi.registerCommand("once", {
+    description: "Run a prompt once later in this session, for example /once 15m check the build",
+    handler: async (args, ctx) => {
+      const input = args.trim();
+
+      if (/^(list|ls)$/i.test(input)) {
+        const oneShots = tasks.filter((task) => task.kind === "once");
+        notice(
+          ctx,
+          oneShots.length > 0
+            ? oneShots.map(formatTask).join("\n")
+            : "No one-shot tasks in this session",
+        );
+        return;
+      }
+
+      const cancel = input.match(/^(?:cancel|delete|remove)\s+(\S+)$/i);
+      if (cancel?.[1]) {
+        try {
+          const task = removeTask(ctx, cancel[1]);
+          notice(ctx, `Cancelled scheduled task ${task.id}`);
+        } catch (error) {
+          notice(ctx, error instanceof Error ? error.message : String(error), "error");
+        }
+        return;
+      }
+
+      const parsed = parseOnceCommand(input);
+      if (!parsed) {
+        showUsage(ctx);
+        return;
+      }
+      try {
+        addOnce(ctx, parsed.nextRunAt, parsed.prompt);
+      } catch (error) {
+        notice(ctx, error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
 
   pi.registerCommand("loop", {
     description: "Repeat a prompt in this session, for example /loop 5m check the deploy",
@@ -803,17 +885,15 @@ export default function sessionScheduler(pi: ExtensionAPI): void {
         return;
       }
 
-      const once = input.match(/^once\s+(\S+)\s+([\s\S]+)$/i);
-      if (once?.[1] && once[2]) {
-        const nextRunAt = parseOnceTime(once[1]);
-        const prompt = stripPromptDelimiter(once[2]);
-        if (!nextRunAt || !prompt) {
+      const once = input.match(/^once\s+([\s\S]+)$/i);
+      if (once?.[1]) {
+        const parsed = parseOnceCommand(once[1]);
+        if (!parsed) {
           notice(ctx, "Once syntax: /schedule once <duration|HH:MM|ISO> <prompt>", "error");
           return;
         }
         try {
-          const task = addTask(ctx, { kind: "once", prompt, nextRunAt });
-          notice(ctx, `Scheduled ${task.id} once at ${new Date(task.nextRunAt).toLocaleString()}`);
+          addOnce(ctx, parsed.nextRunAt, parsed.prompt);
         } catch (error) {
           notice(ctx, error instanceof Error ? error.message : String(error), "error");
         }

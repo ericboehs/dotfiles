@@ -61,8 +61,8 @@ the previous directory as `~/.pi/agent/extensions.symlink-each.bak`.
 context/cost, boot time) plus `/bypass`, `/boot` and `/footer`. It also watches
 pi's on-disk version: when an install lands while instances are running — via
 `pi update`, `npm i -g`, anything — each running footer shows a green, right-aligned
-"Update installed · Restart to update" line above the prompt within ~30s, like
-Claude Code.
+"Update installed v0.52.1 → v0.53.0 · Restart to update" line above the prompt
+within ~30s, like Claude Code.
 
 The same detection kicks off `bin/pi-bundle` in a detached background process,
 since an update leaves the bundle stale and every launch ~115ms slower until it
@@ -172,6 +172,11 @@ the next `/color` re-tints from whatever is current.
 without registering an LLM tool or adding anything to model context:
 
 ```text
+/once 15m check whether the deploy finished
+/once at 8p check in on this
+/once remind me about the PR in 2h
+/once list
+/once cancel <id>
 /loop 15m check CI
 /schedule hourly check status
 /schedule daily 9a write a morning summary
@@ -183,6 +188,13 @@ without registering an LLM tool or adding anything to model context:
 /schedule resume <id|all>
 /schedule cancel <id>
 ```
+
+`/once` is the one-shot counterpart to `/loop`, and is the same task kind as
+`/schedule once`. The time may lead (`/once 15m check the build`, with an
+optional `in`/`at`) or trail (`/once check the build in 15m`); the leading form
+wins when its first token parses as a time, so `/once 8p check in on this`
+keeps the prompt's own "in" intact. `/once list` and `/once cancel` are scoped
+to one-shots, while `/schedule list` shows every kind.
 
 `pause` disarms a task's timer but keeps it in the list, so it survives session
 resume without firing or drifting. `resume` recomputes the next occurrence rather

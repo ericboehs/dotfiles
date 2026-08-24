@@ -9,6 +9,7 @@ import sessionScheduler, {
   parseClock,
   parseCron,
   parseDuration,
+  parseOnceCommand,
 } from "../extensions/session-scheduler.ts";
 
 function cronAt(expr, from) {
@@ -140,7 +141,7 @@ test("advances a recurring interval to the first future slot", () => {
 test("registers slash commands but no LLM tools", async (t) => {
   const ui = await mount();
   t.after(ui.shutdown);
-  assert.deepEqual(Object.keys(ui.commands).sort(), ["loop", "schedule"]);
+  assert.deepEqual(Object.keys(ui.commands).sort(), ["loop", "once", "schedule"]);
   assert.equal(ui.registeredTools, 0);
 });
 
@@ -460,4 +461,116 @@ test("stays quiet once the session has an assistant message", async (t) => {
 
   await ui.run("schedule", "daily 9a morning report");
   assert.equal(ui.notices.filter((n) => /no model reply yet/.test(n.message)).length, 0);
+});
+
+test("/once accepts a leading time, with or without a preposition", () => {
+  const now = new Date(2026, 7, 22, 8, 30).getTime();
+
+  assert.deepEqual(parseOnceCommand("15m check the build", now), {
+    nextRunAt: now + 900_000,
+    prompt: "check the build",
+  });
+  assert.deepEqual(parseOnceCommand("in 15m check the build", now), {
+    nextRunAt: now + 900_000,
+    prompt: "check the build",
+  });
+  assert.equal(parseOnceCommand("5m :: check the build", now).prompt, "check the build");
+
+  const evening = parseOnceCommand("at 8p check in on this", now);
+  assert.equal(evening.prompt, "check in on this", "a leading time must not eat the prompt's own 'in'");
+  assert.equal(new Date(evening.nextRunAt).getHours(), 20);
+});
+
+test("/once falls back to a trailing time when the prompt comes first", () => {
+  const now = new Date(2026, 7, 22, 8, 30).getTime();
+
+  assert.deepEqual(parseOnceCommand("check the build in 15m", now), {
+    nextRunAt: now + 900_000,
+    prompt: "check the build",
+  });
+
+  const trailing = parseOnceCommand("remind me about the PR at 9:15", now);
+  assert.equal(trailing.prompt, "remind me about the PR");
+  assert.equal(new Date(trailing.nextRunAt).getHours(), 9);
+  assert.equal(new Date(trailing.nextRunAt).getMinutes(), 15);
+});
+
+test("/once rejects input with no usable time", () => {
+  assert.equal(parseOnceCommand(""), undefined);
+  assert.equal(parseOnceCommand("check the build"), undefined);
+  assert.equal(parseOnceCommand("15m"), undefined, "a time with no prompt");
+});
+
+test("/once creates a one-shot task and warns that the session must stay open", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("once", "15m check whether the deploy finished");
+  const [task] = latestTasks(ui);
+  assert.equal(task.kind, "once");
+  assert.equal(task.prompt, "check whether the deploy finished");
+  assert.ok(task.nextRunAt > Date.now());
+  assert.match(ui.notices.at(-1).message, /keep this session open/);
+  assert.deepEqual(ui.sent, [], "scheduling must not wake the model");
+});
+
+test("/once list shows only one-shots, and /once cancel removes them", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("loop", "5m check CI");
+  await ui.run("once", "at 8p check in on this");
+  const oneShot = latestTasks(ui).find((task) => task.kind === "once");
+
+  await ui.run("once", "list");
+  const listed = ui.notices.at(-1).message;
+  assert.match(listed, new RegExp(oneShot.id));
+  assert.doesNotMatch(listed, /check CI/, "the interval task belongs to /loop");
+
+  await ui.run("once", `cancel ${oneShot.id.slice(0, 4)}`);
+  assert.deepEqual(latestTasks(ui).map((task) => task.kind), ["interval"]);
+});
+
+test("/once list is empty when only recurring tasks exist", async (t) => {
+  const ui = await mount();
+  t.after(ui.shutdown);
+
+  await ui.run("loop", "5m check CI");
+  await ui.run("once", "list");
+  assert.match(ui.notices.at(-1).message, /No one-shot tasks/);
+});
+
+test("a cron task is restored from a snapshot rather than filtered out", async (t) => {
+  // Regression: the snapshot validator's kind allowlist omitted "cron", so
+  // every cron task was silently dropped on resume before its own branch of
+  // the validator could run.
+  const task = {
+    id: "cr0nb00b",
+    kind: "cron",
+    prompt: "weekday standup",
+    createdAt: Date.now(),
+    nextRunAt: Date.now() + 3_600_000,
+    cronExpr: "0 9 * * 1-5",
+  };
+  const ui = await mount({ branch: [snapshot("session-a", [task])] });
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "list");
+  assert.match(ui.notices.at(-1).message, /cr0nb00b · cron 0 9 \* \* 1-5/);
+});
+
+test("a snapshot with an unparseable cron expression is still rejected", async (t) => {
+  const task = {
+    id: "badc0de5",
+    kind: "cron",
+    prompt: "junk",
+    createdAt: Date.now(),
+    nextRunAt: Date.now() + 3_600_000,
+    cronExpr: "99 * * * *",
+  };
+  const ui = await mount({ branch: [snapshot("session-a", [task])] });
+  t.after(ui.shutdown);
+
+  await ui.run("schedule", "list");
+  assert.match(ui.notices.at(-1).message, /No scheduled tasks/);
 });
