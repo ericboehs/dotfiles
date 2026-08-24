@@ -79,6 +79,7 @@ interface Job {
 	id: string;
 	name: string;
 	command: string;
+	cwd: string;
 	logPath: string;
 	pid: number | undefined;
 	startedAt: number;
@@ -206,8 +207,13 @@ class BgPanel {
 	private cachedLines?: string[];
 	/** Extra rows consumed by a wrapped Command: line, fed back into sizing. */
 	private commandExtraRows = 0;
+	// Declared field rather than a constructor parameter property: the shared
+	// tsconfig sets erasableSyntaxOnly, so everything under extensions/ stays
+	// importable by plain Node in strip-only mode (bin/pi-scheduler does this).
+	private readonly deps: PanelDeps;
 
-	constructor(private readonly deps: PanelDeps) {
+	constructor(deps: PanelDeps) {
+		this.deps = deps;
 		// Runtime counters tick and logs grow while the panel is open.
 		this.timer = setInterval(() => {
 			if (this.mode === "detail") this.load();
@@ -256,12 +262,12 @@ class BgPanel {
 	}
 
 	/**
-	 * Output box height. Budget: 13 rows of panel chrome (title, status block,
+	 * Output box height. Budget: 14 rows of panel chrome (title, status block,
 	 * borders, hint) plus ~7 rows of pi's own editor/footer/status chrome that
 	 * sit outside this component. Undercounting clips the hint line off-screen.
 	 */
 	private viewportHeight(): number {
-		return Math.max(5, this.terminalRows() - 20 - this.commandExtraRows);
+		return Math.max(5, this.terminalRows() - 21 - this.commandExtraRows);
 	}
 
 	private maxScroll(): number {
@@ -402,6 +408,7 @@ class BgPanel {
 			truncateToWidth(theme.fg("accent", "Shell details"), width),
 			"",
 			truncateToWidth(`${"Status:".padEnd(label)}${statusOf(job)}`, width),
+			truncateToWidth(`${"Cwd:".padEnd(label)}${job.cwd}`, width),
 			truncateToWidth(`${"Log:".padEnd(label)}${job.logPath}`, width),
 			truncateToWidth(`${"Command:".padEnd(label)}${commandLines[0] ?? ""}`, width),
 			...commandLines.slice(1).map((l) => truncateToWidth(`${" ".repeat(label)}${l}`, width)),
@@ -484,7 +491,7 @@ export default function (pi: ExtensionAPI) {
 		renderStatus();
 	}
 
-	async function start(command: string): Promise<Job> {
+	async function start(command: string, cwd: string): Promise<Job> {
 		fs.mkdirSync(BG_DIR, { recursive: true, mode: 0o700 });
 		const id = crypto.randomBytes(3).toString("hex");
 		const logPath = path.join(BG_DIR, `${id}.log`);
@@ -493,7 +500,7 @@ export default function (pi: ExtensionAPI) {
 		const child = spawn(command, {
 			shell: true,
 			detached: true, // own process group, so we can kill the whole tree
-			cwd: process.cwd(),
+			cwd,
 			stdio: ["ignore", fd, fd],
 			env: { ...process.env, PI_BG_JOB_ID: id },
 		});
@@ -504,6 +511,7 @@ export default function (pi: ExtensionAPI) {
 			id,
 			name: labelFor(command),
 			command,
+			cwd,
 			logPath,
 			pid: child.pid,
 			startedAt: Date.now(),
@@ -624,7 +632,28 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- bash override: +33 tokens, the entire discovery surface -------------
 
-	const base = createBashToolDefinition(process.cwd());
+	/**
+	 * The base bash definition is bound to a cwd at construction, but pi's
+	 * session cwd is not process.cwd(): resume and new-session rebuild the
+	 * runtime with sessionManager.getCwd(), and SessionManager.open() accepts a
+	 * cwd override. Binding once at load would run every bash call through this
+	 * override -- including background:false ones -- in whatever directory pi
+	 * happened to be launched from, silently and with plausible output.
+	 *
+	 * Schema, description and prompt metadata are cwd-independent (verified), so
+	 * one instance is fine for registration; execution resolves per ctx.cwd and
+	 * memoizes so we are not rebuilding a definition per invocation.
+	 */
+	const baseByCwd = new Map<string, ReturnType<typeof createBashToolDefinition>>();
+	function baseFor(cwd: string): ReturnType<typeof createBashToolDefinition> {
+		let definition = baseByCwd.get(cwd);
+		if (definition === undefined) {
+			definition = createBashToolDefinition(cwd);
+			baseByCwd.set(cwd, definition);
+		}
+		return definition;
+	}
+	const base = baseFor(process.cwd());
 	const baseProperties = (base.parameters as unknown as { properties: Record<string, unknown> })
 		.properties;
 
@@ -641,10 +670,12 @@ export default function (pi: ExtensionAPI) {
 		}),
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const input = params as { command: string; timeout?: number; background?: boolean };
+			// Follow the session, not the launch directory.
+			const cwd = (ctx as { cwd?: string } | undefined)?.cwd ?? process.cwd();
 			if (!input.background) {
-				return base.execute(toolCallId, params, signal, onUpdate, ctx);
+				return baseFor(cwd).execute(toolCallId, input, signal, onUpdate, ctx);
 			}
-			const job = await start(input.command);
+			const job = await start(input.command, cwd);
 			if (job.endedAt !== undefined && job.exitCode === 127) {
 				return {
 					content: [{ type: "text", text: `bg job failed to start; see ${job.logPath}` }],
