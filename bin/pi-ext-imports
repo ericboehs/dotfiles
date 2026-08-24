@@ -1,0 +1,196 @@
+#!/usr/bin/env node
+
+// Fail when an extension imports something that will not exist on another host.
+//
+// Usage: pi-ext-imports [extensions-dir]
+//
+// pi aborts its *entire* launch when one extension has an unresolvable import,
+// so a single bad relative import takes down every extension on every host that
+// pulls it -- which is exactly how footer.ts importing ./color.ts left pi
+// unlaunchable on two machines. tsc does not catch the interesting cases: it
+// resolves imports against the working tree, where the file is sitting happily
+// untracked or gitignored, and reports green right up until someone clones.
+//
+// Three ways an import is judged unsafe:
+//
+//   1. It does not resolve on disk at all.
+//   2. It resolves outside the extensions directory. Only that directory is
+//      symlinked to ~/.pi/agent/extensions, so a ../ import is guaranteed to be
+//      missing at runtime even though tsc is perfectly happy with it.
+//   3. It resolves to a file git is not tracking -- untracked or ignored. This
+//      is the one that pushes green and detonates on clone.
+
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import process from "node:process";
+
+const RED = "\x1b[0;31m";
+const GREEN = "\x1b[0;32m";
+const NC = "\x1b[0m";
+
+const argPath = resolve(process.argv[2] ?? ".pi-agent/extensions");
+
+if (!existsSync(argPath) || !statSync(argPath).isDirectory()) {
+	console.error(`${RED}❌ no extensions directory at ${argPath}${NC}`);
+	process.exit(1);
+}
+
+// Canonicalize everything. `git rev-parse --show-toplevel` reports real paths,
+// so on macOS a run under /tmp (a symlink to /private/tmp) compared git's
+// /private/tmp/... against resolve()'s /tmp/... and called every tracked file
+// untracked. It also means the guard works when pointed at the linked
+// ~/.pi/agent/extensions instead of the checkout.
+const canonical = (p) => (existsSync(p) ? realpathSync(p) : p);
+const root = canonical(argPath);
+
+function git(args, cwd = root) {
+	return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+}
+
+const repoRoot = canonical(git(["rev-parse", "--show-toplevel"]).trim());
+const show = (p) => relative(repoRoot, p);
+
+// One `git ls-files` beats one `--error-unmatch` per import, and the set makes
+// "tracked?" a lookup rather than a process spawn inside the hot loop.
+const tracked = new Set(
+	git(["ls-files", "-z", "--", root], repoRoot)
+		.split("\0")
+		.filter(Boolean)
+		.map((p) => join(repoRoot, p)),
+);
+
+function walk(dir) {
+	const found = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		const isDir = entry.isDirectory() || (entry.isSymbolicLink() && statSync(path).isDirectory());
+		if (isDir) found.push(...walk(path));
+		else if (/\.m?ts$/.test(entry.name)) found.push(path);
+	}
+	return found.sort();
+}
+
+// Comments are blanked rather than deleted so reported line numbers still match
+// the file, and strings survive because the specifier lives in one. Written as a
+// scanner instead of a regex because a stray `*/` inside a doc header already
+// cost this repo a confusing TS1160 once.
+function blankComments(src) {
+	let out = "";
+	let i = 0;
+	while (i < src.length) {
+		const two = src.slice(i, i + 2);
+		if (two === "//") {
+			while (i < src.length && src[i] !== "\n") i++;
+			continue;
+		}
+		if (two === "/*") {
+			i += 2;
+			while (i < src.length && src.slice(i, i + 2) !== "*/") {
+				if (src[i] === "\n") out += "\n";
+				i++;
+			}
+			i += 2;
+			continue;
+		}
+		const quote = src[i];
+		if (quote === '"' || quote === "'" || quote === "`") {
+			out += src[i++];
+			while (i < src.length) {
+				if (src[i] === "\\") {
+					out += src[i] + (src[i + 1] ?? "");
+					i += 2;
+					continue;
+				}
+				out += src[i];
+				if (src[i++] === quote) break;
+			}
+			continue;
+		}
+		out += src[i++];
+	}
+	return out;
+}
+
+const PATTERNS = [
+	/\bfrom\s*(["'])(\.[^"']*)\1/g, // import x from "./y" / export * from "./y"
+	/\bimport\s*(["'])(\.[^"']*)\1/g, // bare import "./y"
+	/\bimport\s*\(\s*(["'])(\.[^"']*)\1/g, // dynamic import("./y")
+	/\brequire\s*\(\s*(["'])(\.[^"']*)\1/g, // stray CJS
+];
+
+// pi and Node's ESM resolver both want the extension spelled out, but a bare
+// specifier that happens to resolve is still worth checking rather than
+// reporting as missing -- the tracked/outside checks matter more than the style.
+function resolveSpecifier(fromFile, spec) {
+	const base = resolve(dirname(fromFile), spec);
+	for (const candidate of [base, `${base}.ts`, `${base}.mts`, `${base}.js`, join(base, "index.ts")]) {
+		if (existsSync(candidate) && statSync(candidate).isFile()) return canonical(candidate);
+	}
+	return undefined;
+}
+
+function ignoreRule(path) {
+	try {
+		// check-ignore -v prints "<file>:<line>:<pattern>\t<path>"; the path is
+		// already in the message, so keep only the rule that did the ignoring.
+		return git(["check-ignore", "-v", "--", path], repoRoot).trim().split("\t")[0];
+	} catch {
+		return undefined; // not ignored; check-ignore exits 1
+	}
+}
+
+const files = walk(root);
+if (files.length === 0) {
+	console.error(`${RED}❌ no .ts extensions under ${show(root)}${NC}`);
+	process.exit(1);
+}
+
+const problems = [];
+let imports = 0;
+
+for (const file of files) {
+	const src = blankComments(readFileSync(file, "utf8"));
+	for (const pattern of PATTERNS) {
+		pattern.lastIndex = 0;
+		for (const match of src.matchAll(pattern)) {
+			imports++;
+			const spec = match[2];
+			const line = src.slice(0, match.index).split("\n").length;
+			const where = `${show(file)}(${line})`;
+			const resolved = resolveSpecifier(file, spec);
+
+			if (!resolved) {
+				problems.push(`${where}: "${spec}" does not resolve on disk`);
+				continue;
+			}
+			if (relative(root, resolved).startsWith("..")) {
+				problems.push(
+					`${where}: "${spec}" resolves to ${show(resolved)}, outside the extensions directory` +
+						" (only that directory is linked to ~/.pi/agent/extensions, so it will be missing at runtime)",
+				);
+				continue;
+			}
+			if (!tracked.has(resolved)) {
+				const rule = ignoreRule(resolved);
+				problems.push(
+					rule
+						? `${where}: "${spec}" resolves to ${show(resolved)}, which is gitignored by ${rule}`
+						: `${where}: "${spec}" resolves to ${show(resolved)}, which is not tracked by git`,
+				);
+			}
+		}
+	}
+}
+
+if (problems.length > 0) {
+	for (const problem of problems) console.error(problem);
+	console.error(
+		`${RED}❌ ${problems.length} unsafe import${problems.length === 1 ? "" : "s"}${NC}` +
+			"\n   pi aborts its whole launch on one unresolvable import, so this breaks every" +
+			"\n   extension on every host that pulls it, not just the importing one.",
+	);
+	process.exit(1);
+}
+
+console.log(`${GREEN}✅ imports safe${NC} (${imports} relative imports across ${files.length} files)`);

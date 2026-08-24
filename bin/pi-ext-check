@@ -3,6 +3,11 @@
 # Typecheck and test the pi extensions in .pi-agent/extensions.
 # Usage: pi-ext-check [-h|--help] [--typecheck-only|--test-only]
 #
+# Three checks, because tsc alone is not enough: it resolves imports against the
+# working tree, so a tracked extension importing an untracked or gitignored
+# helper typechecks green and then aborts pi's entire launch on any host that
+# clones it. bin/pi-ext-imports is the guard for that class.
+#
 # pi loads these extensions from the globally installed @earendil-works/pi-coding-agent,
 # so this borrows that install's types rather than pinning any dependency
 # versions here: .pi-agent/package.json exists only to mark the directory ESM
@@ -15,8 +20,9 @@ set -euo pipefail
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "Usage: $(basename "$0") [--typecheck-only|--test-only]"
   echo ""
-  echo "Typecheck (tsc) and smoke-test (node --test) the pi extensions."
-  echo "Links .pi-agent/node_modules to the globally installed pi first."
+  echo "Check imports (pi-ext-imports), typecheck (tsc) and smoke-test (node --test)"
+  echo "the pi extensions. Links .pi-agent/node_modules to the globally installed pi"
+  echo "first. --typecheck-only runs the import guard too; both are static checks."
   exit 0
 fi
 
@@ -76,6 +82,13 @@ ln -sfn "$PI_PKG/node_modules/typebox" "$PI_AGENT/node_modules/typebox"
 status=0
 
 if [[ "$MODE" != "--test-only" ]]; then
+  echo "Checking imports in $PI_AGENT/extensions..."
+  if ! "$REPO/bin/pi-ext-imports" "$PI_AGENT/extensions"; then
+    status=1
+  fi
+fi
+
+if [[ "$MODE" != "--test-only" ]]; then
   # No typescript is installed anywhere on this machine by design, so fall back
   # to npx (cached after the first run) rather than adding a dependency.
   if command -v tsc >/dev/null; then
@@ -85,11 +98,27 @@ if [[ "$MODE" != "--test-only" ]]; then
     TSC=(npx --yes --package=typescript@5 tsc)
   fi
 
+  # Buffered so the TS1294 hint below can inspect the output; tsc says little
+  # enough that nothing is lost by printing it in one go.
+  tsc_log="$(mktemp -t pi-ext-check)"
+  trap 'rm -f "$tsc_log"' EXIT
+
   echo "Typechecking $PI_AGENT/extensions..."
-  if (cd "$PI_AGENT" && "${TSC[@]}" -p tsconfig.json); then
+  if (cd "$PI_AGENT" && "${TSC[@]}" -p tsconfig.json) >"$tsc_log" 2>&1; then
+    cat "$tsc_log"
     echo -e "${GREEN}✅ typecheck passed${NC}"
   else
+    cat "$tsc_log"
     echo -e "${RED}❌ typecheck failed${NC}"
+    # TS1294 reads like a style rule, so say what the flag is actually for
+    # before someone "fixes" it by turning erasableSyntaxOnly off.
+    if grep -q 'TS1294' "$tsc_log"; then
+      echo -e "${YELLOW}   TS1294: erasableSyntaxOnly keeps these files importable by plain Node." >&2
+      echo "   pi transpiles, so it tolerates parameter properties and enums, but" >&2
+      echo "   bin/pi-scheduler imports extension .ts under Node's strip-only mode," >&2
+      echo "   which rejects them outright (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX). Rewrite" >&2
+      echo -e "   the construct; do not relax the flag.${NC}" >&2
+    fi
     status=1
   fi
 fi
