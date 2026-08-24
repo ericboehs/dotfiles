@@ -1,0 +1,491 @@
+#!/usr/bin/env swift
+
+// teams-capture — continuously extract live captions and meeting chat from the
+// macOS Microsoft Teams app via the Accessibility (AX) API.
+//
+// Teams only keeps ~3 live caption entries in the DOM at a time, so this polls
+// the accessibility tree and finalizes each utterance when it scrolls away.
+//
+// Output (default ~/.local/share/teams-capture):
+//   YYYYMMDD_HHMMSS-<meeting-slug>.jsonl   structured events
+//   YYYYMMDD_HHMMSS-<meeting-slug>.txt     readable transcript
+//
+// Requires: the terminal running this needs Accessibility permission
+// (System Settings → Privacy & Security → Accessibility).
+
+import ApplicationServices
+import Foundation
+
+// MARK: - Options
+
+struct Options {
+    var intervalMs: UInt32 = 250
+    var directory: String = {
+        let base = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
+            ?? NSHomeDirectory() + "/.local/share"
+        return base + "/teams-capture"
+    }()
+    var captureCaptions = true
+    var captureChat = true
+    var includeChatBacklog = false
+    var jsonToStdout = false
+    var quiet = false
+    var pid: pid_t?
+}
+
+func usage() -> String {
+    """
+    usage: teams-capture [options]
+
+      --interval <ms>      poll interval (default 250)
+      --dir <path>         output directory (default $XDG_DATA_HOME/teams-capture)
+      --no-captions        skip live captions
+      --no-chat            skip meeting chat
+      --chat-backlog       also record chat messages already on screen at start
+      --json               print JSONL to stdout instead of pretty lines
+      --quiet              no stdout output
+      --pid <pid>          MSTeams pid (default: autodetect)
+      -h, --help           this help
+
+    Turn on live captions in the meeting; open the chat pane to capture chat.
+    Press Ctrl-C to stop — in-flight captions are flushed on exit.
+    """
+}
+
+func parseOptions() -> Options {
+    var options = Options()
+    var args = Array(CommandLine.arguments.dropFirst())
+    func next(_ flag: String) -> String {
+        guard !args.isEmpty else { fail("missing value for \(flag)") }
+        return args.removeFirst()
+    }
+    while !args.isEmpty {
+        let flag = args.removeFirst()
+        switch flag {
+        case "--interval": options.intervalMs = UInt32(next(flag)) ?? options.intervalMs
+        case "--dir": options.directory = (next(flag) as NSString).expandingTildeInPath
+        case "--no-captions": options.captureCaptions = false
+        case "--no-chat": options.captureChat = false
+        case "--chat-backlog": options.includeChatBacklog = true
+        case "--json": options.jsonToStdout = true
+        case "--quiet": options.quiet = true
+        case "--pid": options.pid = pid_t(next(flag))
+        case "-h", "--help": print(usage()); exit(0)
+        default: fail("unknown option: \(flag)\n\n\(usage())")
+        }
+    }
+    return options
+}
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("teams-capture: \(message)\n".utf8))
+    exit(1)
+}
+
+// MARK: - Accessibility helpers
+
+func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+    return value
+}
+
+func axString(_ element: AXUIElement, _ name: String) -> String {
+    axAttribute(element, name) as? String ?? ""
+}
+
+func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+    axAttribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+}
+
+func axParent(_ element: AXUIElement) -> AXUIElement? {
+    guard let value = axAttribute(element, kAXParentAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+func axClasses(_ element: AXUIElement) -> [String] {
+    axAttribute(element, "AXDOMClassList") as? [String] ?? []
+}
+
+func axDomID(_ element: AXUIElement) -> String { axString(element, "AXDOMIdentifier") }
+
+func axNodeID(_ element: AXUIElement) -> String { axString(element, "ChromeAXNodeId") }
+
+/// Visible text of a subtree, in document order, without the duplication you
+/// get from naively concatenating value/title/description of every node.
+func axText(_ element: AXUIElement, depth: Int = 0) -> String {
+    guard depth < 24 else { return "" }
+    let role = axString(element, kAXRoleAttribute)
+    if role == "AXStaticText" || role == "AXHeading" || role == "AXLink" {
+        for key in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
+            let value = axString(element, key).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return value }
+        }
+        return ""
+    }
+    let parts = axChildren(element).map { axText($0, depth: depth + 1) }.filter { !$0.isEmpty }
+    return parts.joined(separator: " ")
+}
+
+/// Static text leaves of a subtree, in order.
+func axStaticTexts(_ element: AXUIElement, depth: Int = 0) -> [String] {
+    guard depth < 24 else { return [] }
+    if axString(element, kAXRoleAttribute) == "AXStaticText" {
+        let value = axString(element, kAXValueAttribute).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? [] : [value]
+    }
+    return axChildren(element).flatMap { axStaticTexts($0, depth: depth + 1) }
+}
+
+func findElement(from root: AXUIElement, depth: Int = 0, where match: (AXUIElement) -> Bool) -> AXUIElement? {
+    guard depth < 80 else { return nil }
+    if match(root) { return root }
+    for child in axChildren(root) {
+        if let hit = findElement(from: child, depth: depth + 1, where: match) { return hit }
+    }
+    return nil
+}
+
+// MARK: - Model
+
+struct Utterance {
+    var speaker: String
+    var text: String
+    var startedAt: Date
+}
+
+struct Recorder {
+    let startedAt = Date()
+    let jsonlURL: URL
+    let textURL: URL
+    private let jsonl: FileHandle
+    private let text: FileHandle
+    private let stdout = FileHandle.standardOutput
+    let options: Options
+    /// True when we can draw an updating "live" line for in-progress speech.
+    let interactive: Bool
+    private var liveLines: [String] = []
+
+    init(options: Options, meeting: String) {
+        self.options = options
+        let directory = URL(fileURLWithPath: options.directory, isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyyMMdd_HHmmss"
+        let slug = Recorder.slugify(meeting)
+        let base = "\(stamp.string(from: Date()))-\(slug)"
+        jsonlURL = directory.appendingPathComponent(base + ".jsonl")
+        textURL = directory.appendingPathComponent(base + ".txt")
+
+        for url in [jsonlURL, textURL] where !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let jsonlHandle = FileHandle(forWritingAtPath: jsonlURL.path),
+              let textHandle = FileHandle(forWritingAtPath: textURL.path) else {
+            fail("cannot write to \(directory.path)")
+        }
+        jsonl = jsonlHandle
+        text = textHandle
+        jsonl.seekToEndOfFile()
+        text.seekToEndOfFile()
+        interactive = !options.quiet && !options.jsonToStdout && isatty(STDOUT_FILENO) == 1
+    }
+
+    static func terminalWidth() -> Int {
+        var size = winsize()
+        if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &size) == 0, size.ws_col > 0 { return Int(size.ws_col) }
+        return 100
+    }
+
+    static func slugify(_ value: String) -> String {
+        let cleaned = value
+            .replacingOccurrences(of: "| Microsoft Teams", with: "")
+            .lowercased()
+            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        let slug = String(cleaned)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        return slug.isEmpty ? "teams-meeting" : slug
+    }
+
+    static let isoFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        return formatter
+    }()
+
+    func elapsed(_ date: Date) -> String {
+        let total = Int(date.timeIntervalSince(startedAt))
+        return String(format: "%02d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
+    }
+
+    func writeJSON(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line += "\n"
+        jsonl.write(Data(line.utf8))
+        if options.jsonToStdout && !options.quiet { stdout.write(Data(line.utf8)) }
+    }
+
+    /// Erase the live region, leaving the cursor at the start of its first line.
+    private mutating func eraseLive() {
+        guard interactive, !liveLines.isEmpty else { liveLines = []; return }
+        var escape = "\r\u{1B}[2K"
+        for _ in 1..<max(1, liveLines.count) { escape += "\u{1B}[1A\u{1B}[2K" }
+        stdout.write(Data(escape.utf8))
+        liveLines = []
+    }
+
+    private mutating func drawLive(_ rendered: [String]) {
+        guard interactive, !rendered.isEmpty else { return }
+        stdout.write(Data(rendered.joined(separator: "\n").utf8))
+        liveLines = rendered
+    }
+
+    /// Show every in-progress utterance below the finished transcript, updating
+    /// in place. Finished lines scroll above it like `tail -f`.
+    mutating func setLive(_ lines: [String]) {
+        guard interactive else { return }
+        let width = Recorder.terminalWidth()
+        let rendered = lines.map { line -> String in
+            var body = line.replacingOccurrences(of: "\n", with: " ")
+            if body.count > width - 1 { body = String(body.prefix(max(1, width - 2))) + "…" }
+            return body
+        }
+        guard rendered != liveLines else { return } // avoid redrawing unchanged text
+        eraseLive()
+        drawLive(rendered)
+    }
+
+    mutating func clearLive() { eraseLive() }
+
+    mutating func writeLine(_ line: String) {
+        text.write(Data((line + "\n").utf8))
+        guard !options.jsonToStdout && !options.quiet else { return }
+        let live = liveLines
+        eraseLive()
+        stdout.write(Data((line + "\n").utf8))
+        drawLive(live)
+    }
+
+    mutating func record(kind: String, speaker: String, body: String, at date: Date, extra: [String: Any] = [:]) {
+        var payload: [String: Any] = [
+            "type": kind,
+            "speaker": speaker,
+            "text": body,
+            "ts": Recorder.isoFormatter.string(from: date),
+            "elapsed": elapsed(date)
+        ]
+        payload.merge(extra) { current, _ in current }
+        writeJSON(payload)
+        let tag = kind == "chat" ? "(chat) " : ""
+        writeLine("[\(elapsed(date))] \(tag)\(speaker): \(body)")
+    }
+
+    func metadata(_ payload: [String: Any]) { writeJSON(payload) }
+}
+
+// MARK: - Teams tree lookups
+
+func teamsPID(_ override: pid_t?) -> pid_t {
+    if let override { return override }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    process.arguments = ["-f", "Microsoft Teams.app/Contents/MacOS/MSTeams"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    try? process.run()
+    process.waitUntilExit()
+    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    guard let first = output.split(separator: "\n").first, let pid = pid_t(first) else {
+        fail("Microsoft Teams does not appear to be running")
+    }
+    return pid
+}
+
+func meetingTitle(_ app: AXUIElement) -> String {
+    let windows = axAttribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? []
+    for window in windows {
+        let title = axString(window, kAXTitleAttribute)
+        if !title.isEmpty { return title }
+    }
+    return "Teams meeting"
+}
+
+/// Caption entries render as `fui-ChatMessageCompact__body` groups holding
+/// exactly [speaker, text]. Works for both the in-window panel and the pop-out.
+let captionEntryClass = "fui-ChatMessageCompact__body"
+
+func isCaptionEntry(_ element: AXUIElement) -> Bool {
+    axClasses(element).contains(captionEntryClass)
+}
+
+/// The captions list is simply the parent of the caption entries.
+func findCaptionsContainer(_ app: AXUIElement) -> AXUIElement? {
+    findElement(from: app, where: isCaptionEntry).flatMap(axParent)
+}
+
+func captionEntries(_ container: AXUIElement) -> [(id: String, speaker: String, text: String)] {
+    axChildren(container).compactMap { entry in
+        guard isCaptionEntry(entry) else { return nil }
+        let texts = axStaticTexts(entry)
+        guard texts.count >= 2 else { return nil }
+        let id = axNodeID(entry)
+        guard !id.isEmpty else { return nil }
+        return (id, texts[0], texts.dropFirst().joined(separator: " "))
+    }
+}
+
+/// The chat message list: the grandparent of any rendered message body.
+func findChatContainer(_ app: AXUIElement) -> AXUIElement? {
+    guard let body = findElement(from: app, where: {
+        axDomID($0).hasPrefix("message-body-") && axClasses($0).contains("fui-ChatMessage__body")
+    }) else { return nil }
+    return axParent(body).flatMap(axParent)
+}
+
+struct ChatMessage { let id: String; let author: String; let text: String }
+
+func chatMessages(_ container: AXUIElement, limit: Int = 20) -> [ChatMessage] {
+    let rows = axChildren(container).suffix(limit)
+    return rows.compactMap { row -> ChatMessage? in
+        let parts = axChildren(row)
+        guard let body = parts.first(where: {
+            axClasses($0).contains("fui-ChatMessage__body") && axDomID($0).hasPrefix("message-body-")
+        }) else { return nil }
+        let author = parts.first { axClasses($0).contains("fui-ChatMessage__author") }.map { axText($0) } ?? ""
+        let text = axText(body).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let id = String(axDomID(body).dropFirst("message-body-".count))
+        return ChatMessage(id: id, author: author.isEmpty ? "Unknown" : author, text: text)
+    }
+}
+
+// MARK: - Main loop
+
+var stopRequested = false
+signal(SIGINT) { _ in stopRequested = true }
+signal(SIGTERM) { _ in stopRequested = true }
+
+let options = parseOptions()
+let pid = teamsPID(options.pid)
+let app = AXUIElementCreateApplication(pid)
+AXUIElementSetMessagingTimeout(app, 2.0)
+
+guard AXIsProcessTrusted() else {
+    fail("no Accessibility permission — grant it to your terminal in System Settings → Privacy & Security → Accessibility")
+}
+guard !axChildren(app).isEmpty else { fail("cannot read the Teams accessibility tree (pid \(pid))") }
+
+let meeting = meetingTitle(app)
+var recorder = Recorder(options: options, meeting: meeting)
+recorder.metadata([
+    "type": "metadata",
+    "source": "teams-ax",
+    "meeting": meeting,
+    "pid": Int(pid),
+    "recorded_at": Recorder.isoFormatter.string(from: recorder.startedAt)
+])
+if !options.quiet {
+    FileHandle.standardError.write(Data("""
+    teams-capture: \(meeting) (pid \(pid))
+      jsonl: \(recorder.jsonlURL.path)
+      text:  \(recorder.textURL.path)
+
+    """.utf8))
+}
+
+var captionsContainer: AXUIElement?
+var chatContainer: AXUIElement?
+var lastRelocate = Date.distantPast
+var activeCaptions: [String: Utterance] = [:]
+var captionOrder: [String] = []
+var seenChatIDs = Set<String>()
+var chatBaselineDone = options.includeChatBacklog
+
+func finalizeCaption(_ id: String, at date: Date) {
+    guard let utterance = activeCaptions.removeValue(forKey: id) else { return }
+    captionOrder.removeAll { $0 == id }
+    guard !utterance.text.isEmpty else { return }
+    recorder.record(
+        kind: "caption",
+        speaker: utterance.speaker,
+        body: utterance.text,
+        at: utterance.startedAt,
+        extra: ["node_id": id, "ended_at": Recorder.isoFormatter.string(from: date)]
+    )
+}
+
+while !stopRequested {
+    let now = Date()
+    let needsRelocate = (options.captureCaptions && captionsContainer == nil)
+        || (options.captureChat && chatContainer == nil)
+    if needsRelocate && now.timeIntervalSince(lastRelocate) > 3 {
+        lastRelocate = now
+        if options.captureCaptions { captionsContainer = findCaptionsContainer(app) }
+        if options.captureChat { chatContainer = findChatContainer(app) }
+    }
+
+    if options.captureCaptions, let container = captionsContainer {
+        let entries = captionEntries(container)
+        if entries.isEmpty && axChildren(container).isEmpty {
+            captionsContainer = nil // panel closed or re-rendered
+        }
+        let visible = Set(entries.map(\.id))
+        for id in captionOrder where !visible.contains(id) { finalizeCaption(id, at: now) }
+        for entry in entries {
+            if var utterance = activeCaptions[entry.id] {
+                utterance.speaker = entry.speaker
+                utterance.text = entry.text
+                activeCaptions[entry.id] = utterance
+            } else {
+                activeCaptions[entry.id] = Utterance(speaker: entry.speaker, text: entry.text, startedAt: now)
+                captionOrder.append(entry.id)
+            }
+        }
+        // Mirror every in-progress utterance; finished lines scroll above.
+        let live = captionOrder.compactMap { id -> String? in
+            guard let utterance = activeCaptions[id] else { return nil }
+            return "[\(recorder.elapsed(utterance.startedAt))] \(utterance.speaker): \(utterance.text)"
+        }
+        recorder.setLive(live.enumerated().map { $0.offset == live.count - 1 ? "\($0.element) ▍" : $0.element })
+    }
+
+    if options.captureChat, let container = chatContainer {
+        let messages = chatMessages(container)
+        if messages.isEmpty && axChildren(container).isEmpty { chatContainer = nil }
+        for message in messages {
+            if !chatBaselineDone {
+                seenChatIDs.insert(message.id)
+                continue
+            }
+            guard !seenChatIDs.contains(message.id) else { continue }
+            seenChatIDs.insert(message.id)
+            let sent = Double(message.id).map { Date(timeIntervalSince1970: $0 / 1000) } ?? now
+            recorder.record(
+                kind: "chat",
+                speaker: message.author,
+                body: message.text,
+                at: sent > recorder.startedAt ? sent : now,
+                extra: ["message_id": message.id]
+            )
+        }
+        if !messages.isEmpty { chatBaselineDone = true }
+    }
+
+    usleep(options.intervalMs * 1000)
+}
+
+let stoppedAt = Date()
+recorder.clearLive()
+for id in captionOrder { finalizeCaption(id, at: stoppedAt) }
+recorder.metadata([
+    "type": "metadata",
+    "event": "stopped",
+    "stopped_at": Recorder.isoFormatter.string(from: stoppedAt),
+    "duration": recorder.elapsed(stoppedAt)
+])
+if !options.quiet {
+    FileHandle.standardError.write(Data("\nteams-capture: stopped after \(recorder.elapsed(stoppedAt))\n".utf8))
+}
