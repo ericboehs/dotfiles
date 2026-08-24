@@ -10,14 +10,19 @@ set -euo pipefail
 label="com.ericboehs.teams-capture"
 source_script="${BASH_SOURCE[0]%/*}/teams-capture"
 binary="$HOME/.local/bin/teams-capture-daemon"
+stamp="$binary.sha256"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/teams-capture"
 log="$log_dir/launchd.log"
+# macOS ties an Accessibility grant to the binary's code signature. Ad-hoc
+# signing re-hashes on every build, so each rebuild silently drops permission.
+# Set TEAMS_CAPTURE_SIGN_ID to a self-signed identity to keep it across builds.
+sign_id="${TEAMS_CAPTURE_SIGN_ID:--}"
 
 case "${1:-install}" in
   uninstall)
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
-    rm -f "$plist" "$binary"
+    rm -f "$plist" "$binary" "$stamp"
     echo "removed $label"
     exit 0
     ;;
@@ -30,13 +35,22 @@ esac
 
 mkdir -p "${binary%/*}" "$log_dir"
 
-echo "building $binary"
-build_dir=$(mktemp -d)
-trap 'rm -rf "$build_dir"' EXIT
-cp "$source_script" "$build_dir/teams-capture.swift"
-swiftc -O -o "$binary" "$build_dir/teams-capture.swift"
-# Ad-hoc sign so TCC keeps recognising the binary across rebuilds.
-codesign --force --sign - "$binary"
+# Only rebuild when the source actually changed, so re-running this script
+# doesn't cost you the Accessibility permission.
+source_hash=$(shasum -a 256 "$source_script" | cut -d' ' -f1)
+rebuilt=false
+if [[ ! -x $binary || ! -f $stamp || $(cat "$stamp") != "$source_hash" ]]; then
+  echo "building $binary"
+  build_dir=$(mktemp -d)
+  trap 'rm -rf "$build_dir"' EXIT
+  cp "$source_script" "$build_dir/teams-capture.swift"
+  swiftc -O -o "$binary" "$build_dir/teams-capture.swift"
+  codesign --force --sign "$sign_id" "$binary"
+  echo "$source_hash" > "$stamp"
+  rebuilt=true
+else
+  echo "$binary is current, skipping build"
+fi
 
 cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -85,10 +99,16 @@ installed $label
   log:         $log
   transcripts: ${XDG_DATA_HOME:-$HOME/.local/share}/teams-capture
 
-Grant Accessibility to the binary or it cannot read Teams:
-  System Settings -> Privacy & Security -> Accessibility -> + -> $binary
-  (Shift-Cmd-G in the picker to type the path)
-  then: launchctl kickstart -k gui/$UID/$label
-
   tail -f $log
 INFO
+
+if [[ $rebuilt == true ]]; then
+  cat <<INFO
+
+The binary changed, so macOS dropped its Accessibility permission. Re-grant it:
+  System Settings -> Privacy & Security -> Accessibility
+  remove the old teams-capture-daemon entry, then + -> $binary
+  (Shift-Cmd-G in the picker to type the path)
+  then: launchctl kickstart -k gui/$UID/$label
+INFO
+fi

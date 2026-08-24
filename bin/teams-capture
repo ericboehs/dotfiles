@@ -382,6 +382,19 @@ func captionEntries(_ container: AXUIElement) -> [(id: String, speaker: String, 
     }
 }
 
+/// Captions are on when the panel chrome exists. Don't infer this from caption
+/// entries: Teams clears those after a few seconds of silence, which would look
+/// exactly like the panel being closed.
+let captionPanelIDs: Set<String> = [
+    "captions-panel-dismiss-button",
+    "closed-captions-pop-out-button",
+    "captions-settings-menu-trigger-button-non-overflow"
+]
+
+func captionsPanelOpen(_ app: AXUIElement) -> Bool {
+    findElement(from: app) { captionPanelIDs.contains(axDomID($0)) } != nil
+}
+
 /// Teams' own shortcut for the captions panel, delivered straight to the app so
 /// it bypasses global event taps (e.g. a Hammerspoon remap of ⇧⌘A).
 func toggleCaptionsShortcut(pid: pid_t) {
@@ -438,7 +451,8 @@ final class Session {
     private var seenChatIDs = Set<String>()
     private var chatBaselineDone: Bool
     private var captionAttempts = 0
-    private var lastCaptionAttempt = Date.distantPast
+    private var lastCaptionCheck = Date.distantPast
+    private var sawCaptions = false
 
     init(options: Options, live: LiveView, title: String) {
         self.options = options
@@ -481,18 +495,23 @@ final class Session {
             if needsChat { chatContainer = findChatContainer(app) }
         }
 
-        if options.autoCaptions { ensureCaptionsOn(pid: pid, now: now) }
+        if options.autoCaptions { ensureCaptionsOn(app: app, pid: pid, now: now) }
         if options.captureCaptions { pollCaptions(now: now) }
         if options.captureChat { pollChat(now: now) }
     }
 
-    /// Nudge Teams into showing captions, a few times, then stop pestering it.
-    private func ensureCaptionsOn(pid: pid_t, now: Date) {
-        guard captionsContainer == nil, captionAttempts < 3,
+    /// Turn captions on if the panel isn't up. Gives up quickly: toggling a
+    /// shortcut we can't verify is worse than missing a transcript.
+    private func ensureCaptionsOn(app: AXUIElement, pid: pid_t, now: Date) {
+        guard !sawCaptions, captionAttempts < 2,
               now.timeIntervalSince(startedAt) > 3,
-              now.timeIntervalSince(lastCaptionAttempt) > 8 else { return }
+              now.timeIntervalSince(lastCaptionCheck) > 8 else { return }
+        lastCaptionCheck = now
+        guard !captionsPanelOpen(app) else {
+            sawCaptions = true // panel is up, just idle — never press again
+            return
+        }
         captionAttempts += 1
-        lastCaptionAttempt = now
         toggleCaptionsShortcut(pid: pid)
         if !options.quiet { status("asked Teams to show live captions (attempt \(captionAttempts))") }
     }
@@ -500,6 +519,7 @@ final class Session {
     private func pollCaptions(now: Date) {
         guard let container = captionsContainer else { return }
         let entries = captionEntries(container)
+        if !entries.isEmpty { sawCaptions = true }
         if entries.isEmpty && axChildren(container).isEmpty {
             captionsContainer = nil // panel closed or re-rendered
         }
