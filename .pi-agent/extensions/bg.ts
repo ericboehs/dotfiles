@@ -12,15 +12,25 @@
  *
  * UI:
  *   footer          "● 2 bg · rspec 1m12s · vite 12s"   (zero tokens, TUI only)
- *   /bg             interactive picker: view log / kill
- *   ctrl+shift+b    same picker
+ *   /bg             job list; ↑/↓ select, enter opens a full-screen live log,
+ *                   x stops the selected job, esc closes
+ *   ctrl+shift+b    same panel
+ *
+ *   ctrl+shift+b only reaches pi where the terminal disambiguates it via the
+ *   Kitty/CSI-u protocol (tmux: `extended-keys on` + `extended-keys-format
+ *   csi-u`). Without that it collapses to 0x02, i.e. plain ctrl+b — swallowed
+ *   as the tmux prefix, or read as tui.editor.cursorLeft outside tmux. The
+ *   failure mode is a dead shortcut, never a false trigger, so /bg is the
+ *   portable path and the one to reach for on an unfamiliar host.
  *
  * Wake:
  *   When a job exits, injects exit code + tail into the conversation and
  *   triggers a turn. User-initiated kills never wake the model.
  *
  * Env knobs:
- *   PI_BG_DIR         log/spool directory  (default $TMPDIR/pi-bg)
+ *   PI_BG_DIR         log/spool directory (default /tmp/pi-bg-<uid>, mode
+ *                     0700; not $TMPDIR — macOS makes that per-user and
+ *                     unguessable, and purges it out from under running jobs)
  *   PI_BG_TAIL_LINES  lines injected on completion (default 15, 0 disables)
  *   PI_BG_WAKE        followUp | nextTurn | off  (default followUp)
  */
@@ -683,7 +693,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerShortcut("ctrl+shift+b", {
-		description: "Background jobs",
+		// Requires CSI-u disambiguation; /bg is the portable fallback.
+		description: "Background jobs (also /bg)",
 		handler: async (ctx) => {
 			await openPanel(ctx);
 		},
