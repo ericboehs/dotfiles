@@ -437,6 +437,72 @@ test("run and runs are different commands, and neither shadows the other", async
   assert.ok(readRegistry().tasks[0].runningSince > 0, "run actually starts something");
 });
 
+test("a mistyped subcommand is told its own shape, not handed the full usage", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+  await ui.run("--name grades daily 9a :: x");
+
+  // Each of these previously fell through to the creation path and dumped the
+  // entire usage block, which buries the one line that matters.
+  const cases = [
+    ["show", /Usage: \/schedule show <id\|name>/],
+    ["run", /Usage: \/schedule run <id\|name>/],
+    ["runs", /Usage: \/schedule runs <id\|name>/],
+    ["pause", /Usage: \/schedule pause <id\|name\|all>/],
+    ["remove", /Usage: \/schedule remove <id\|name>/],
+    ["list all extra", /Usage: \/schedule list \[all\]/],
+    ["show grades extra", /Usage: \/schedule show <id\|name>/],
+    ["runs grades 20", /Usage: \/schedule runs <id\|name>/],
+  ];
+  for (const [input, expected] of cases) {
+    await ui.run(input);
+    assert.equal(ui.last().level, "error", `${input} should be an error`);
+    assert.match(ui.last().message, expected, `wrong guidance for "${input}"`);
+  }
+
+  assert.equal(readRegistry().tasks.length, 1, "no malformed input created a task");
+});
+
+test("pause all and resume all work, matching /loop", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+  await ui.run("--name a daily 9a :: x");
+  await ui.run("--name b daily 10a :: y");
+
+  await ui.run("pause all");
+  assert.deepEqual(readRegistry().tasks.map((task) => task.paused), [true, true]);
+
+  await ui.run("resume all");
+  assert.deepEqual(readRegistry().tasks.map((task) => task.paused), [false, false]);
+
+  await ui.run("resume all");
+  assert.match(ui.last().message, /Nothing to resume/, "a no-op says so rather than reporting success");
+});
+
+test("there is no bulk delete, because it is not undone by restarting pi", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+  await ui.run("--name a daily 9a :: x");
+  await ui.run("--name b daily 10a :: y");
+
+  for (const input of ["remove all", "cancel all", "clear"]) {
+    await ui.run(input);
+    assert.equal(ui.last().level, "error", `${input} should refuse`);
+  }
+  assert.equal(readRegistry().tasks.length, 2, "nothing was deleted");
+  assert.match(ui.last().message, /unlike \/loop/, "clear explains why it differs from the session command");
+});
+
+test("a task cannot be named all, which would make pause all ambiguous", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name all daily 9a :: x");
+  assert.equal(ui.last().level, "error");
+  assert.match(ui.last().message, /cannot be named all/);
+  assert.deepEqual(readRegistry().tasks, []);
+});
+
 test("/schedule remove takes the task out of the registry", async (t) => {
   withTempDir(t);
   const ui = mount();

@@ -147,6 +147,25 @@ function describeMisfire(task: DurableTask): string {
   return `catch up within ${formatDuration(policy)}`;
 }
 
+/**
+ * Management verbs and the shape each expects. Used only to explain a mistyped
+ * one; the matchers above remain the source of truth for what is accepted.
+ */
+const SUBCOMMAND_SHAPES: Record<string, string> = {
+  list: "list [all]",
+  ls: "list [all]",
+  show: "show <id|name>",
+  runs: "runs <id|name>",
+  history: "runs <id|name>",
+  run: "run <id|name>",
+  pause: "pause <id|name|all>",
+  resume: "resume <id|name|all>",
+  remove: "remove <id|name>",
+  rm: "remove <id|name>",
+  delete: "remove <id|name>",
+  cancel: "remove <id|name>",
+};
+
 /** What discovery this run gets, phrased for someone reading `show`. */
 export function describeFeatures(task: DurableTask): string {
   const enabled = enabledFeatures(task);
@@ -398,16 +417,29 @@ export default function durableScheduler(pi: ExtensionAPI): void {
           const paused = toggle[1].toLowerCase() === "pause";
           const selector = toggle[2];
           withRegistry((registry) => {
-            const existing = findTask(registry.tasks, selector);
-            const index = registry.tasks.indexOf(existing);
-            const task = { ...existing, paused };
-            // Resuming must not replay slots missed while paused.
-            if (!paused && task.nextRunAt <= Date.now()) {
-              task.nextRunAt = firstRunAfter(task) ?? task.nextRunAt;
+            // `all` matches /loop, where it already means every timer. Going
+            // away for a week should not mean naming each task in turn.
+            const targets = /^all$/i.test(selector)
+              ? registry.tasks.filter((task) => Boolean(task.paused) !== paused)
+              : [findTask(registry.tasks, selector)];
+            if (targets.length === 0) {
+              notice(ctx, `Nothing to ${paused ? "pause" : "resume"}`);
+              return;
             }
-            registry.tasks[index] = task;
+            for (const existing of targets) {
+              const index = registry.tasks.indexOf(existing);
+              const task = { ...existing, paused };
+              // Resuming must not replay slots missed while paused.
+              if (!paused && task.nextRunAt <= Date.now()) {
+                task.nextRunAt = firstRunAfter(task) ?? task.nextRunAt;
+              }
+              registry.tasks[index] = task;
+            }
             writeRegistry(registry);
-            notice(ctx, formatTask(task));
+            notice(ctx, registry.tasks
+              .filter((task) => targets.some((target) => target.id === task.id))
+              .map((task) => formatTask(task))
+              .join("\n"));
           });
           return;
         }
@@ -415,12 +447,35 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         const remove = input.match(/^(?:remove|rm|delete|cancel)\s+(\S+)$/i);
         if (remove?.[1]) {
           const selector = remove[1];
+          if (/^all$/i.test(selector)) {
+            // Deliberately not supported. pause all is reversible; this is not,
+            // and a fat-fingered `remove all` should not empty the registry.
+            notice(ctx, "remove takes one task. Remove them individually, or delete tasks.json", "error");
+            return;
+          }
           withRegistry((registry) => {
             const task = findTask(registry.tasks, selector);
             registry.tasks = registry.tasks.filter((candidate) => candidate.id !== task.id);
             writeRegistry(registry);
             notice(ctx, `Removed ${task.name ?? task.id}; its run history is kept until pi-scheduler prune`);
           });
+          return;
+        }
+
+        // Before treating this as a new task: if it opens with a management
+        // verb, the user meant that verb and got the shape wrong. Saying so
+        // beats dumping the whole usage, or worse, complaining that "show" is
+        // not a valid schedule.
+        const verb = input.split(/\s+/)[0]?.toLowerCase() ?? "";
+        if (verb === "clear") {
+          // /loop has clear; this deliberately does not. Wiping durable tasks
+          // is not undone by restarting pi.
+          notice(ctx, "No clear here, unlike /loop: remove tasks one at a time", "error");
+          return;
+        }
+        const shape = SUBCOMMAND_SHAPES[verb];
+        if (shape !== undefined) {
+          notice(ctx, `Usage: /schedule ${shape}`, "error");
           return;
         }
 
@@ -443,6 +498,12 @@ export default function durableScheduler(pi: ExtensionAPI): void {
             return;
           }
           const name = parsedFlags.flags.name;
+          if (typeof name === "string" && /^all$/i.test(name)) {
+            // `pause all` means every task; a task called all could never be
+            // selected on its own again.
+            notice(ctx, "A task cannot be named all; that word selects every task", "error");
+            return;
+          }
           if (typeof name === "string" && registry.tasks.some((task) => task.name === name)) {
             notice(ctx, `A task named ${name} already exists`, "error");
             return;

@@ -346,6 +346,9 @@ function commandAdd(rest, flags) {
     if (registry.tasks.length >= MAX_DURABLE_TASKS) {
       die(`already at ${MAX_DURABLE_TASKS} scheduled tasks`);
     }
+    if (flags.name && /^all$/i.test(flags.name)) {
+      die("a task cannot be named all; that word selects every task");
+    }
     if (flags.name && registry.tasks.some((task) => task.name === flags.name)) {
       die(`a task named ${flags.name} already exists`);
     }
@@ -395,20 +398,33 @@ function commandEdit(selector, flags) {
 
 function commandSetPaused(selector, paused) {
   withRegistry((registry) => {
-    const existing = findTask(registry.tasks, selector);
-    const index = registry.tasks.indexOf(existing);
-    const task = { ...existing, paused };
-    // Resuming a task whose slot passed while it slept should not fire a burst.
-    if (!paused && task.nextRunAt <= Date.now()) {
-      task.nextRunAt = firstRunAfter(task) ?? task.nextRunAt;
+    // `all` means every task here too, so the CLI and /schedule agree.
+    const targets = /^all$/i.test(selector)
+      ? registry.tasks.filter((task) => Boolean(task.paused) !== paused)
+      : [findTask(registry.tasks, selector)];
+    if (targets.length === 0) {
+      process.stdout.write(`Nothing to ${paused ? "pause" : "resume"}\n`);
+      return;
     }
-    registry.tasks[index] = task;
+    const lines = [];
+    for (const existing of targets) {
+      const index = registry.tasks.indexOf(existing);
+      const task = { ...existing, paused };
+      // Resuming a task whose slot passed while it slept should not fire a burst.
+      if (!paused && task.nextRunAt <= Date.now()) {
+        task.nextRunAt = firstRunAfter(task) ?? task.nextRunAt;
+      }
+      registry.tasks[index] = task;
+      lines.push(formatTask(task));
+    }
     writeRegistry(registry);
-    process.stdout.write(`${formatTask(task)}\n`);
+    process.stdout.write(`${lines.join("\n")}\n`);
   });
 }
 
 function commandRemove(selector) {
+  // No bulk delete: pause all is reversible, this is not.
+  if (/^all$/i.test(selector)) die("remove takes one task; remove them individually");
   withRegistry((registry) => {
     const task = findTask(registry.tasks, selector);
     registry.tasks = registry.tasks.filter((candidate) => candidate.id !== task.id);
