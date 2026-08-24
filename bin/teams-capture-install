@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Install teams-capture as a launchd agent that records every Teams meeting.
+#
+# The script form runs under `swift`, which is awkward for TCC: Accessibility
+# permission would have to be granted to the compiler. So compile a real binary
+# and grant permission to that instead.
+
+set -euo pipefail
+
+label="com.ericboehs.teams-capture"
+source_script="${BASH_SOURCE[0]%/*}/teams-capture"
+binary="$HOME/.local/bin/teams-capture-daemon"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/teams-capture"
+log="$log_dir/launchd.log"
+
+case "${1:-install}" in
+  uninstall)
+    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+    rm -f "$plist" "$binary"
+    echo "removed $label"
+    exit 0
+    ;;
+  install) ;;
+  *)
+    echo "usage: ${0##*/} [install|uninstall]" >&2
+    exit 1
+    ;;
+esac
+
+mkdir -p "${binary%/*}" "$log_dir"
+
+echo "building $binary"
+build_dir=$(mktemp -d)
+trap 'rm -rf "$build_dir"' EXIT
+cp "$source_script" "$build_dir/teams-capture.swift"
+swiftc -O -o "$binary" "$build_dir/teams-capture.swift"
+# Ad-hoc sign so TCC keeps recognising the binary across rebuilds.
+codesign --force --sign - "$binary"
+
+cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$binary</string>
+    <string>--watch</string>
+    <string>--auto-captions</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>$HOME</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$log</string>
+  <key>StandardErrorPath</key>
+  <string>$log</string>
+</dict>
+</plist>
+PLIST
+
+launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+launchctl bootstrap "gui/$UID" "$plist"
+
+cat <<INFO
+
+installed $label
+  binary:      $binary
+  plist:       $plist
+  log:         $log
+  transcripts: ${XDG_DATA_HOME:-$HOME/.local/share}/teams-capture
+
+Grant Accessibility to the binary or it cannot read Teams:
+  System Settings -> Privacy & Security -> Accessibility -> + -> $binary
+  (Shift-Cmd-G in the picker to type the path)
+  then: launchctl kickstart -k gui/$UID/$label
+
+  tail -f $log
+INFO

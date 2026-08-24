@@ -6,20 +6,26 @@
 // Teams only keeps ~3 live caption entries in the DOM at a time, so this polls
 // the accessibility tree and finalizes each utterance when it scrolls away.
 //
-// Output (default ~/.local/share/teams-capture):
+//   teams-capture              capture the current meeting, Ctrl-C to stop
+//   teams-capture --watch      run forever, one transcript per meeting
+//
+// Output (default ~/.local/share/teams-capture), created on first captured
+// line so meetings without captions leave no empty files behind:
 //   YYYYMMDD_HHMMSS-<meeting-slug>.jsonl   structured events
 //   YYYYMMDD_HHMMSS-<meeting-slug>.txt     readable transcript
 //
-// Requires: the terminal running this needs Accessibility permission
-// (System Settings → Privacy & Security → Accessibility).
+// Requires Accessibility permission for whatever runs this (terminal, or the
+// compiled binary when run from launchd).
 
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 // MARK: - Options
 
 struct Options {
     var intervalMs: UInt32 = 250
+    var idleIntervalMs: UInt32 = 2000
     var directory: String = {
         let base = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
             ?? NSHomeDirectory() + "/.local/share"
@@ -28,6 +34,8 @@ struct Options {
     var captureCaptions = true
     var captureChat = true
     var includeChatBacklog = false
+    var autoCaptions = false
+    var watch = false
     var jsonToStdout = false
     var quiet = false
     var pid: pid_t?
@@ -37,19 +45,27 @@ func usage() -> String {
     """
     usage: teams-capture [options]
 
-      --interval <ms>      poll interval (default 250)
+      --watch              stay running: one transcript per meeting, forever
+      --auto-captions      turn live captions on (⇧⌘A) when a meeting starts
+      --interval <ms>      poll interval while in a meeting (default 250)
+      --idle-interval <ms> poll interval while waiting for one (default 2000)
       --dir <path>         output directory (default $XDG_DATA_HOME/teams-capture)
       --no-captions        skip live captions
       --no-chat            skip meeting chat
-      --chat-backlog       also record chat messages already on screen at start
+      --chat-backlog       also record chat already on screen when joining
       --json               print JSONL to stdout instead of pretty lines
       --quiet              no stdout output
-      --pid <pid>          MSTeams pid (default: autodetect)
+      --pid <pid>          MSTeams pid (default: autodetect, refreshed in --watch)
       -h, --help           this help
 
-    Turn on live captions in the meeting; open the chat pane to capture chat.
-    Press Ctrl-C to stop — in-flight captions are flushed on exit.
+    Files are only created once there is something to write. Ctrl-C flushes
+    any in-flight captions.
     """
+}
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("teams-capture: \(message)\n".utf8))
+    exit(1)
 }
 
 func parseOptions() -> Options {
@@ -62,7 +78,10 @@ func parseOptions() -> Options {
     while !args.isEmpty {
         let flag = args.removeFirst()
         switch flag {
+        case "--watch": options.watch = true
+        case "--auto-captions": options.autoCaptions = true
         case "--interval": options.intervalMs = UInt32(next(flag)) ?? options.intervalMs
+        case "--idle-interval": options.idleIntervalMs = UInt32(next(flag)) ?? options.idleIntervalMs
         case "--dir": options.directory = (next(flag) as NSString).expandingTildeInPath
         case "--no-captions": options.captureCaptions = false
         case "--no-chat": options.captureChat = false
@@ -77,9 +96,8 @@ func parseOptions() -> Options {
     return options
 }
 
-func fail(_ message: String) -> Never {
+func status(_ message: String) {
     FileHandle.standardError.write(Data("teams-capture: \(message)\n".utf8))
-    exit(1)
 }
 
 // MARK: - Accessibility helpers
@@ -146,7 +164,7 @@ func findElement(from root: AXUIElement, depth: Int = 0, where match: (AXUIEleme
     return nil
 }
 
-// MARK: - Model
+// MARK: - Recording
 
 struct Utterance {
     var speaker: String
@@ -154,27 +172,87 @@ struct Utterance {
     var startedAt: Date
 }
 
+/// The scrolling terminal view: finished lines scroll up, in-progress speech
+/// updates in place below them (like `tail -f`). Independent of the files, so a
+/// meeting can be displayed before it has written anything.
+final class LiveView {
+    private let stdout = FileHandle.standardOutput
+    private let printsLines: Bool
+    private let updatesRegion: Bool
+    private var lines: [String] = []
+
+    init(options: Options) {
+        printsLines = !options.quiet && !options.jsonToStdout
+        updatesRegion = printsLines && isatty(STDOUT_FILENO) == 1
+    }
+
+    private static func terminalWidth() -> Int {
+        var size = winsize()
+        if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &size) == 0, size.ws_col > 0 { return Int(size.ws_col) }
+        return 100
+    }
+
+    /// Erase the region, leaving the cursor at the start of its first line.
+    func erase() {
+        guard updatesRegion, !lines.isEmpty else { lines = []; return }
+        var escape = "\r\u{1B}[2K"
+        for _ in 1..<max(1, lines.count) { escape += "\u{1B}[1A\u{1B}[2K" }
+        stdout.write(Data(escape.utf8))
+        lines = []
+    }
+
+    private func draw(_ rendered: [String]) {
+        guard updatesRegion, !rendered.isEmpty else { return }
+        stdout.write(Data(rendered.joined(separator: "\n").utf8))
+        lines = rendered
+    }
+
+    func set(_ pending: [String]) {
+        guard updatesRegion else { return }
+        let width = LiveView.terminalWidth()
+        let rendered = pending.map { line -> String in
+            var body = line.replacingOccurrences(of: "\n", with: " ")
+            if body.count > width - 1 { body = String(body.prefix(max(1, width - 2))) + "…" }
+            return body
+        }
+        guard rendered != lines else { return } // avoid redrawing unchanged text
+        erase()
+        draw(rendered)
+    }
+
+    /// Print a finished transcript line above the live region.
+    func permanent(_ line: String) {
+        guard printsLines else { return }
+        let pending = lines
+        erase()
+        stdout.write(Data((line + "\n").utf8))
+        draw(pending)
+    }
+}
+
+func elapsedString(from start: Date, to end: Date) -> String {
+    let total = max(0, Int(end.timeIntervalSince(start)))
+    return String(format: "%02d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
+}
+
 struct Recorder {
-    let startedAt = Date()
+    let startedAt: Date
     let jsonlURL: URL
     let textURL: URL
     private let jsonl: FileHandle
     private let text: FileHandle
     private let stdout = FileHandle.standardOutput
     let options: Options
-    /// True when we can draw an updating "live" line for in-progress speech.
-    let interactive: Bool
-    private var liveLines: [String] = []
 
-    init(options: Options, meeting: String) {
+    init(options: Options, meeting: String, startedAt: Date) {
         self.options = options
+        self.startedAt = startedAt
         let directory = URL(fileURLWithPath: options.directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let stamp = DateFormatter()
         stamp.dateFormat = "yyyyMMdd_HHmmss"
-        let slug = Recorder.slugify(meeting)
-        let base = "\(stamp.string(from: Date()))-\(slug)"
+        let base = "\(stamp.string(from: startedAt))-\(Recorder.slugify(meeting))"
         jsonlURL = directory.appendingPathComponent(base + ".jsonl")
         textURL = directory.appendingPathComponent(base + ".txt")
 
@@ -189,13 +267,6 @@ struct Recorder {
         text = textHandle
         jsonl.seekToEndOfFile()
         text.seekToEndOfFile()
-        interactive = !options.quiet && !options.jsonToStdout && isatty(STDOUT_FILENO) == 1
-    }
-
-    static func terminalWidth() -> Int {
-        var size = winsize()
-        if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &size) == 0, size.ws_col > 0 { return Int(size.ws_col) }
-        return 100
     }
 
     static func slugify(_ value: String) -> String {
@@ -215,10 +286,7 @@ struct Recorder {
         return formatter
     }()
 
-    func elapsed(_ date: Date) -> String {
-        let total = Int(date.timeIntervalSince(startedAt))
-        return String(format: "%02d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
-    }
+    func elapsed(_ date: Date) -> String { elapsedString(from: startedAt, to: date) }
 
     func writeJSON(_ payload: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
@@ -228,48 +296,8 @@ struct Recorder {
         if options.jsonToStdout && !options.quiet { stdout.write(Data(line.utf8)) }
     }
 
-    /// Erase the live region, leaving the cursor at the start of its first line.
-    private mutating func eraseLive() {
-        guard interactive, !liveLines.isEmpty else { liveLines = []; return }
-        var escape = "\r\u{1B}[2K"
-        for _ in 1..<max(1, liveLines.count) { escape += "\u{1B}[1A\u{1B}[2K" }
-        stdout.write(Data(escape.utf8))
-        liveLines = []
-    }
-
-    private mutating func drawLive(_ rendered: [String]) {
-        guard interactive, !rendered.isEmpty else { return }
-        stdout.write(Data(rendered.joined(separator: "\n").utf8))
-        liveLines = rendered
-    }
-
-    /// Show every in-progress utterance below the finished transcript, updating
-    /// in place. Finished lines scroll above it like `tail -f`.
-    mutating func setLive(_ lines: [String]) {
-        guard interactive else { return }
-        let width = Recorder.terminalWidth()
-        let rendered = lines.map { line -> String in
-            var body = line.replacingOccurrences(of: "\n", with: " ")
-            if body.count > width - 1 { body = String(body.prefix(max(1, width - 2))) + "…" }
-            return body
-        }
-        guard rendered != liveLines else { return } // avoid redrawing unchanged text
-        eraseLive()
-        drawLive(rendered)
-    }
-
-    mutating func clearLive() { eraseLive() }
-
-    mutating func writeLine(_ line: String) {
-        text.write(Data((line + "\n").utf8))
-        guard !options.jsonToStdout && !options.quiet else { return }
-        let live = liveLines
-        eraseLive()
-        stdout.write(Data((line + "\n").utf8))
-        drawLive(live)
-    }
-
-    mutating func record(kind: String, speaker: String, body: String, at date: Date, extra: [String: Any] = [:]) {
+    /// Append to both files; returns the transcript line for display.
+    func record(kind: String, speaker: String, body: String, at date: Date, extra: [String: Any] = [:]) -> String {
         var payload: [String: Any] = [
             "type": kind,
             "speaker": speaker,
@@ -280,41 +308,58 @@ struct Recorder {
         payload.merge(extra) { current, _ in current }
         writeJSON(payload)
         let tag = kind == "chat" ? "(chat) " : ""
-        writeLine("[\(elapsed(date))] \(tag)\(speaker): \(body)")
+        let line = "[\(elapsed(date))] \(tag)\(speaker): \(body)"
+        text.write(Data((line + "\n").utf8))
+        return line
     }
-
-    func metadata(_ payload: [String: Any]) { writeJSON(payload) }
 }
 
-// MARK: - Teams tree lookups
+// MARK: - Teams lookups
 
-func teamsPID(_ override: pid_t?) -> pid_t {
-    if let override { return override }
+func teamsPID() -> pid_t? {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
     process.arguments = ["-f", "Microsoft Teams.app/Contents/MacOS/MSTeams"]
     let pipe = Pipe()
     process.standardOutput = pipe
-    try? process.run()
+    guard (try? process.run()) != nil else { return nil }
     process.waitUntilExit()
     let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    guard let first = output.split(separator: "\n").first, let pid = pid_t(first) else {
-        fail("Microsoft Teams does not appear to be running")
-    }
-    return pid
+    return output.split(separator: "\n").first.flatMap { pid_t($0) }
 }
 
-func meetingTitle(_ app: AXUIElement) -> String {
-    let windows = axAttribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? []
-    for window in windows {
-        let title = axString(window, kAXTitleAttribute)
-        if !title.isEmpty { return title }
+/// The Leave button only exists while a call is up — our in-meeting signal.
+func meetingLeaveButton(_ app: AXUIElement) -> AXUIElement? {
+    findElement(from: app) { axDomID($0) == "hangup-button" }
+}
+
+func windowTitle(containing element: AXUIElement) -> String? {
+    var node: AXUIElement? = element
+    while let current = node {
+        if axString(current, kAXRoleAttribute) == "AXWindow" {
+            let title = axString(current, kAXTitleAttribute)
+            return title.isEmpty ? nil : title
+        }
+        node = axParent(current)
     }
-    return "Teams meeting"
+    return nil
+}
+
+func meetingTitle(_ app: AXUIElement, leaveButton: AXUIElement?) -> String {
+    var title = ""
+    if let leaveButton, let windowTitle = windowTitle(containing: leaveButton) { title = windowTitle }
+    if title.isEmpty {
+        let windows = axAttribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        title = windows.map { axString($0, kAXTitleAttribute) }.first { !$0.isEmpty } ?? ""
+    }
+    title = title
+        .replacingOccurrences(of: "| Microsoft Teams", with: "")
+        .trimmingCharacters(in: .whitespaces)
+    return title.isEmpty ? "Teams meeting" : title
 }
 
 /// Caption entries render as `fui-ChatMessageCompact__body` groups holding
-/// exactly [speaker, text]. Works for both the in-window panel and the pop-out.
+/// [speaker, text]. Works for both the in-window panel and the pop-out.
 let captionEntryClass = "fui-ChatMessageCompact__body"
 
 func isCaptionEntry(_ element: AXUIElement) -> Bool {
@@ -335,6 +380,19 @@ func captionEntries(_ container: AXUIElement) -> [(id: String, speaker: String, 
         guard !id.isEmpty else { return nil }
         return (id, texts[0], texts.dropFirst().joined(separator: " "))
     }
+}
+
+/// Teams' own shortcut for the captions panel, delivered straight to the app so
+/// it bypasses global event taps (e.g. a Hammerspoon remap of ⇧⌘A).
+func toggleCaptionsShortcut(pid: pid_t) {
+    let source = CGEventSource(stateID: .privateState)
+    let keyA: CGKeyCode = 0
+    guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyA, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: keyA, keyDown: false) else { return }
+    down.flags = [.maskCommand, .maskShift]
+    up.flags = [.maskCommand, .maskShift]
+    down.postToPid(pid)
+    up.postToPid(pid)
 }
 
 /// The chat message list: the grandparent of any rendered message body.
@@ -362,72 +420,85 @@ func chatMessages(_ container: AXUIElement, limit: Int = 20) -> [ChatMessage] {
     }
 }
 
-// MARK: - Main loop
+// MARK: - Session
 
-var stopRequested = false
-signal(SIGINT) { _ in stopRequested = true }
-signal(SIGTERM) { _ in stopRequested = true }
+/// One meeting: holds the caption/chat state and creates files lazily, so a
+/// meeting that never produces a line leaves nothing behind.
+final class Session {
+    let options: Options
+    let live: LiveView
+    let startedAt = Date()
+    var title: String
+    private var recorder: Recorder?
+    private var captionsContainer: AXUIElement?
+    private var chatContainer: AXUIElement?
+    private var lastRelocate = Date.distantPast
+    private var activeCaptions: [String: Utterance] = [:]
+    private var captionOrder: [String] = []
+    private var seenChatIDs = Set<String>()
+    private var chatBaselineDone: Bool
+    private var captionAttempts = 0
+    private var lastCaptionAttempt = Date.distantPast
 
-let options = parseOptions()
-let pid = teamsPID(options.pid)
-let app = AXUIElementCreateApplication(pid)
-AXUIElementSetMessagingTimeout(app, 2.0)
-
-guard AXIsProcessTrusted() else {
-    fail("no Accessibility permission — grant it to your terminal in System Settings → Privacy & Security → Accessibility")
-}
-guard !axChildren(app).isEmpty else { fail("cannot read the Teams accessibility tree (pid \(pid))") }
-
-let meeting = meetingTitle(app)
-var recorder = Recorder(options: options, meeting: meeting)
-recorder.metadata([
-    "type": "metadata",
-    "source": "teams-ax",
-    "meeting": meeting,
-    "pid": Int(pid),
-    "recorded_at": Recorder.isoFormatter.string(from: recorder.startedAt)
-])
-if !options.quiet {
-    FileHandle.standardError.write(Data("""
-    teams-capture: \(meeting) (pid \(pid))
-      jsonl: \(recorder.jsonlURL.path)
-      text:  \(recorder.textURL.path)
-
-    """.utf8))
-}
-
-var captionsContainer: AXUIElement?
-var chatContainer: AXUIElement?
-var lastRelocate = Date.distantPast
-var activeCaptions: [String: Utterance] = [:]
-var captionOrder: [String] = []
-var seenChatIDs = Set<String>()
-var chatBaselineDone = options.includeChatBacklog
-
-func finalizeCaption(_ id: String, at date: Date) {
-    guard let utterance = activeCaptions.removeValue(forKey: id) else { return }
-    captionOrder.removeAll { $0 == id }
-    guard !utterance.text.isEmpty else { return }
-    recorder.record(
-        kind: "caption",
-        speaker: utterance.speaker,
-        body: utterance.text,
-        at: utterance.startedAt,
-        extra: ["node_id": id, "ended_at": Recorder.isoFormatter.string(from: date)]
-    )
-}
-
-while !stopRequested {
-    let now = Date()
-    let needsRelocate = (options.captureCaptions && captionsContainer == nil)
-        || (options.captureChat && chatContainer == nil)
-    if needsRelocate && now.timeIntervalSince(lastRelocate) > 3 {
-        lastRelocate = now
-        if options.captureCaptions { captionsContainer = findCaptionsContainer(app) }
-        if options.captureChat { chatContainer = findChatContainer(app) }
+    init(options: Options, live: LiveView, title: String) {
+        self.options = options
+        self.live = live
+        self.title = title
+        chatBaselineDone = options.includeChatBacklog
     }
 
-    if options.captureCaptions, let container = captionsContainer {
+    var wroteAnything: Bool { recorder != nil }
+    var files: (jsonl: URL, text: URL)? { recorder.map { ($0.jsonlURL, $0.textURL) } }
+
+    /// Files are created on first write, so a silent meeting leaves no litter.
+    private func recorderForWriting() -> Recorder {
+        if let recorder { return recorder }
+        let created = Recorder(options: options, meeting: title, startedAt: startedAt)
+        created.writeJSON([
+            "type": "metadata",
+            "source": "teams-ax",
+            "meeting": title,
+            "recorded_at": Recorder.isoFormatter.string(from: startedAt)
+        ])
+        recorder = created
+        if !options.quiet {
+            status("recording \"\(title)\"\n  jsonl: \(created.jsonlURL.path)\n  text:  \(created.textURL.path)")
+        }
+        return created
+    }
+
+    private func emit(kind: String, speaker: String, body: String, at date: Date, extra: [String: Any]) {
+        let line = recorderForWriting().record(kind: kind, speaker: speaker, body: body, at: date, extra: extra)
+        live.permanent(line)
+    }
+
+    func tick(app: AXUIElement, pid: pid_t, now: Date) {
+        let needsCaptions = options.captureCaptions && captionsContainer == nil
+        let needsChat = options.captureChat && chatContainer == nil
+        if (needsCaptions || needsChat) && now.timeIntervalSince(lastRelocate) > 3 {
+            lastRelocate = now
+            if needsCaptions { captionsContainer = findCaptionsContainer(app) }
+            if needsChat { chatContainer = findChatContainer(app) }
+        }
+
+        if options.autoCaptions { ensureCaptionsOn(pid: pid, now: now) }
+        if options.captureCaptions { pollCaptions(now: now) }
+        if options.captureChat { pollChat(now: now) }
+    }
+
+    /// Nudge Teams into showing captions, a few times, then stop pestering it.
+    private func ensureCaptionsOn(pid: pid_t, now: Date) {
+        guard captionsContainer == nil, captionAttempts < 3,
+              now.timeIntervalSince(startedAt) > 3,
+              now.timeIntervalSince(lastCaptionAttempt) > 8 else { return }
+        captionAttempts += 1
+        lastCaptionAttempt = now
+        toggleCaptionsShortcut(pid: pid)
+        if !options.quiet { status("asked Teams to show live captions (attempt \(captionAttempts))") }
+    }
+
+    private func pollCaptions(now: Date) {
+        guard let container = captionsContainer else { return }
         let entries = captionEntries(container)
         if entries.isEmpty && axChildren(container).isEmpty {
             captionsContainer = nil // panel closed or re-rendered
@@ -444,15 +515,17 @@ while !stopRequested {
                 captionOrder.append(entry.id)
             }
         }
+        guard recorder != nil || !captionOrder.isEmpty else { return }
         // Mirror every in-progress utterance; finished lines scroll above.
-        let live = captionOrder.compactMap { id -> String? in
+        let pending = captionOrder.compactMap { id -> String? in
             guard let utterance = activeCaptions[id] else { return nil }
-            return "[\(recorder.elapsed(utterance.startedAt))] \(utterance.speaker): \(utterance.text)"
+            return "[\(elapsedString(from: startedAt, to: utterance.startedAt))] \(utterance.speaker): \(utterance.text)"
         }
-        recorder.setLive(live.enumerated().map { $0.offset == live.count - 1 ? "\($0.element) ▍" : $0.element })
+        live.set(pending.enumerated().map { $0.offset == pending.count - 1 ? "\($0.element) ▍" : $0.element })
     }
 
-    if options.captureChat, let container = chatContainer {
+    private func pollChat(now: Date) {
+        guard let container = chatContainer else { return }
         let messages = chatMessages(container)
         if messages.isEmpty && axChildren(container).isEmpty { chatContainer = nil }
         for message in messages {
@@ -463,29 +536,123 @@ while !stopRequested {
             guard !seenChatIDs.contains(message.id) else { continue }
             seenChatIDs.insert(message.id)
             let sent = Double(message.id).map { Date(timeIntervalSince1970: $0 / 1000) } ?? now
-            recorder.record(
+            emit(
                 kind: "chat",
                 speaker: message.author,
                 body: message.text,
-                at: sent > recorder.startedAt ? sent : now,
+                at: sent > startedAt ? sent : now,
                 extra: ["message_id": message.id]
             )
         }
         if !messages.isEmpty { chatBaselineDone = true }
     }
 
-    usleep(options.intervalMs * 1000)
+    private func finalizeCaption(_ id: String, at date: Date) {
+        guard let utterance = activeCaptions.removeValue(forKey: id) else { return }
+        captionOrder.removeAll { $0 == id }
+        guard !utterance.text.isEmpty else { return }
+        emit(
+            kind: "caption",
+            speaker: utterance.speaker,
+            body: utterance.text,
+            at: utterance.startedAt,
+            extra: ["node_id": id, "ended_at": Recorder.isoFormatter.string(from: date)]
+        )
+    }
+
+    /// Flush in-flight captions and close out the transcript.
+    func finish(at date: Date) {
+        live.erase()
+        for id in captionOrder { finalizeCaption(id, at: date) }
+        guard let writer = recorder else { return }
+        writer.writeJSON([
+            "type": "metadata",
+            "event": "stopped",
+            "stopped_at": Recorder.isoFormatter.string(from: date),
+            "duration": writer.elapsed(date)
+        ])
+        if !options.quiet { status("finished \"\(title)\" after \(writer.elapsed(date))") }
+    }
 }
 
-let stoppedAt = Date()
-recorder.clearLive()
-for id in captionOrder { finalizeCaption(id, at: stoppedAt) }
-recorder.metadata([
-    "type": "metadata",
-    "event": "stopped",
-    "stopped_at": Recorder.isoFormatter.string(from: stoppedAt),
-    "duration": recorder.elapsed(stoppedAt)
-])
-if !options.quiet {
-    FileHandle.standardError.write(Data("\nteams-capture: stopped after \(recorder.elapsed(stoppedAt))\n".utf8))
+// MARK: - Main
+
+var stopRequested = false
+signal(SIGINT) { _ in stopRequested = true }
+signal(SIGTERM) { _ in stopRequested = true }
+
+let options = parseOptions()
+let live = LiveView(options: options)
+
+guard AXIsProcessTrusted() else {
+    fail("no Accessibility permission — grant it in System Settings → Privacy & Security → Accessibility")
 }
+
+var currentPID: pid_t?
+var app: AXUIElement?
+var session: Session?
+var leaveMissingSince: Date?
+
+func attach(to pid: pid_t) {
+    let element = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(element, 2.0)
+    currentPID = pid
+    app = element
+}
+
+if let pid = options.pid ?? teamsPID() { attach(to: pid) }
+if !options.watch {
+    guard let app, !axChildren(app).isEmpty else {
+        fail("cannot read the Teams accessibility tree — is Teams running?")
+    }
+    let leave = meetingLeaveButton(app)
+    session = Session(options: options, live: live, title: meetingTitle(app, leaveButton: leave))
+} else if !options.quiet {
+    status("watching for Teams meetings…")
+}
+
+while !stopRequested {
+    let now = Date()
+
+    if options.watch {
+        // Teams can quit and come back with a new pid.
+        if app == nil || axChildren(app!).isEmpty {
+            if let pid = options.pid ?? teamsPID(), pid != currentPID || app == nil { attach(to: pid) }
+        }
+    }
+
+    guard let app else {
+        usleep(options.idleIntervalMs * 1000)
+        continue
+    }
+
+    if options.watch {
+        let leave = meetingLeaveButton(app)
+        if leave != nil {
+            leaveMissingSince = nil
+            if session == nil, let pid = currentPID {
+                let title = meetingTitle(app, leaveButton: leave)
+                session = Session(options: options, live: live, title: title)
+                if !options.quiet { status("joined \"\(title)\" (pid \(pid))") }
+            }
+        } else if session != nil {
+            // Debounce: the button vanishes briefly during UI transitions.
+            let missingSince = leaveMissingSince ?? now
+            leaveMissingSince = missingSince
+            if now.timeIntervalSince(missingSince) > 6 {
+                session?.finish(at: now)
+                session = nil
+                leaveMissingSince = nil
+            }
+        }
+    }
+
+    if let active = session, let pid = currentPID {
+        active.tick(app: app, pid: pid, now: now)
+        usleep(options.intervalMs * 1000)
+    } else {
+        usleep(options.idleIntervalMs * 1000)
+    }
+}
+
+session?.finish(at: Date())
