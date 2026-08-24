@@ -12,7 +12,7 @@
 // border and leaves every other surface — transcript, tools, markdown, syntax
 // — exactly as the theme author wrote it. `bashMode` is left alone on purpose,
 // so `!` still turns the border its own color no matter what /color is set to.
-// The footer imports sessionColorAnsi() to paint a `/name`d session to match.
+// The footer paints a `/name`d session to match, reading the same stash.
 //
 // Two consequences of pi's setThemeInstance(), both intentional trades:
 //   - the theme file watcher stops, so editing the active custom theme's JSON
@@ -100,12 +100,11 @@ type ColorValue = string | number;
  * The SGR foreground the editor border is currently painted with, or undefined
  * when no session color is set.
  *
- * Exported for the footer, which paints an explicit session name to match —
- * the stored sequence rather than a recomputed one, so the two can't disagree
- * about the terminal's color depth. Importing this module from another
- * extension is safe: pi loads extensions by absolute path, so the import
- * resolves to the same module instance and the default export is not run a
- * second time.
+ * The stored sequence rather than a recomputed one, so nothing can disagree
+ * about the terminal's color depth. The footer wants the same value but reads
+ * STASH_KEY off globalThis instead of importing this: an unresolvable import
+ * aborts pi's launch outright, and the footer should not stop working on a
+ * host where only some of these extensions are present.
  */
 export function sessionColorAnsi(): string | undefined {
   return stash().ansi;

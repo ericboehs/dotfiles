@@ -29,7 +29,6 @@ import type {
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
-import { sessionColorAnsi } from "./color.ts";
 
 const GIT_TTL_MS = 5_000;
 const GIT_TIMEOUT_MS = 1_000;
@@ -325,6 +324,22 @@ function formatGit(branch: string | null, state: GitState): string {
 
 function color(code: number, text: string): string {
   return text ? `\x1b[${code}m${text}\x1b[39m` : "";
+}
+
+/**
+ * The SGR foreground /color painted the editor border with, or undefined when
+ * no session color is set.
+ *
+ * Read out of color.ts's globalThis stash rather than imported from it. An
+ * import is the same value but a hard dependency: pi aborts the whole launch
+ * when an extension's import cannot resolve, so a host that has footer.ts but
+ * not color.ts — which is exactly what a partially-applied extensions
+ * directory looks like — gets no pi at all rather than an uncolored name.
+ * The key is part of color.ts's contract; see its STASH_KEY.
+ */
+function sessionColorAnsi(): string | undefined {
+  const stash = (globalThis as { __piSessionColor?: { ansi?: string } }).__piSessionColor;
+  return stash?.ansi;
 }
 
 /** Wrap text in a ready-made SGR foreground sequence (from /color). */
