@@ -32,14 +32,14 @@
 # Heuristics remain as fallbacks for both: an explicit id on the command line,
 # then the newest transcript not already claimed by an earlier pane.
 #
-# Usage: tmux-agent-save [SESSION_NAME]
-#   SESSION_NAME defaults to "future"
+# Usage: tmux-agent-save [SESSION_NAME...]
+#   With no arguments every live tmux session is saved, each to its own file.
+#   A session holding no agents is reported and left alone rather than
+#   overwriting an earlier save of it with an empty one.
 
 set -euo pipefail
 
-SESSION_NAME="${1:-future}"
 SAVE_DIR="$HOME/.config/tmux-agent"
-SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
 
 CLAUDE_SESSIONS="$HOME/.claude/sessions"
 CLAUDE_PROJECTS="$HOME/.claude/projects"
@@ -58,14 +58,32 @@ for dep in tmux jq; do
   command -v "$dep" >/dev/null || { echo "Error: '$dep' is required" >&2; exit 1; }
 done
 
-mkdir -p "$SAVE_DIR"
+TARGETS=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --help|-h)
+      # Print the header comment block, stopping at the first non-comment line.
+      awk 'NR>1 { if (/^#/) { sub(/^# ?/, ""); print } else { exit } }' "$0"
+      exit 0
+      ;;
+    -*) echo "Error: unknown option '$1'" >&2; exit 1 ;;
+    *) TARGETS+=("$1"); shift ;;
+  esac
+done
 
-if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-  echo "Error: tmux session '$SESSION_NAME' not found" >&2
-  echo "Available sessions:" >&2
-  tmux list-sessions -F '  #{session_name}' 2>/dev/null >&2 || true
-  exit 1
+# No session named: take them all. Read line by line, because a tmux session
+# name may contain spaces.
+if [ ${#TARGETS[@]} -eq 0 ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && TARGETS+=("$line")
+  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+  if [ ${#TARGETS[@]} -eq 0 ]; then
+    echo "Error: no tmux sessions are running" >&2
+    exit 1
+  fi
 fi
+
+mkdir -p "$SAVE_DIR"
 
 # --- process helpers ------------------------------------------------------
 
@@ -280,172 +298,207 @@ claude_id_most_recent() {
 
 # --- scan -----------------------------------------------------------------
 
-echo "Scanning tmux session: $SESSION_NAME"
-echo ""
-
+# Sessions already spoken for. Deliberately global across every tmux session
+# scanned in one run: a conversation lives in exactly one pane, so a transcript
+# claimed while scanning "code" must not be guessed at again while scanning
+# "future".
 CLAIMED=""
-entries="[]"
-total=0
-found=0
 
-while IFS='|' read -r window_index pane_index pane_pid window_name; do
-  read -r agent agent_pid < <(agent_in_pane "$pane_pid"; echo)
-  [ -n "${agent:-}" ] || continue
+# Scan one tmux session and write its save file. Returns non-zero when the
+# session holds no agents, so the caller can leave any earlier save alone.
+save_session() {
+  local SESSION_NAME="$1"
+  local SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
+  local entries="[]" total=0 found=0
+  local window_index pane_index pane_pid window_name
+  local agent agent_pid agent_cmd state_file dir
+  local session_id session_file session_label detection_method cwd extra agent_dir
+  local status_icon tmp
 
-  total=$((total + 1))
-  session_id=""
-  session_file=""
-  session_label=""
-  detection_method="none"
-  cwd=""
-  extra=""
-  agent_dir=""
+  echo "Scanning tmux session: $SESSION_NAME"
 
-  agent_cmd=$(ps -ww -o args= -p "$agent_pid" 2>/dev/null || true)
+  while IFS='|' read -r window_index pane_index pane_pid window_name; do
+    read -r agent agent_pid < <(agent_in_pane "$pane_pid"; echo)
+    [ -n "${agent:-}" ] || continue
 
-  if [ "$agent" = "claude" ]; then
-    state_file="$CLAUDE_SESSIONS/$agent_pid.json"
+    total=$((total + 1))
+    session_id=""
+    session_file=""
+    session_label=""
+    detection_method="none"
+    cwd=""
+    extra=""
+    agent_dir=""
 
-    # Method 1 (authoritative): Claude's own per-pid session state.
-    if [ -f "$state_file" ]; then
-      session_id=$(jq -r '.sessionId // empty' "$state_file" 2>/dev/null || true)
-      cwd=$(jq -r '.cwd // empty' "$state_file" 2>/dev/null || true)
-      session_label=$(jq -r '.name // empty' "$state_file" 2>/dev/null || true)
-      [ -n "$session_id" ] && detection_method="agent_state"
+    agent_cmd=$(ps -ww -o args= -p "$agent_pid" 2>/dev/null || true)
+
+    if [ "$agent" = "claude" ]; then
+      state_file="$CLAUDE_SESSIONS/$agent_pid.json"
+
+      # Method 1 (authoritative): Claude's own per-pid session state.
+      if [ -f "$state_file" ]; then
+        session_id=$(jq -r '.sessionId // empty' "$state_file" 2>/dev/null || true)
+        cwd=$(jq -r '.cwd // empty' "$state_file" 2>/dev/null || true)
+        session_label=$(jq -r '.name // empty' "$state_file" 2>/dev/null || true)
+        [ -n "$session_id" ] && detection_method="agent_state"
+      fi
+
+      [ -n "$cwd" ] || cwd=$(cwd_of_pid "$agent_pid")
+
+      # Method 2: an explicit --resume on the command line.
+      if [ -z "$session_id" ]; then
+        session_id=$(claude_id_from_args "$agent_cmd")
+        [ -n "$session_id" ] && detection_method="command_args"
+      fi
+
+      # Method 3: most recent unclaimed transcript for this cwd.
+      if [ -z "$session_id" ] && [ -n "$cwd" ]; then
+        session_id=$(claude_id_most_recent "$(claude_project_dir "$cwd")")
+        [ -n "$session_id" ] && detection_method="most_recent_fallback"
+      fi
+
+      if [ -n "$session_id" ] && [ -n "$cwd" ]; then
+        session_file="$(claude_project_dir "$cwd")/$session_id.jsonl"
+        [ -f "$session_file" ] || session_file=""
+      fi
+
+      # Permission posture is a property of the launch, not of the transcript,
+      # so it has to be carried across by hand.
+      case "$agent_cmd" in
+        *--dangerously-skip-permissions*) extra="--dangerously-skip-permissions" ;;
+      esac
+    else
+      state_file="$CLAUDE_SESSIONS/$agent_pid.json"
+
+      # Method 1 (authoritative): the session pi-claude-link registered.
+      if [ -f "$state_file" ]; then
+        session_id=$(jq -r '.sessionId // empty' "$state_file" 2>/dev/null || true)
+        cwd=$(jq -r '.cwd // empty' "$state_file" 2>/dev/null || true)
+        session_label=$(jq -r '.name // empty' "$state_file" 2>/dev/null || true)
+        [ -n "$session_id" ] && detection_method="agent_state"
+      fi
+
+      [ -n "$cwd" ] || cwd=$(cwd_of_pid "$agent_pid")
+
+      [ -n "$session_id" ] && session_file=$(pi_file_for_id "$cwd" "$session_id")
+
+      # The remaining methods cannot know the profile, so they look where an
+      # unconfigured pi would have written.
+      dir=""
+      [ -n "$cwd" ] && dir=$(pi_session_dir "$PI_DEFAULT_AGENT_DIR" "$cwd")
+
+      # Method 2: an explicit --session/--session-id/--fork.
+      if [ -z "$session_file" ]; then
+        session_file=$(pi_file_from_args "$agent_cmd" "$dir")
+        [ -n "$session_file" ] && detection_method="command_args"
+      fi
+
+      # Method 3: the session that began when this process did.
+      if [ -z "$session_file" ] && [ -n "$dir" ]; then
+        session_file=$(pi_file_by_start_time "$dir" "$(proc_start_epoch "$agent_pid")")
+        [ -n "$session_file" ] && detection_method="start_time_match"
+      fi
+
+      # Method 4: newest unclaimed session for this project.
+      if [ -z "$session_file" ] && [ -n "$dir" ]; then
+        session_file=$(pi_file_most_recent "$dir")
+        [ -n "$session_file" ] && detection_method="most_recent_fallback"
+      fi
+
+      if [ -n "$session_file" ]; then
+        [ -n "$session_id" ] || session_id=$(pi_id_of_file "$session_file")
+        [ -n "$session_label" ] || session_label=$(pi_name_of_file "$session_file")
+        # Only worth recording when it is not the profile pi would pick anyway.
+        agent_dir=$(pi_agent_dir_of_file "$session_file")
+        [ "$agent_dir" = "$PI_DEFAULT_AGENT_DIR" ] && agent_dir=""
+      fi
+
+      case "$agent_cmd" in
+        *--approve*|*\ -a\ *) extra="--approve" ;;
+      esac
     fi
 
-    [ -n "$cwd" ] || cwd=$(cwd_of_pid "$agent_pid")
+    [ -n "$session_id" ] && CLAIMED="$CLAIMED $session_id"
 
-    # Method 2: an explicit --resume on the command line.
-    if [ -z "$session_id" ]; then
-      session_id=$(claude_id_from_args "$agent_cmd")
-      [ -n "$session_id" ] && detection_method="command_args"
+    if [ -n "$session_id" ]; then
+      status_icon="✓"
+      found=$((found + 1))
+    else
+      status_icon="✗"
     fi
 
-    # Method 3: most recent unclaimed transcript for this cwd.
-    if [ -z "$session_id" ] && [ -n "$cwd" ]; then
-      session_id=$(claude_id_most_recent "$(claude_project_dir "$cwd")")
-      [ -n "$session_id" ] && detection_method="most_recent_fallback"
-    fi
+    echo "  $status_icon Window $window_index ($window_name) [$agent] → ${session_id:-(unknown)} ($detection_method)"
+    echo "    cwd: ${cwd:-(unknown)}${session_label:+  name: $session_label}${agent_dir:+  profile: $(basename "$agent_dir")}"
 
-    if [ -n "$session_id" ] && [ -n "$cwd" ]; then
-      session_file="$(claude_project_dir "$cwd")/$session_id.jsonl"
-      [ -f "$session_file" ] || session_file=""
-    fi
+    entries=$(jq -c \
+      --arg agent "$agent" \
+      --argjson window_index "$window_index" \
+      --argjson pane_index "$pane_index" \
+      --arg window_name "$window_name" \
+      --arg cwd "$cwd" \
+      --arg session_id "$session_id" \
+      --arg session_file "$session_file" \
+      --arg session_name "$session_label" \
+      --arg detection_method "$detection_method" \
+      --arg extra "$extra" \
+      --arg agent_dir "$agent_dir" \
+      --argjson agent_pid "$agent_pid" \
+      '. + [{
+         agent: $agent,
+         agent_dir: $agent_dir,
+         window_index: $window_index,
+         window_name: $window_name,
+         pane_index: $pane_index,
+         cwd: $cwd,
+         session_id: $session_id,
+         session_file: $session_file,
+         session_name: $session_name,
+         detection_method: $detection_method,
+         extra_args: ($extra | split(" ") | map(select(length > 0))),
+         agent_pid: $agent_pid
+       }]' <<<"$entries")
+  done < <(tmux list-panes -t "$SESSION_NAME" -s -F '#{window_index}|#{pane_index}|#{pane_pid}|#{window_name}')
 
-    # Permission posture is a property of the launch, not of the transcript,
-    # so it has to be carried across by hand.
-    case "$agent_cmd" in
-      *--dangerously-skip-permissions*) extra="--dangerously-skip-permissions" ;;
-    esac
-  else
-    state_file="$CLAUDE_SESSIONS/$agent_pid.json"
-
-    # Method 1 (authoritative): the session pi-claude-link registered.
-    if [ -f "$state_file" ]; then
-      session_id=$(jq -r '.sessionId // empty' "$state_file" 2>/dev/null || true)
-      cwd=$(jq -r '.cwd // empty' "$state_file" 2>/dev/null || true)
-      session_label=$(jq -r '.name // empty' "$state_file" 2>/dev/null || true)
-      [ -n "$session_id" ] && detection_method="agent_state"
-    fi
-
-    [ -n "$cwd" ] || cwd=$(cwd_of_pid "$agent_pid")
-
-    [ -n "$session_id" ] && session_file=$(pi_file_for_id "$cwd" "$session_id")
-
-    # The remaining methods cannot know the profile, so they look where an
-    # unconfigured pi would have written.
-    dir=""
-    [ -n "$cwd" ] && dir=$(pi_session_dir "$PI_DEFAULT_AGENT_DIR" "$cwd")
-
-    # Method 2: an explicit --session/--session-id/--fork.
-    if [ -z "$session_file" ]; then
-      session_file=$(pi_file_from_args "$agent_cmd" "$dir")
-      [ -n "$session_file" ] && detection_method="command_args"
-    fi
-
-    # Method 3: the session that began when this process did.
-    if [ -z "$session_file" ] && [ -n "$dir" ]; then
-      session_file=$(pi_file_by_start_time "$dir" "$(proc_start_epoch "$agent_pid")")
-      [ -n "$session_file" ] && detection_method="start_time_match"
-    fi
-
-    # Method 4: newest unclaimed session for this project.
-    if [ -z "$session_file" ] && [ -n "$dir" ]; then
-      session_file=$(pi_file_most_recent "$dir")
-      [ -n "$session_file" ] && detection_method="most_recent_fallback"
-    fi
-
-    if [ -n "$session_file" ]; then
-      [ -n "$session_id" ] || session_id=$(pi_id_of_file "$session_file")
-      [ -n "$session_label" ] || session_label=$(pi_name_of_file "$session_file")
-      # Only worth recording when it is not the profile pi would pick anyway.
-      agent_dir=$(pi_agent_dir_of_file "$session_file")
-      [ "$agent_dir" = "$PI_DEFAULT_AGENT_DIR" ] && agent_dir=""
-    fi
-
-    case "$agent_cmd" in
-      *--approve*|*\ -a\ *) extra="--approve" ;;
-    esac
+  if [ "$total" -eq 0 ]; then
+    echo "  (no panes running a coding agent; leaving any existing save alone)"
+    return 1
   fi
 
-  [ -n "$session_id" ] && CLAIMED="$CLAIMED $session_id"
+  tmp=$(mktemp)
+  jq -n \
+    --arg session_name "$SESSION_NAME" \
+    --arg saved_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson windows "$entries" \
+    '{session_name: $session_name, saved_at: $saved_at, windows: $windows}' >"$tmp"
+  mv "$tmp" "$SAVE_FILE"
 
-  if [ -n "$session_id" ]; then
-    status_icon="✓"
-    found=$((found + 1))
-  else
-    status_icon="✗"
+  echo "  saved $found/$total to $SAVE_FILE"
+  return 0
+}
+
+# --- drive ----------------------------------------------------------------
+
+saved=0
+empty=0
+missing=0
+
+for name in "${TARGETS[@]}"; do
+  if ! tmux has-session -t "$name" 2>/dev/null; then
+    echo "Error: tmux session '$name' not found" >&2
+    missing=$((missing + 1))
+    continue
   fi
-
-  echo "  $status_icon Window $window_index ($window_name) [$agent] → ${session_id:-(unknown)} ($detection_method)"
-  echo "    cwd: ${cwd:-(unknown)}${session_label:+  name: $session_label}${agent_dir:+  profile: $(basename "$agent_dir")}"
-
-  entries=$(jq -c \
-    --arg agent "$agent" \
-    --argjson window_index "$window_index" \
-    --argjson pane_index "$pane_index" \
-    --arg window_name "$window_name" \
-    --arg cwd "$cwd" \
-    --arg session_id "$session_id" \
-    --arg session_file "$session_file" \
-    --arg session_name "$session_label" \
-    --arg detection_method "$detection_method" \
-    --arg extra "$extra" \
-    --arg agent_dir "$agent_dir" \
-    --argjson agent_pid "$agent_pid" \
-    '. + [{
-       agent: $agent,
-       agent_dir: $agent_dir,
-       window_index: $window_index,
-       window_name: $window_name,
-       pane_index: $pane_index,
-       cwd: $cwd,
-       session_id: $session_id,
-       session_file: $session_file,
-       session_name: $session_name,
-       detection_method: $detection_method,
-       extra_args: ($extra | split(" ") | map(select(length > 0))),
-       agent_pid: $agent_pid
-     }]' <<<"$entries")
-done < <(tmux list-panes -t "$SESSION_NAME" -s -F '#{window_index}|#{pane_index}|#{pane_pid}|#{window_name}')
-
-if [ "$total" -eq 0 ]; then
-  echo "  (no panes running a coding agent found)"
+  if save_session "$name"; then
+    saved=$((saved + 1))
+  else
+    empty=$((empty + 1))
+  fi
   echo ""
-  echo "Nothing to save; leaving any existing $SAVE_FILE untouched." >&2
-  exit 1
-fi
+done
 
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-jq -n \
-  --arg session_name "$SESSION_NAME" \
-  --arg saved_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --argjson windows "$entries" \
-  '{session_name: $session_name, saved_at: $saved_at, windows: $windows}' >"$tmp"
-mv "$tmp" "$SAVE_FILE"
+echo "Saved $saved session(s) to $SAVE_DIR."
+[ "$empty" -gt 0 ] && echo "$empty session(s) held no agents."
+[ "$missing" -gt 0 ] && echo "$missing session(s) could not be found." >&2
 
-echo ""
-echo "Saved to: $SAVE_FILE"
-echo "Windows with agent sessions: $found/$total"
+# Nothing written at all is a failure worth reporting to a caller.
+[ "$saved" -gt 0 ]

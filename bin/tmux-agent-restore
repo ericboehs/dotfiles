@@ -17,17 +17,27 @@
 #   SESSION_NAME defaults to "future"
 #   --dry-run, -n   Show what would be done without executing
 #   --list, -l      List saved sessions
+# Usage: tmux-agent-restore [SESSION_NAME...] [OPTIONS]
+#   --all, -A       Restore every saved session
+#   --dry-run, -n   Show what would be done without executing
+#   --list, -l      List saved sessions
 #   --force, -f     Restore even when cwd/transcript checks fail
+#
+# Naming a target is required. tmux-agent-save sweeps every live session
+# because reading state is free, but restoring launches an agent process per
+# window, so this end asks to be told rather than guessing.
 
 set -euo pipefail
 
-SESSION_NAME=""
+TARGETS=()
+ALL=false
 DRY_RUN=false
 LIST_MODE=false
 FORCE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --all|-A) ALL=true; shift ;;
     --dry-run|-n) DRY_RUN=true; shift ;;
     --list|-l) LIST_MODE=true; shift ;;
     --force|-f) FORCE=true; shift ;;
@@ -37,7 +47,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     -*) echo "Error: unknown option '$1'" >&2; exit 1 ;;
-    *) SESSION_NAME="$1"; shift ;;
+    *) TARGETS+=("$1"); shift ;;
   esac
 done
 
@@ -50,40 +60,59 @@ for dep in tmux jq; do
   command -v "$dep" >/dev/null || { echo "Error: '$dep' is required" >&2; exit 1; }
 done
 
+# Every save on disk, newest first, preferring the current directory over a
+# legacy one of the same name.
+saved_names() {
+  local f name seen=""
+  shopt -s nullglob
+  for f in "$SAVE_DIR"/*.json "$LEGACY_SAVE_DIR"/*.json; do
+    name=$(basename "$f" .json)
+    case " $seen " in
+      *" $name "*) continue ;;
+    esac
+    seen="$seen $name"
+    printf '%s\n' "$name"
+  done
+}
+
 if $LIST_MODE; then
   echo "Saved tmux-agent sessions:"
   shopt -s nullglob
   found_any=false
+  seen=""
   for f in "$SAVE_DIR"/*.json "$LEGACY_SAVE_DIR"/*.json; do
+    name=$(basename "$f" .json)
+    # A legacy save of a name that has a current one would never be read, so
+    # listing it would only offer something restore will not do.
+    case " $seen " in
+      *" $name "*) continue ;;
+    esac
+    seen="$seen $name"
     found_any=true
     case "$f" in
       "$LEGACY_SAVE_DIR"/*) tag="  (legacy tmux-claude save)" ;;
       *) tag="" ;;
     esac
-    jq -r --arg name "$(basename "$f" .json)" --arg tag "$tag" \
+    jq -r --arg name "$name" --arg tag "$tag" \
       '"  \($name)  (\(.windows | length) windows, saved \(.saved_at))\($tag)"' "$f" 2>/dev/null \
-      || echo "  $(basename "$f" .json)  (unreadable)"
+      || echo "  $name  (unreadable)"
   done
   $found_any || echo "  (none)"
   exit 0
 fi
 
-SESSION_NAME="${SESSION_NAME:-future}"
-SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
-
-if [ ! -f "$SAVE_FILE" ] && [ -f "$LEGACY_SAVE_DIR/$SESSION_NAME.json" ]; then
-  SAVE_FILE="$LEGACY_SAVE_DIR/$SESSION_NAME.json"
-  echo "Note: reading legacy save $SAVE_FILE"
+if $ALL; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && TARGETS+=("$line")
+  done < <(saved_names)
 fi
 
-if [ ! -f "$SAVE_FILE" ]; then
-  echo "Error: No saved state for session '$SESSION_NAME'" >&2
-  echo "Run 'tmux-agent-restore --list' to see available saves" >&2
+if [ ${#TARGETS[@]} -eq 0 ]; then
+  echo "Error: name a session to restore, or pass --all" >&2
+  echo "" >&2
+  "$0" --list >&2
   exit 1
 fi
-
-jq -e '.windows | type == "array"' "$SAVE_FILE" >/dev/null 2>&1 \
-  || { echo "Error: $SAVE_FILE is not valid tmux-agent state" >&2; exit 1; }
 
 # Encode a cwd the way each agent names its per-project storage
 # (see tmux-agent-save for both rules).
@@ -130,124 +159,172 @@ resolve_session_file() {
   return 0
 }
 
-echo "Restoring tmux session: $SESSION_NAME"
-echo ""
+# Restore one saved session. Returns non-zero when its save is missing or
+# unreadable, so one bad name does not abandon the rest of a --all run.
+restore_session() {
+  local SESSION_NAME="$1"
+  local SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
+  local session_exists=false created=0 skipped=0 first_window=true
+  local win agent agent_dir idx cwd session_id session_file session_name method
+  local extra resolved cmd confidence label problem new_idx actual
 
-session_exists=false
-if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-  session_exists=true
-  echo "Warning: tmux session '$SESSION_NAME' already exists"
-  $DRY_RUN || echo "  Adding restored windows to the existing session"
+  if [ ! -f "$SAVE_FILE" ] && [ -f "$LEGACY_SAVE_DIR/$SESSION_NAME.json" ]; then
+    SAVE_FILE="$LEGACY_SAVE_DIR/$SESSION_NAME.json"
+    echo "Note: reading legacy save $SAVE_FILE"
+  fi
+
+  if [ ! -f "$SAVE_FILE" ]; then
+    echo "Error: no saved state for session '$SESSION_NAME'" >&2
+    return 1
+  fi
+
+  if ! jq -e '.windows | type == "array"' "$SAVE_FILE" >/dev/null 2>&1; then
+    echo "Error: $SAVE_FILE is not valid tmux-agent state" >&2
+    return 1
+  fi
+
+  echo "Restoring tmux session: $SESSION_NAME"
   echo ""
-fi
 
-echo "Saved at: $(jq -r '.saved_at' "$SAVE_FILE")"
-echo "Windows to restore: $(jq -r '.windows | length' "$SAVE_FILE")"
-echo ""
-
-created=0
-skipped=0
-first_window=true
-
-while IFS= read -r win; do
-  # Parse per window. Tab-separated output is not safe here: tab is an IFS
-  # whitespace character, so bash collapses runs of tabs and an empty field
-  # (e.g. a missing session_name) would shift every later field left.
-  #
-  # A missing "agent" means the save predates pi support, and tmux-claude-save
-  # only ever recorded Claude.
-  agent=$(jq -r '.agent // "claude"' <<<"$win")
-  agent_dir=$(jq -r '.agent_dir // ""' <<<"$win")
-  idx=$(jq -r '.window_index // ""' <<<"$win")
-  cwd=$(jq -r '.cwd // ""' <<<"$win")
-  session_id=$(jq -r '.session_id // ""' <<<"$win")
-  session_file=$(jq -r '.session_file // ""' <<<"$win")
-  session_name=$(jq -r '.session_name // ""' <<<"$win")
-  method=$(jq -r '.detection_method // ""' <<<"$win")
-  # Older saves spelled the permission posture as its own boolean.
-  extra=$(jq -r '
-    (.extra_args //
-      (if .dangerously_skip_permissions then ["--dangerously-skip-permissions"] else [] end))
-    | join(" ")' <<<"$win")
-
-  resolved=$(resolve_session_file "$agent" "$cwd" "$session_id" "$session_file")
-
-  # Build the launch command. A non-default pi profile travels as an
-  # environment assignment rather than the `pia` shell function, so the line
-  # says which profile it means and works in any shell.
-  cmd="$agent"
-  if [ "$agent" = "pi" ] && [ -n "$agent_dir" ]; then
-    cmd="PI_CODING_AGENT_DIR=$(printf '%q' "$agent_dir") $cmd"
+  session_exists=false
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    session_exists=true
+    echo "Warning: tmux session '$SESSION_NAME' already exists"
+    $DRY_RUN || echo "  Adding restored windows to the existing session"
+    echo ""
   fi
-  [ -n "$extra" ] && cmd="$cmd $extra"
-  if [ -n "$resolved" ]; then
-    if [ "$agent" = "pi" ]; then
-      cmd="$cmd --session $(printf '%q' "$resolved")"
-    else
-      cmd="$cmd --resume $session_id"
+
+  echo "Saved at: $(jq -r '.saved_at' "$SAVE_FILE")"
+  echo "Windows to restore: $(jq -r '.windows | length' "$SAVE_FILE")"
+  echo ""
+
+  created=0
+  skipped=0
+  first_window=true
+
+  while IFS= read -r win; do
+    # Parse per window. Tab-separated output is not safe here: tab is an IFS
+    # whitespace character, so bash collapses runs of tabs and an empty field
+    # (e.g. a missing session_name) would shift every later field left.
+    #
+    # A missing "agent" means the save predates pi support, and tmux-claude-save
+    # only ever recorded Claude.
+    agent=$(jq -r '.agent // "claude"' <<<"$win")
+    agent_dir=$(jq -r '.agent_dir // ""' <<<"$win")
+    idx=$(jq -r '.window_index // ""' <<<"$win")
+    cwd=$(jq -r '.cwd // ""' <<<"$win")
+    session_id=$(jq -r '.session_id // ""' <<<"$win")
+    session_file=$(jq -r '.session_file // ""' <<<"$win")
+    session_name=$(jq -r '.session_name // ""' <<<"$win")
+    method=$(jq -r '.detection_method // ""' <<<"$win")
+    # Older saves spelled the permission posture as its own boolean.
+    extra=$(jq -r '
+      (.extra_args //
+        (if .dangerously_skip_permissions then ["--dangerously-skip-permissions"] else [] end))
+      | join(" ")' <<<"$win")
+
+    resolved=$(resolve_session_file "$agent" "$cwd" "$session_id" "$session_file")
+
+    # Build the launch command. A non-default pi profile travels as an
+    # environment assignment rather than the `pia` shell function, so the line
+    # says which profile it means and works in any shell.
+    cmd="$agent"
+    if [ "$agent" = "pi" ] && [ -n "$agent_dir" ]; then
+      cmd="PI_CODING_AGENT_DIR=$(printf '%q' "$agent_dir") $cmd"
     fi
-  fi
+    [ -n "$extra" ] && cmd="$cmd $extra"
+    if [ -n "$resolved" ]; then
+      if [ "$agent" = "pi" ]; then
+        cmd="$cmd --session $(printf '%q' "$resolved")"
+      else
+        cmd="$cmd --resume $session_id"
+      fi
+    fi
 
-  case "$method" in
-    agent_state|claude_state) confidence="★" ;;
-    start_time_match) confidence="◆" ;;
-    command_args) confidence="●" ;;
-    *) confidence="○" ;;
-  esac
+    case "$method" in
+      agent_state|claude_state) confidence="★" ;;
+      start_time_match) confidence="◆" ;;
+      command_args) confidence="●" ;;
+      *) confidence="○" ;;
+    esac
 
-  label="Window $idx [$agent]"
-  [ -n "$session_name" ] && label="$label ($session_name)"
+    label="Window $idx [$agent]"
+    [ -n "$session_name" ] && label="$label ($session_name)"
 
-  # Pre-flight checks. tmux silently falls back to $HOME when -c is missing,
-  # which would resume a session against the wrong project, so verify first.
-  problem=""
-  if [ -z "$cwd" ] || [ ! -d "$cwd" ]; then
-    problem="working directory is gone: ${cwd:-(unset)}"
-  elif [ -z "$session_id" ] && [ -z "$session_file" ]; then
-    problem="no session was captured (would start a brand-new conversation)"
-  elif [ -z "$resolved" ]; then
-    problem="transcript for ${session_id:-$session_file} no longer exists"
-  fi
+    # Pre-flight checks. tmux silently falls back to $HOME when -c is missing,
+    # which would resume a session against the wrong project, so verify first.
+    problem=""
+    if [ -z "$cwd" ] || [ ! -d "$cwd" ]; then
+      problem="working directory is gone: ${cwd:-(unset)}"
+    elif [ -z "$session_id" ] && [ -z "$session_file" ]; then
+      problem="no session was captured (would start a brand-new conversation)"
+    elif [ -z "$resolved" ]; then
+      problem="transcript for ${session_id:-$session_file} no longer exists"
+    fi
 
-  if [ -n "$problem" ] && ! $FORCE; then
-    echo "  ⚠ SKIP $label: $problem"
-    skipped=$((skipped + 1))
-    continue
-  fi
-  [ -n "$problem" ] && echo "  ! $label: $problem (forced)"
+    if [ -n "$problem" ] && ! $FORCE; then
+      echo "  ⚠ SKIP $label: $problem"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    [ -n "$problem" ] && echo "  ! $label: $problem (forced)"
 
-  echo "  $confidence $label: (cd $cwd) $cmd"
-  $DRY_RUN && continue
+    echo "  $confidence $label: (cd $cwd) $cmd"
+    # Counted before the dry-run bail so a rehearsal reports the same tally the
+    # real run would.
+    created=$((created + 1))
+    $DRY_RUN && continue
 
-  # Create the window and capture its real index atomically; never assume a
-  # base-index or read back the session's "current" window.
-  if $first_window && ! $session_exists; then
-    new_idx=$(tmux new-session -d -P -F '#{window_index}' \
-      -s "$SESSION_NAME" -c "$cwd" -x 200 -y 50)
+    # Create the window and capture its real index atomically; never assume a
+    # base-index or read back the session's "current" window.
+    if $first_window && ! $session_exists; then
+      new_idx=$(tmux new-session -d -P -F '#{window_index}' \
+        -s "$SESSION_NAME" -c "$cwd" -x 200 -y 50)
+    else
+      new_idx=$(tmux new-window -t "$SESSION_NAME" -P -F '#{window_index}' -c "$cwd")
+    fi
+    first_window=false
+
+    [ -n "$session_name" ] && tmux rename-window -t "$SESSION_NAME:$new_idx" "$session_name"
+
+    # Confirm the pane really landed in the intended directory.
+    actual=$(tmux display-message -t "$SESSION_NAME:$new_idx" -p '#{pane_start_path}')
+    if [ "$actual" != "$cwd" ]; then
+      echo "    ⚠ tmux started this window in '$actual' instead of '$cwd'" >&2
+    fi
+
+    tmux send-keys -t "$SESSION_NAME:$new_idx" "$cmd" Enter
+  done < <(jq -c '.windows[]' "$SAVE_FILE")
+
+  if $DRY_RUN; then
+    echo "  (dry run — $created window(s) would be restored, $skipped skipped)"
   else
-    new_idx=$(tmux new-window -t "$SESSION_NAME" -P -F '#{window_index}' -c "$cwd")
-  fi
-  first_window=false
-
-  [ -n "$session_name" ] && tmux rename-window -t "$SESSION_NAME:$new_idx" "$session_name"
-
-  # Confirm the pane really landed in the intended directory.
-  actual=$(tmux display-message -t "$SESSION_NAME:$new_idx" -p '#{pane_start_path}')
-  if [ "$actual" != "$cwd" ]; then
-    echo "    ⚠ tmux started this window in '$actual' instead of '$cwd'" >&2
+    echo "  restored $created window(s), skipped $skipped"
+    [ "$created" -gt 0 ] && echo "  attach with: tmux attach -t $SESSION_NAME"
   fi
 
-  tmux send-keys -t "$SESSION_NAME:$new_idx" "$cmd" Enter
-  created=$((created + 1))
-done < <(jq -c '.windows[]' "$SAVE_FILE")
+  TOTAL_CREATED=$((TOTAL_CREATED + created))
+  TOTAL_SKIPPED=$((TOTAL_SKIPPED + skipped))
+  return 0
+}
 
-echo ""
+# --- drive ----------------------------------------------------------------
+
+TOTAL_CREATED=0
+TOTAL_SKIPPED=0
+failed=0
+
+for name in "${TARGETS[@]}"; do
+  restore_session "$name" || failed=$((failed + 1))
+  echo ""
+done
+
 echo "Legend: ★ = agent session state, ◆ = start-time match, ● = from command args, ○ = fallback guess"
 if $DRY_RUN; then
-  echo "(dry run — no changes made; $skipped would be skipped)"
+  echo "(dry run — no changes made; $TOTAL_CREATED window(s) would be restored, $TOTAL_SKIPPED skipped)"
 else
-  echo "Restored $created window(s), skipped $skipped."
-  [ "$skipped" -gt 0 ] && echo "Re-run with --force to restore skipped windows anyway."
-  [ "$created" -gt 0 ] && echo "Attach with: tmux attach -t $SESSION_NAME"
+  echo "Restored $TOTAL_CREATED window(s) across ${#TARGETS[@]} session(s), skipped $TOTAL_SKIPPED."
 fi
-exit 0
+[ "$TOTAL_SKIPPED" -gt 0 ] && echo "Re-run with --force to restore skipped windows anyway."
+
+[ "$failed" -eq 0 ]
