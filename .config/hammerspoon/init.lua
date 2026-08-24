@@ -1,9 +1,13 @@
 -- Per-app key remaps: while an app is frontmost, a chord it doesn't use
 -- becomes one it does.
 local remaps = {
-  -- Teams: cmd-shift-A (accept audio call) -> cmd-shift-M (toggle mute)
   ["com.microsoft.teams2"] = {
+    -- accept-audio-call -> toggle mute
     { from = { { "cmd", "shift" }, "a" }, to = { { "cmd", "shift" }, "m" } },
+    -- accept-video-call -> toggle video
+    { from = { { "cmd", "shift" }, "v" }, to = { { "cmd", "shift" }, "o" } },
+    -- Zoom muscle memory -> start/stop screen share
+    { from = { { "cmd", "shift" }, "s" }, to = { { "cmd", "shift" }, "e" } },
   },
 }
 
@@ -39,6 +43,3 @@ local front = hs.application.frontmostApplication()
 if front then enableFor(front:bundleID()) end
 
 hs.alert.show("Hammerspoon config loaded")
-
-
-
