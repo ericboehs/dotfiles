@@ -3,10 +3,10 @@ BAT_THEME = "ansi"
 DISABLE_SPRING = "true"
 DOCKER_SCAN_SUGGEST = "false"
 VTK_DISABLE_ANALYTICS = "true"
-CLAUDE_NOTIFY_SLACK = "true"
+AGENT_NOTIFY_SLACK = "true"
 # Slack is the away channel: banner while I am at the desk, Slack when I am not.
 # Away means a dark display or a VNC session, since I dial in from my phone.
-CLAUDE_NOTIFY_SLACK_AWAY_ONLY = "true"
+AGENT_NOTIFY_SLACK_AWAY_ONLY = "true"
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY = "YES"
 OP_BIOMETRIC_UNLOCK_ENABLED = "true"
 GITLEAKS_CONFIG = "{{env.HOME}}/.config/gitleaks/config.toml"

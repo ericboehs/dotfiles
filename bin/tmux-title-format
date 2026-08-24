@@ -13,7 +13,7 @@
 # has no way to tell which tab holds the ssh.
 #
 # The prefix has to be the name you reach the box by, because that is the name
-# the notification carries (CLAUDE_NOTIFY_HOST) and therefore the string the
+# the notification carries (AGENT_NOTIFY_HOST) and therefore the string the
 # click matches on. tmux's own #h is the wrong answer twice over: on the work
 # laptop it expands to an asset tag nobody types or recognises, and it would
 # never match a notification labelled "gfe".
@@ -30,7 +30,7 @@ format='#S:#I #T'
 
 for f in "$HOME/.config/mise/config.local.toml" "$HOME"/.config/mise/conf.d/*.toml; do
   [ -f "$f" ] || continue
-  host=$(sed -n 's/^[[:space:]]*CLAUDE_NOTIFY_HOST[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1)
+  host=$(sed -n 's/^[[:space:]]*AGENT_NOTIFY_HOST[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1)
   if [ -n "$host" ]; then
     printf '%s:%s\n' "$host" "$format"
     exit 0
