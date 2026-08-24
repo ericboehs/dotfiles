@@ -64,7 +64,55 @@ export type RunStatus = "ok" | "error" | "timeout" | "skipped";
  * window in milliseconds past `nextRunAt` within which a late run is still
  * wanted. Late runs coalesce: one catch-up, never a replay of every slot.
  */
+/**
+ * What this task actually runs with, folding in the legacy `tools` boolean that
+ * predates `enable`.
+ */
+export function enabledFeatures(task: DurableTask): Set<Feature> {
+  const features = new Set<Feature>(task.enable ?? []);
+  if (task.tools) features.add("tools");
+  return features;
+}
+
 export type MisfirePolicy = "skip" | "always" | number;
+
+/**
+ * Discovery a scheduled run can opt back into.
+ *
+ * Themes are deliberately absent: a headless run has no TUI to theme, so the
+ * flag would be a knob that does nothing.
+ */
+export const FEATURES = ["extensions", "skills", "templates", "context", "tools"] as const;
+export type Feature = (typeof FEATURES)[number];
+
+/**
+ * Parse a `--with` list. Returns an error string rather than throwing, so both
+ * the slash command and the CLI can report it the same way.
+ */
+export function parseFeatures(input: string): { features: Feature[] } | { error: string } {
+  const requested = input
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0);
+  if (requested.length === 0) return { error: `--with wants ${FEATURES.join(", ")}, or all` };
+
+  const features = new Set<Feature>();
+  for (const item of requested) {
+    if (item === "all") {
+      for (const feature of FEATURES) features.add(feature);
+      continue;
+    }
+    if (item === "none") continue;
+    const match = FEATURES.find(
+      (feature) => feature === item || `${feature}s` === item || feature === `${item}s`,
+    );
+    if (!match) {
+      return { error: `--with does not know "${item}"; try ${FEATURES.join(", ")}, all or none` };
+    }
+    features.add(match);
+  }
+  return { features: FEATURES.filter((feature) => features.has(feature)) };
+}
 
 export interface DurableTask extends Schedule {
   id: string;
@@ -75,6 +123,12 @@ export interface DurableTask extends Schedule {
   cwd?: string;
   /** Off by default: most scheduled prompts summarize data gathered by `deliver`-style scripts. */
   tools?: boolean;
+  /**
+   * Discovery to switch back on for this run. Empty means a bare pi, which is
+   * reproducible and starts in about a second. Opt in when the prompt needs
+   * your setup — a skill, or a prompt template invoked as `/checkin`.
+   */
+  enable?: Feature[];
   /** Shell command receiving the run output on stdin and in $PI_SCHEDULER_OUTPUT. */
   deliver?: string;
   misfire?: MisfirePolicy;

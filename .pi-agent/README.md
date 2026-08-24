@@ -227,7 +227,7 @@ depend on a terminal being left running.
 /schedule run <id> | pause <id> | resume <id> | remove <id>
 ```
 
-Options go **first**, before the schedule: `--name --model --cwd --tools
+Options go **first**, before the schedule: `--name --model --cwd --with
 --deliver --misfire --timeout`. Flags are only recognized while they lead,
 because the schedule itself is variable length (a cron expression is five bare
 words) and there is otherwise no reliable place to stop scanning — so a prompt
@@ -236,7 +236,7 @@ containing `--force` is never mistaken for an option.
 The same tasks are managed from the shell, which is also where `install` lives:
 
 ```sh
-pi-scheduler install          # per-minute launchd agent, or systemd --user timer
+pi-scheduler install          # per-minute launchd job, or systemd --user timer
 pi-scheduler list
 pi-scheduler add daily 15:30 :: check grades --name grades --model cerebras/gpt-oss-120b:low
 pi-scheduler run grades       # ignore the schedule and run now
@@ -244,19 +244,34 @@ pi-scheduler runs grades      # recent history
 pi-scheduler check            # what the timer calls
 ```
 
-**Nothing stays resident.** A LaunchAgent (or systemd timer on Linux) runs
+**Nothing stays resident.** A launchd job (or systemd timer on Linux) runs
 `pi-scheduler check` every 60s; it reads one JSON file and exits, measured at
 ~73ms when nothing is due, so interactive pi startup is untouched. pi is only
 spawned when a task is actually due — a due run measured end to end at ~0.65s
 against `cerebras/gpt-oss-120b:low`.
 
-Each run is a fresh `pi -p --no-session` with discovery disabled
-(`--no-extensions --no-skills --no-prompt-templates --no-themes
---no-context-files`) and tools off unless `--tools` is passed. Runs are never
-messages into an existing session: pi appends to session JSONL without file
-locking, so writing into a session that might be open in a terminal risks
-interleaved entries. Isolation also means a task cannot inherit whatever model
-or cwd a human left in a session three days ago — hence per-task `--model`.
+Each run is a fresh `pi -p --no-session` with discovery off by default
+(`--no-extensions --no-skills --no-prompt-templates --no-context-files
+--no-tools`), which keeps a run reproducible and starts it in about a second.
+`--with` turns pieces back on when the prompt needs your setup:
+
+```sh
+pi-scheduler add --name checkin --with templates,tools --cwd ~/Code/some/repo \
+  daily 9a :: /checkin
+```
+
+That runs a **prompt template as the scheduled prompt** — `/checkin` expands
+exactly as it would if you typed it. `--with` takes `extensions`, `skills`,
+`templates`, `context` (AGENTS.md), `tools`, plus `all` and `none`. Most of
+them are inert without `tools`, since a skill that cannot run a command can
+only talk about running one; `show` says `skills (but no tools)` rather than
+letting that pass silently. Themes have no `--with`: there is no TUI to theme.
+
+Runs are never messages into an existing session: pi appends to session JSONL
+without file locking, so writing into a session that might be open in a
+terminal risks interleaved entries. Isolation also means a task cannot inherit
+whatever model or cwd a human left in a session three days ago — hence
+per-task `--model` and `--cwd`.
 
 `--deliver` is a shell command that receives the output on stdin and in
 `$PI_SCHEDULER_OUTPUT`; the prompt and the result both travel by stdin rather

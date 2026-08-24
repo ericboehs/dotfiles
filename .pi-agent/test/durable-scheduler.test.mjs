@@ -8,7 +8,8 @@ import durableScheduler, {
   parseLeadingFlags,
   tokenize,
 } from "../extensions/durable-scheduler.ts";
-import { readRegistry, writeRegistry } from "../extensions/lib/task-registry.ts";
+import { readRegistry, writeRegistry, FEATURES } from "../extensions/lib/task-registry.ts";
+import { piArgsFor } from "../extensions/lib/runner.ts";
 
 function withTempDir(t) {
   const dir = mkdtempSync(join(tmpdir(), "pi-sched-cmd-"));
@@ -221,8 +222,89 @@ test("/schedule show explains what the run will actually be", async (t) => {
   const shown = ui.last().message;
   assert.match(shown, /schedule\s+daily 15:30/);
   assert.match(shown, /model\s+cerebras\/gpt-oss-120b:low/);
-  assert.match(shown, /tools\s+disabled/);
+  assert.match(shown, /runs with\s+nothing \(bare pi, no tools\)/);
   assert.match(shown, /last run\s+never/);
+});
+
+test("--with re-enables discovery, so a task can run a skill or a /template", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name checkin --with templates,tools daily 9a :: /checkin");
+  const [task] = readRegistry().tasks;
+  assert.deepEqual(task.enable, ["templates", "tools"]);
+  assert.equal(task.tools, true, "--with settles tools too, rather than leaving it stale");
+
+  await ui.run("show checkin");
+  assert.match(ui.last().message, /runs with\s+templates, tools/);
+});
+
+test("--with all turns everything on, and singular or plural spellings both work", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name everything --with all daily 9a :: x");
+  assert.deepEqual(readRegistry().tasks[0].enable, FEATURES.slice());
+
+  await ui.run("--name loose --with skill,TEMPLATE,tools daily 9a :: x");
+  assert.deepEqual(
+    readRegistry().tasks.find((task) => task.name === "loose").enable,
+    ["skills", "templates", "tools"],
+    "singular and shouty spellings are accepted; nobody should have to guess plurality",
+  );
+
+  // Spaces inside the list need quoting, same as --deliver, because the slash
+  // command is tokenized on whitespace before flags are read.
+  await ui.run("--name spaced --with 'skills, tools' daily 9a :: x");
+  assert.deepEqual(
+    readRegistry().tasks.find((task) => task.name === "spaced").enable,
+    ["skills", "tools"],
+  );
+});
+
+test("show warns when discovery is on but tools are not, since skills would be inert", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name quiet --with skills daily 9a :: x");
+  await ui.run("show quiet");
+  assert.match(ui.last().message, /runs with\s+skills \(but no tools\)/);
+});
+
+test("a misspelled feature is refused and names the ones that exist", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--with skillz daily 9a :: x");
+  assert.equal(ui.last().level, "error");
+  assert.match(ui.last().message, /does not know "skillz"/);
+  assert.match(ui.last().message, /skills/);
+  assert.deepEqual(readRegistry().tasks, []);
+});
+
+test("discovery flags become the pi arguments the run is actually launched with", async (t) => {
+  withTempDir(t);
+  const ui = mount();
+
+  await ui.run("--name bare daily 9a :: x");
+  await ui.run("--name rich --with templates,tools daily 9a :: /checkin");
+  const tasks = readRegistry().tasks;
+  const bare = piArgsFor(tasks.find((task) => task.name === "bare"));
+  const rich = piArgsFor(tasks.find((task) => task.name === "rich"));
+
+  for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-tools"]) {
+    assert.ok(bare.includes(flag), `default run should pass ${flag}`);
+  }
+  assert.ok(!rich.includes("--no-prompt-templates"), "templates were asked for");
+  assert.ok(!rich.includes("--no-tools"), "tools were asked for");
+  assert.ok(rich.includes("--no-skills"), "skills were not asked for and stay off");
+
+  // No TUI to theme and nothing should accumulate a session file, whatever else
+  // is enabled.
+  for (const args of [bare, rich]) {
+    assert.ok(args.includes("--no-themes"));
+    assert.ok(args.includes("--no-session"));
+  }
 });
 
 test("/schedule remove takes the task out of the registry", async (t) => {
@@ -263,7 +345,7 @@ test("/schedule help documents every option the parser accepts", async (t) => {
 
   // The usage line lists flag names; help has to say what each one is for, or
   // the flags are undiscoverable. Keep the two from drifting apart.
-  for (const flag of ["--name", "--model", "--cwd", "--tools", "--deliver", "--misfire", "--timeout"]) {
+  for (const flag of ["--name", "--model", "--cwd", "--with", "--tools", "--deliver", "--misfire", "--timeout"]) {
     assert.match(help, new RegExp(`${flag}\\b`), `${flag} is undocumented`);
   }
   for (const subcommand of ["list", "show", "runs", "run", "pause", "resume", "remove"]) {
@@ -280,7 +362,9 @@ test("/schedule help explains the choices a caller cannot guess", async (t) => {
 
   assert.match(help, /must come before the schedule/, "flag position is not guessable");
   assert.match(help, /skip[\s\S]*always[\s\S]*catch up/, "misfire policies are enumerated");
-  assert.match(help, /Off by default/, "tools defaulting off is a safety property worth stating");
+  assert.match(help, /Default is none/, "discovery defaulting off is a safety property worth stating");
+  assert.match(help, /inert without tools/, "skills without tools is the trap worth naming");
+  assert.match(help, /\/checkin/, "running a prompt template is the non-obvious capability");
   assert.match(help, /stdin/, "deliver is the only way output leaves an unattended run");
   assert.match(help, /default 2h/);
   assert.match(help, /default 15m/);

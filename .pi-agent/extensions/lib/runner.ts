@@ -7,10 +7,12 @@
  * Isolation also means the run cannot inherit whatever model, cwd or context a
  * human happened to leave in a session three days ago.
  *
- * Discovery is disabled wholesale (`--no-extensions`, `--no-skills`,
- * `--no-prompt-templates`, `--no-themes`, `--no-context-files`) because a
- * scheduled prompt should behave the same in six months, and because it cuts
- * startup to roughly a second. Tools are off unless the task asks for them.
+ * Discovery is off by default (`--no-extensions`, `--no-skills`,
+ * `--no-prompt-templates`, `--no-context-files`) because a scheduled prompt
+ * should behave the same in six months, and because it cuts startup to roughly
+ * a second. A task can opt back in per feature via `enable`, which is how a
+ * prompt like `/checkin` or one that leans on a skill gets what it needs.
+ * Themes are always off: there is no TUI to theme.
  */
 
 import { spawn } from "node:child_process";
@@ -19,6 +21,7 @@ import { homedir } from "node:os";
 import {
   DEFAULT_TIMEOUT_MS,
   type DurableTask,
+  enabledFeatures,
   type RunStatus,
   truncate,
 } from "./task-registry.ts";
@@ -33,16 +36,15 @@ export interface RunOutcome {
 const MAX_CAPTURED_OUTPUT = 200_000;
 
 export function piArgsFor(task: DurableTask): string[] {
-  const args = [
-    "-p",
-    "--no-session",
-    "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-themes",
-    "--no-context-files",
-  ];
-  if (!task.tools) args.push("--no-tools");
+  const enabled = enabledFeatures(task);
+  // Always off: a headless run has no TUI, and saving a session for something
+  // that runs unattended every day would grow a session file forever.
+  const args = ["-p", "--no-session", "--no-themes"];
+  if (!enabled.has("extensions")) args.push("--no-extensions");
+  if (!enabled.has("skills")) args.push("--no-skills");
+  if (!enabled.has("templates")) args.push("--no-prompt-templates");
+  if (!enabled.has("context")) args.push("--no-context-files");
+  if (!enabled.has("tools")) args.push("--no-tools");
   if (task.model) args.push("--model", task.model);
   return args;
 }

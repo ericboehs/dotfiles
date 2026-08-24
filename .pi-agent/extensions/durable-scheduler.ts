@@ -14,11 +14,14 @@ import {
   DEFAULT_MISFIRE_GRACE_MS,
   DEFAULT_TIMEOUT_MS,
   type DurableTask,
+  enabledFeatures,
+  FEATURES,
   MAX_DURABLE_TASKS,
   type MisfirePolicy,
   findTask,
   formatTask,
   makeTaskId,
+  parseFeatures,
   readRegistry,
   readRuns,
   registryPath,
@@ -49,7 +52,7 @@ export interface ParsedFlags {
   rest: string;
 }
 
-const VALUE_FLAGS = new Set(["name", "model", "cwd", "deliver", "misfire", "timeout"]);
+const VALUE_FLAGS = new Set(["name", "model", "cwd", "with", "deliver", "misfire", "timeout"]);
 const BOOLEAN_FLAGS = new Set(["tools", "no-tools", "no-deliver"]);
 
 /**
@@ -104,6 +107,14 @@ function applyFlags(
   if (typeof flags.cwd === "string") updated.cwd = flags.cwd;
   if (flags.tools === true) updated.tools = true;
   if (flags["no-tools"] === true) updated.tools = false;
+  if (typeof flags.with === "string") {
+    const parsed = parseFeatures(flags.with);
+    if ("error" in parsed) throw new Error(parsed.error);
+    updated.enable = parsed.features;
+    // --with is the whole answer, so it also settles tools rather than leaving
+    // a stale --tools from an earlier edit half-applied.
+    updated.tools = parsed.features.includes("tools");
+  }
   if (flags["no-deliver"] === true) delete updated.deliver;
   if (typeof flags.deliver === "string") updated.deliver = flags.deliver;
 
@@ -129,14 +140,22 @@ function describeMisfire(task: DurableTask): string {
   return `catch up within ${formatDuration(policy)}`;
 }
 
+/** What discovery this run gets back, phrased for someone reading `show`. */
+export function describeFeatures(task: DurableTask): string {
+  const enabled = enabledFeatures(task);
+  if (enabled.size === 0) return "nothing (bare pi, no tools)";
+  const listed = FEATURES.filter((feature) => enabled.has(feature)).join(", ");
+  return enabled.has("tools") ? listed : `${listed} (but no tools)`;
+}
+
 /**
  * `/schedule` — durable tasks that run without an open session.
  *
  * Unlike `/once` and `/loop`, nothing here arms a timer in this process. The
- * command only edits ~/.pi/agent/scheduler/tasks.json; a LaunchAgent runs
- * `pi-scheduler check` every minute and starts a fresh, isolated `pi -p` for
- * whatever is due. That is why each task carries its own model, cwd and tool
- * policy: there is no session to inherit them from.
+ * command only edits ~/.pi/agent/scheduler/tasks.json; a launchd job (a systemd
+ * timer on Linux) runs `pi-scheduler check` every minute and starts a fresh,
+ * isolated `pi -p` for whatever is due. That is why each task carries its own
+ * model, cwd and tool policy: there is no session to inherit them from.
  *
  * The extension costs one command registration and no tools, and it touches
  * the filesystem only when the command is actually run, so it adds nothing to
@@ -161,7 +180,7 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "  /schedule list [all] | show <id> | runs <id>",
         "  /schedule run <id> | pause <id> | resume <id> | remove <id>",
         "",
-        "Options go first: --name --model --cwd --tools --deliver --misfire --timeout",
+        "Options go first: --name --model --cwd --with --deliver --misfire --timeout",
         "  /schedule --name grades --model cerebras/gpt-oss-120b:low daily 15:30 :: check grades",
         "",
         "/schedule help explains what each option does.",
@@ -177,9 +196,9 @@ export default function durableScheduler(pi: ExtensionAPI): void {
       [
         "/schedule \u2014 tasks that run without an open session.",
         "",
-        "A per-minute agent runs 'pi-scheduler check'. When a task is due it spawns a",
-        "fresh pi with no session, extensions or skills, so a run behaves the same in",
-        "three months as it does today. Nothing stays resident between ticks.",
+        "A launchd job (a systemd timer on Linux) runs 'pi-scheduler check' every",
+        "minute. When a task is due it starts a fresh pi, which then exits. Nothing",
+        "stays resident, and no model runs on the ticks where nothing is due.",
         "",
         "SCHEDULES                        :: separates the schedule from the prompt",
         "  daily 15:30   daily 9a         every day at that local time",
@@ -194,8 +213,20 @@ export default function durableScheduler(pi: ExtensionAPI): void {
         "                      session to inherit a model from, and a summarising",
         "                      job rarely needs an expensive one.",
         "  --cwd <dir>         directory to run in (default: this session's)",
-        "  --tools             allow tool use. Off by default, so a scheduled run",
-        "                      cannot touch the filesystem or network unasked.",
+        "  --with <list>       discovery to switch back on, comma separated:",
+        "                        extensions  your pi extensions",
+        "                        skills      SKILL.md files",
+        "                        templates   prompt templates, so the prompt can be",
+        "                                    a slash command such as /checkin",
+        "                        context     AGENTS.md and CLAUDE.md",
+        "                        tools       let the model act, not just answer",
+        "                        all, none",
+        "                      Default is none: a bare pi starts in about a second",
+        "                      and behaves the same in six months. Turn things on",
+        "                      when the prompt needs your setup, and remember most",
+        "                      of them are inert without tools.",
+        "                        --with templates,tools   then prompt: /checkin",
+        "  --tools             shorthand for --with tools",
         "  --deliver <cmd>     shell command receiving the output on stdin and in",
         "                      $PI_SCHEDULER_OUTPUT. Without it the only trace of a",
         "                      run is '/schedule runs <id>', since nobody is watching.",
@@ -265,7 +296,7 @@ export default function durableScheduler(pi: ExtensionAPI): void {
             `schedule  ${describeSchedule(task)}`,
             `next run  ${task.paused ? "paused" : new Date(task.nextRunAt).toLocaleString()}`,
             `model     ${task.model ?? "pi default"}`,
-            `tools     ${task.tools ? "enabled" : "disabled"}`,
+            `runs with ${describeFeatures(task)}`,
             `cwd       ${task.cwd ?? "$HOME"}`,
             `deliver   ${task.deliver ?? "—"}`,
             `misfire   ${describeMisfire(task)}`,

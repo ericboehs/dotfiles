@@ -28,7 +28,9 @@
  *   --name <name>        stable handle, nicer than the generated id
  *   --model <ref>        pi --model pattern, e.g. cerebras/gpt-oss-120b:low
  *   --cwd <dir>          working directory for the run (default: $HOME)
- *   --tools              allow built-in tools (off by default)
+ *   --with <list>        discovery to re-enable: extensions, skills, templates,
+ *                        context, tools; or all / none (default none)
+ *   --tools              shorthand for --with tools
  *   --no-tools
  *   --deliver <shell>    receives the output on stdin and in $PI_SCHEDULER_OUTPUT
  *   --no-deliver
@@ -55,12 +57,15 @@ import {
   DEFAULT_MISFIRE_GRACE_MS,
   DEFAULT_TIMEOUT_MS,
   MAX_DURABLE_TASKS,
+  FEATURES,
   appendRun,
   claimTask,
+  enabledFeatures,
   findTask,
   forgetRuns,
   formatTask,
   makeTaskId,
+  parseFeatures,
   pruneRuns,
   readRegistry,
   readRuns,
@@ -114,7 +119,8 @@ function usage() {
     "  prune                     drop run logs for tasks that no longer exist",
     "  install|uninstall         manage the per-minute tick (launchd or systemd)",
     "",
-    "Flags: --name --model --cwd --tools/--no-tools --deliver/--no-deliver",
+    "Flags: --name --model --cwd --with <all|skills,templates,tools,...>",
+    "       --tools/--no-tools --deliver/--no-deliver",
     "       --misfire <skip|always|2h> --timeout <15m> --prompt --schedule",
   ].join("\n");
   process.stdout.write(`${text}\n`);
@@ -155,11 +161,25 @@ function parseMisfire(value) {
   return ms;
 }
 
+/** What discovery this run gets back, phrased for someone reading `show`. */
+function describeFeatures(task) {
+  const enabled = enabledFeatures(task);
+  if (enabled.size === 0) return "nothing (bare pi, no tools)";
+  const listed = FEATURES.filter((feature) => enabled.has(feature)).join(", ");
+  return enabled.has("tools") ? listed : `${listed} (but no tools)`;
+}
+
 function applyFlags(task, flags) {
   if (flags.name !== undefined) task.name = flags.name;
   if (flags.model !== undefined) task.model = flags.model;
   if (flags.cwd !== undefined) task.cwd = flags.cwd;
   if (flags.tools !== undefined) task.tools = flags.tools;
+  if (flags.with !== undefined) {
+    const parsed = parseFeatures(flags.with);
+    if (parsed.error) die(parsed.error);
+    task.enable = parsed.features;
+    task.tools = parsed.features.includes("tools");
+  }
   if (flags.deliver === null) delete task.deliver;
   else if (flags.deliver !== undefined) task.deliver = flags.deliver;
   const misfire = parseMisfire(flags.misfire);
@@ -260,7 +280,7 @@ function commandShow(selector) {
     `schedule    ${describeSchedule(task)}`,
     `next run    ${task.paused ? "paused" : new Date(task.nextRunAt).toLocaleString()}`,
     `model       ${task.model ?? "pi default"}`,
-    `tools       ${task.tools ? "enabled" : "disabled"}`,
+    `runs with   ${describeFeatures(task)}`,
     `cwd         ${task.cwd ?? homedir()}`,
     `deliver     ${task.deliver ?? "—"}`,
     `misfire     ${task.misfire ?? formatDuration(DEFAULT_MISFIRE_GRACE_MS)}`,
