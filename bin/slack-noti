@@ -5,7 +5,9 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 Usage: slack-noti [MESSAGE]
 
 Send MESSAGE to Eric's Slack notification webhook.
-Defaults to "Done" when MESSAGE is omitted.
+Reads stdin when MESSAGE is omitted and stdin is not a terminal, so it can be
+piped to: some-command | slack-noti
+Defaults to "Done" when there is neither.
 
 Options:
   -h, --help  Show this help and exit without sending a notification.
@@ -13,6 +15,15 @@ EOF
   exit 0
 fi
 
+# Prefer an argument; otherwise take piped input. The terminal check keeps an
+# interactive `slack-noti` from hanging on a read that will never arrive.
+if [[ -n "${1:-}" ]]; then
+  message=$1
+elif [[ ! -t 0 ]]; then
+  message=$(cat)
+fi
+message=${message:-Done}
+
 # Properly escape message for JSON using jq
-json_payload=$(jq -nc --arg text "${1:-Done}" '{text: $text}')
+json_payload=$(jq -nc --arg text "$message" '{text: $text}')
 curl -s -X POST -H 'Content-type: application/json' --data "$json_payload" "$BOEHS_SLACK_NOTI_HOOK"

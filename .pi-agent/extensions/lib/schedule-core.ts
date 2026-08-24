@@ -407,7 +407,15 @@ export function parseScheduleSpec(
     const fields = cronExpr ? parseCron(cronExpr) : undefined;
     const prompt = stripPromptDelimiter(cron?.[2] ?? "");
     if (!cronExpr || !fields || !prompt) {
-      return { error: "Cron syntax: cron <m h dom mon dow> <prompt>, or an @macro" };
+      // An unquoted cron expression is the likeliest cause: the shell expands
+      // `* *` into filenames before the scheduler ever sees it, so the fields
+      // arrive as a list of directory entries.
+      const looksGlobbed = /^cron\s/i.test(text) && !/[*@]/.test(text);
+      return {
+        error: looksGlobbed
+          ? "Cron syntax: cron <m h dom mon dow> <prompt>. No * in that expression — the shell probably expanded it; quote the schedule: 'cron 30 15 * * 1-5'"
+          : "Cron syntax: cron <m h dom mon dow> <prompt>, or an @macro",
+      };
     }
     const nextRunAt = nextCronRun(fields, new Date(now));
     if (nextRunAt === undefined) return { error: `Cron expression ${cronExpr} never matches a real date` };

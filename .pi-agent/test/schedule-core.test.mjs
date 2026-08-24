@@ -213,3 +213,18 @@ test("durations format back into the same shorthand they parse from", () => {
   assert.equal(formatDuration(0), "0ms");
   assert.equal(formatDuration(-1), "0ms", "a schedule that just passed is not negative time");
 });
+
+test("a cron expression eaten by the shell says so, rather than just 'bad syntax'", () => {
+  // What `cron 30 15 * * 1-5 :: x` becomes when the shell expands the stars
+  // against the current directory. The fields are real words, so the only clue
+  // is that the asterisks are gone.
+  const globbed = parseScheduleSpec("cron 30 15 Documents Downloads 1-5 :: check grades");
+  assert.match(globbed.error, /shell probably expanded it/);
+  assert.match(globbed.error, /'cron 30 15 \* \* 1-5'/, "shows the quoted form to copy");
+
+  // A genuinely malformed expression that still has stars gets the plain
+  // message; blaming the shell there would be a wrong guess.
+  const wrong = parseScheduleSpec("cron 99 * * * :: check grades");
+  assert.match(wrong.error, /Cron syntax/);
+  assert.doesNotMatch(wrong.error, /shell/);
+});
