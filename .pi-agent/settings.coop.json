@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.84.2",
   "packages": [
-    "npm:pi-approval-guardian@0.8.0",
+    "git:github.com/ericboehs/pi-approval-guardian@bde157396387766d570a93eecc0f0489f41f0935",
     "npm:@nicknisi/pi-stash",
     "git:github.com/ericboehs/pi-claude-link@78e01168ddccbf1f5ef3a3474b70cf030a6bd551",
     "git:github.com/ericboehs/pi-context"
