@@ -48,9 +48,12 @@ compilation (parameter properties, enums, namespaces) fails at load time
 otherwise.
 
 `tsconfig.json`, `package.json` and `test/` deliberately sit beside
-`extensions/` rather than inside it: mise links that directory into
-`~/.pi/agent/extensions` with `symlink-each`, so anything in it becomes
-something pi tries to load.
+`extensions/` rather than inside it: mise links that directory as a whole to
+`~/.pi/agent/extensions`, so anything in it becomes something pi tries to load.
+A whole-directory link also makes extensions added by a later git pull appear
+immediately; the old `symlink-each` layout required another bootstrap run for
+every new file. During that one-time migration, the pre-dotfiles hook preserves
+the previous directory as `~/.pi/agent/extensions.symlink-each.bak`.
 
 ## Footer
 

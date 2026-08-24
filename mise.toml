@@ -185,7 +185,9 @@ REPO_PATH = "ericboehs/dotfiles"
 # same file. bootstrap:pi links the per-host .pi-agent/settings.<host>.json.
 "~/.pi/agent/keybindings.json" = ".pi-agent/keybindings.json"
 "~/.pi/agent/approval-guardian.json" = ".pi-agent/approval-guardian.json"
-"~/.pi/agent/extensions" = { source = ".pi-agent/extensions", mode = "symlink-each" }
+# One directory link means a newly pulled extension appears immediately. Using
+# symlink-each here left existing hosts without new files until bootstrap ran.
+"~/.pi/agent/extensions" = ".pi-agent/extensions"
 
 # ---------------------------------------------------------------------------
 # macOS defaults
@@ -280,7 +282,24 @@ fi
 # Submodules back .zsh/{powerlevel10k,fast-syntax-highlighting,
 # zsh-autosuggestions} and .tmux/extrakto, all of which are symlinked into
 # $HOME as part of their parent directory — so they must be populated first.
-pre-dotfiles = "git submodule update --init --recursive"
+pre-dotfiles = '''
+git submodule update --init --recursive
+
+# extensions used to be a real directory populated with symlink-each. Preserve
+# it before converging to one directory symlink: that makes extensions added by
+# a later git pull visible immediately instead of leaving stale host manifests.
+pi_extensions="$HOME/.pi/agent/extensions"
+if [ -d "$pi_extensions" ] && [ ! -L "$pi_extensions" ]; then
+  backup="$HOME/.pi/agent/extensions.symlink-each.bak"
+  suffix=1
+  while [ -e "$backup" ] || [ -L "$backup" ]; do
+    backup="$HOME/.pi/agent/extensions.symlink-each.bak.$suffix"
+    suffix=$((suffix + 1))
+  done
+  mv "$pi_extensions" "$backup"
+  echo "dotfiles: kept the previous Pi extensions directory at $backup"
+fi
+'''
 
 pre-defaults = '''
 [ "$(uname)" = Darwin ] || exit 0
