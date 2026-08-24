@@ -47,6 +47,9 @@ async function mount(overrides = {}) {
     cwd: "/Users/someone/Code/github.com/someone/dotfiles",
     model,
     getContextUsage: () => contextUsage,
+    modelRegistry: {
+      isUsingOAuth: () => overrides.usingOAuth ?? false,
+    },
     sessionManager: {
       getBranch: () => costs.map((total) => ({ message: { role: "assistant", usage: { cost: { total } } } })),
     },
@@ -300,6 +303,15 @@ test("cost formatting and subscription providers", async () => {
     const ui = await mount({ model: { id: "claude-opus-5", provider, reasoning: true } });
     assert.doesNotMatch(ui.plain()[0], /\$/, provider);
   }
+
+  const xaiKey = await mount({ model: { id: "grok-4.6", provider: "xai", reasoning: true } });
+  assert.match(xaiKey.plain()[0], /\$/, "xAI API keys still have a dollar cost");
+
+  const xaiOAuth = await mount({
+    model: { id: "grok-4.6", provider: "xai", reasoning: true },
+    usingOAuth: true,
+  });
+  assert.doesNotMatch(xaiOAuth.plain()[0], /\$/, "SuperGrok OAuth hides cost");
 });
 
 test("context colors escalate at 70% and 90%", async () => {
@@ -313,6 +325,20 @@ test("context colors escalate at 70% and 90%", async () => {
   assert.equal(await shade(95), "31", "red at 90%");
 });
 
+test("usage chips color by pace warnings", async () => {
+  const shade = async (key, status) => {
+    const ui = await mount({ statuses: new Map([[key, status]]) });
+    const escaped = status.replaceAll(".", "\\.").replaceAll("!", "\\!");
+    return new RegExp(`\x1B\\[(\\d+)m${escaped}\x1B\\[39m`).exec(ui.raw()[0])?.[1];
+  };
+  for (const key of ["codex-window", "copilot-window", "grok-window"]) {
+    assert.equal(await shade(key, "2.1/7D: 18%"), "36", `${key} cyan with no warning`);
+    assert.equal(await shade(key, "2.1/7D: 18%!"), "33", `${key} yellow at one !`);
+    assert.equal(await shade(key, "2.1/7D: 18%!!"), "31", `${key} red at two !`);
+    assert.equal(await shade(key, "2.1/7D: 18%!!!"), "31", `${key} red at three !`);
+  }
+});
+
 test("unknown context tokens render as ?", async () => {
   const ui = await mount({ contextUsage: { tokens: null, contextWindow: 200000, percent: null } });
   assert.match(ui.plain()[0], /\?\/200k /);
@@ -324,11 +350,12 @@ test("session name is right-aligned and statuses split inline vs status row", as
     statuses: new Map([
       ["codex-window", "codex 12%"],
       ["copilot-window", "copilot 40%"],
+      ["grok-window", "2.1/7D: 18%"],
       ["turn-timer", "3s"],
     ]),
   });
   const [main, statusRow] = await ui.settled(120);
-  assert.match(main, /codex 12% copilot 40% +footer-work$/);
+  assert.match(main, /codex 12% copilot 40% 2\.1\/7D: 18% +footer-work$/);
   assert.equal(statusRow, "3s");
   assert.equal(main.length, 120);
 });

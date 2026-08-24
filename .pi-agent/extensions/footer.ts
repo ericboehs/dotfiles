@@ -56,7 +56,7 @@ const AUTO_BUNDLE_LOCK = "pi-bundle.lock";
 const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
-const INLINE_STATUS_KEYS = ["codex-window", "copilot-window"] as const;
+const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window"] as const;
 
 /**
  * The boot timer sits in the footer until the first message goes out, and every
@@ -85,6 +85,13 @@ const BOOT_LOG_MAX_BYTES = 200_000;
 
 /** Providers whose cost is meaningless (subscription-billed). */
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+
+/** SuperGrok OAuth is subscription-billed; an xAI API key still has a real dollar cost. */
+function hideSessionCost(provider: string | undefined, ctx: ExtensionContext): boolean {
+  if (!provider) return false;
+  if (HIDE_COST_PROVIDERS.has(provider)) return true;
+  return provider === "xai" && ctx.model != null && ctx.modelRegistry.isUsingOAuth(ctx.model);
+}
 
 const CONTEXT_WARNING_PERCENT = 70;
 const CONTEXT_DANGER_PERCENT = 90;
@@ -723,6 +730,14 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
   return CYAN;
 }
 
+/** Pace `!`s from the usage chips: 1 = >5pts ahead, 2 = >10, 3 = >20. */
+function paceWarningColorCode(value: string): number {
+  const bangs = /!+$/.exec(value)?.[0].length ?? 0;
+  if (bangs >= 2) return RED;
+  if (bangs === 1) return YELLOW;
+  return CYAN;
+}
+
 export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
   const peer = new PeerNameCache();
@@ -818,10 +833,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
               contextColorCode(usage?.tokens, usage?.contextWindow),
               usage?.tokens == null ? "?" : formatCount(usage.tokens),
             )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
-            provider && HIDE_COST_PROVIDERS.has(provider)
+            hideSessionCost(provider, ctx)
               ? ""
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
-            ...INLINE_STATUS_KEYS.map((key) => statuses.get(key) ?? ""),
+            ...INLINE_STATUS_KEYS.map((key) => {
+              const value = statuses.get(key);
+              return value ? color(paceWarningColorCode(value), value) : "";
+            }),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
             // Last before the flex gap, so it sits closest to the right edge.
             bypassed ? color(BRIGHT_RED, "bypass") : "",
