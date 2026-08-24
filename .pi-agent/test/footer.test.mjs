@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { VERSION as RUNNING_PI_VERSION } from "@earendil-works/pi-coding-agent";
 import footer from "../extensions/footer.ts";
 
 const PORCELAIN = "A  staged.ts\n M edited.ts\n?? new.ts\n";
@@ -70,14 +71,37 @@ async function mount(overrides = {}) {
     handlers: {},
   };
 
-  const previousBootVersion = globalThis.__piFooterBootVersion;
-  if (overrides.updateInstalled) globalThis.__piFooterBootVersion = "older-version";
+  const previousEntry = process.argv[1];
+  const previousExecPath = process.execPath;
+  if (overrides.updateInstalled) {
+    const root = mkdtempSync(path.join(tmpdir(), "footer-pi-version-"));
+    if (overrides.updateInstalled.missingEntry) {
+      process.argv[1] = path.join(root, "removed", "dist", "bundle.mjs");
+      process.execPath = path.join(root, "bin", "node");
+      const pkg = path.join(
+        root,
+        "lib",
+        "node_modules",
+        "@earendil-works",
+        "pi-coding-agent",
+        "package.json",
+      );
+      mkdirSync(path.dirname(pkg), { recursive: true });
+      writeFileSync(pkg, JSON.stringify({ version: overrides.updateInstalled.to }));
+    } else {
+      const entry = path.join(root, "dist", "cli.js");
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, "");
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: overrides.updateInstalled.to }));
+      process.argv[1] = entry;
+    }
+  }
   try {
     footer(pi);
     await pi.handlers.session_start(overrides.sessionStart ?? {}, ctx);
   } finally {
-    if (previousBootVersion === undefined) delete globalThis.__piFooterBootVersion;
-    else globalThis.__piFooterBootVersion = previousBootVersion;
+    process.argv[1] = previousEntry;
+    process.execPath = previousExecPath;
   }
 
   const component = factory(
@@ -285,16 +309,21 @@ test("session name is right-aligned and statuses split inline vs status row", as
   assert.equal(main.length, 120);
 });
 
-test("update notice is a right-aligned widget above the prompt", async () => {
-  const ui = await mount({ updateInstalled: true });
+test("update notice shows both versions in a right-aligned widget above the prompt", async () => {
+  // Updates can remove the exact bundle argv[1] names while the old process
+  // still runs, so exercise the node-prefix fallback used after /reload.
+  const ui = await mount({ updateInstalled: { to: "99.0.0", missingEntry: true } });
   const [main] = await ui.settled(80);
   const widgetFactory = ui.widgets.find(({ key }) => key === "footer-update")?.content;
   const widget = widgetFactory({ requestRender: () => {} });
-  const message = "Update installed · Restart to update";
+  const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
   assert.equal(main, "dotfiles or ox hi master* 41.2k/1m $0.5123");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
-  assert.match(widget.render(80)[0], /\x1B\[32mUpdate installed · Restart to update\x1B\[39m$/);
+  assert.match(
+    widget.render(80)[0],
+    new RegExp(`\\x1B\\[32m${message.replaceAll(".", "\\.")}\\x1B\\[39m$`),
+  );
 });
 
 /**

@@ -23,10 +23,11 @@ import { appendFile, readFile, realpath, writeFile, access, constants } from "no
 import { homedir, loadavg } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionCommandContext,
+import {
+  VERSION as RUNNING_PI_VERSION,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
@@ -260,33 +261,33 @@ class PeerNameCache {
  * then watch the on-disk version; a mismatch means an install landed while we
  * run old code and only a restart picks it up.
  *
- * The boot version is stashed on globalThis (keyed per process) so /reload —
- * which re-executes this module against the already-updated files on disk —
- * doesn't reset the baseline and silently clear a still-valid notice.
+ * RUNNING_PI_VERSION comes from pi's already-loaded module, so /reload keeps
+ * reporting the version this process is actually running even after the files
+ * on disk have been replaced by an update.
  */
+interface InstalledUpdate {
+  from: string;
+  to: string;
+}
+
 class UpdateCheckCache {
-  private bootVersion = "";
+  private readonly bootVersion = RUNNING_PI_VERSION;
   private current = "";
   private fetchedAt = 0;
   private inFlight = false;
 
   async init(): Promise<void> {
-    const stash = globalThis as { __piFooterBootVersion?: string };
-    if (stash.__piFooterBootVersion !== undefined) {
-      this.bootVersion = stash.__piFooterBootVersion;
-      return;
-    }
-    this.bootVersion = await piVersion();
-    stash.__piFooterBootVersion = this.bootVersion;
-    this.current = this.bootVersion;
+    this.current = (await piVersion()) || this.bootVersion;
   }
 
-  read(requestRender: () => void): boolean {
-    if (!this.bootVersion) return false;
+  read(requestRender: () => void): InstalledUpdate | undefined {
+    if (!this.bootVersion) return undefined;
     if (!this.inFlight && Date.now() - this.fetchedAt >= UPDATE_TTL_MS) {
       void this.refresh(requestRender);
     }
-    return this.current !== this.bootVersion;
+    return this.current && this.current !== this.bootVersion
+      ? { from: this.bootVersion, to: this.current }
+      : undefined;
   }
 
   /** Re-read now, ignoring the TTL (used by the idle-session poll timer). */
@@ -324,6 +325,10 @@ function formatGit(branch: string | null, state: GitState): string {
 
 function color(code: number, text: string): string {
   return text ? `\x1b[${code}m${text}\x1b[39m` : "";
+}
+
+function versionLabel(version: string): string {
+  return version.startsWith("v") ? version : `v${version}`;
 }
 
 /**
@@ -495,20 +500,40 @@ function bootLogPath(): string {
 }
 
 /**
- * pi's package.json, resolved fresh on every call. argv[1] is usually a bin
- * symlink (mise shim -> ../lib/node_modules/.../dist/cli.js), so resolve it
- * before walking up to the package root — and re-resolve per read, so an
- * update that repoints the symlink (or swaps the tree underneath it) is seen.
+ * pi's package.json, resolved fresh on every call. Prefer argv[1] while its
+ * entrypoint still exists; an update can remove the old bundle out from under
+ * a running process, so fall back to the global package beside node itself.
  */
 async function piPackageJsonPath(): Promise<string | null> {
+  const candidates: string[] = [];
   try {
     const entry = process.argv[1];
-    if (!entry) return null;
-    const resolved = await realpath(entry);
-    return join(dirname(dirname(resolved)), "package.json");
+    if (entry) {
+      const resolved = await realpath(entry);
+      candidates.push(join(dirname(dirname(resolved)), "package.json"));
+    }
   } catch {
-    return null;
+    // The update may have removed the running process's old entrypoint.
   }
+  candidates.push(
+    join(
+      dirname(dirname(process.execPath)),
+      "lib",
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+      "package.json",
+    ),
+  );
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.R_OK);
+      return candidate;
+    } catch {
+      // Try the next installation layout.
+    }
+  }
+  return null;
 }
 
 /** pi's own version, for correlating a regression with an upgrade. */
@@ -702,7 +727,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
   const peer = new PeerNameCache();
   const update = new UpdateCheckCache();
-  void update.init().catch(() => {});
+  const updateReady = update.init().catch(() => {});
   let enabled = true;
   let bypassed = false;
   let repaint: (() => void) | undefined;
@@ -745,8 +770,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
     ctx.ui.setWidget(UPDATE_WIDGET_KEY, (tui) => ({
       invalidate(): void {},
       render(width: number): string[] {
-        if (width <= 0 || !update.read(() => tui.requestRender())) return [];
-        return [alignRight(color(GREEN, "Update installed · Restart to update"), width)];
+        if (width <= 0) return [];
+        const installed = update.read(() => tui.requestRender());
+        if (!installed) return [];
+        const message =
+          `Update installed ${versionLabel(installed.from)} → ${versionLabel(installed.to)}` +
+          " · Restart to update";
+        return [alignRight(color(GREEN, message), width)];
       },
     }));
 
@@ -986,6 +1016,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    await updateReady;
     // The guardian's bypass resets when the session runtime reloads.
     bypassed = false;
     if (unseenState) unseenState.unseen = 0;
