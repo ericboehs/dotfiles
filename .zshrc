@@ -35,11 +35,11 @@ if [[ -f "$HOME/.zshrc.local" ]]; then
   source "$HOME/.zshrc.local"
 fi
 
-# Claude notifications from a machine you are only ever ssh'd into come back to
-# whichever machine you are sitting at, and need to name the pane holding that
-# ssh so clicking one can land on it. LC_* is the only namespace ssh forwards by
-# default (SendEnv LANG LC_* against sshd's matching AcceptEnv), and a %pane_id
-# survives every rename and renumbering, so that is what travels.
+# Coding-agent notifications from a machine you are only ever ssh'd into come
+# back to whichever machine you are sitting at, and need to name the pane holding
+# that ssh so clicking one can land on it. LC_* is the only namespace ssh
+# forwards by default (SendEnv LANG LC_* against sshd's matching AcceptEnv), and
+# a %pane_id survives every rename and renumbering, so that is what travels.
 #
 # Which half runs depends on which end of the connection this shell is: the far
 # end records where the login came from, keyed by tty, because a tmux session
@@ -50,13 +50,23 @@ fi
 # ssh'd from inside tmux left the old pane id standing, and a notification from
 # this machine would then send the click to a pane that had nothing to do with
 # it - selecting the wrong tab and yanking the local tmux somewhere else.
+#
+# LC_CLAUDE_PANE and ~/.claude/origin are compatibility mirrors for endpoints
+# still running the old name; LC_AGENT_NOTIFY_PANE and ~/.agent-notify/origin are
+# canonical.
 if [[ -n $SSH_TTY ]]; then
-  mkdir -p ~/.claude/origin
-  if [[ -n $LC_CLAUDE_PANE ]]; then
-    print -r -- $LC_CLAUDE_PANE > ~/.claude/origin/${SSH_TTY//\//-}
+  agent_notify_origin=${LC_AGENT_NOTIFY_PANE:-${LC_CLAUDE_PANE:-}}
+  agent_notify_origin_file=${SSH_TTY//\//-}
+  mkdir -p ~/.agent-notify/origin ~/.claude/origin
+  if [[ -n $agent_notify_origin ]]; then
+    print -r -- "$agent_notify_origin" > ~/.agent-notify/origin/$agent_notify_origin_file
+    print -r -- "$agent_notify_origin" > ~/.claude/origin/$agent_notify_origin_file
   else
-    rm -f ~/.claude/origin/${SSH_TTY//\//-}
+    rm -f ~/.agent-notify/origin/$agent_notify_origin_file \
+      ~/.claude/origin/$agent_notify_origin_file
   fi
+  unset agent_notify_origin agent_notify_origin_file
 elif [[ -n $TMUX_PANE ]]; then
+  export LC_AGENT_NOTIFY_PANE=$TMUX_PANE
   export LC_CLAUDE_PANE=$TMUX_PANE
 fi
