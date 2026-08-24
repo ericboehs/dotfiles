@@ -64,7 +64,7 @@ REPO_PATH = "ericboehs/dotfiles"
 # tree-sitter (the lib) and tree-sitter-cli are separate formulas;
 # nvim-treesitter needs the CLI for parser compilation.
 "brew:tree-sitter-cli" = { version = "latest", os = ["macos"] }
-# bin/tmux-claude-save and -restore parse Claude's session JSON with jq and
+# bin/tmux-agent-save and -restore parse the agents' session JSON with jq and
 # abort without it. macOS has shipped /usr/bin/jq (1.7.1-apple) for a while, so
 # this is belt-and-braces here — it is the apt entry below that a Linux box
 # actually needs. Declared on both so the dependency is stated rather than
