@@ -2,41 +2,79 @@
 # Install teams-capture as a launchd agent that records every Teams meeting.
 #
 # The script form runs under `swift`, which is awkward for TCC: Accessibility
-# permission would have to be granted to the compiler. So compile a real binary
-# and grant permission to that instead.
+# permission would have to be granted to the Swift compiler. So compile a real
+# binary, wrapped in an .app bundle purely so it has a stable bundle id — that
+# gives it a readable name in the Accessibility list and, more usefully, makes
+# `tccutil reset` able to clear a stale grant.
 
 set -euo pipefail
 
-label="com.ericboehs.teams-capture"
+bundle_id="com.ericboehs.teams-capture"
+label="$bundle_id"
 source_script="${BASH_SOURCE[0]%/*}/teams-capture"
-binary="$HOME/.local/bin/teams-capture-daemon"
-stamp="$binary.sha256"
+app="$HOME/Applications/TeamsCapture.app"
+binary="$app/Contents/MacOS/teams-capture"
 plist="$HOME/Library/LaunchAgents/$label.plist"
-log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/teams-capture"
-log="$log_dir/launchd.log"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/teams-capture"
+stamp="$state_dir/source.sha256"
+log="$state_dir/launchd.log"
 # macOS ties an Accessibility grant to the binary's code signature. Ad-hoc
-# signing re-hashes on every build, so each rebuild silently drops permission.
-# Set TEAMS_CAPTURE_SIGN_ID to a self-signed identity to keep it across builds.
+# signing re-hashes on every build, so each rebuild drops the permission. Set
+# TEAMS_CAPTURE_SIGN_ID to a Developer ID to keep it across rebuilds; without
+# one, `reauthorize` below makes re-granting a two-step affair.
 sign_id="${TEAMS_CAPTURE_SIGN_ID:--}"
+
+settings_pane="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
 case "${1:-install}" in
   uninstall)
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
-    rm -f "$plist" "$binary" "$stamp"
+    rm -rf "$plist" "$app" "$stamp"
+    tccutil reset Accessibility "$bundle_id" >/dev/null 2>&1 || true
     echo "removed $label"
+    exit 0
+    ;;
+  reauthorize)
+    launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+    tccutil reset Accessibility "$bundle_id" >/dev/null 2>&1 || true
+    open "$settings_pane"
+    open -R "$app"
+    echo "drag TeamsCapture.app into the Accessibility list, then:"
+    echo "  launchctl bootstrap gui/$UID $plist"
     exit 0
     ;;
   install) ;;
   *)
-    echo "usage: ${0##*/} [install|uninstall]" >&2
+    echo "usage: ${0##*/} [install|reauthorize|uninstall]" >&2
     exit 1
     ;;
 esac
 
-mkdir -p "${binary%/*}" "$log_dir"
+mkdir -p "$app/Contents/MacOS" "$state_dir"
 
-# Only rebuild when the source actually changed, so re-running this script
-# doesn't cost you the Accessibility permission.
+cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>$bundle_id</string>
+  <key>CFBundleName</key>
+  <string>Teams Capture</string>
+  <key>CFBundleExecutable</key>
+  <string>teams-capture</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+
+# Only rebuild when the source changed: every rebuild costs the Accessibility
+# grant unless a stable signing identity is in play.
 source_hash=$(shasum -a 256 "$source_script" | cut -d' ' -f1)
 rebuilt=false
 if [[ ! -x $binary || ! -f $stamp || $(cat "$stamp") != "$source_hash" ]]; then
@@ -45,11 +83,11 @@ if [[ ! -x $binary || ! -f $stamp || $(cat "$stamp") != "$source_hash" ]]; then
   trap 'rm -rf "$build_dir"' EXIT
   cp "$source_script" "$build_dir/teams-capture.swift"
   swiftc -O -o "$binary" "$build_dir/teams-capture.swift"
-  codesign --force --sign "$sign_id" "$binary"
+  codesign --force --sign "$sign_id" --identifier "$bundle_id" "$app"
   echo "$source_hash" > "$stamp"
   rebuilt=true
 else
-  echo "$binary is current, skipping build"
+  echo "$app is current, skipping build"
 fi
 
 cat > "$plist" <<PLIST
@@ -94,7 +132,7 @@ launchctl bootstrap "gui/$UID" "$plist"
 cat <<INFO
 
 installed $label
-  binary:      $binary
+  app:         $app
   plist:       $plist
   log:         $log
   transcripts: ${XDG_DATA_HOME:-$HOME/.local/share}/teams-capture
@@ -102,13 +140,10 @@ installed $label
   tail -f $log
 INFO
 
-if [[ $rebuilt == true ]]; then
+if [[ $rebuilt == true && $sign_id == "-" ]]; then
   cat <<INFO
 
-The binary changed, so macOS dropped its Accessibility permission. Re-grant it:
-  System Settings -> Privacy & Security -> Accessibility
-  remove the old teams-capture-daemon entry, then + -> $binary
-  (Shift-Cmd-G in the picker to type the path)
-  then: launchctl kickstart -k gui/$UID/$label
+Ad-hoc signed, so macOS sees a new binary and drops any previous grant:
+  ${BASH_SOURCE[0]} reauthorize
 INFO
 fi
