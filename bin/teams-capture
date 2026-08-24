@@ -6,8 +6,8 @@
 // Teams only keeps ~3 live caption entries in the DOM at a time, so this polls
 // the accessibility tree and finalizes each utterance when it scrolls away.
 //
-//   teams-capture              capture the current meeting, Ctrl-C to stop
-//   teams-capture --watch      run forever, one transcript per meeting
+//   teams-capture              follow the running daemon, or capture if none
+//   teams-capture --once       capture the current meeting only, Ctrl-C to stop
 //
 // Output (default ~/.local/share/teams-capture), created on first captured
 // line so meetings without captions leave no empty files behind:
@@ -35,17 +35,28 @@ struct Options {
     var captureChat = true
     var includeChatBacklog = false
     var autoCaptions = false
-    var watch = false
+    var once = false
+    var follow = false
     var jsonToStdout = false
     var quiet = false
     var pid: pid_t?
+    var stateDirectory: String = {
+        let base = ProcessInfo.processInfo.environment["XDG_STATE_HOME"]
+            ?? NSHomeDirectory() + "/.local/state"
+        return base + "/teams-capture"
+    }()
 }
 
 func usage() -> String {
     """
     usage: teams-capture [options]
 
-      --watch              stay running: one transcript per meeting, forever
+    With no options: record every meeting, one transcript each, forever. If
+    another teams-capture (e.g. the launchd agent) already holds the lock,
+    follow its transcript instead of fighting it for the same meeting.
+
+      --once               capture only the meeting happening now, then stop
+      --follow             just watch the newest transcript, never record
       --auto-captions      turn live captions on (⇧⌘A) when a meeting starts
       --interval <ms>      poll interval while in a meeting (default 250)
       --idle-interval <ms> poll interval while waiting for one (default 2000)
@@ -55,7 +66,7 @@ func usage() -> String {
       --chat-backlog       also record chat already on screen when joining
       --json               print JSONL to stdout instead of pretty lines
       --quiet              no stdout output
-      --pid <pid>          MSTeams pid (default: autodetect, refreshed in --watch)
+      --pid <pid>          MSTeams pid (default: autodetect, refreshed as needed)
       -h, --help           this help
 
     Files are only created once there is something to write. Ctrl-C flushes
@@ -78,7 +89,9 @@ func parseOptions() -> Options {
     while !args.isEmpty {
         let flag = args.removeFirst()
         switch flag {
-        case "--watch": options.watch = true
+        case "--watch": break // now the default; accepted so old invocations work
+        case "--once": options.once = true
+        case "--follow": options.follow = true
         case "--auto-captions": options.autoCaptions = true
         case "--interval": options.intervalMs = UInt32(next(flag)) ?? options.intervalMs
         case "--idle-interval": options.idleIntervalMs = UInt32(next(flag)) ?? options.idleIntervalMs
@@ -97,7 +110,8 @@ func parseOptions() -> Options {
 }
 
 func status(_ message: String) {
-    FileHandle.standardError.write(Data("teams-capture: \(message)\n".utf8))
+    let stamp = Recorder.isoFormatter.string(from: Date())
+    FileHandle.standardError.write(Data("[\(stamp)] teams-capture: \(message)\n".utf8))
 }
 
 // MARK: - Accessibility helpers
@@ -453,6 +467,8 @@ final class Session {
     private var captionAttempts = 0
     private var lastCaptionCheck = Date.distantPast
     private var sawCaptions = false
+    /// Recently written utterances, to catch Teams re-rendering a finished one.
+    private var written: [(speaker: String, text: String, at: Date)] = []
 
     init(options: Options, live: LiveView, title: String) {
         self.options = options
@@ -567,10 +583,27 @@ final class Session {
         if !messages.isEmpty { chatBaselineDone = true }
     }
 
+    /// When an utterance finishes, Teams often replaces its node with a fresh
+    /// one holding the same (or corrected) text. Without this, the utterance
+    /// gets written twice: once when the old node goes, once when the new does.
+    private func supersededByActive(_ utterance: Utterance, id: String) -> Bool {
+        activeCaptions.contains { key, other in
+            key != id && other.speaker == utterance.speaker && other.text.hasPrefix(utterance.text)
+        }
+    }
+
+    private func alreadyWritten(_ utterance: Utterance, now: Date) -> Bool {
+        written.contains {
+            $0.speaker == utterance.speaker && $0.text == utterance.text
+                && now.timeIntervalSince($0.at) < 30
+        }
+    }
+
     private func finalizeCaption(_ id: String, at date: Date) {
         guard let utterance = activeCaptions.removeValue(forKey: id) else { return }
         captionOrder.removeAll { $0 == id }
         guard !utterance.text.isEmpty else { return }
+        guard !supersededByActive(utterance, id: id), !alreadyWritten(utterance, now: date) else { return }
         emit(
             kind: "caption",
             speaker: utterance.speaker,
@@ -578,6 +611,8 @@ final class Session {
             at: utterance.startedAt,
             extra: ["node_id": id, "ended_at": Recorder.isoFormatter.string(from: date)]
         )
+        written.append((utterance.speaker, utterance.text, date))
+        if written.count > 40 { written.removeFirst(written.count - 40) }
     }
 
     /// Flush in-flight captions and close out the transcript.
@@ -595,6 +630,62 @@ final class Session {
     }
 }
 
+// MARK: - Single instance, and following someone else's transcript
+
+/// Hold an exclusive lock for the lifetime of the process. Two capturers on one
+/// meeting would write two transcripts of the same words.
+func acquireLock(_ path: String) -> Int32? {
+    let descriptor = open(path, O_CREAT | O_RDWR, 0o644)
+    guard descriptor >= 0 else { return nil }
+    guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+        close(descriptor)
+        return nil
+    }
+    return descriptor
+}
+
+func newestTranscript(in directory: String) -> URL? {
+    let url = URL(fileURLWithPath: directory, isDirectory: true)
+    let keys: [URLResourceKey] = [.contentModificationDateKey]
+    guard let entries = try? FileManager.default.contentsOfDirectory(
+        at: url, includingPropertiesForKeys: keys) else { return nil }
+    func modified(_ file: URL) -> Date {
+        (try? file.resourceValues(forKeys: Set(keys)))?.contentModificationDate ?? .distantPast
+    }
+    return entries.filter { $0.pathExtension == "txt" }.max { modified($0) < modified($1) }
+}
+
+/// Tail the newest transcript, switching over when a new meeting starts.
+func followTranscripts(_ options: Options) {
+    let stdout = FileHandle.standardOutput
+    var current: URL?
+    var offset: UInt64 = 0
+    var lastScan = Date.distantPast
+    if !options.quiet { status("following \(options.directory)") }
+
+    while !stopRequested {
+        let now = Date()
+        if now.timeIntervalSince(lastScan) > 1 {
+            lastScan = now
+            if let newest = newestTranscript(in: options.directory), newest != current {
+                current = newest
+                offset = 0 // print the meeting so far, then keep up with it
+                if !options.quiet { status("\(newest.lastPathComponent)") }
+            }
+        }
+        if let current, let handle = try? FileHandle(forReadingFrom: current) {
+            try? handle.seek(toOffset: offset)
+            let data = handle.readDataToEndOfFile()
+            if !data.isEmpty {
+                stdout.write(data)
+                offset += UInt64(data.count)
+            }
+            try? handle.close()
+        }
+        usleep(400_000)
+    }
+}
+
 // MARK: - Main
 
 var stopRequested = false
@@ -604,8 +695,26 @@ signal(SIGTERM) { _ in stopRequested = true }
 let options = parseOptions()
 let live = LiveView(options: options)
 
+if options.follow {
+    followTranscripts(options)
+    exit(0)
+}
+
 guard AXIsProcessTrusted() else {
     fail("no Accessibility permission — grant it in System Settings → Privacy & Security → Accessibility")
+}
+
+try? FileManager.default.createDirectory(
+    atPath: options.stateDirectory, withIntermediateDirectories: true)
+let lockDescriptor = acquireLock(options.stateDirectory + "/lock")
+if lockDescriptor == nil {
+    // Someone else is recording this meeting — show it rather than duplicate it.
+    guard isatty(STDOUT_FILENO) == 1, !options.once else {
+        fail("another teams-capture is already recording")
+    }
+    status("another teams-capture is already recording; following it instead")
+    followTranscripts(options)
+    exit(0)
 }
 
 var currentPID: pid_t?
@@ -615,13 +724,15 @@ var leaveMissingSince: Date?
 
 func attach(to pid: pid_t) {
     let element = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(element, 2.0)
+    // Generous: a busy or throttled Teams can take seconds to answer, and a
+    // timeout is indistinguishable from "the meeting ended".
+    AXUIElementSetMessagingTimeout(element, 5.0)
     currentPID = pid
     app = element
 }
 
 if let pid = options.pid ?? teamsPID() { attach(to: pid) }
-if !options.watch {
+if options.once {
     guard let app, !axChildren(app).isEmpty else {
         fail("cannot read the Teams accessibility tree — is Teams running?")
     }
@@ -631,10 +742,13 @@ if !options.watch {
     status("watching for Teams meetings…")
 }
 
+var lastMeetingCheck = Date.distantPast
+var lastUnreadableWarning = Date.distantPast
+
 while !stopRequested {
     let now = Date()
 
-    if options.watch {
+    if !options.once {
         // Teams can quit and come back with a new pid.
         if app == nil || axChildren(app!).isEmpty {
             if let pid = options.pid ?? teamsPID(), pid != currentPID || app == nil { attach(to: pid) }
@@ -646,23 +760,36 @@ while !stopRequested {
         continue
     }
 
-    if options.watch {
-        let leave = meetingLeaveButton(app)
-        if leave != nil {
-            leaveMissingSince = nil
-            if session == nil, let pid = currentPID {
-                let title = meetingTitle(app, leaveButton: leave)
-                session = Session(options: options, live: live, title: title)
-                if !options.quiet { status("joined \"\(title)\" (pid \(pid))") }
+    // Scanning the whole tree is expensive, and pointless several times a
+    // second: joining and leaving are not that urgent.
+    if !options.once && now.timeIntervalSince(lastMeetingCheck) >= 2 {
+        lastMeetingCheck = now
+        if axChildren(app).isEmpty {
+            // Unreadable tree. Say nothing about the meeting: a failed read is
+            // not evidence that the call ended.
+            if now.timeIntervalSince(lastUnreadableWarning) > 60 {
+                lastUnreadableWarning = now
+                if !options.quiet { status("cannot read the Teams accessibility tree") }
             }
-        } else if session != nil {
-            // Debounce: the button vanishes briefly during UI transitions.
-            let missingSince = leaveMissingSince ?? now
-            leaveMissingSince = missingSince
-            if now.timeIntervalSince(missingSince) > 6 {
-                session?.finish(at: now)
-                session = nil
+        } else {
+            let leave = meetingLeaveButton(app)
+            if leave != nil {
                 leaveMissingSince = nil
+                if session == nil, let pid = currentPID {
+                    let title = meetingTitle(app, leaveButton: leave)
+                    session = Session(options: options, live: live, title: title)
+                    if !options.quiet { status("joined \"\(title)\" (pid \(pid))") }
+                }
+            } else if session != nil {
+                // Debounce: the button vanishes briefly during UI transitions.
+                let missingSince = leaveMissingSince ?? now
+                leaveMissingSince = missingSince
+                if now.timeIntervalSince(missingSince) > 10 {
+                    if !options.quiet { status("no Leave button for 10s, ending session") }
+                    session?.finish(at: now)
+                    session = nil
+                    leaveMissingSince = nil
+                }
             }
         }
     }

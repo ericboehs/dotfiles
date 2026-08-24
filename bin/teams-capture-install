@@ -100,7 +100,6 @@ cat > "$plist" <<PLIST
   <key>ProgramArguments</key>
   <array>
     <string>$binary</string>
-    <string>--watch</string>
     <string>--auto-captions</string>
   </array>
   <key>EnvironmentVariables</key>
@@ -114,10 +113,10 @@ cat > "$plist" <<PLIST
   <true/>
   <key>ThrottleInterval</key>
   <integer>60</integer>
+  <!-- Not Background/LowPriorityIO: throttling starves the Accessibility
+       round-trips until they time out, which looks like the meeting ended. -->
   <key>ProcessType</key>
-  <string>Background</string>
-  <key>LowPriorityIO</key>
-  <true/>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>$log</string>
   <key>StandardErrorPath</key>
