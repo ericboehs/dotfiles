@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# zoxide-seed — preseed the zoxide database with every git repo under ~/Code
+#
+# Makes `cd claude-notify` work from anywhere, even for repos you've never
+# visited in this shell's lifetime. Seeded entries get a low score, so real
+# usage always outranks them and the frecency ordering stays meaningful.
+#
+# Usage:
+#   zoxide-seed                 # add any repo not already in the db
+#   zoxide-seed --dry-run       # show what would be added
+#   zoxide-seed --if-stale [7]  # only run if last seed was >N days ago
+#   zoxide-seed --force         # bump every repo, even known ones
+#
+# Env:
+#   ZOXIDE_SEED_ROOTS   colon-separated roots to scan (default: $HOME/Code)
+#   ZOXIDE_SEED_SCORE   score for new entries (default: 1)
+#   ZOXIDE_SEED_DEPTH   max search depth below each root (default: 6)
+
+set -uo pipefail
+
+roots=${ZOXIDE_SEED_ROOTS:-$HOME/Code}
+score=${ZOXIDE_SEED_SCORE:-1}
+depth=${ZOXIDE_SEED_DEPTH:-6}
+stamp=${XDG_CACHE_HOME:-$HOME/.cache}/zoxide-seed.stamp
+
+dry_run=0
+force=0
+quiet=0
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    -n|--dry-run) dry_run=1 ;;
+    -f|--force)   force=1 ;;
+    -q|--quiet)   quiet=1 ;;
+    -s|--score)   score=$2; shift ;;
+    --if-stale)
+      days=7
+      case ${2:-} in [0-9]*) days=$2; shift ;; esac
+      quiet=1
+      if [ -f "$stamp" ]; then
+        # shellcheck disable=SC2012
+        age=$(( ( $(date +%s) - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp") ) / 86400 ))
+        [ "$age" -ge "$days" ] || exit 0
+      fi
+      ;;
+    -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
+    *) echo "zoxide-seed: unknown option $1" >&2; exit 64 ;;
+  esac
+  shift
+done
+
+command -v zoxide >/dev/null || { echo "zoxide-seed: zoxide not installed" >&2; exit 127; }
+
+find_repos() {
+  local root=$1
+  [ -d "$root" ] || return 0
+  if command -v fd >/dev/null; then
+    fd -H --absolute-path --max-depth "$depth" \
+       --type d --type f --type l '^\.git$' "$root" 2>/dev/null
+  else
+    find "$root" -maxdepth "$depth" -name .git -print 2>/dev/null
+  fi
+}
+
+# Existing entries, so re-runs don't inflate scores.
+known=$(zoxide query -l 2>/dev/null)
+
+added=0 skipped=0
+while IFS= read -r gitpath; do
+  [ -n "$gitpath" ] || continue
+  gitpath=${gitpath%/}          # fd appends a trailing slash to dirs
+  repo=${gitpath%/.git}
+  [ "$repo" != "$gitpath" ] || continue
+  [ -d "$repo" ] || continue
+  if [ "$force" -eq 0 ] && printf '%s\n' "$known" | grep -qxF "$repo"; then
+    skipped=$((skipped + 1))
+    continue
+  fi
+  if [ "$dry_run" -eq 1 ]; then
+    echo "+ $repo"
+  else
+    zoxide add --score "$score" -- "$repo"
+  fi
+  added=$((added + 1))
+done < <(IFS=:; for r in $roots; do find_repos "$r"; done | sort -u)
+
+[ "$dry_run" -eq 1 ] || : > "$stamp"
+[ "$quiet" -eq 1 ] || echo "zoxide-seed: ${added} added, ${skipped} already known"

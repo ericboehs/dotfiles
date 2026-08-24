@@ -2,7 +2,14 @@
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 
 # zoxide setup
-[[ $- == *i* ]] && [ -z "$DISABLE_ZOXIDE" ] && eval "$(zoxide init --cmd cd zsh)"
+if [[ $- == *i* ]] && [ -z "$DISABLE_ZOXIDE" ]; then
+  eval "$(zoxide init --cmd cd zsh)"
+
+  # Keep every ~/Code repo jumpable, even ones never visited in a shell.
+  # Runs detached, at most once a week; seeded entries score 1 so real
+  # usage always outranks them.
+  (zoxide-seed --if-stale 7 &) >/dev/null 2>&1
+fi
 
 # fnox setup
 if command -v fnox >/dev/null 2>&1; then
