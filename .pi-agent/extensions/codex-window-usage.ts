@@ -23,6 +23,11 @@ interface UsageResponse {
   };
 }
 
+interface UsageDisplay {
+  value: string;
+  resetSummary: string;
+}
+
 let requestGeneration = 0;
 let lastValue: string | undefined;
 // Log only the first failure of a streak (and the recovery) so a dead token
@@ -75,22 +80,22 @@ function windowSeconds(window: UsageWindow): number | undefined {
   return undefined;
 }
 
-function selectWindow(usage: UsageResponse): UsageWindow | undefined {
-  const windows = [
+function selectWindows(usage: UsageResponse): UsageWindow[] {
+  return [
     usage.rate_limit?.primary_window,
     usage.rate_limit?.secondary_window,
-  ].filter((window): window is UsageWindow => {
-    return (
-      window != null &&
-      typeof window.used_percent === "number" &&
-      windowSeconds(window) !== undefined
+  ]
+    .filter((window): window is UsageWindow => {
+      return (
+        window != null &&
+        typeof window.used_percent === "number" &&
+        windowSeconds(window) !== undefined
+      );
+    })
+    // Shortest first: the ~5h cap gates sooner than the 7-day quota.
+    .sort(
+      (left, right) => (windowSeconds(left) ?? 0) - (windowSeconds(right) ?? 0),
     );
-  });
-
-  // Prefer the longest reported window (normally the 7-day quota).
-  return windows.sort(
-    (left, right) => (windowSeconds(right) ?? 0) - (windowSeconds(left) ?? 0),
-  )[0];
 }
 
 function formatNumber(value: number): string {
@@ -98,24 +103,56 @@ function formatNumber(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+function resetAtMs(window: UsageWindow, nowMs = Date.now()): number | undefined {
+  if (typeof window.reset_at === "number" && Number.isFinite(window.reset_at)) {
+    return window.reset_at > 10_000_000_000
+      ? window.reset_at
+      : window.reset_at * 1000;
+  }
+
+  if (
+    typeof window.reset_after_seconds === "number" &&
+    Number.isFinite(window.reset_after_seconds)
+  ) {
+    return nowMs + window.reset_after_seconds * 1000;
+  }
+
+  return undefined;
+}
+
+function windowLabel(window: UsageWindow): string | undefined {
+  const totalSeconds = windowSeconds(window);
+  if (totalSeconds === undefined) return undefined;
+
+  return totalSeconds >= 86_400
+    ? `${formatNumber(totalSeconds / 86_400)}D`
+    : `${formatNumber(totalSeconds / 3_600)}H`;
+}
+
+function formatReset(window: UsageWindow, nowMs = Date.now()): string | undefined {
+  const label = windowLabel(window);
+  const reset = resetAtMs(window, nowMs);
+  if (!label || reset === undefined) return undefined;
+
+  const formatted = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(reset));
+  return `${label} ${formatted}`;
+}
+
 function formatWindow(window: UsageWindow, nowMs = Date.now()): string | undefined {
   const totalSeconds = windowSeconds(window);
   const usedPercent = window.used_percent;
   if (totalSeconds === undefined || typeof usedPercent !== "number") return undefined;
 
-  let remainingSeconds: number | undefined;
-  if (typeof window.reset_at === "number" && Number.isFinite(window.reset_at)) {
-    const resetAtSeconds =
-      window.reset_at > 10_000_000_000 ? window.reset_at / 1000 : window.reset_at;
-    remainingSeconds = resetAtSeconds - nowMs / 1000;
-  } else if (
-    typeof window.reset_after_seconds === "number" &&
-    Number.isFinite(window.reset_after_seconds)
-  ) {
-    remainingSeconds = window.reset_after_seconds;
-  }
-
-  if (remainingSeconds === undefined) return undefined;
+  const reset = resetAtMs(window, nowMs);
+  if (reset === undefined) return undefined;
+  const remainingSeconds = (reset - nowMs) / 1000;
 
   const elapsedSeconds = Math.max(
     0,
@@ -138,7 +175,7 @@ function formatWindow(window: UsageWindow, nowMs = Date.now()): string | undefin
   return `${formatNumber(elapsedHours)}/${formatNumber(totalHours)}H: ${formatNumber(percent)}%${warning}`;
 }
 
-async function fetchValue(ctx: ExtensionContext): Promise<string> {
+async function fetchDisplay(ctx: ExtensionContext): Promise<UsageDisplay> {
   const resolved = await ctx.modelRegistry.getProviderAuth(PROVIDER);
   const accessToken = resolved?.auth.apiKey;
   if (!accessToken) throw new Error("OpenAI Codex authentication is unavailable");
@@ -163,16 +200,25 @@ async function fetchValue(ctx: ExtensionContext): Promise<string> {
     }
 
     const usage = (await response.json()) as UsageResponse;
-    const window = selectWindow(usage);
-    const value = window ? formatWindow(window) : undefined;
+    const windows = selectWindows(usage);
+    const nowMs = Date.now();
+    const value = windows
+      .map((window) => formatWindow(window, nowMs))
+      .filter((formatted): formatted is string => formatted !== undefined)
+      .join(" ");
     if (!value) throw new Error("no timed usage window was returned");
-    return value;
+
+    const resetSummary = windows
+      .map((window) => formatReset(window, nowMs))
+      .filter((formatted): formatted is string => formatted !== undefined)
+      .join(" ");
+    return { value, resetSummary };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function refresh(ctx: ExtensionContext): Promise<string | undefined> {
+async function refresh(ctx: ExtensionContext): Promise<UsageDisplay | undefined> {
   const generation = ++requestGeneration;
 
   if (!isCodex(ctx)) {
@@ -183,15 +229,15 @@ async function refresh(ctx: ExtensionContext): Promise<string | undefined> {
   if (lastValue) setStatus(ctx, lastValue);
 
   try {
-    const value = await fetchValue(ctx);
+    const display = await fetchDisplay(ctx);
     if (generation !== requestGeneration || !isCodex(ctx)) return undefined;
-    lastValue = value;
+    lastValue = display.value;
     if (warned) {
       warned = false;
       console.error("[codex-window-usage] usage fetch recovered");
     }
-    setStatus(ctx, value);
-    return value;
+    setStatus(ctx, display.value);
+    return display;
   } catch (err) {
     if (generation === requestGeneration && !lastValue) {
       setStatus(ctx, undefined);
@@ -236,8 +282,13 @@ export default function codexWindowUsage(pi: ExtensionAPI): void {
         return;
       }
 
-      const value = await refresh(ctx);
-      ctx.ui.notify(value ?? "Codex usage is unavailable", value ? "info" : "error");
+      const display = await refresh(ctx);
+      ctx.ui.notify(
+        display
+          ? `${display.value}\nResets: ${display.resetSummary}`
+          : "Codex usage is unavailable",
+        display ? "info" : "error",
+      );
     },
   });
 }
