@@ -33,13 +33,20 @@
 # then the newest transcript not already claimed by an earlier pane.
 #
 # Usage: tmux-agent-save [SESSION_NAME...]
+#        tmux-agent-save --clear [SESSION_NAME...]
+#
 #   With no arguments every live tmux session is saved, each to its own file.
 #   A session holding no agents is reported and left alone rather than
 #   overwriting an earlier save of it with an empty one.
+#
+#   --clear, -c   Delete saves instead of writing them; with no names, all of
+#                 them
+#   --yes, -y     Skip the confirmation prompt when clearing every save
 
 set -euo pipefail
 
 SAVE_DIR="$HOME/.config/tmux-agent"
+LEGACY_SAVE_DIR="$HOME/.config/tmux-claude"
 
 CLAUDE_SESSIONS="$HOME/.claude/sessions"
 CLAUDE_PROJECTS="$HOME/.claude/projects"
@@ -59,8 +66,12 @@ for dep in tmux jq; do
 done
 
 TARGETS=()
+CLEAR=false
+ASSUME_YES=false
 while [ $# -gt 0 ]; do
   case $1 in
+    --clear|-c) CLEAR=true; shift ;;
+    --yes|-y) ASSUME_YES=true; shift ;;
     --help|-h)
       # Print the header comment block, stopping at the first non-comment line.
       awk 'NR>1 { if (/^#/) { sub(/^# ?/, ""); print } else { exit } }' "$0"
@@ -70,6 +81,71 @@ while [ $# -gt 0 ]; do
     *) TARGETS+=("$1"); shift ;;
   esac
 done
+
+# Every session name with a save on disk, current or legacy.
+saved_names() {
+  local f name seen=""
+  shopt -s nullglob
+  for f in "$SAVE_DIR"/*.json "$LEGACY_SAVE_DIR"/*.json; do
+    name=$(basename "$f" .json)
+    case " $seen " in
+      *" $name "*) continue ;;
+    esac
+    seen="$seen $name"
+    printf '%s\n' "$name"
+  done
+}
+
+if $CLEAR; then
+  clearing_all=false
+  if [ ${#TARGETS[@]} -eq 0 ]; then
+    clearing_all=true
+    while IFS= read -r line; do
+      [ -n "$line" ] && TARGETS+=("$line")
+    done < <(saved_names)
+  fi
+
+  if [ ${#TARGETS[@]} -eq 0 ]; then
+    echo "No saved sessions to clear."
+    exit 0
+  fi
+
+  if $clearing_all && ! $ASSUME_YES; then
+    if [ ! -t 0 ]; then
+      echo "Error: refusing to clear every save unattended; pass --yes" >&2
+      exit 1
+    fi
+    printf 'Delete all %d saved session(s)? [y/N] ' "${#TARGETS[@]}"
+    read -r reply
+    case "$reply" in
+      [yY]|[yY][eE][sS]) ;;
+      *) echo "Cancelled."; exit 1 ;;
+    esac
+  fi
+
+  removed=0
+  for name in "${TARGETS[@]}"; do
+    hit=false
+    # Both copies go. Removing only the current one would un-hide a legacy
+    # save of the same name, which tmux-agent-restore falls back to - so a
+    # "cleared" session would quietly come back from the dead.
+    for f in "$SAVE_DIR/$name.json" "$LEGACY_SAVE_DIR/$name.json"; do
+      [ -f "$f" ] || continue
+      rm -f "$f"
+      echo "  removed $f"
+      hit=true
+    done
+    if $hit; then
+      removed=$((removed + 1))
+    else
+      echo "  no save for '$name'" >&2
+    fi
+  done
+
+  echo "Cleared $removed session(s)."
+  [ "$removed" -gt 0 ] || exit 1
+  exit 0
+fi
 
 # No session named: take them all. Read line by line, because a tmux session
 # name may contain spaces.
