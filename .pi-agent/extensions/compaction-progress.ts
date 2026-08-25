@@ -6,7 +6,8 @@
  *
  *   [compaction] Compacted from 101,377 tokens (ctrl+r to expand)
  *     ████████████████░░░░░░░░░░░░  ~42s left · 70.5k tokens
- *     ✓ Compacted from 101,377 tokens in 52s
+ *     ████████████████████████████  +8s over estimate · 70.5k tokens
+ *     ✓ Compacted from 101,377 tokens in 52s · est. 44s
  *
  * Compaction is a single LLM call, so there is no real percent-complete
  * signal. This estimates a total duration from the context size using a
@@ -14,9 +15,10 @@
  * in ~/.pi/agent/compaction-rates.json. An unseen model borrows the median of
  * all recorded models before falling back to a conservative default.
  *
- * If the estimate runs out mid-flight it revises itself: the timeline stretches
- * from the bar's current position, so the bar pauses and resumes climbing
- * rather than jumping backward or parking at 100%.
+ * If the estimate runs out mid-flight, the bar completes and the countdown
+ * flips to a count-up ("+8s over estimate") rather than stretching the
+ * timeline or faking further progress. The overrun is honest feedback, and the
+ * learned rate absorbs it for next time.
  *
  * Rate limits are handled honestly. On a 429/5xx the bar FREEZES and says
  * "rate limited" instead of faking motion, backoff time is excluded from the
@@ -45,18 +47,19 @@ const STATE_FILE = join(
 	".pi/agent/compaction-rates.json",
 );
 
-// Cold-start assumption before any samples exist. This is end-to-end
-// summarization throughput (includes latency + output generation), NOT raw
-// prefill speed -- measured runs land around 900-1500 tok/s, so start low.
-// Real samples override this as soon as one clean run is recorded.
-const DEFAULT_TOKENS_PER_SEC = 1_000;
+// Cold-start assumption before any samples exist.
+// Compaction time = a large fixed cost + a small per-token cost. Measured
+// runs: 54k tokens took 61s while 212k took 91s, i.e. 4x the context for only
+// 1.5x the time. These defaults apply only until real samples are recorded.
+const DEFAULT_BASE_SEC = 35;
+const DEFAULT_TOKENS_PER_SEC = 5_000;
+const MIN_SAMPLES_FOR_FIT = 3;
 const MIN_ETA_SEC = 8;
 
-// Pad the ETA so the bar usually completes just BEFORE reality does.
-const SAFETY_MARGIN = 1.15;
-
-// The bar never rises past this; the final stretch shows "finishing up...".
-const FILL_CAP = 0.9;
+// The estimate is deliberately unbiased (no padding): the bar counts down to
+// zero and then counts UP, showing exactly how wrong the estimate was.
+// Raise above 1.0 to pad the ETA if you'd rather rarely see an overrun.
+const SAFETY_MARGIN = 1.0;
 
 // How long the "Compacted from N tokens in Xs" result stays on screen.
 const LINGER_MS = 6_000;
@@ -82,27 +85,75 @@ function median(values: number[]): number | undefined {
 	return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+function clamp(v: number, lo: number, hi: number): number {
+	return Math.min(hi, Math.max(lo, v));
+}
+
 /**
- * Median tokens/sec for a model, falling back to a global median across all
- * models so a brand-new model still gets a realistic first estimate.
+ * Estimated seconds for a compaction, using an AFFINE model:
+ *
+ *     sec = base + tokens / rate
+ *
+ * Compaction time is dominated by a fixed cost (request latency plus
+ * generating a summary whose length barely varies with input size). Measured
+ * runs show ~4x the context taking only ~1.5x the time, so a purely
+ * proportional tokens/sec model wildly under-predicts small compactions.
+ *
+ * With enough spread in sample sizes we least-squares fit both terms per
+ * model; otherwise we hold `base` fixed and solve for the rate. Falls back to
+ * a pooled fit across all models so a brand-new model still starts sane.
  */
-function learnedRate(key: string): number | undefined {
+function estimateSec(key: string, tokens: number): number | undefined {
 	try {
 		if (!existsSync(STATE_FILE)) return undefined;
 		const state = JSON.parse(readFileSync(STATE_FILE, "utf8"));
-		const toRates = (samples: RateSample[]) =>
-			samples.map((s) => s.tokens / Math.max(s.sec, 0.5));
+		const own = ((state[key] ?? []) as RateSample[]).slice(-8);
+		const pool = own.length
+			? own
+			: (Object.values(state) as RateSample[][]).flatMap((s) => s.slice(-8));
+		if (pool.length === 0) return undefined;
 
-		const own = median(toRates((state[key] ?? []).slice(-8)));
-		if (own !== undefined) return own;
-
-		const all = Object.values(state).flatMap((samples) =>
-			toRates((samples as RateSample[]).slice(-8)),
-		);
-		return median(all);
+		const { base, rate } = fitModel(pool);
+		return base + tokens / rate;
 	} catch {
 		return undefined;
 	}
+}
+
+function fitModel(samples: RateSample[]): { base: number; rate: number } {
+	const n = samples.length;
+	const sizes = samples.map((s) => s.tokens);
+	const spread = Math.max(...sizes) / Math.max(1, Math.min(...sizes));
+
+	// Enough points AND enough size variation to separate the two terms.
+	if (n >= MIN_SAMPLES_FOR_FIT && spread >= 1.5) {
+		const mx = samples.reduce((a, s) => a + s.tokens, 0) / n;
+		const my = samples.reduce((a, s) => a + s.sec, 0) / n;
+		let sxy = 0;
+		let sxx = 0;
+		for (const s of samples) {
+			sxy += (s.tokens - mx) * (s.sec - my);
+			sxx += (s.tokens - mx) ** 2;
+		}
+		const slope = sxx > 0 ? sxy / sxx : 0;
+		const intercept = my - slope * mx;
+		// Reject nonsense fits (negative slope = "bigger is faster").
+		if (slope > 0 && intercept > 0) {
+			return {
+				base: clamp(intercept, 2, 300),
+				rate: clamp(1 / slope, 200, 500_000),
+			};
+		}
+	}
+
+	// Too few / too similar samples: hold the base fixed and solve for the rate.
+	// Keep the base under the fastest observed run or the rate goes negative.
+	const fastest = Math.min(...samples.map((s) => s.sec));
+	const base = Math.min(DEFAULT_BASE_SEC, fastest * 0.6);
+	const rates = samples
+		.map((s) => s.tokens / Math.max(0.5, s.sec - base))
+		.filter((r) => Number.isFinite(r) && r > 0);
+	return { base, rate: median(rates) ?? DEFAULT_TOKENS_PER_SEC };
 }
 
 function recordRate(key: string, tokens: number, sec: number): void {
@@ -181,29 +232,26 @@ export default function (pi: ExtensionAPI) {
 
 		const elapsedSec = activeSeconds();
 
-		// Self-correct: if the estimate ran out, stretch the timeline so the
-		// bar resumes from where it is now (no jump, no parking at full) and
-		// keeps climbing steadily toward FILL_CAP.
-		if (elapsedSec >= etaTotalSec) {
-			const anchor = Math.min(FILL_CAP, Math.max(lastShownFill, 0.45));
-			etaTotalSec = elapsedSec / anchor;
-		}
-
-		lastShownFill = Math.max(
-			lastShownFill,
-			Math.min(FILL_CAP, elapsedSec / etaTotalSec),
-		);
+		// The bar fills linearly and completes exactly when the estimate says it
+		// should. Past that we stop pretending: the countdown flips to a count-up
+		// showing how far over the estimate we are.
+		const overSec = elapsedSec - etaTotalSec;
+		lastShownFill = Math.max(lastShownFill, Math.min(1, elapsedSec / etaTotalSec));
 		const { filled, rest } = renderBar(lastShownFill);
 
 		// pi already renders its own "Compacting context..." loader row above
 		// this widget, so show only the bar -- no duplicate label or spinner.
-		const remainingSec = Math.max(0, Math.ceil(etaTotalSec - elapsedSec));
-		const timeText =
-			(remainingSec > 0 ? `~${remainingSec}s left` : "finishing up...") +
-			` · ${fmtTokens(tokensBefore)} tokens`;
+		const remainingSec = Math.max(0, Math.ceil(-overSec));
+		const status =
+			overSec >= 1
+				? `+${fmtDuration(overSec)} over estimate`
+				: remainingSec > 0
+					? `~${remainingSec}s left`
+					: "finishing up...";
+		const timeText = `${status} · ${fmtTokens(tokensBefore)} tokens`;
 
 		const line =
-			theme.fg("accent", `  ${filled}`) +
+			theme.fg(overSec >= 1 ? "warning" : "accent", `  ${filled}`) +
 			theme.fg("dim", rest) +
 			theme.fg("dim", `  ${timeText}`);
 
@@ -217,7 +265,9 @@ export default function (pi: ExtensionAPI) {
 		etaTotalSec = Math.max(
 			MIN_ETA_SEC,
 			Math.round(
-				SAFETY_MARGIN * (tokensBefore / (learnedRate(modelKey((ctx as any).model)) ?? DEFAULT_TOKENS_PER_SEC)),
+				SAFETY_MARGIN *
+					(estimateSec(modelKey((ctx as any).model), tokensBefore) ??
+						DEFAULT_BASE_SEC + tokensBefore / DEFAULT_TOKENS_PER_SEC),
 			),
 		);
 		lastShownFill = 0;
@@ -265,7 +315,13 @@ export default function (pi: ExtensionAPI) {
 		const theme = ctx?.ui?.theme;
 		const stalledNote =
 			stalledSec >= 1 ? ` (${fmtDuration(stalledSec)} rate limited)` : "";
-		const text = `✓ Compacted from ${reportTokens.toLocaleString()} tokens in ${fmtDuration(wallSec)}${stalledNote}`;
+		// Show how far off the estimate was, so the calibration is visible.
+		const estSec = etaTotalSec;
+		const estNote =
+			estSec > 0 && Math.abs(wallSec - estSec) >= 2
+				? ` · est. ${fmtDuration(estSec)}`
+				: "";
+		const text = `✓ Compacted from ${reportTokens.toLocaleString()} tokens in ${fmtDuration(wallSec)}${stalledNote}${estNote}`;
 		ctx?.ui?.setWidget(WIDGET_ID, [
 			theme ? theme.fg("dim", `  ${text}`) : `  ${text}`,
 		]);
