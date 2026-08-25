@@ -61,9 +61,6 @@ const MIN_ETA_SEC = 8;
 // Raise above 1.0 to pad the ETA if you'd rather rarely see an overrun.
 const SAFETY_MARGIN = 1.0;
 
-// How long the "Compacted from N tokens in Xs" result stays on screen.
-const LINGER_MS = 6_000;
-
 // Partial-fill characters for smooth sub-cell progress ("█" is full).
 const FILL_STEPS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 
@@ -173,7 +170,7 @@ function recordRate(key: string, tokens: number, sec: number): void {
 
 export default function (pi: ExtensionAPI) {
 	let timer: ReturnType<typeof setInterval> | undefined;
-	let lingerTimer: ReturnType<typeof setTimeout> | undefined;
+	let reportShown = false; // completion line is up, awaiting the next turn
 	let startedAt = 0;
 	let tokensBefore = 0;
 	let etaTotalSec = 0; // current estimated total duration (grows via revisions)
@@ -287,10 +284,6 @@ export default function (pi: ExtensionAPI) {
 			clearInterval(timer);
 			timer = undefined;
 		}
-		if (lingerTimer !== undefined) {
-			clearTimeout(lingerTimer);
-			lingerTimer = undefined;
-		}
 		const wallSec = startedAt > 0 ? (Date.now() - startedAt) / 1000 : 0;
 		const stalledSec = blockedTotalSec + (blockedSince ? (Date.now() - blockedSince) / 1000 : 0);
 
@@ -306,12 +299,15 @@ export default function (pi: ExtensionAPI) {
 		blockedSince = undefined;
 
 		if (!shouldReport) {
+			reportShown = false;
 			ctx?.ui?.setWidget(WIDGET_ID, undefined);
 			return;
 		}
 
-		// pi's own "[compaction] Compacted from N tokens" entry has no timing,
-		// so linger briefly with the duration before clearing.
+		// pi's own "[compaction] Compacted from N tokens" entry has no timing, so
+		// show the duration here. This stays up until your next turn -- compaction
+		// often finishes while you're looking away, and a timed auto-clear means
+		// you come back to nothing.
 		const theme = ctx?.ui?.theme;
 		const stalledNote =
 			stalledSec >= 1 ? ` (${fmtDuration(stalledSec)} rate limited)` : "";
@@ -325,12 +321,15 @@ export default function (pi: ExtensionAPI) {
 		ctx?.ui?.setWidget(WIDGET_ID, [
 			theme ? theme.fg("dim", `  ${text}`) : `  ${text}`,
 		]);
-
-		lingerTimer = setTimeout(() => {
-			lingerTimer = undefined;
-			ctx?.ui?.setWidget(WIDGET_ID, undefined);
-		}, LINGER_MS);
+		reportShown = true;
 	}
+
+	// Clear the completion line when the next turn begins, not on a timer.
+	pi.on("turn_start", async (_event, eventCtx) => {
+		if (!reportShown) return;
+		reportShown = false;
+		eventCtx?.ui?.setWidget(WIDGET_ID, undefined);
+	});
 
 	pi.on("session_before_compact", async (event, eventCtx) => {
 		start(event, eventCtx);
