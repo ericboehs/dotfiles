@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# Reconcile the agent-running flags against reality. Runs on every status
+# Compute the status bar's busy signal (@agent_count) fresh on every status
 # refresh via #() in status-format[0], next to theme-sync.sh.
 #
-# The pi extension (~/.pi-agent/extensions/tmux-attention.ts) and Claude's
-# hooks (claude-agent-state.sh) maintain the same convention while their turns
-# run: per-pane @agent_running, plus a rolled-up window-level @agent_count that
-# the status bar uses to dim #I on background windows. If an agent dies without
-# clearing its flag — kill -9, crash, tmux resurrect — the window would stay
-# dimmed forever. One ps snapshot answers for every pane at once: a flagged
-# pane whose tty no longer hosts a claude/pi process has lost its agent.
+# A background window dims its index while any of its panes is working:
+#   * a pane flagged @agent_running by pi's tmux-attention extension or
+#     Claude's claude-agent-state.sh hook (agents idle at their prompt still
+#     report odd foreground commands — "node", bare version strings — so they
+#     are counted by flag alone, never by command), or
+#   * a shell running something that isn't interactive: foreground command
+#     outside the ignore list AND not on the alternate screen. TUI apps
+#     (vim, less, htop) flip alt-screen; batch jobs (cargo build, rspec) don't.
+#
+# The ps snapshot doubles as the crash safety net: a flag whose agent died
+# (kill -9, crash) gets cleared instead of dimming its window forever.
+#
+# The ignore list defaults below; override with the @busy_ignore option:
+#   tmux set-option -g @busy_ignore "zsh fish python3 ..."
+# NB: tmux's #{pane_tty} is /dev/ttysN while ps reports bare ttysN.
 
-# Cheap exit when nothing is flagged: list-panes is a few ms, and this runs
-# every refresh. The ps snapshot below only happens for flagged panes.
-panes=$(tmux list-panes -a -F '#{pane_id}|#{pane_tty}|#{@agent_running}')
-grep -q '|on$' <<<"$panes" || exit 0
+ignore=$(tmux show-options -gv @busy_ignore 2>/dev/null)
+ignore=${ignore:-zsh bash fish sh nu ksh dash pwsh \
+  ssh mosh-client \
+  python python3 ipython irb pry node deno bun \
+  psql pgcli sqlite3 mysql redis-cli}
 
 # Which ttys currently host an agent process? Word-split each line so the
 # fields are exact regardless of padding: $1 = tty, $2 = argv[0], $3 = argv[1].
@@ -32,20 +41,54 @@ while IFS= read -r line; do
   esac
 done < <(ps -axo tty=,args=)
 
-# Every stale flag gets cleared and its window recounted, so the dim drops as
-# soon as the status line notices rather than never.
-# NB: tmux's #{pane_tty} is /dev/ttysN while ps reports bare ttysN — normalize
-# before comparing.
-while IFS='|' read -r pane tty flag; do
-  [ "$flag" = on ] || continue
-  case "$live" in *" ${tty#/dev/} "* ) continue ;; esac
-  tmux set-option -p -u -t "$pane" @agent_running
+# Roll up per-window counts. bash 3.2 has no associative arrays, so track
+# windows/counts/previous-values in parallel arrays (a handful of entries).
+wins=(); counts=(); prevs=()
+while IFS='|' read -r win pane tty cmd alt flag oldcount; do
+  case "$live" in *" ${tty#/dev/} "* ) agent=1 ;; *) agent=0 ;; esac
 
-  win=$(tmux display-message -p -t "$pane" '#{window_id}')
-  count=$(tmux list-panes -t "$win" -F '#{@agent_running}' | grep -c .)
-  if [ "${count:-0}" -gt 0 ]; then
-    tmux set-window-option -t "$win" @agent_count "$count"
-  else
-    tmux set-window-option -u -t "$win" @agent_count
+  if [ "$flag" = on ] && [ "$agent" = 0 ]; then
+    # Flag outlived its process: clear it so this pass treats the pane honestly.
+    tmux set-option -p -u -t "$pane" @agent_running
+    flag=""
   fi
-done < <(grep '|on$' <<<"$panes")
+
+  work=0
+  if [ "$flag" = on ]; then
+    work=1
+  elif [ "$agent" = 0 ] && [ "$alt" = 0 ] && [ -n "$cmd" ]; then
+    work=1
+    # Versioned binaries report themselves with their full name (python3.14,
+    # node22), so match both the raw command and its version-stripped form.
+    stripped=${cmd%%[0-9]*}
+    # shellcheck disable=SC2086  # intentional word split of the ignore list
+    for w in $ignore; do
+      [ "$w" = "$cmd" ] && { work=0; break; }
+      [ -n "$stripped" ] && [ "$w" = "$stripped" ] && { work=0; break; }
+    done
+  fi
+
+  i=0
+  while [ "$i" -lt "${#wins[@]}" ] && [ "${wins[$i]}" != "$win" ]; do i=$((i+1)); done
+  if [ "$i" -eq "${#wins[@]}" ]; then
+    wins+=("$win"); counts+=(0); prevs+=("$oldcount")
+  fi
+  [ "$work" = 1 ] && counts[$i]=$(( ${counts[$i]} + 1 ))
+done < <(tmux list-panes -a \
+  -F '#{window_id}|#{pane_id}|#{pane_tty}|#{pane_current_command}|#{alternate_on}|#{@agent_running}|#{@agent_count}')
+
+# Only touch tmux when a window's value actually changed, to avoid churn on
+# every refresh.
+i=0
+while [ "$i" -lt "${#wins[@]}" ]; do
+  c=${counts[$i]}
+  if [ "$c" = "${prevs[$i]}" ] || { [ "$c" -eq 0 ] && [ -z "${prevs[$i]}" ]; }; then
+    i=$((i+1)); continue
+  fi
+  if [ "$c" -eq 0 ]; then
+    tmux set-window-option -u -t "${wins[$i]}" @agent_count
+  else
+    tmux set-window-option -t "${wins[$i]}" @agent_count "$c"
+  fi
+  i=$((i+1))
+done
