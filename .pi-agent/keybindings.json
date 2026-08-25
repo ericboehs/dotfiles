@@ -1,5 +1,6 @@
 {
   "tui.input.newLine": ["shift+enter", "ctrl+j", "alt+enter"],
+  "tui.editor.undo": ["ctrl+-", "super+z"],
   "app.message.followUp": "ctrl+enter",
   "app.models.save": "alt+s",
   "app.session.toggleSort": "alt+s"
