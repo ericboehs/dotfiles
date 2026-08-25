@@ -121,6 +121,11 @@ REPO_PATH = "ericboehs/dotfiles"
 [bootstrap.repos]
 # .zsh/functions.zsh sources gcd from this fixed path.
 "~/Code/github.com/ericboehs/gcd" = { url = "https://github.com/ericboehs/gcd" }
+# bin/meeting-capture is a symlink into this checkout, so without the clone a
+# fresh machine gets a dangling link in ~/bin. Cloned on Linux too, where it is
+# inert — it reads the macOS accessibility API, and [bootstrap.repos] takes no
+# `os` filter the way [bootstrap.packages] does.
+"~/Code/github.com/ericboehs/meeting-capture" = { url = "https://github.com/ericboehs/meeting-capture" }
 
 # ---------------------------------------------------------------------------
 # Dotfiles
