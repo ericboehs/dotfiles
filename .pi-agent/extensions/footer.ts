@@ -734,8 +734,9 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
   return CYAN;
 }
 
-/** Pace `!`s from the usage chips: 1 = >5pts ahead, 2 = >10, 3 = >20. */
+/** Pace `!`s from the usage chips: 1 = >5pts ahead, 2 = >10, 3 = >20. `↻` is at-limit. */
 function paceWarningColorCode(value: string): number {
+  if (value.includes("\u21bb")) return RED;
   const bangs = /!+$/.exec(value)?.[0].length ?? 0;
   if (bangs >= 2) return RED;
   if (bangs === 1) return YELLOW;

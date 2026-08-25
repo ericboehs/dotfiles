@@ -336,6 +336,7 @@ test("usage chips color by pace warnings", async () => {
     assert.equal(await shade(key, "2.1/7D: 18%!"), "33", `${key} yellow at one !`);
     assert.equal(await shade(key, "2.1/7D: 18%!!"), "31", `${key} red at two !`);
     assert.equal(await shade(key, "2.1/7D: 18%!!!"), "31", `${key} red at three !`);
+    assert.equal(await shade(key, "4.8/5H: \u21bb3:45p"), "31", `${key} red at limit reset`);
   }
 });
 

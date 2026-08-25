@@ -103,6 +103,34 @@ function formatNumber(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+/** Compact local reset time: 3:45p, Sat 3:45p, Apr 1 3:45p. */
+function formatResetClock(resetMs: number, nowMs = Date.now()): string {
+  const reset = new Date(resetMs);
+  const now = new Date(nowMs);
+  const hours24 = reset.getHours();
+  const minutes = String(reset.getMinutes()).padStart(2, "0");
+  const time = `${hours24 % 12 || 12}:${minutes}${hours24 >= 12 ? "p" : "a"}`;
+
+  if (
+    reset.getFullYear() === now.getFullYear() &&
+    reset.getMonth() === now.getMonth() &&
+    reset.getDate() === now.getDate()
+  ) {
+    return time;
+  }
+
+  const startOfReset = new Date(reset.getFullYear(), reset.getMonth(), reset.getDate()).getTime();
+  const startOfNow = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const daysAway = Math.round((startOfReset - startOfNow) / 86_400_000);
+  if (daysAway > 0 && daysAway < 7) {
+    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(reset);
+    return `${weekday} ${time}`;
+  }
+
+  const date = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(reset);
+  return `${date} ${time}`;
+}
+
 function resetAtMs(window: UsageWindow, nowMs = Date.now()): number | undefined {
   if (typeof window.reset_at === "number" && Number.isFinite(window.reset_at)) {
     return window.reset_at > 10_000_000_000
@@ -163,16 +191,21 @@ function formatWindow(window: UsageWindow, nowMs = Date.now()): string | undefin
   const pointsAhead = percent - expectedPercent;
   const warningCount = pointsAhead > 20 ? 3 : pointsAhead > 10 ? 2 : pointsAhead > 5 ? 1 : 0;
   const warning = "!".repeat(warningCount);
+  // 100% is not actionable; the reset is. Footer colors ↻ red.
+  const usage =
+    formatNumber(percent) === "100"
+      ? `↻${formatResetClock(reset, nowMs)}`
+      : `${formatNumber(percent)}%${warning}`;
 
   if (totalSeconds >= 86_400) {
     const elapsedDays = elapsedSeconds / 86_400;
     const totalDays = totalSeconds / 86_400;
-    return `${formatNumber(elapsedDays)}/${formatNumber(totalDays)}D: ${formatNumber(percent)}%${warning}`;
+    return `${formatNumber(elapsedDays)}/${formatNumber(totalDays)}D: ${usage}`;
   }
 
   const elapsedHours = elapsedSeconds / 3_600;
   const totalHours = totalSeconds / 3_600;
-  return `${formatNumber(elapsedHours)}/${formatNumber(totalHours)}H: ${formatNumber(percent)}%${warning}`;
+  return `${formatNumber(elapsedHours)}/${formatNumber(totalHours)}H: ${usage}`;
 }
 
 async function fetchDisplay(ctx: ExtensionContext): Promise<UsageDisplay> {

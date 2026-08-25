@@ -122,6 +122,34 @@ function formatNumber(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+/** Compact local reset time: 3:45p, Sat 3:45p, Apr 1 3:45p. */
+function formatResetClock(resetMs: number, nowMs = Date.now()): string {
+  const reset = new Date(resetMs);
+  const now = new Date(nowMs);
+  const hours24 = reset.getHours();
+  const minutes = String(reset.getMinutes()).padStart(2, "0");
+  const time = `${hours24 % 12 || 12}:${minutes}${hours24 >= 12 ? "p" : "a"}`;
+
+  if (
+    reset.getFullYear() === now.getFullYear() &&
+    reset.getMonth() === now.getMonth() &&
+    reset.getDate() === now.getDate()
+  ) {
+    return time;
+  }
+
+  const startOfReset = new Date(reset.getFullYear(), reset.getMonth(), reset.getDate()).getTime();
+  const startOfNow = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const daysAway = Math.round((startOfReset - startOfNow) / 86_400_000);
+  if (daysAway > 0 && daysAway < 7) {
+    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(reset);
+    return `${weekday} ${time}`;
+  }
+
+  const date = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(reset);
+  return `${date} ${time}`;
+}
+
 function usedPercent(quota: QuotaSnapshot): number | undefined {
   if (
     typeof quota.percent_remaining === "number" &&
@@ -164,6 +192,10 @@ function formatQuota(
   const pointsAhead = percent - expectedPercent;
   const warningCount = pointsAhead > 20 ? 3 : pointsAhead > 10 ? 2 : pointsAhead > 5 ? 1 : 0;
   const warning = "!".repeat(warningCount);
+  // 100% is not actionable; the reset is. Footer colors ↻ red.
+  if (formatNumber(percent) === "100") {
+    return `↻${formatResetClock(reset.getTime(), nowMs)}`;
+  }
 
   return `${formatNumber(percent)}%${warning}`;
 }
