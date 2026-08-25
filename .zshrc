@@ -12,7 +12,8 @@ source "$HOME/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh"
 source "$HOME/.zsh/auto-notify.plugin.zsh"
 
 # Source config
-source "$HOME/.zsh/path.zsh"
+# path.zsh is sourced from .zshenv, not here: PATH has to exist for
+# non-interactive shells too.
 source "$HOME/.zsh/history.zsh"
 source "$HOME/.zsh/keybindings.zsh"
 source "$HOME/.zsh/abbreviations.zsh"

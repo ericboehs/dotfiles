@@ -148,6 +148,9 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.rgignore" = ".rgignore"
 "~/.tmux.conf" = ".tmux.conf"
 "~/.zprofile" = ".zprofile"
+# PATH is set here rather than in .zshrc, so it has to be linked for
+# non-interactive shells (`zsh -c`, scripts) to find anything.
+"~/.zshenv" = ".zshenv"
 "~/.zshrc" = ".zshrc"
 # Contains the zsh plugin submodules; .zshrc sources them from $HOME/.zsh/.
 "~/.zsh" = ".zsh"
