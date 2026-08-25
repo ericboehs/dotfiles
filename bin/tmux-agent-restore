@@ -22,10 +22,17 @@
 #   --dry-run, -n   Show what would be done without executing
 #   --list, -l      List saved sessions
 #   --force, -f     Restore even when cwd/transcript checks fail
+#   --keep, -k      Keep the save afterwards instead of retiring it
 #
 # Naming a target is required. tmux-agent-save sweeps every live session
 # because reading state is free, but restoring launches an agent process per
 # window, so this end asks to be told rather than guessing.
+#
+# A save that restores cleanly is spent, and leaving it in place invites a
+# second restore of windows that already exist. It is moved to a "restored"
+# subdirectory rather than deleted: relaunching is only `tmux send-keys`, which
+# types a command and never learns whether the agent came up, so the state is
+# kept where a failed launch can still be recovered from.
 
 set -euo pipefail
 
@@ -34,6 +41,7 @@ ALL=false
 DRY_RUN=false
 LIST_MODE=false
 FORCE=false
+KEEP_SAVE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -41,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run|-n) DRY_RUN=true; shift ;;
     --list|-l) LIST_MODE=true; shift ;;
     --force|-f) FORCE=true; shift ;;
+    --keep|-k) KEEP_SAVE=true; shift ;;
     --help|-h)
       # Print the header comment block, stopping at the first non-comment line.
       awk 'NR>1 { if (/^#/) { sub(/^# ?/, ""); print } else { exit } }' "$0"
@@ -51,8 +60,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SAVE_DIR="$HOME/.config/tmux-agent"
-LEGACY_SAVE_DIR="$HOME/.config/tmux-claude"
+SAVE_DIR="${TMUX_AGENT_SAVE_DIR:-$HOME/.config/tmux-agent}"
+LEGACY_SAVE_DIR="${TMUX_AGENT_LEGACY_SAVE_DIR:-$HOME/.config/tmux-claude}"
 CLAUDE_PROJECTS="$HOME/.claude/projects"
 PI_ROOT="$HOME/.pi"
 
@@ -164,7 +173,7 @@ resolve_session_file() {
 restore_session() {
   local SESSION_NAME="$1"
   local SAVE_FILE="$SAVE_DIR/$SESSION_NAME.json"
-  local session_exists=false created=0 skipped=0 first_window=true
+  local session_exists=false created=0 skipped=0 forced=0 first_window=true
   local win agent agent_dir idx cwd session_id session_file session_name method
   local extra resolved cmd confidence label problem new_idx actual
 
@@ -267,7 +276,10 @@ restore_session() {
       skipped=$((skipped + 1))
       continue
     fi
-    [ -n "$problem" ] && echo "  ! $label: $problem (forced)"
+    if [ -n "$problem" ]; then
+      echo "  ! $label: $problem (forced)"
+      forced=$((forced + 1))
+    fi
 
     echo "  $confidence $label: (cd $cwd) $cmd"
     # Counted before the dry-run bail so a rehearsal reports the same tally the
@@ -301,6 +313,15 @@ restore_session() {
   else
     echo "  restored $created window(s), skipped $skipped"
     [ "$created" -gt 0 ] && echo "  attach with: tmux attach -t $SESSION_NAME"
+
+    # Only a clean sweep spends the save. Anything skipped or forced means what
+    # is now on screen is not what was saved, and the original stays the better
+    # record of it.
+    if ! $KEEP_SAVE && [ "$created" -gt 0 ] && [ "$skipped" -eq 0 ] && [ "$forced" -eq 0 ]; then
+      mkdir -p "$SAVE_DIR/restored"
+      mv "$SAVE_FILE" "$SAVE_DIR/restored/$SESSION_NAME.json"
+      echo "  save retired to $SAVE_DIR/restored/$SESSION_NAME.json"
+    fi
   fi
 
   TOTAL_CREATED=$((TOTAL_CREATED + created))

@@ -45,8 +45,8 @@
 
 set -euo pipefail
 
-SAVE_DIR="$HOME/.config/tmux-agent"
-LEGACY_SAVE_DIR="$HOME/.config/tmux-claude"
+SAVE_DIR="${TMUX_AGENT_SAVE_DIR:-$HOME/.config/tmux-agent}"
+LEGACY_SAVE_DIR="${TMUX_AGENT_LEGACY_SAVE_DIR:-$HOME/.config/tmux-claude}"
 
 CLAUDE_SESSIONS="$HOME/.claude/sessions"
 CLAUDE_PROJECTS="$HOME/.claude/projects"
