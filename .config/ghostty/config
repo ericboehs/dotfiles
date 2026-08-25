@@ -24,7 +24,9 @@ shell-integration-features = ssh-env,ssh-terminfo
 keybind = escape=unbind
 
 # Undo
-keybind = super+z=text:\x1f
+# Encode Cmd-Z as CSI-u Ctrl-minus. tmux forwards it to enhanced-key apps
+# such as pi, and degrades it to the legacy Ctrl-_ byte for normal shells.
+keybind = super+z=text:\x1b[45;5u
 
 # Ctrl+1-9 switches tmux windows. Ghostty does not send anything distinguishable
 # for a bare ctrl+digit, so these have to be written out as modifyOtherKeys
