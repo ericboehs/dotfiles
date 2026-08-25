@@ -11,7 +11,7 @@
  * Playwright is only the CDP client. It never launches the browser, so none of
  * its default launcher flags or Emulation.setAutomationOverride are involved.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -69,6 +69,33 @@ async function cdpResponding(port: number): Promise<boolean> {
 	}
 }
 
+/**
+ * The debugger port of a Chrome already running on this profile, read off its
+ * own command line.
+ *
+ * The cache file is an optimisation, not the truth. It can go missing while
+ * the browser it describes is still alive — a crash, a stale profile, or the
+ * shutdown bug fixed below — and the symptom is brutal: the profile's
+ * SingletonLock is still held, so every subsequent launch dies instantly with
+ * "Chrome exited during startup (21)" and tier 3 is silently gone. Chrome
+ * knows its own port, and ps will say.
+ */
+function runningPort(profileDir: string): number | null {
+	try {
+		const out = execFileSync("ps", ["-axo", "command="], { encoding: "utf8", maxBuffer: 8 << 20 });
+		for (const line of out.split("\n")) {
+			// Both flags, so renderer helpers — which inherit --user-data-dir but
+			// have no debugger of their own — cannot be mistaken for the browser.
+			if (!line.includes(`--user-data-dir=${profileDir}`)) continue;
+			const match = line.match(/--remote-debugging-port=(\d+)/);
+			if (match) return Number(match[1]);
+		}
+	} catch {
+		/* ps unavailable */
+	}
+	return null;
+}
+
 function savedPort(profileDir: string): number | null {
 	try {
 		const value = Number(JSON.parse(readFileSync(join(profileDir, PORT_FILE), "utf8")).port);
@@ -102,8 +129,15 @@ async function launchDirect(profileDir: string): Promise<BrowserState> {
 
 	// A Chrome intentionally outlives pi/reload. Reattach to it when its saved
 	// endpoint still answers instead of launching against a locked profile.
-	const existingPort = savedPort(profileDir);
+	const existingPort = savedPort(profileDir) ?? runningPort(profileDir);
 	if (existingPort && (await cdpResponding(existingPort))) {
+		// Re-record it: we may have found it by ps after the cache went missing,
+		// and the next process should not have to search again.
+		try {
+			writeFileSync(join(profileDir, PORT_FILE), JSON.stringify({ port: existingPort }));
+		} catch {
+			/* best effort */
+		}
 		return attach(existingPort, profileDir, null);
 	}
 
@@ -158,11 +192,17 @@ export async function shutdownBrowser(): Promise<void> {
 	} catch {
 		/* already gone */
 	}
-	if (current.child && current.child.exitCode === null) current.child.kill("SIGTERM");
-	try {
-		unlinkSync(join(current.profileDir, PORT_FILE));
-	} catch {
-		/* already gone */
+	// Only tear down what we started. A null child means we attached to a
+	// browser someone else launched, and killing its port record while it keeps
+	// running is what orphaned the profile in the first place: Chrome alive,
+	// holding the lock, with nothing left to say where its debugger is.
+	if (current.child) {
+		if (current.child.exitCode === null) current.child.kill("SIGTERM");
+		try {
+			unlinkSync(join(current.profileDir, PORT_FILE));
+		} catch {
+			/* already gone */
+		}
 	}
 }
 
