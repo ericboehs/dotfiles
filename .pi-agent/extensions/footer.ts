@@ -87,9 +87,13 @@ const BOOT_LOG_MAX_BYTES = 200_000;
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 
 /** SuperGrok OAuth is subscription-billed; an xAI API key still has a real dollar cost. */
+/** ox-alpha reports a flat $0.0000 — meaningless, so hide it like the subscription providers. */
+const HIDE_COST_MODELS = /^stealth\/ox-alpha$/i;
+
 function hideSessionCost(provider: string | undefined, ctx: ExtensionContext): boolean {
   if (!provider) return false;
   if (HIDE_COST_PROVIDERS.has(provider)) return true;
+  if (ctx.model?.id && HIDE_COST_MODELS.test(ctx.model.id)) return true;
   return provider === "xai" && ctx.model != null && ctx.modelRegistry.isUsingOAuth(ctx.model);
 }
 

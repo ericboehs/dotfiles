@@ -26,8 +26,8 @@
     "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/pr-review/skills"
   ],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultProvider": "openrouter",
+  "defaultModel": "stealth/ox-alpha",
   "defaultThinkingLevel": "high",
   "theme": "light/dark",
   "steeringMode": "all",
@@ -47,7 +47,8 @@
     "baseten/deepseek-ai/DeepSeek-V4-Flash-0731",
     "openai-codex/gpt-5.6-sol",
     "github-copilot/claude-opus-5",
-    "openrouter/stealth/ox-alpha"
+    "openrouter/stealth/ox-alpha",
+    "xai/grok-4.6"
   ],
   "showHardwareCursor": true,
   "editorPaddingX": 1,
