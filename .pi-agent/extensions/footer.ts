@@ -780,6 +780,24 @@ function paceWarningColorCode(value: string): number {
   return CYAN;
 }
 
+/** A window label like "1.2/5H:" — each such token starts a fresh window group. */
+const WINDOW_LABEL_RE = /^\d+(\.\d+)?\/\d+(\.\d+)?[HD]:$/;
+
+/** Split a multi-window chip so each window colors independently:
+ *  "1.2/5H: 43%!! 3.4/7D: 80%" → ["1.2/5H: 43%!!", "3.4/7D: 80%"].
+ *  Single-window chips (copilot, grok) come back as one untouched group. */
+function windowGroups(value: string): string[] {
+  const groups: string[] = [];
+  for (const token of value.split(" ")) {
+    if (groups.length === 0 || WINDOW_LABEL_RE.test(token)) {
+      groups.push(token);
+    } else {
+      groups[groups.length - 1] += ` ${token}`;
+    }
+  }
+  return groups;
+}
+
 export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
   const peer = new PeerNameCache();
@@ -880,7 +898,12 @@ export default function footerExtension(pi: ExtensionAPI): void {
               : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
             ...INLINE_STATUS_KEYS.map((key) => {
               const value = statuses.get(key);
-              return value ? color(paceWarningColorCode(value), value) : "";
+              // Per-window coloring: a red 5h shouldn't paint the week red too.
+              return value
+                ? windowGroups(value)
+                    .map((group) => color(paceWarningColorCode(group), group))
+                    .join(" ")
+                : "";
             }),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
             // Last before the flex gap, so it sits closest to the right edge.
