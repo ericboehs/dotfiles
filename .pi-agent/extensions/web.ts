@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawn } from "node:child_process";
+import { Text } from "@earendil-works/pi-tui";
+import { resilientFetch } from "./web-fetch-resilient/fetch-core.ts";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 // Plain OpenAI API keys speak the same Responses API shape, just at the
@@ -302,79 +304,6 @@ function run(cmd: string, args: string[], input: string, signal?: AbortSignal): 
   });
 }
 
-function stripChrome(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<(script|style|noscript|svg|form|iframe|template)\b[\s\S]*?<\/\1>/gi, "")
-    .replace(/<(nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, "");
-}
-
-function textFallback(html: string): string {
-  return stripChrome(html)
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n\s*\n+/g, "\n\n")
-    .trim();
-}
-
-async function toMarkdown(html: string, signal?: AbortSignal): Promise<string> {
-  try {
-    const md = await run(
-      "pandoc",
-      ["-f", "html", "-t", "gfm-raw_html", "--wrap=none", "--strip-comments"],
-      stripChrome(html),
-      signal,
-    );
-    return md.replace(/\n{3,}/g, "\n\n").replace(/^:::.*$/gm, "").trim();
-  } catch (err) {
-    // A cancel or timeout is not a pandoc failure; let it propagate.
-    if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
-    const reason = err instanceof Error ? err.message : String(err);
-    return `[web_fetch: pandoc failed (${reason}) — unformatted text]\n\n${textFallback(html)}`;
-  }
-}
-
-async function fetchUrl(url: string, maxChars: number, signal?: AbortSignal): Promise<string> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) URLs are supported.");
-
-  if (isYouTube(parsed)) return truncate(await youtubeTranscript(url, signal), maxChars, url);
-
-  const res = await fetch(url, {
-    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml,application/pdf,text/plain,*/*" },
-    redirect: "follow",
-    signal: signal ? AbortSignal.any([AbortSignal.timeout(FETCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-
-  const type = res.headers.get("content-type") ?? "";
-  let body: string;
-  if (type.includes("pdf")) {
-    const tmp = `/tmp/pi-web-${Date.now()}.pdf`;
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
-    try {
-      body = await run("pdftotext", ["-layout", tmp, "-"], "", signal);
-    } finally {
-      try {
-        unlinkSync(tmp);
-      } catch {}
-    }
-  } else if (type.includes("html") || type.includes("xml")) {
-    body = await toMarkdown(await res.text(), signal);
-  } else {
-    body = await res.text();
-  }
-
-  return truncate(body, maxChars, url);
-}
-
 function truncate(body: string, maxChars: number, url: string): string {
   let text = body.trim();
   if (text.length > maxChars) {
@@ -412,19 +341,47 @@ export default function web(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
-    description: "Fetch a URL as readable markdown. YouTube links return the transcript.",
+    description:
+      "Fetch a URL as readable markdown. Escalates on failure/bot-challenges: plain fetch → curl with browser headers → headless Chrome. YouTube links return the transcript. Result footer reports which tier succeeded.",
     parameters: Type.Object({
       url: Type.String({ description: "http(s) URL" }),
       max_chars: Type.Optional(Type.Number({ description: `Truncation limit (default ${DEFAULT_MAX_CHARS})` })),
     }),
+    renderCall(args: any, theme: any) {
+      let text = theme.fg("toolTitle", theme.bold("web_fetch "));
+      text += theme.fg("accent", String(args.url ?? ""));
+      return new Text(text, 0, 0);
+    },
+
     async execute(_id, params: any, signal, onUpdate) {
       onUpdate?.({ content: [{ type: "text", text: `Fetching ${params.url}` }], details: undefined });
       const raw = Number(params.max_chars ?? DEFAULT_MAX_CHARS);
       const maxChars = Number.isFinite(raw)
         ? Math.min(Math.max(Math.trunc(raw), MIN_MAX_CHARS), MAX_MAX_CHARS)
         : DEFAULT_MAX_CHARS;
-      const text = await fetchUrl(params.url, maxChars, signal);
-      return { content: [{ type: "text" as const, text }], details: { url: params.url } };
+
+      const parsed = new URL(params.url);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        throw new Error("Only http(s) URLs are supported.");
+      }
+
+      // YouTube: yt-dlp first (timestamps, metadata); fall back to the warmed
+      // browser player-intercept when yt-dlp can't get captions.
+      if (isYouTube(parsed)) {
+        try {
+          const text = await youtubeTranscript(params.url, signal);
+          return { content: [{ type: "text" as const, text: truncate(text, maxChars, params.url) }], details: { url: params.url } };
+        } catch (err) {
+          onUpdate?.({ content: [{ type: "text", text: `yt-dlp failed (${err instanceof Error ? err.message : err}); trying browser transcript...` }], details: undefined });
+        }
+      }
+
+      const result = await resilientFetch(params.url, {
+        maxChars,
+        signal,
+        onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: msg }], details: undefined }),
+      });
+      return { content: [{ type: "text" as const, text: result.content }], details: { url: params.url, tier: result.tier } };
     },
   });
 }

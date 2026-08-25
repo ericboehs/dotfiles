@@ -1,0 +1,372 @@
+/**
+ * fetch-core.ts — tiered fetch with escalation.
+ *
+ *  1. plain fetch (current web_fetch behavior — the control)
+ *  2. curl with a coherent browser header set (real Chrome UA + matching
+ *     client hints) — defeats header-coherence edge blocks
+ *  3. warmed headless Chrome via CDP — executes the site's bot sensor and
+ *     passes it, exactly like an ordinary browser would
+ *
+ * Deny/challenge detection is explicit: a 200 that is actually a challenge
+ * page must be reported as such, never as a successful empty fetch.
+ */
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { JSDOM } from "jsdom";
+import { Readability } from "@mozilla/readability";
+import TurndownService from "turndown";
+import { browserHeaders, userAgentString } from "./ua.ts";
+import { navigateAndGet, sameOriginFetch, shutdownBrowser } from "./browser.ts";
+
+export { shutdownBrowser };
+
+type FetchTier = 1 | 2 | 3 | 4;
+
+export interface FetchResult {
+	url: string;
+	finalUrl: string;
+	status: number | undefined;
+	tier: FetchTier;
+	contentType?: string;
+	content: string;
+	truncated: boolean;
+}
+
+const DENY_MARKERS = [
+	"access denied",
+	"errors.edgesuite.net",
+	"sec-if-cpt-container",
+	"just a moment...",
+	"attention required",
+	"challenge-platform",
+	"cf-chl",
+	"verify you are human",
+	"are you a robot",
+	"request unsuccessful. incapsula",
+];
+
+/** Returns the marker if the HTML looks like a bot challenge / deny page, else null. */
+export function denyMarker(html: string): string | null {
+	if (!html || html.length > 2_000_000) return null; // huge pages are real pages
+	const lower = html.toLowerCase();
+	for (const m of DENY_MARKERS) {
+		if (lower.includes(m)) return m;
+	}
+	return null;
+}
+
+const TEXTUAL = /^(text\/|application\/(json|xml|xhtml|\w+\+json))/;
+
+function truncate(s: string, maxChars: number): [string, boolean] {
+	return s.length <= maxChars ? [s, false] : [s.slice(0, maxChars), true];
+}
+
+/** HTML → readable markdown via Readability + Turndown, with a text fallback. */
+export function htmlToMarkdown(html: string, url: string): string {
+	try {
+		const dom = new JSDOM(html, { url });
+		const doc = dom.window.document;
+		const title = doc.title?.trim() ?? "";
+		let articleHtml = "";
+		try {
+			const parsed = new Readability(doc.cloneNode(true) as any).parse();
+			articleHtml = parsed?.content ?? "";
+		} catch {
+			articleHtml = "";
+		}
+		let md = "";
+		if (articleHtml && articleHtml.length > 200) {
+			const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
+			md = td.turndown(articleHtml);
+		} else {
+			md = (doc.body?.textContent ?? "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+		}
+		return title ? `# ${title}\n\n${md}` : md;
+	} catch {
+		return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+	}
+}
+
+interface RawResult {
+	status: number | undefined;
+	body: string; // decoded text (tiers 3); empty for binary tiers 1–2
+	bytes?: Buffer; // raw response bytes (tiers 1–2, for PDFs)
+	contentType: string;
+	finalUrl: string;
+	note?: string;
+}
+
+function rawText(r: RawResult): string {
+	return r.body || (r.bytes ? r.bytes.toString("utf8") : "");
+}
+
+function rawLen(r: RawResult): number {
+	return r.bytes ? r.bytes.length : r.body.length;
+}
+
+/** Tier 1 — plain fetch, identical in spirit to the built-in tool. */
+async function tier1(url: string, signal?: AbortSignal): Promise<RawResult> {
+	const signals = [AbortSignal.timeout(20_000), ...(signal ? [signal] : [])];
+	const res = await fetch(url, { redirect: "follow", signal: AbortSignal.any(signals) });
+	const bytes = Buffer.from(await res.arrayBuffer());
+	return { status: res.status, body: "", bytes, contentType: res.headers.get("content-type") ?? "", finalUrl: res.url };
+}
+
+/** Tier 2 — curl with the full coherent header set; brotli-capable like a real browser. */
+async function tier2(url: string, signal?: AbortSignal): Promise<RawResult> {
+	const dir = await mkdtemp(join(tmpdir(), "pifetch-"));
+	const bodyFile = join(dir, "body");
+	try {
+		const args = ["-sS", "-L", "--compressed", "--max-time", "25"];
+		for (const [k, v] of browserHeaders()) args.push("-H", `${k}: ${v}`);
+		args.push("-o", bodyFile, "-w", "%{http_code}\t%{url_effective}", url);
+		const out = await new Promise<string>((resolve, reject) => {
+			const p = spawn("curl", args, { signal });
+			let stdout = "";
+			let stderr = "";
+			p.stdout.on("data", (d) => (stdout += d));
+			p.stderr.on("data", (d) => (stderr += d));
+			p.on("error", reject);
+			p.on("close", (code) =>
+				code === 0 ? resolve(stdout) : reject(new Error(`curl exit ${code}: ${stderr.trim()}`)),
+			);
+		});
+		const [statusStr, finalUrl] = out.trim().split("\t");
+		const bytes = await readFile(bodyFile).catch(() => Buffer.alloc(0));
+		return { status: Number(statusStr) || undefined, body: "", bytes, contentType: "", finalUrl };
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}
+
+/**
+ * Tier 3 — direct-launched Chrome. Navigate first so rendered sites and
+ * managed challenges work normally. If the target is denied, switch to the
+ * Tractor transport shape: warm a tab on the origin, wait for sensor trust,
+ * and issue a same-origin fetch() carrying Chrome's cookies and fingerprint.
+ */
+async function tier3(
+	url: string,
+	profileDir?: string,
+	headers?: Record<string, string>,
+): Promise<RawResult> {
+	let r = await navigateAndGet(url, { profileDir });
+	let note = r.note;
+	// A 429 from real Chrome is the site's actual cooldown. Retrying can extend
+	// it, so unlike a 403 challenge it is terminal at this tier.
+	if (r.status === 429) {
+		return {
+			status: r.status,
+			body: r.html,
+			contentType: "text/html",
+			finalUrl: r.finalUrl,
+			note: r.note,
+		};
+	}
+	const blocked = denyMarker(r.html) || r.status === 403;
+	if (blocked) {
+		try {
+			const fetched = await sameOriginFetch(url, { profileDir, headers });
+			note = `navigation denied; same-origin fetch status=${fetched.status}`;
+			if (
+				(fetched.status >= 200 && fetched.status < 300 && !denyMarker(fetched.body)) ||
+				fetched.status === 429
+			) {
+				return {
+					status: fetched.status,
+					body: fetched.body,
+					contentType: fetched.contentType,
+					finalUrl: fetched.finalUrl,
+					note,
+				};
+			}
+			// The warm-up may still have improved the profile; retry navigation
+			// once before declaring the browser path denied.
+			r = await navigateAndGet(url, { profileDir });
+		} catch (e) {
+			note = `same-origin browser fetch failed: ${(e as Error).message}`;
+		}
+	}
+	return {
+		status: r.status,
+		body: r.html,
+		contentType: "text/html",
+		finalUrl: r.finalUrl,
+		note,
+	};
+}
+
+/** Tier 4 — dedicated minimized private Safari window (macOS only). */
+async function tier4(url: string, headers?: Record<string, string>): Promise<RawResult> {
+	const { safariFetch } = await import("./safari.ts");
+	const r = await safariFetch(url, { headers });
+	return {
+		status: r.status,
+		body: "",
+		bytes: r.bytes,
+		contentType: r.contentType,
+		finalUrl: r.finalUrl,
+	};
+}
+
+function acceptable(r: RawResult): boolean {
+	if (rawLen(r) === 0) return false;
+	if (r.status !== undefined && r.status >= 400) return false;
+	const text = rawText(r);
+	if (denyMarker(text)) return false;
+	if (isPdf(r)) return true; // PDFs are validated by pdftotext in finish()
+	if (r.contentType && !TEXTUAL.test(r.contentType)) {
+		// unknown content type with a 200 and a real-sized body — accept
+		return rawLen(r) > 100;
+	}
+	// textual: guard against suspiciously tiny "successes"
+	return !(rawLen(r) < 400 && r.finalUrl.includes(".com"));
+}
+
+function isPdf(r: RawResult): boolean {
+	return (
+		r.contentType.includes("pdf") ||
+		/\.pdf([?#]|$)/i.test(r.finalUrl) ||
+		(r.bytes && r.bytes.subarray(0, 5).toString("latin1") === "%PDF-") === true
+	);
+}
+
+async function pdfToText(bytes: Buffer): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), "pifetch-pdf-"));
+	const file = join(dir, "doc.pdf");
+	try {
+		await import("node:fs/promises").then((fs) => fs.writeFile(file, bytes));
+		return await new Promise<string>((resolve, reject) => {
+			const p = spawn("pdftotext", ["-layout", file, "-"]);
+			let out = "";
+			p.stdout.on("data", (d) => (out += d));
+			p.on("error", (e) => reject(new Error(`pdftotext not available: ${e.message}`)));
+			p.on("close", (code) => (code === 0 ? resolve(out.trim()) : reject(new Error(`pdftotext exited ${code}`))));
+		});
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}
+
+function tierDescription(tier: FetchTier): string {
+	if (tier === 2) return ": curl w/ browser headers";
+	if (tier === 3) return ": headless Chrome";
+	if (tier === 4) return ": private Safari";
+	return "";
+}
+
+async function finish(url: string, tier: FetchTier, raw: RawResult, maxChars: number): Promise<FetchResult> {
+	let content: string;
+	let extraNote = "";
+	if (isPdf(raw) && raw.bytes) {
+		content = await pdfToText(raw.bytes); // throws → tier marked failed by caller? no: finish is called on accepted results only
+		extraNote = " · pdftotext";
+	} else {
+		const bodyText = rawText(raw);
+		const isHtml =
+			raw.contentType.includes("html") || /^\s*<(!doctype|html)/i.test(bodyText.slice(0, 200));
+		content = isHtml ? htmlToMarkdown(bodyText, raw.finalUrl) : bodyText;
+	}
+	const [text, truncated] = truncate(content, maxChars);
+	return {
+		url,
+		finalUrl: raw.finalUrl,
+		status: raw.status,
+		tier,
+		contentType: raw.contentType || undefined,
+		content:
+			text +
+			`\n\n---\n[via tier ${tier}${tierDescription(tier)}${extraNote} · status ${raw.status ?? "?"}${raw.status && raw.status >= 400 ? " — genuine upstream error page" : ""} · ${truncated ? "truncated" : "complete"}]`,
+		truncated,
+	};
+}
+
+export interface FetchOptions {
+	maxChars?: number;
+	profileDir?: string;
+	headers?: Record<string, string>;
+	signal?: AbortSignal;
+	onAttempt?: (msg: string) => void;
+}
+
+/**
+ * Fetch `url` through the tier ladder. Returns the first acceptable result,
+ * annotated with the tier that produced it. Throws only when every tier fails.
+ */
+export async function resilientFetch(url: string, opts: FetchOptions = {}): Promise<FetchResult> {
+	const attempts: string[] = [];
+
+	// YouTube gets special handling: transcripts, not HTML.
+	const yt = url.match(/(?:youtube\.com\/watch\?[^ ]*v=|youtu\.be\/)([\w-]{6,})/);
+	if (yt) {
+		const { resolveYoutubeTranscript } = await import("./youtube.ts");
+		try {
+			const t = await resolveYoutubeTranscript(url);
+			const header = `Transcript for https://www.youtube.com/watch?v=${t.videoId} (${t.via} path):\n\n`;
+			const [text, truncated] = truncate(header + t.text, opts.maxChars ?? 20_000);
+			return {
+				url,
+				finalUrl: `https://www.youtube.com/watch?v=${t.videoId}`,
+				status: 200,
+				tier: 3, // always: player-intercept runs in the warmed browser
+				contentType: "text/plain",
+				content: text,
+				truncated,
+			};
+		} catch (e) {
+			attempts.push(`youtube: ${(e as Error).message}`);
+		}
+	}
+
+	const tiers: Array<[FetchTier, () => Promise<RawResult>]> = [
+		[1, () => tier1(url, opts.signal)],
+		[2, () => tier2(url, opts.signal)],
+		[3, () => tier3(url, opts.profileDir, opts.headers)],
+		[4, () => tier4(url, opts.headers)],
+	];
+
+	let lastBrowserRaw: RawResult | null = null;
+	let lastBrowserTier: FetchTier = 3;
+	for (const [tier, run] of tiers) {
+		try {
+			opts.onAttempt?.(
+				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : ""}...`,
+			);
+			const raw = await run();
+			if (tier >= 3) {
+				lastBrowserRaw = raw;
+				lastBrowserTier = tier;
+			}
+			if (acceptable(raw)) {
+				return await finish(url, tier, raw, opts.maxChars ?? 20_000);
+			}
+			const marker = denyMarker(rawText(raw));
+			attempts.push(
+				`tier ${tier}: status=${raw.status} len=${rawLen(raw)}${marker ? ` deny-marker="${marker}"` : ""}${raw.note ? ` note="${raw.note}"` : ""}`,
+			);
+		} catch (e) {
+			attempts.push(`tier ${tier}: ${(e as Error).message}`);
+		}
+	}
+
+	// If even real Chrome got a >= 400 with a rendered body, that status is
+	// genuine — hand back the error page instead of failing outright. Reuse
+	// the response we already have; never spend another browser request here.
+	if (
+		lastBrowserRaw?.status &&
+		lastBrowserRaw.status >= 400 &&
+		rawLen(lastBrowserRaw) > 500 &&
+		!denyMarker(rawText(lastBrowserRaw))
+	) {
+		return await finish(url, lastBrowserTier, lastBrowserRaw, opts.maxChars ?? 20_000);
+	}
+
+	// Preserve the live browser/profile even on failure. Its accumulated sensor
+	// trust is the scarce resource; tests and explicit teardown call
+	// shutdownBrowser() themselves.
+	throw new Error(
+		`all fetch tiers failed for ${url}\n  - ${attempts.join("\n  - ")}\nUA sent: ${userAgentString()}`,
+	);
+}

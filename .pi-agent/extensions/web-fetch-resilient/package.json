@@ -1,0 +1,16 @@
+{
+  "name": "pi-web-fetch-resilient",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tiered fetch core used by extensions/web.ts web_fetch. No tool registration here — web.ts owns web_fetch.",
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^26.0.0",
+    "playwright-core": "^1.55.0",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "typebox": "^1.3.14"
+  }
+}
