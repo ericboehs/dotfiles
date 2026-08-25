@@ -3,9 +3,9 @@
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@bde157396387766d570a93eecc0f0489f41f0935",
     "npm:@nicknisi/pi-stash",
-    "git:github.com/ericboehs/pi-claude-link@78e01168ddccbf1f5ef3a3474b70cf030a6bd551",
     "git:github.com/ericboehs/pi-context",
-    "git:github.com/ericboehs/pi-scheduler"
+    "git:github.com/ericboehs/pi-scheduler",
+    "git:github.com/ericboehs/pi-agent-link@f35e9455ee049b3fd529a2db3597799878b14594"
   ],
   "extensions": [
     "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
