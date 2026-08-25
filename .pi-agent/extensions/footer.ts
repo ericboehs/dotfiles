@@ -105,6 +105,8 @@ const GUARDIAN_COMMAND = "approval-guardian";
 const GUARDIAN_WIDGET_KEY = "approval-guardian-bypass";
 const GUARDIAN_BYPASS_CONTROL_EVENT = "approval-guardian:set-temporary-bypass";
 const GUARDIAN_BYPASS_STATE_EVENT = "approval-guardian:temporary-bypass-state";
+/** The pin that carries the control event; upstream npm builds do not have it. */
+const GUARDIAN_FORK_PACKAGE = "git:github.com/ericboehs/pi-approval-guardian";
 
 const BLUE = 34;
 const MAGENTA = 35;
@@ -505,9 +507,48 @@ function formatMs(ms: number): string {
   return ms < 1_000 ? `${ms}ms` : `${(ms / 1_000).toFixed(2)}s`;
 }
 
-function bootLogPath(): string {
+/** The active profile's agent directory (`pia` runs a second one). */
+function agentDir(): string {
   // Resolved per call, not at module load, so a HOME change is picked up.
-  return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), BOOT_LOG_FILE);
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
+/** `$HOME/x` → `~/x`, so a notification names a path the way settings do. */
+function tildePath(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
+/**
+ * Which pi-approval-guardian the active profile pinned, e.g.
+ * "npm:pi-approval-guardian@0.8.0".
+ *
+ * Read from settings rather than from the loaded extension: /bypass fails when
+ * the guardian is a build without the control event, and the only actionable
+ * thing to say is which pin produced it and which file to change. Both profiles
+ * here share one packages tree, so the installed files cannot tell them apart —
+ * the settings file is what actually differs.
+ */
+async function guardianPin(): Promise<{ pin: string; settings: string }> {
+  const settings = join(agentDir(), "settings.json");
+  try {
+    const parsed: unknown = JSON.parse(await readFile(settings, "utf8"));
+    const packages = (parsed as { packages?: unknown } | null)?.packages;
+    if (Array.isArray(packages)) {
+      const pin = packages.find(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.includes("pi-approval-guardian"),
+      );
+      if (pin) return { pin, settings };
+    }
+  } catch {
+    // No settings file, or a half-written one: fall back to the generic wording.
+  }
+  return { pin: "", settings };
+}
+
+function bootLogPath(): string {
+  return join(agentDir(), BOOT_LOG_FILE);
 }
 
 /**
@@ -571,10 +612,6 @@ async function piBundleScript(): Promise<string | null> {
   }
 }
 
-function autoBundleAgentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-}
-
 /**
  * A pi update leaves dist/bundle.mjs stale and the bin at stock cli.js, so
  * every launch runs ~115ms slower until someone re-runs pi-bundle. This footer
@@ -594,11 +631,11 @@ async function rebuildBundle(version: string): Promise<void> {
   const script = await piBundleScript();
   if (!script) return;
 
-  const agentDir = autoBundleAgentDir();
+  const dir = agentDir();
   // Redirect by path, not by inherited fd: Node opens files with O_CLOEXEC,
   // so fd numbers from this process don't exist in the detached child.
-  const logPath = join(agentDir, AUTO_BUNDLE_LOG);
-  const lockPath = join(agentDir, AUTO_BUNDLE_LOCK);
+  const logPath = join(dir, AUTO_BUNDLE_LOG);
+  const lockPath = join(dir, AUTO_BUNDLE_LOCK);
   const sh = [
     `lock=${JSON.stringify(lockPath)}`,
     `log=${JSON.stringify(logPath)}`,
@@ -942,8 +979,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
       const request = { active: next, handled: false };
       pi.events.emit(GUARDIAN_BYPASS_CONTROL_EVENT, request);
       if (!request.handled) {
+        const { pin, settings } = await guardianPin();
         ctx.ui.notify(
-          "Installed Approval Guardian does not support immediate bypass control; update to the configured fork and /reload",
+          `${pin || "The installed Approval Guardian"} does not support immediate bypass control.` +
+            ` Pin ${GUARDIAN_FORK_PACKAGE} in ${tildePath(settings)} and /reload,` +
+            " or use /approval-guardian bypass.",
           "error",
         );
         return;

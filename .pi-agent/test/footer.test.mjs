@@ -19,6 +19,17 @@ import footer from "../extensions/footer.ts";
 
 const PORCELAIN = "A  staged.ts\n M edited.ts\n?? new.ts\n";
 
+/** Run one test against a throwaway agent directory (boot log, settings.json). */
+function withAgentDir(fn) {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const dir = mkdtempSync(path.join(tmpdir(), "pi-agent-dir-"));
+  process.env.PI_CODING_AGENT_DIR = dir;
+  return Promise.resolve(fn(dir)).finally(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  });
+}
+
 /** Build the extension, drive session_start, and return a rendering handle. */
 async function mount(overrides = {}) {
   const {
@@ -544,6 +555,30 @@ test("/bypass refuses a guardian without immediate control support", async () =>
   assert.doesNotMatch(ui.plain()[0], /bypass/);
 });
 
+test("that refusal names the pinned guardian package and its settings file", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(
+      path.join(dir, "settings.json"),
+      JSON.stringify({ packages: ["npm:@nicknisi/pi-stash", "npm:pi-approval-guardian@0.8.0"] }),
+    );
+    const ui = await mount({ guardianEventSupport: false });
+    await ui.run("bypass");
+    const { message } = ui.notices.at(-1);
+    assert.match(message, /^npm:pi-approval-guardian@0\.8\.0 does not support/);
+    assert.match(message, /Pin git:github\.com\/ericboehs\/pi-approval-guardian in /);
+    assert.ok(message.includes(path.join(dir, "settings.json")), message);
+    assert.match(message, /\/approval-guardian bypass/, "offers the slow path meanwhile");
+  });
+});
+
+test("that refusal stays generic when settings name no guardian", async () => {
+  await withAgentDir(async () => {
+    const ui = await mount({ guardianEventSupport: false });
+    await ui.run("bypass");
+    assert.match(ui.notices.at(-1).message, /^The installed Approval Guardian does not support/);
+  });
+});
+
 test("bypass clears the guardian's below-editor warning and resets per session", async () => {
   const ui = await mount();
   await ui.run("bypass");
@@ -560,13 +595,7 @@ const COLD_START = { sessionStart: { reason: "startup" } };
 
 /** Point the extension's boot log at a throwaway directory for one test. */
 function withBootLog(fn) {
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  const dir = mkdtempSync(path.join(tmpdir(), "pi-boot-"));
-  process.env.PI_CODING_AGENT_DIR = dir;
-  return Promise.resolve(fn(path.join(dir, "boot-times.jsonl"))).finally(() => {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
-  });
+  return withAgentDir((dir) => fn(path.join(dir, "boot-times.jsonl")));
 }
 
 test("a cold start shows the boot time until the first message is sent", async () => {
