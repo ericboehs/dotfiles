@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { browserHeaders, userAgentString } from "./ua.ts";
@@ -45,7 +45,17 @@ const DENY_MARKERS = [
 	"verify you are human",
 	"are you a robot",
 	"request unsuccessful. incapsula",
+	// Amazon's wall answers 200 and looks like a page. Measured 2026-08-25:
+	// tier 2 "succeeded" on it and the ladder stopped, because nothing about
+	// the status or the size said no. These three strings say no.
+	"click the button below to continue shopping",
+	"/errors/validatecaptcha",
+	"api-services-support@amazon.com",
 ];
+
+// Deliberately not a marker: "enable javascript". Half the honest web ships
+// that sentence in a <noscript> it never shows, and refusing those pages would
+// cost far more than the walls it caught.
 
 /** Returns the marker if the HTML looks like a bot challenge / deny page, else null. */
 export function denyMarker(html: string): string | null {
@@ -66,7 +76,11 @@ function truncate(s: string, maxChars: number): [string, boolean] {
 /** HTML → readable markdown via Readability + Turndown, with a text fallback. */
 export function htmlToMarkdown(html: string, url: string): string {
 	try {
-		const dom = new JSDOM(html, { url });
+		// jsdom reports every CSS parse error on the real web to the console.
+		// Reddit alone emits a stack trace per stylesheet, and this runs in-process
+		// inside pi — so the noise lands in the user's UI, describing nothing they
+		// can act on. We want the DOM, not the diagnostics.
+		const dom = new JSDOM(html, { url, virtualConsole: new VirtualConsole() });
 		const doc = dom.window.document;
 		const title = doc.title?.trim() ?? "";
 		let articleHtml = "";
@@ -250,6 +264,33 @@ async function pdfToText(bytes: Buffer): Promise<string> {
 	}
 }
 
+/**
+ * Whether an extracted result is too thin to be the page that was asked for.
+ *
+ * Judged *after* extraction, which is the whole point. `acceptable()` reads the
+ * response; this reads the answer. A JavaScript application shell is a large,
+ * well-formed, 200-status document containing no prose at all — Reddit came
+ * back `200 · complete` with an empty body that way, having passed every check
+ * that looked only at the bytes.
+ *
+ * Size is half the judgement. example.com is 1.2KB of HTML and 167 characters
+ * of prose, and that is the entire page — not a shell. Only a document big
+ * enough to have had something to say is suspicious for saying nothing.
+ */
+const THIN_CHARS = 200;
+const SHELL_BYTES = 8_000;
+
+function thin(result: FetchResult, raw: RawResult): boolean {
+	if (isPdf(raw)) return false; // pdftotext already validated these
+	if (result.truncated) return false; // truncation means there was plenty
+	if (raw.contentType && !TEXTUAL.test(raw.contentType)) return false; // size-checked in acceptable()
+	// Drop the `# Title` line and the footer finish() adds: a shell has a title
+	// and nothing else, and the footer is never evidence of content.
+	const body = result.content.replace(/^#[^\n]*\n/, "").split("\n\n---\n[via tier")[0].trim();
+	if (body.length >= THIN_CHARS) return false;
+	return rawLen(raw) >= SHELL_BYTES;
+}
+
 function tierDescription(tier: FetchTier): string {
 	if (tier === 2) return ": curl w/ browser headers";
 	if (tier === 3) return ": headless Chrome";
@@ -257,7 +298,13 @@ function tierDescription(tier: FetchTier): string {
 	return "";
 }
 
-async function finish(url: string, tier: FetchTier, raw: RawResult, maxChars: number): Promise<FetchResult> {
+async function finish(
+	url: string,
+	tier: FetchTier,
+	raw: RawResult,
+	maxChars: number,
+	caveat = "",
+): Promise<FetchResult> {
 	let content: string;
 	let extraNote = "";
 	if (isPdf(raw) && raw.bytes) {
@@ -278,7 +325,7 @@ async function finish(url: string, tier: FetchTier, raw: RawResult, maxChars: nu
 		contentType: raw.contentType || undefined,
 		content:
 			text +
-			`\n\n---\n[via tier ${tier}${tierDescription(tier)}${extraNote} · status ${raw.status ?? "?"}${raw.status && raw.status >= 400 ? " — genuine upstream error page" : ""} · ${truncated ? "truncated" : "complete"}]`,
+			`\n\n---\n[via tier ${tier}${tierDescription(tier)}${extraNote} · status ${raw.status ?? "?"}${raw.status && raw.status >= 400 ? " — genuine upstream error page" : ""} · ${truncated ? "truncated" : "complete"}${caveat}]`,
 		truncated,
 	};
 }
@@ -329,6 +376,9 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 
 	let lastBrowserRaw: RawResult | null = null;
 	let lastBrowserTier: FetchTier = 3;
+	// The best thin answer seen so far. A shell from tier 1 is worthless when
+	// tier 4 can render the page, but it beats throwing if nothing else lands.
+	let bestThin: { raw: RawResult; tier: FetchTier; len: number } | null = null;
 	for (const [tier, run] of tiers) {
 		try {
 			opts.onAttempt?.(
@@ -340,7 +390,17 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 				lastBrowserTier = tier;
 			}
 			if (acceptable(raw)) {
-				return await finish(url, tier, raw, opts.maxChars ?? 20_000);
+				const result = await finish(url, tier, raw, opts.maxChars ?? 20_000);
+				if (!thin(result, raw)) return result;
+				// Extracted to almost nothing: an app shell, or a wall with no
+				// marker in it. Either way this tier did not answer the question,
+				// so keep climbing rather than reporting "complete".
+				const len = result.content.length;
+				if (!bestThin || len > bestThin.len) bestThin = { raw, tier, len };
+				attempts.push(
+					`tier ${tier}: status=${raw.status} len=${rawLen(raw)} but extracted no readable content`,
+				);
+				continue;
 			}
 			const marker = denyMarker(rawText(raw));
 			attempts.push(
@@ -361,6 +421,19 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 		!denyMarker(rawText(lastBrowserRaw))
 	) {
 		return await finish(url, lastBrowserTier, lastBrowserRaw, opts.maxChars ?? 20_000);
+	}
+
+	// Every tier that answered at all answered with a shell. Hand back the
+	// fullest of them, saying so: an empty page the caller can see through is a
+	// better outcome than an exception that hides one was served.
+	if (bestThin) {
+		return await finish(
+			url,
+			bestThin.tier,
+			bestThin.raw,
+			opts.maxChars ?? 20_000,
+			" · WARNING: no readable content extracted — likely a JS app shell or an unrecognised bot wall",
+		);
 	}
 
 	// Preserve the live browser/profile even on failure. Its accumulated sensor
