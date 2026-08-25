@@ -111,6 +111,20 @@ export default function (pi: ExtensionAPI): void {
 
   watchForResponder(pi);
 
+  // Stamp this pane with a sticky marker carrying our PID. The sweeper uses
+  // it to (a) exclude idle agents from the non-interactive-job heuristic —
+  // we report "node" as our foreground command even when sitting still — and
+  // (b) detect a harsh kill via kill -0 without ever spawning ps.
+  void pi
+    .exec(
+      "tmux",
+      ["set-option", "-p", "-t", TMUX_PANE, "@agent_pane", String(process.pid)],
+      { timeout: 1000 },
+    )
+    .catch(() => {
+      // Cosmetic only; agent-sync's tty check covers unmarked sessions.
+    });
+
   const markWindow = async () => {
     try {
       // Match the Claude hook: a turn only needs announcing when its window is
@@ -241,8 +255,13 @@ export default function (pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     removeTerminalListener?.();
     removeTerminalListener = undefined;
-    // Best effort: a clean exit should leave no dim behind. Anything harsher
-    // is agent-sync's job.
+    // Best effort: a clean exit should leave no dim or stale marker behind.
+    // Anything harsher is agent-sync's job (it drops dead markers itself).
     void setRunning(false);
+    void pi
+      .exec("tmux", ["set-option", "-p", "-u", "-t", TMUX_PANE, "@agent_pane"], {
+        timeout: 1000,
+      })
+      .catch(() => {});
   });
 }
