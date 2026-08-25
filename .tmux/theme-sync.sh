@@ -17,6 +17,7 @@ if [ "$("$HOME/bin/appearance")" = dark ]; then
   text="#cdd6f4"; status_fg="white"
   border="#191923"
   clock="#a6adc8"
+  dim="#6c7086"   # overlay0: window index while an agent is working there
   warn="#f9e2af"; crit="#f38ba8"; peach="#fab387"
   mark="#cba6f7"; mark_fg="#11111b"
 else
@@ -26,6 +27,7 @@ else
   text="#4c4f69"; status_fg="#4c4f69"
   border="#ccd0da"
   clock="#6c6f85"
+  dim="#9ca0b0"   # overlay0: window index while an agent is working there
   warn="#df8e1d"; crit="#d20f39"; peach="#fe640b"
   mark="#8839ef"; mark_fg="#eff1f5"
 fi
@@ -53,6 +55,7 @@ tmux set-option -gq pane-active-border-style "fg=$accent"
 tmux set-option -gq @active_fg "$accent"
 tmux set-option -gq @time_fg "#8c8fa1"
 tmux set-option -gq @clock_fg "$clock"
+tmux set-option -gq @dim_fg "$dim"
 tmux set-option -gq @load_warn_fg "$warn"
 tmux set-option -gq @load_crit_fg "$crit"
 

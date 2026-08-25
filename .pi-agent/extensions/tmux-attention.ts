@@ -133,7 +133,74 @@ export default function (pi: ExtensionAPI): void {
     }
   };
 
+  /**
+   * Maintain this pane's @agent_running flag and roll it up into the window's
+   * @agent_count. The status bar dims #I on background windows while
+   * @agent_count is set; Claude's hooks (claude-agent-state.sh) keep the same
+   * convention, and ~/.tmux/agent-sync.sh clears flags orphaned by a dead
+   * agent. Dimming is decided at render time from window_active, so the flag
+   * is maintained even when this window is currently focused — switching away
+   * mid-turn dims it without any extra bookkeeping.
+   */
+  const setRunning = async (on: boolean): Promise<void> => {
+    try {
+      await pi.exec(
+        "tmux",
+        on
+          ? ["set-option", "-p", "-t", TMUX_PANE, "@agent_running", "on"]
+          : ["set-option", "-p", "-u", "-t", TMUX_PANE, "@agent_running"],
+        { timeout: 1000 },
+      );
+
+      // Recount every pane in this window: with several agents split across
+      // panes, the dim must hold until the last one settles, not the first.
+      const win = await pi.exec(
+        "tmux",
+        ["display-message", "-p", "-t", TMUX_PANE, "#{window_id}"],
+        { timeout: 1000 },
+      );
+      if (win.code !== 0) return;
+      const target = win.stdout.trim();
+      const listing = await pi.exec(
+        "tmux",
+        ["list-panes", "-t", target, "-F", "#{@agent_running}"],
+        { timeout: 1000 },
+      );
+      let count = 0;
+      if (listing.code === 0) {
+        for (const line of listing.stdout.split("\n")) {
+          if (line.trim()) count++;
+        }
+      }
+      if (count > 0) {
+        await pi.exec(
+          "tmux",
+          ["set-window-option", "-t", target, "@agent_count", String(count)],
+          { timeout: 1000 },
+        );
+      } else {
+        await pi.exec(
+          "tmux",
+          ["set-window-option", "-u", "-t", target, "@agent_count"],
+          { timeout: 1000 },
+        );
+      }
+    } catch {
+      // Same best-effort contract as markWindow above.
+    }
+  };
+
+  // A working agent dims its background window's index until it settles.
+  pi.on("agent_start", () => {
+    void setRunning(true);
+  });
+
   pi.on("agent_settled", async () => {
+    // Clear this pane's running flag first: a turn that launched background
+    // work still counts as settled for dimming purposes — the tasks below get
+    // their own announcement path when they finish.
+    await setRunning(false);
+
     // A turn that launched background work does not need attention yet. Its
     // completion notification will either wake another turn or be handled by
     // the terminal-event listener below.
@@ -174,5 +241,8 @@ export default function (pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     removeTerminalListener?.();
     removeTerminalListener = undefined;
+    // Best effort: a clean exit should leave no dim behind. Anything harsher
+    // is agent-sync's job.
+    void setRunning(false);
   });
 }
