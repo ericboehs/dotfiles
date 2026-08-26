@@ -205,6 +205,8 @@ Store**. Anything needing an Apple ID has to be tested on real hardware.
 - `Ctrl-Shift-L`: Clear screen and scrollback
 - `Alt-h/l`: Previous/next window
 - `Alt-j/k`: Previous/next session
+- `Prefix+C`: Open `pi` in a new window
+- `Prefix+r`: Resume the pi/claude session that just quit in this pane
 
 ## Directory Structure
 
