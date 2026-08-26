@@ -82,6 +82,9 @@ export function htmlToMarkdown(html: string, url: string): string {
 		// can act on. We want the DOM, not the diagnostics.
 		const dom = new JSDOM(html, { url, virtualConsole: new VirtualConsole() });
 		const doc = dom.window.document;
+		// Script/style text is not the page. Leaving it in made a Next.js shell
+		// extract as its __NEXT_DATA__ JSON and look like 164 characters of prose.
+		for (const el of doc.querySelectorAll("script, style, noscript")) el.remove();
 		const title = doc.title?.trim() ?? "";
 		let articleHtml = "";
 		try {
@@ -280,10 +283,41 @@ async function pdfToText(bytes: Buffer): Promise<string> {
 const THIN_CHARS = 200;
 const SHELL_BYTES = 8_000;
 
+/**
+ * Compact JavaScript application shells. These are well-formed 200s that
+ * contain no document — just an empty mount point and the script that would
+ * have filled it. They sit well under SHELL_BYTES (Next.js empty exports are
+ * ~2KB) so the size half of thin() never fires on them.
+ *
+ * Measured 2026-08-26: gatesnotes.com answered 200 with a 2.1KB Next.js
+ * export (`<div id="__next"></div>` + empty pageProps). The ladder stopped
+ * at tier 1 holding the JSON blob as if it were the article.
+ */
+export function looksLikeJsShell(html: string): boolean {
+	if (!html) return false;
+	// Next.js: empty root + __NEXT_DATA__. The article lives in the client
+	// bundle; nothing was rendered into the HTML.
+	if (/<div id=["']__next["']>\s*<\/div>/i.test(html) && /id=["']__NEXT_DATA__["']/i.test(html)) {
+		return true;
+	}
+	// React/Vite/etc.: empty #root/#app and almost no remaining prose.
+	if (/<div id=["'](?:root|app)["']>\s*<\/div>/i.test(html)) {
+		const without = html
+			.replace(/<script[\s\S]*?<\/script>/gi, "")
+			.replace(/<style[\s\S]*?<\/style>/gi, "")
+			.replace(/<noscript[\s\S]*?<\/noscript>/gi, "");
+		const text = without.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+		return text.length < 80;
+	}
+	return false;
+}
+
 function thin(result: FetchResult, raw: RawResult): boolean {
 	if (isPdf(raw)) return false; // pdftotext already validated these
 	if (result.truncated) return false; // truncation means there was plenty
 	if (raw.contentType && !TEXTUAL.test(raw.contentType)) return false; // size-checked in acceptable()
+	// Compact SPA shells never reach SHELL_BYTES, but they are not the page.
+	if (looksLikeJsShell(rawText(raw))) return true;
 	// Drop the `# Title` line and the footer finish() adds: a shell has a title
 	// and nothing else, and the footer is never evidence of content.
 	const body = result.content.replace(/^#[^\n]*\n/, "").split("\n\n---\n[via tier")[0].trim();
