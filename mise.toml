@@ -851,6 +851,9 @@ done
 # behave the same, and the package trees because both settings files pin the
 # same versions — installing them twice buys nothing. Sessions, memory, and
 # trust stay per-profile, which is the reason the split exists.
+# enabledModels is the exception: settings.json cannot be shared, so pia()
+# copies the Ctrl+P list from the coding profile on launch and writes it back
+# on exit if /scoped-models saved.
 for name in auth.json models.json keybindings.json npm git bin; do
   [ -e "$HOME/.pi/agent/$name" ] || continue
   target="$profile/$name"
