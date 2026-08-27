@@ -144,6 +144,25 @@ The tool also takes a per-call `excerpts` parameter, for when the model is
 chasing a specific number and wants the surrounding context. It overrides
 length only — never the backend — and does not touch the saved config.
 
+## What this costs before you ask it anything
+
+Measured, because both numbers are paid on every session whether or not a
+search happens.
+
+**Context.** The `web_search` name, description and schema total ~650
+characters, roughly 180 tokens, up ~63 from the single-backend version. Those
+sit in the cached prompt prefix, so the marginal per-turn cost is a fraction of
+that. The `excerpts` parameter is declared with `enum` rather than a union of
+literals: TypeBox expands a union into three `anyOf` branches, which cost ~150
+characters of schema per request to express the same three words.
+
+**Boot.** `config.ts` and `search.ts` add **~3ms** to extension load. The
+extension's ~375ms is almost entirely `fetch-core.ts` (~265ms of jsdom,
+Readability and Turndown) and predates the provider chain. Nothing here does
+I/O at import: config is read on first use, keys are resolved only when a
+backend is actually reached, and a fetch that never escalates never touches the
+Keychain.
+
 ## Keys
 
 Resolved from the environment first, then `fnox get <NAME>` (macOS Keychain),

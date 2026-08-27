@@ -590,24 +590,34 @@ export default function web(pi: ExtensionAPI): void {
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web. Returns ranked results with excerpts from the first available provider in an operator-configured chain; some providers answer in prose instead. Chain and output shape are set with /web.",
+      "Search the web. Returns ranked results with excerpts; some backends return prose instead. Backend order is operator-configured (/web).",
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language search query" }),
       recency: Type.Optional(Type.String({ description: "Bias to recent sources: day, week, month, or year" })),
       links_only: Type.Optional(
         Type.Boolean({ description: "Skip excerpts, return just a ranked [title](url) list" }),
       ),
+      // `enum` rather than a union of literals: TypeBox serialises a union as
+      // three separate anyOf branches, which costs ~150 characters of schema
+      // in every request for no extra meaning. Validation of the value itself
+      // happens below, where an unknown mode has to be handled anyway.
       excerpts: Type.Optional(
-        Type.Union([Type.Literal("short"), Type.Literal("auto"), Type.Literal("long")], {
-          description:
-            "Excerpt length per result: short (~200 chars, just enough to pick a link), auto (~1200), long (~2500, use when chasing a specific number or quote). Defaults to the configured mode.",
+        Type.String({
+          enum: [...EXCERPT_MODES],
+          description: "Excerpt length: short ~200 chars, auto ~1200, long ~2500 when chasing an exact figure.",
         }),
       ),
     }),
     async execute(_id, params: any, signal, onUpdate, ctx) {
+      // An out-of-range mode would index EXCERPT_CHARS to undefined and
+      // truncate every excerpt to a single ellipsis, so drop it rather than
+      // trust the schema to have been enforced upstream.
+      const excerpts: Excerpts | undefined = EXCERPT_MODES.includes(params.excerpts)
+        ? params.excerpts
+        : undefined;
       const outcome = await runSearchChain(
         params.query,
-        { recency: params.recency, linksOnly: params.links_only, excerpts: params.excerpts },
+        { recency: params.recency, linksOnly: params.links_only, excerpts },
         {
           codex: (query, opts, s) => codexSearch(query, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
           onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: `Searching ${msg}` }], details: undefined }),
