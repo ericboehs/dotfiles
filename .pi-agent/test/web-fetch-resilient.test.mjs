@@ -36,8 +36,8 @@ test("empty #root with no prose is a JS shell", () => {
 	assert.equal(looksLikeJsShell(html), true);
 });
 
-test("htmlToMarkdown does not treat __NEXT_DATA__ JSON as the article", () => {
-	const md = htmlToMarkdown(GATES_SHELL, "https://www.gatesnotes.com/x");
+test("htmlToMarkdown does not treat __NEXT_DATA__ JSON as the article", async () => {
+	const md = await htmlToMarkdown(GATES_SHELL, "https://www.gatesnotes.com/x");
 	assert.doesNotMatch(md, /pageProps/);
 	assert.doesNotMatch(md, /__NEXT_DATA__/);
 });
