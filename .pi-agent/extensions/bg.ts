@@ -3,12 +3,24 @@
  *
  * Design goals: minimal permanent context cost, minimal boot cost.
  *
- *   Context: +33 tokens total. Adds one optional `background` boolean to the
+ *   Context: +~55 tokens total. Adds one optional `background` boolean to the
  *            existing built-in `bash` tool instead of registering bg_start /
  *            bg_status / bg_logs / bg_wait / bg_kill. Status and logs need no
  *            tools — the log is a plain file the model reads with `read`.
+ *            One description sentence documents the foreground budget.
  *   Boot:    ~20ms. Single file, no npm dependencies. Nothing is started at
  *            factory time; all resources come up in session_start.
+ *
+ * Foreground auto-background (Claude Code-style):
+ *   Without `background`, commands run in the foreground for up to
+ *   PI_BG_FG_TIMEOUT seconds (default 120). A model-supplied `timeout` can
+ *   only shorten that wait, never extend it (models otherwise pass
+ *   timeout=sleepDuration and defeat the cap). Then adopted as bg jobs: the tool result
+ *   returns "moved to background" + log path immediately, and the normal
+ *   completion wake delivers exit code + tail later — no polling tokens.
+ *   Completion of an in-budget foreground job is silent (quiet): the tool
+ *   result already carries the outcome. PI_BG_FG_TIMEOUT=0 restores pi's
+ *   built-in semantics (no default timeout; explicit timeout kills).
  *
  * UI:
  *   footer          "● 2 bg · rspec 1m12s · vite 12s"   (zero tokens, TUI only)
@@ -33,6 +45,8 @@
  *                     unguessable, and purges it out from under running jobs)
  *   PI_BG_TAIL_LINES  lines injected on completion (default 15, 0 disables)
  *   PI_BG_WAKE        followUp | nextTurn | off  (default followUp)
+ *   PI_BG_FG_TIMEOUT  foreground seconds before auto-background (default
+ *                     120; 0 disables auto-background)
  */
 
 import { spawn } from "node:child_process";
@@ -44,6 +58,8 @@ import {
 	createBashToolDefinition,
 	type ExtensionAPI,
 	type ExtensionContext,
+	getShellConfig,
+	truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -75,6 +91,23 @@ const WAKE = (process.env.PI_BG_WAKE ?? "followUp") as "followUp" | "nextTurn" |
 const STATUS_KEY = "bg";
 const MAX_STATUS_JOBS = 3;
 
+/**
+ * Foreground wait budget before a non-background command is adopted as a bg
+ * job (Claude Code-style auto-background) instead of blocking the turn
+ * indefinitely. 0 disables the feature entirely.
+ */
+const FG_TIMEOUT_SECS = (() => {
+	const parsed = Number.parseInt(process.env.PI_BG_FG_TIMEOUT ?? "120", 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 120;
+})();
+/** Cap for partial output streamed to the TUI while a foreground job runs. */
+const PARTIAL_CAP_BYTES = 64 * 1024;
+/** setTimeout() clamps delays above 2^31-1 ms down to 1ms — keep under it. */
+const MAX_TIMER_MS = 2_147_483_647;
+/** Short output peek included in the "moved to background" tool result. */
+const ADOPT_TAIL_LINES = 5;
+const ADOPT_TAIL_CHARS = 400;
+
 interface Job {
 	id: string;
 	name: string;
@@ -87,6 +120,10 @@ interface Job {
 	exitCode?: number | null;
 	signal?: NodeJS.Signals | null;
 	killedByUser: boolean;
+	/** Foreground-race job: its tool result carries the outcome; suppress the wake. */
+	quiet: boolean;
+	/** Drop the child's event-loop ref so an adopted job outlives the turn. */
+	unrefChild?: () => void;
 }
 
 /**
@@ -124,6 +161,87 @@ function humanDuration(ms: number): string {
 	const seconds = total % 60;
 	if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 	return `${Math.floor(minutes / 60)}h${(minutes % 60).toString().padStart(2, "0")}m`;
+}
+
+/**
+ * pi's agent dir (mirrors pi's getAgentDir(); not part of the public API).
+ * Used to replicate the built-in bash tool's PATH tweak and settings lookup.
+ */
+function agentDir(): string {
+	const envDir = process.env.PI_CODING_AGENT_DIR;
+	if (envDir) {
+		return envDir.startsWith("~") ? path.join(os.homedir(), envDir.slice(1)) : envDir;
+	}
+	return path.join(os.homedir(), ".pi", "agent");
+}
+
+/**
+ * The env the built-in bash tool spawns with: process.env plus pi's bin dir
+ * prepended to PATH (mirrors getShellEnv(), which is not public).
+ */
+function shellEnv(): NodeJS.ProcessEnv {
+	const binDir = path.join(agentDir(), "bin");
+	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+	const currentPath = process.env[pathKey] ?? "";
+	const entries = currentPath.split(path.delimiter).filter(Boolean);
+	const updatedPath = entries.includes(binDir)
+		? currentPath
+		: [binDir, ...entries].join(path.delimiter);
+	return { ...process.env, [pathKey]: updatedPath };
+}
+
+/**
+ * Session env injected into built-in bash commands (PI_SESSION_ID etc.).
+ * Mirrors bash.js resolveSpawnContext; process.env may hold stale values on
+ * resume, so prefer the live session when ctx provides one. Best-effort.
+ */
+function sessionEnv(ctx: unknown): Record<string, string> {
+	const env: Record<string, string> = {};
+	try {
+		const c = ctx as
+			| {
+					sessionManager?: { getSessionId(): string; getSessionFile?(): string | undefined };
+					model?: { provider: string; id: string } | null;
+					thinkingLevel?: string;
+			  }
+			| undefined;
+		if (c?.sessionManager) {
+			env.PI_SESSION_ID = c.sessionManager.getSessionId();
+			const file = c.sessionManager.getSessionFile?.();
+			if (file) env.PI_SESSION_FILE = file;
+		}
+		if (c?.model) {
+			env.PI_PROVIDER = c.model.provider;
+			env.PI_MODEL = c.model.id;
+		}
+		if (c?.thinkingLevel) env.PI_REASONING_LEVEL = c.thinkingLevel;
+	} catch {
+		// session env is best-effort
+	}
+	return env;
+}
+
+/**
+ * The built-in bash tool prefixes every command with the `shellCommandPrefix`
+ * setting. Extensions get no settings API, so read it straight from the
+ * settings files (project overrides global) to keep parity.
+ */
+function shellCommandPrefix(cwd: string): string | undefined {
+	let prefix: string | undefined;
+	for (const settingsPath of [
+		path.join(agentDir(), "settings.json"),
+		path.join(cwd, ".pi", "settings.json"),
+	]) {
+		try {
+			const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as {
+				shellCommandPrefix?: string;
+			};
+			if (parsed.shellCommandPrefix) prefix = parsed.shellCommandPrefix;
+		} catch {
+			// missing or invalid settings file
+		}
+	}
+	return prefix;
 }
 
 /** Read the last `count` lines without slurping a huge log into memory. */
@@ -452,11 +570,13 @@ export default function (pi: ExtensionAPI) {
 	let ticker: NodeJS.Timeout | undefined;
 
 	const running = () => [...jobs.values()].filter((job) => job.endedAt === undefined);
+	/** Jobs the footer surfaces (quiet foreground-race jobs are invisible until adopted). */
+	const adopted = () => running().filter((job) => !job.quiet);
 
 	function renderStatus(): void {
 		const ctx = ctxRef;
 		if (!ctx?.hasUI) return;
-		const active = running();
+		const active = adopted();
 		if (active.length === 0) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
@@ -480,7 +600,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function syncTicker(): void {
-		const active = running().length > 0;
+		const active = adopted().length > 0;
 		if (active && !ticker) {
 			ticker = setInterval(renderStatus, 1000);
 			ticker.unref?.();
@@ -491,22 +611,30 @@ export default function (pi: ExtensionAPI) {
 		renderStatus();
 	}
 
-	async function start(command: string, cwd: string): Promise<Job> {
+	async function start(
+		command: string,
+		cwd: string,
+		opts: { quiet?: boolean; ctx?: unknown } = {},
+	): Promise<{ job: Job; exited: Promise<void> }> {
 		fs.mkdirSync(BG_DIR, { recursive: true, mode: 0o700 });
 		const id = crypto.randomBytes(3).toString("hex");
 		const logPath = path.join(BG_DIR, `${id}.log`);
 		const fd = fs.openSync(logPath, "a");
 
-		const child = spawn(command, {
-			shell: true,
-			detached: true, // own process group, so we can kill the whole tree
-			cwd,
-			stdio: ["ignore", fd, fd],
-			env: { ...process.env, PI_BG_JOB_ID: id },
-		});
-		fs.closeSync(fd);
-		child.unref();
-
+		// Same shell the built-in bash tool uses (bash -c), not /bin/sh.
+		const shellConfig = getShellConfig();
+		const stdinTransport = shellConfig.commandTransport === "stdin";
+		const child = spawn(
+			shellConfig.shell,
+			stdinTransport ? shellConfig.args : [...shellConfig.args, command],
+			{
+				cwd,
+				detached: true, // own process group, so we can kill the whole tree
+				stdio: [stdinTransport ? "pipe" : "ignore", fd, fd],
+				env: { ...shellEnv(), ...sessionEnv(opts.ctx), PI_BG_JOB_ID: id },
+				windowsHide: true,
+			},
+		);
 		const job: Job = {
 			id,
 			name: labelFor(command),
@@ -516,29 +644,53 @@ export default function (pi: ExtensionAPI) {
 			pid: child.pid,
 			startedAt: Date.now(),
 			killedByUser: false,
+			quiet: opts.quiet === true,
 		};
 		jobs.set(id, job);
 
-		// Listeners are attached synchronously so a fast-exiting job cannot slip
-		// through the gap while we await "spawn".
+		let resolveExited!: () => void;
+		const exited = new Promise<void>((resolve) => {
+			resolveExited = resolve;
+		});
+		// Listeners must be attached before unref/await so a fast-exiting job
+		// cannot slip through the gap (e.g. `exit 3`).
 		const ready = new Promise<void>((resolve) => {
 			child.once("spawn", () => resolve());
 			child.once("exit", (code, signal) => {
 				finish(job, code, signal);
+				resolveExited();
 				resolve();
 			});
 			child.once("error", (error) => {
 				appendLog(job, `pi-bg: failed to start: ${error.message}`);
 				finish(job, 127, null);
+				resolveExited();
 				resolve();
 			});
 		});
+
+		if (stdinTransport) {
+			child.stdin?.on("error", () => {});
+			child.stdin?.end(command);
+		}
+		fs.closeSync(fd);
+		// Explicit bg jobs outlive the turn immediately. Foreground-race jobs
+		// stay referenced until they finish or are adopted, so their exit (and
+		// the budget timer) keep the event loop alive even without a TUI.
+		if (!job.quiet) {
+			child.unref();
+		} else {
+			job.unrefChild = () => {
+				child.unref();
+				job.unrefChild = undefined;
+			};
+		}
 
 		syncTicker();
 		// Confirm the fork actually happened before telling the model "started",
 		// so spawn failures surface in the tool result instead of arriving later.
 		await ready;
-		return job;
+		return { job, exited };
 	}
 
 	/**
@@ -573,6 +725,10 @@ export default function (pi: ExtensionAPI) {
 		job.exitCode = code;
 		job.signal = signal;
 		syncTicker();
+
+		// Foreground-race jobs report through their tool result; only adopted
+		// (timed-out) jobs get the completion wake.
+		if (job.quiet) return;
 
 		const elapsed = humanDuration(job.endedAt - job.startedAt);
 		const outcome =
@@ -630,7 +786,12 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	// ---- bash override: +33 tokens, the entire discovery surface -------------
+	const autoBackgroundNote =
+		FG_TIMEOUT_SECS > 0
+			? ` Foreground commands auto-background after ${FG_TIMEOUT_SECS}s and report on completion. timeout only shortens that wait.`
+			: "";
+
+	// ---- bash override: +~55 tokens, the entire discovery surface -------------
 
 	/**
 	 * The base bash definition is bound to a cwd at construction, but pi's
@@ -659,8 +820,17 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool({
 		...base,
+		description: `${base.description}${autoBackgroundNote}`,
 		parameters: Type.Object({
 			...baseProperties,
+			timeout:
+				FG_TIMEOUT_SECS > 0
+					? Type.Optional(
+						Type.Number({
+							description: `Optional; shorten the ${FG_TIMEOUT_SECS}s foreground wait (cannot extend it)`,
+						}),
+					)
+					: (baseProperties.timeout as never),
 			background: Type.Optional(
 				Type.Boolean({
 					description:
@@ -672,26 +842,160 @@ export default function (pi: ExtensionAPI) {
 			const input = params as { command: string; timeout?: number; background?: boolean };
 			// Follow the session, not the launch directory.
 			const cwd = (ctx as { cwd?: string } | undefined)?.cwd ?? process.cwd();
-			if (!input.background) {
+
+			if (input.background) {
+				const { job } = await start(input.command, cwd, { ctx });
+				if (job.endedAt !== undefined && job.exitCode === 127) {
+					return {
+						content: [{ type: "text", text: `bg job failed to start; see ${job.logPath}` }],
+						details: undefined,
+						isError: true,
+					};
+				}
+				return {
+					content: [
+						{
+							type: "text",
+							text: `bg job ${job.id} started · log: ${job.logPath}`,
+						},
+					],
+					details: undefined,
+				};
+			}
+
+			// Auto-background disabled: pi's built-in semantics (no default timeout;
+			// explicit timeout kills the process tree).
+			if (FG_TIMEOUT_SECS === 0) {
 				return baseFor(cwd).execute(toolCallId, input, signal, onUpdate, ctx);
 			}
-			const job = await start(input.command, cwd);
-			if (job.endedAt !== undefined && job.exitCode === 127) {
+
+			// Foreground race: run as a quiet bg job so the process can be adopted
+			// instead of killed if it outlives the budget (non-idempotent commands
+			// keep running rather than being re-run).
+			// Cap at FG_TIMEOUT_SECS so a model passing timeout=sleepDuration
+			// cannot defeat auto-background. timeout may only shorten the wait.
+			const budgetSecs =
+				input.timeout && input.timeout > 0
+					? Math.min(input.timeout, FG_TIMEOUT_SECS)
+					: FG_TIMEOUT_SECS;
+			const prefix = shellCommandPrefix(cwd);
+			const command = prefix ? `${prefix}\n${input.command}` : input.command;
+			const { job, exited } = await start(command, cwd, { quiet: true, ctx });
+
+			// Stream the job log into partial tool updates so live output in the
+			// TUI matches the built-in tool.
+			onUpdate?.({ content: [], details: undefined });
+			let offset = 0;
+			let partial = "";
+			const tail = onUpdate
+				? setInterval(() => {
+						try {
+							const size = fs.statSync(job.logPath).size;
+							if (size <= offset) return;
+							const buffer = Buffer.alloc(size - offset);
+							const fd = fs.openSync(job.logPath, "r");
+							try {
+								fs.readSync(fd, buffer, 0, buffer.length, offset);
+							} finally {
+								fs.closeSync(fd);
+							}
+							offset = size;
+							partial = (partial + buffer.toString("utf8")).slice(-PARTIAL_CAP_BYTES);
+							onUpdate({ content: [{ type: "text", text: partial }], details: undefined });
+						} catch {
+							// log file not readable (yet)
+						}
+				  }, 100)
+				: undefined;
+
+			const onAbort = () => kill(job);
+			signal?.addEventListener("abort", onAbort, { once: true });
+
+			let timedOut = false;
+			let timerHandle: NodeJS.Timeout | undefined;
+			try {
+				timedOut = await Promise.race([
+					exited.then(() => false),
+					new Promise<boolean>((resolve) => {
+						timerHandle = setTimeout(
+							() => resolve(true),
+							Math.min(budgetSecs * 1000, MAX_TIMER_MS),
+						);
+					}),
+				]);
+			} finally {
+				if (timerHandle) clearTimeout(timerHandle);
+				if (tail) clearInterval(tail);
+				signal?.removeEventListener("abort", onAbort);
+			}
+
+			// The budget timer and the exit event can interleave; a recorded
+			// outcome always wins over the timer.
+			if (timedOut && job.endedAt !== undefined) timedOut = false;
+
+			if (timedOut) {
+				job.quiet = false; // adopt: the completion wake now applies
+				job.unrefChild?.(); // outlive the turn, like an explicit bg job
+				syncTicker(); // footer ignored it while quiet; start the ticker now
+				let peek = "";
+				try {
+					const all = tailLines(job.logPath, 8 * 1024);
+					let lines = all.slice(-ADOPT_TAIL_LINES);
+					while (lines.length > 1 && lines.join("\n").length > ADOPT_TAIL_CHARS) {
+						lines = lines.slice(1);
+					}
+					peek = lines.join("\n").slice(-ADOPT_TAIL_CHARS);
+				} catch {
+					// no output yet
+				}
+				const outputSoFar = peek ? `\nOutput so far:\n${peek}` : "";
 				return {
-					content: [{ type: "text", text: `bg job failed to start; see ${job.logPath}` }],
+					content: [
+						{
+							type: "text",
+							text:
+								`Still running after ${budgetSecs}s — moved to background as job ${job.id}.\n` +
+								`log: ${job.logPath} — you'll be notified on completion; tail the log for progress.` +
+								outputSoFar,
+						},
+					],
 					details: undefined,
+				};
+			}
+
+			if (signal?.aborted) throw new Error("Command aborted");
+
+			// Completed within the budget: report straight from the log (the log
+			// is the full-output file, so truncation needs no temp copy).
+			let text: string;
+			let details: unknown = undefined;
+			try {
+				const result = truncateTail(fs.readFileSync(job.logPath, "utf8"));
+				text = result.content || "(no output)";
+				if (result.truncated) {
+					text += `\n\n[Truncated: showing ${result.outputLines} of ${result.totalLines} lines. Full output: ${job.logPath}]`;
+					details = { truncation: result, fullOutputPath: job.logPath };
+				}
+			} catch {
+				text = "(no output)";
+			}
+			if (job.signal) {
+				return {
+					content: [{ type: "text", text: `${text}\n\nCommand killed (${job.signal})` }],
+					details,
 					isError: true,
 				};
 			}
-			return {
-				content: [
-					{
-						type: "text",
-						text: `bg job ${job.id} started · log: ${job.logPath}`,
-					},
-				],
-				details: undefined,
-			};
+			if (job.exitCode !== 0) {
+				return {
+					content: [
+						{ type: "text", text: `${text}\n\nCommand exited with code ${job.exitCode}` },
+					],
+					details,
+					isError: true,
+				};
+			}
+			return { content: [{ type: "text", text }], details };
 		},
 	} as Parameters<ExtensionAPI["registerTool"]>[0]);
 
