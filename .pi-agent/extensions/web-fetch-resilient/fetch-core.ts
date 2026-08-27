@@ -6,6 +6,12 @@
  *     client hints) — defeats header-coherence edge blocks
  *  3. warmed headless Chrome via CDP — executes the site's bot sensor and
  *     passes it, exactly like an ordinary browser would
+ *  4. minimized private Safari window — an independent browser trust tier
+ *  5. Firecrawl — a paid render/extract service; last by default because it
+ *     is the only tier that spends credits
+ *
+ * The ladder is operator-ordered (see web-providers/config.ts). Names map to
+ * fixed tier numbers so result footers stay comparable across orderings.
  *
  * Deny/challenge detection is explicit: a 200 that is actually a challenge
  * page must be reported as such, never as a successful empty fetch.
@@ -22,7 +28,11 @@ import { navigateAndGet, sameOriginFetch, shutdownBrowser } from "./browser.ts";
 
 export { shutdownBrowser };
 
-type FetchTier = 1 | 2 | 3 | 4;
+type FetchTier = 1 | 2 | 3 | 4 | 5;
+
+/** Stable name → tier number. Reordering never renumbers a tier. */
+export const TIER_NUMBERS = { plain: 1, curl: 2, chrome: 3, safari: 4, firecrawl: 5 } as const;
+export type FetchTierName = keyof typeof TIER_NUMBERS;
 
 export interface FetchResult {
 	url: string;
@@ -215,6 +225,35 @@ async function tier3(
 	};
 }
 
+/**
+ * Tier 5 — Firecrawl scrape. Costs a credit per page, so it sits last by
+ * default and only runs once the free local tiers have denied or come back
+ * empty. Returns markdown, which finish() passes through untouched.
+ */
+async function tier5(url: string, key?: string, signal?: AbortSignal): Promise<RawResult> {
+	if (!key) throw new Error("no FIRECRAWL_API_KEY (env or fnox)");
+	const signals = [AbortSignal.timeout(60_000), ...(signal ? [signal] : [])];
+	const res = await fetch("https://api.firecrawl.dev/v2/scrape", {
+		method: "POST",
+		headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+		body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true }),
+		signal: AbortSignal.any(signals),
+	});
+	const json = (await res.json().catch(() => ({}))) as any;
+	if (!res.ok || json?.success === false) {
+		const detail = JSON.stringify(json?.error ?? json ?? {}).slice(0, 200);
+		throw new Error(`firecrawl ${res.status}: ${detail}`);
+	}
+	const meta = json?.data?.metadata ?? {};
+	return {
+		status: typeof meta.statusCode === "number" ? meta.statusCode : res.status,
+		body: String(json?.data?.markdown ?? ""),
+		contentType: "text/markdown",
+		finalUrl: meta.sourceURL ?? meta.url ?? url,
+		note: "firecrawl scrape",
+	};
+}
+
 /** Tier 4 — dedicated minimized private Safari window (macOS only). */
 async function tier4(url: string, headers?: Record<string, string>): Promise<RawResult> {
 	const { safariFetch } = await import("./safari.ts");
@@ -238,6 +277,10 @@ function acceptable(r: RawResult): boolean {
 		// unknown content type with a 200 and a real-sized body — accept
 		return rawLen(r) > 100;
 	}
+	// Firecrawl (tier 5) returns already-extracted markdown rather than a raw
+	// document, so its length is prose length. example.com is 167 characters of
+	// real page; the raw-size floor below would call that a failed fetch.
+	if (r.contentType === "text/markdown") return true;
 	// textual: guard against suspiciously tiny "successes"
 	return !(rawLen(r) < 400 && r.finalUrl.includes(".com"));
 }
@@ -329,6 +372,7 @@ function tierDescription(tier: FetchTier): string {
 	if (tier === 2) return ": curl w/ browser headers";
 	if (tier === 3) return ": headless Chrome";
 	if (tier === 4) return ": private Safari";
+	if (tier === 5) return ": Firecrawl";
 	return "";
 }
 
@@ -370,7 +414,13 @@ export interface FetchOptions {
 	headers?: Record<string, string>;
 	signal?: AbortSignal;
 	onAttempt?: (msg: string) => void;
+	/** Tier names in the order to try them. Defaults to the full local-first ladder. */
+	order?: FetchTierName[];
+	/** Required for the firecrawl tier; resolved by the caller so this module owns no secrets. */
+	firecrawlKey?: string;
 }
+
+const DEFAULT_ORDER: FetchTierName[] = ["plain", "curl", "chrome", "safari", "firecrawl"];
 
 /**
  * Fetch `url` through the tier ladder. Returns the first acceptable result,
@@ -401,12 +451,18 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 		}
 	}
 
-	const tiers: Array<[FetchTier, () => Promise<RawResult>]> = [
-		[1, () => tier1(url, opts.signal)],
-		[2, () => tier2(url, opts.signal)],
-		[3, () => tier3(url, opts.profileDir, opts.headers)],
-		[4, () => tier4(url, opts.headers)],
-	];
+	const runners: Record<FetchTierName, () => Promise<RawResult>> = {
+		plain: () => tier1(url, opts.signal),
+		curl: () => tier2(url, opts.signal),
+		chrome: () => tier3(url, opts.profileDir, opts.headers),
+		safari: () => tier4(url, opts.headers),
+		firecrawl: () => tier5(url, opts.firecrawlKey, opts.signal),
+	};
+	const order = opts.order?.length ? opts.order : DEFAULT_ORDER;
+	const tiers: Array<[FetchTier, () => Promise<RawResult>]> = order.map((name) => [
+		TIER_NUMBERS[name],
+		runners[name],
+	]);
 
 	let lastBrowserRaw: RawResult | null = null;
 	let lastBrowserTier: FetchTier = 3;
@@ -416,10 +472,12 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 	for (const [tier, run] of tiers) {
 		try {
 			opts.onAttempt?.(
-				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : ""}...`,
+				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : tier === 5 ? " (Firecrawl)" : ""}...`,
 			);
 			const raw = await run();
-			if (tier >= 3) {
+			// Only real browsers earn the "this 4xx is genuine" fallback below;
+			// a Firecrawl error page is the vendor's opinion, not the origin's.
+			if (tier === 3 || tier === 4) {
 				lastBrowserRaw = raw;
 				lastBrowserTier = tier;
 			}

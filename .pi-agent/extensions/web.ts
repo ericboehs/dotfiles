@@ -3,6 +3,24 @@ import { Type } from "typebox";
 import { spawn } from "node:child_process";
 import { Text } from "@earendil-works/pi-tui";
 import { resilientFetch } from "./web-fetch-resilient/fetch-core.ts";
+import {
+  activeChain,
+  clearSkips,
+  EXCERPT_MODES,
+  FETCH_TIERS,
+  FORMATS,
+  KEY_ENV,
+  loadConfig,
+  mutateConfig,
+  resolveKey,
+  SEARCH_BACKENDS,
+  type Excerpts,
+  type FetchTierName,
+  type Format,
+  type SearchBackend,
+  type WebConfig,
+} from "./web-providers/config.ts";
+import { chipFor, runSearchChain } from "./web-providers/search.ts";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 // Plain OpenAI API keys speak the same Responses API shape, just at the
@@ -116,12 +134,23 @@ function extractAnswer(output: unknown[]): { answer: string; sources: string[] }
   return { answer: parts.join("\n").trim(), sources: [...sources] };
 }
 
-interface SearchOptions {
+interface CodexOptions {
   recency?: string;
   linksOnly?: boolean;
 }
 
-async function search(query: string, opts: SearchOptions, ctx: ExtensionContext, signal?: AbortSignal) {
+/**
+ * The Codex backend: one API call, and OpenAI's servers run the whole
+ * search-read-write loop. Slow and quota-hungry compared with a SERP API,
+ * which is why the chain puts it last — but it is the only backend that
+ * answers rather than lists.
+ */
+async function codexSearch(
+  query: string,
+  opts: CodexOptions,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<{ answer: string; sources: string[] }> {
   const auth = await resolveAuth(ctx);
   if (!auth) throw new Error("No OpenAI/Codex credentials. Run /login and sign in with your Codex subscription.");
 
@@ -174,11 +203,12 @@ async function search(query: string, opts: SearchOptions, ctx: ExtensionContext,
   const { answer, sources } = extractAnswer(collectOutput(await res.text()));
   if (!answer && sources.length === 0) throw new Error("Search returned nothing.");
 
-  // links mode: the list is the payload, so never append a duplicate source block.
-  if (opts.linksOnly) return answer || sources.slice(0, 10).map((u) => `- ${u}`).join("\n");
-
-  const cited = sources.filter((u) => !answer.includes(u)).slice(0, 10);
-  return cited.length ? `${answer}\n\nSources:\n${cited.map((u) => `- ${u}`).join("\n")}` : answer;
+  // links mode: the list is the payload, so never hand back sources that would
+  // be rendered a second time underneath it.
+  if (opts.linksOnly) {
+    return { answer: answer || sources.slice(0, 10).map((u) => `- ${u}`).join("\n"), sources: [] };
+  }
+  return { answer, sources };
 }
 
 /* ----------------------------------------------------------------- youtube */
@@ -312,29 +342,228 @@ function truncate(body: string, maxChars: number, url: string): string {
   return `# ${url}\n\n${text}`;
 }
 
+/* --------------------------------------------------------------- /web ui */
+
+function chainLine(order: string[], off: string[], skipUntil: Record<string, number>): string {
+  const now = Date.now();
+  return order
+    .map((name) => {
+      if (off.includes(name)) return `${name} (off)`;
+      if (skipUntil[name] > now) return `${name} (skipped)`;
+      return name;
+    })
+    .join(" \u203a ");
+}
+
+function relative(ms: number): string {
+  const mins = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+}
+
+async function statusText(cfg: WebConfig): Promise<string> {
+  const lines = [
+    `search    ${chainLine(cfg.search.order, cfg.search.off, cfg.skipUntil)}`,
+    `fetch     ${chainLine(cfg.fetch.order, cfg.fetch.off, cfg.skipUntil)}`,
+    `format    ${cfg.format}    excerpts ${cfg.excerpts}`,
+    "",
+  ];
+  const creds: string[] = [];
+  for (const name of SEARCH_BACKENDS) {
+    if (name === "codex") {
+      creds.push("codex      subscription (via /login)");
+      continue;
+    }
+    // Presence only. The value is never rendered, logged, or persisted.
+    const has = (await resolveKey(name)) ? "\u2713" : "\u2717";
+    const note = name === "firecrawl" ? "  (search + fetch share one credit pool)" : "";
+    creds.push(`${name.padEnd(10)} ${has} ${KEY_ENV[name]}${note}`);
+  }
+  lines.push(...creds);
+
+  const skipped = Object.entries(cfg.skipUntil).filter(([, until]) => until > Date.now());
+  if (skipped.length) {
+    lines.push("", ...skipped.map(([name, until]) => `skipped   ${name} for ${relative(until)}`));
+  }
+  return lines.join("\n");
+}
+
+const WEB_HELP = [
+  "/web                                   show chains, keys, cool-offs",
+  "/web search order brave tavily exa firecrawl codex",
+  "/web fetch order plain curl chrome safari firecrawl",
+  "/web search off|on <name>",
+  "/web fetch off|on <name>",
+  "/web format native|serp|answer",
+  "/web excerpts auto|short|long",
+  "/web reset                             clear cool-offs",
+].join("\n");
+
+function parseNames<T extends string>(words: string[], allowed: readonly T[]): { names: T[]; bad: string[] } {
+  const names: T[] = [];
+  const bad: string[] = [];
+  for (const raw of words.flatMap((w) => w.split(","))) {
+    const name = raw.trim().toLowerCase() as T;
+    if (!name) continue;
+    if (!allowed.includes(name)) bad.push(name);
+    else if (!names.includes(name)) names.push(name);
+  }
+  return { names, bad };
+}
+
+async function handleWeb(args: string, ctx: ExtensionContext): Promise<void> {
+  const words = args.trim().split(/\s+/).filter(Boolean);
+  const notify = (msg: string) => ctx.ui.notify(msg, "info");
+
+  if (!words.length) {
+    notify(await statusText(await loadConfig()));
+    return;
+  }
+
+  const [head, ...rest] = words;
+  switch (head.toLowerCase()) {
+    case "help":
+      notify(WEB_HELP);
+      return;
+
+    case "reset": {
+      await clearSkips();
+      notify(`Cool-offs cleared.\n\n${await statusText(await loadConfig())}`);
+      return;
+    }
+
+    case "format": {
+      const value = rest[0]?.toLowerCase() as Format;
+      if (!FORMATS.includes(value)) {
+        notify(`format must be one of: ${FORMATS.join(", ")}`);
+        return;
+      }
+      await mutateConfig((cfg) => {
+        cfg.format = value;
+      });
+      notify(`format \u2192 ${value}`);
+      return;
+    }
+
+    case "excerpts": {
+      const value = rest[0]?.toLowerCase() as Excerpts;
+      if (!EXCERPT_MODES.includes(value)) {
+        notify(`excerpts must be one of: ${EXCERPT_MODES.join(", ")}`);
+        return;
+      }
+      await mutateConfig((cfg) => {
+        cfg.excerpts = value;
+      });
+      notify(`excerpts \u2192 ${value}`);
+      return;
+    }
+
+    case "search":
+    case "fetch": {
+      const which = head.toLowerCase() as "search" | "fetch";
+      const allowed = which === "search" ? SEARCH_BACKENDS : FETCH_TIERS;
+      const [verb, ...names] = rest;
+      const { names: parsed, bad } = parseNames(names, allowed as readonly string[]);
+      if (bad.length) {
+        notify(`unknown ${which} name(s): ${bad.join(", ")}\nvalid: ${allowed.join(", ")}`);
+        return;
+      }
+
+      if (verb?.toLowerCase() === "order") {
+        if (!parsed.length) {
+          notify(`give at least one name: ${allowed.join(", ")}`);
+          return;
+        }
+        const cfg = await mutateConfig((c) => {
+          // Names left out keep working but move to the back, so a partial
+          // order is a reprioritisation rather than a silent amputation.
+          const remainder = (c[which].order as string[]).filter((n) => !parsed.includes(n));
+          c[which].order = [...parsed, ...remainder] as any;
+        });
+        notify(`${which} order \u2192 ${chainLine(cfg[which].order, cfg[which].off, cfg.skipUntil)}`);
+        return;
+      }
+
+      if (verb?.toLowerCase() === "off" || verb?.toLowerCase() === "on") {
+        if (!parsed.length) {
+          notify(`give at least one name: ${allowed.join(", ")}`);
+          return;
+        }
+        const turningOff = verb.toLowerCase() === "off";
+        const cfg = await mutateConfig((c) => {
+          const off = new Set(c[which].off as string[]);
+          for (const name of parsed) (turningOff ? off.add(name) : off.delete(name));
+          c[which].off = [...off] as any;
+        });
+        notify(`${which} \u2192 ${chainLine(cfg[which].order, cfg[which].off, cfg.skipUntil)}`);
+        return;
+      }
+
+      notify(WEB_HELP);
+      return;
+    }
+
+    default:
+      notify(WEB_HELP);
+  }
+}
+
 /* -------------------------------------------------------------- extension */
 
 export default function web(pi: ExtensionAPI): void {
+  pi.registerCommand("web", {
+    description: "Configure the web_search backend chain and web_fetch tier ladder",
+    getArgumentCompletions: (prefix: string) => {
+      const options = [
+        "search order",
+        "search off",
+        "search on",
+        "fetch order",
+        "fetch off",
+        "fetch on",
+        "format native",
+        "format serp",
+        "format answer",
+        "excerpts auto",
+        "excerpts short",
+        "excerpts long",
+        "reset",
+        "help",
+      ].map((value) => ({ value, label: value }));
+      const filtered = options.filter((o) => o.value.startsWith(prefix));
+      return filtered.length ? filtered : null;
+    },
+    handler: handleWeb,
+  });
+
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
-    description: "Search the web. Returns a cited answer synthesized from live results.",
+    description:
+      "Search the web. Returns ranked results with excerpts from the first available provider (Brave, Tavily, Exa, Firecrawl, then Codex); the Codex backend answers in prose instead. Chain and output shape are configured with /web.",
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language search query" }),
       recency: Type.Optional(Type.String({ description: "Bias to recent sources: day, week, month, or year" })),
       links_only: Type.Optional(
-        Type.Boolean({ description: "Skip the summary, return just a ranked [title](url) list" }),
+        Type.Boolean({ description: "Skip excerpts, return just a ranked [title](url) list" }),
       ),
     }),
     async execute(_id, params: any, signal, onUpdate, ctx) {
-      onUpdate?.({ content: [{ type: "text", text: `Searching: ${params.query}` }], details: undefined });
-      const text = await search(
+      const outcome = await runSearchChain(
         params.query,
         { recency: params.recency, linksOnly: params.links_only },
-        ctx,
+        {
+          codex: (query, opts, s) => codexSearch(query, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
+          onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: `Searching ${msg}` }], details: undefined }),
+        },
         signal,
       );
-      return { content: [{ type: "text" as const, text }], details: { query: params.query } };
+      ctx.ui.setStatus("web", chipFor(outcome.backend));
+      return {
+        content: [{ type: "text" as const, text: outcome.text }],
+        details: { query: params.query, backend: outcome.backend, tried: outcome.tried },
+      };
     },
   });
 
@@ -376,9 +605,17 @@ export default function web(pi: ExtensionAPI): void {
         }
       }
 
+      const cfg = await loadConfig();
+      const order = activeChain(cfg.fetch.order, cfg.fetch.off, cfg.skipUntil) as FetchTierName[];
+      // Resolve the key only when the tier is actually in play, so a fetch that
+      // never reaches Firecrawl never touches the Keychain.
+      const firecrawlKey = order.includes("firecrawl") ? await resolveKey("firecrawl") : undefined;
+
       const result = await resilientFetch(params.url, {
         maxChars,
         signal,
+        order,
+        firecrawlKey,
         onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: msg }], details: undefined }),
       });
       return { content: [{ type: "text" as const, text: result.content }], details: { url: params.url, tier: result.tier } };
