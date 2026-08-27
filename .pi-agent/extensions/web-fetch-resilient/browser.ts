@@ -17,8 +17,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { Browser, BrowserContext, Page } from "playwright-core";
-import { chromium } from "playwright-core";
 import { chromeBinary, userAgentString } from "./ua.ts";
+
+// playwright-core is ~100ms of module evaluation for one chromium.connectOverCDP
+// call; load it on first attach instead of at extension import time.
+let playwrightPromise: Promise<typeof import("playwright-core")> | undefined;
+
+function playwright(): Promise<typeof import("playwright-core")> {
+	playwrightPromise ??= import("playwright-core");
+	return playwrightPromise;
+}
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const PORT_FILE = ".pi-web-fetch-port";
@@ -110,6 +118,7 @@ async function attach(
 	profileDir: string,
 	child: ChildProcess | null,
 ): Promise<BrowserState> {
+	const { chromium } = await playwright();
 	const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
 	const context = browser.contexts()[0];
 	if (!context) {

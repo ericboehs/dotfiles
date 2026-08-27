@@ -20,13 +20,36 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { JSDOM, VirtualConsole } from "jsdom";
-import { Readability } from "@mozilla/readability";
-import TurndownService from "turndown";
 import { browserHeaders, userAgentString } from "./ua.ts";
 import { navigateAndGet, sameOriginFetch, shutdownBrowser } from "./browser.ts";
 
 export { shutdownBrowser };
+
+// jsdom + readability + turndown cost ~300ms to evaluate at module load (they
+// resolve to pi's bundled copies). Nothing above uses them until a fetch
+// returns HTML, so they load lazily on first htmlToMarkdown call and stay
+// cached for the process. Keeps pi's boot free of web-extension weight.
+interface HtmlDeps {
+	JSDOM: typeof import("jsdom").JSDOM;
+	VirtualConsole: typeof import("jsdom").VirtualConsole;
+	Readability: typeof import("@mozilla/readability").Readability;
+	TurndownService: typeof import("turndown").default;
+}
+let htmlDepsPromise: Promise<HtmlDeps> | undefined;
+
+function htmlDeps(): Promise<HtmlDeps> {
+	htmlDepsPromise ??= Promise.all([
+		import("jsdom"),
+		import("@mozilla/readability"),
+		import("turndown"),
+	]).then(([jsdom, readability, turndown]) => ({
+		JSDOM: jsdom.JSDOM,
+		VirtualConsole: jsdom.VirtualConsole,
+		Readability: readability.Readability,
+		TurndownService: turndown.default,
+	}));
+	return htmlDepsPromise;
+}
 
 type FetchTier = 1 | 2 | 3 | 4 | 5;
 
@@ -84,8 +107,9 @@ function truncate(s: string, maxChars: number): [string, boolean] {
 }
 
 /** HTML → readable markdown via Readability + Turndown, with a text fallback. */
-export function htmlToMarkdown(html: string, url: string): string {
+export async function htmlToMarkdown(html: string, url: string): Promise<string> {
 	try {
+		const { JSDOM, VirtualConsole, Readability, TurndownService } = await htmlDeps();
 		// jsdom reports every CSS parse error on the real web to the console.
 		// Reddit alone emits a stack trace per stylesheet, and this runs in-process
 		// inside pi — so the noise lands in the user's UI, describing nothing they
@@ -408,7 +432,7 @@ async function finish(
 		const bodyText = rawText(raw);
 		const isHtml =
 			raw.contentType.includes("html") || /^\s*<(!doctype|html)/i.test(bodyText.slice(0, 200));
-		content = isHtml ? htmlToMarkdown(bodyText, raw.finalUrl) : bodyText;
+		content = isHtml ? await htmlToMarkdown(bodyText, raw.finalUrl) : bodyText;
 	}
 	const [text, truncated] = truncate(content, maxChars);
 	return {
