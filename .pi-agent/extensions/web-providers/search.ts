@@ -29,6 +29,12 @@ export interface BackendResult {
   /** Prose written by the provider (Codex, Tavily include_answer, ...). */
   answer?: string;
   sources?: string[];
+  /**
+   * The terms the backend actually searched, when it silently rewrote the
+   * ones it was given. Only set when it differs — an echo of the query as
+   * sent would be noise the caller already knows.
+   */
+  searchedAs?: string;
 }
 
 export interface SearchOptions {
@@ -178,7 +184,12 @@ async function braveSearch(
       age: r.age || r.page_age || undefined,
     });
   }
-  return { hits };
+  // Brave silently spellchecks and rewrites, and only reports `altered` when
+  // it did. Compared case-insensitively because it also lowercases the echo,
+  // which is not a change worth announcing.
+  const altered = typeof data?.query?.altered === "string" ? data.query.altered.trim() : "";
+  const searchedAs = altered && altered.toLowerCase() !== query.trim().toLowerCase() ? altered : undefined;
+  return { hits, searchedAs };
 }
 
 /* ---------------------------------------------------------------- tavily */
@@ -380,21 +391,24 @@ function renderAnswer(answer: string, sources: string[] = []): string {
 
 function render(result: BackendResult, format: Format, excerpts: Excerpts, linksOnly: boolean): string {
   const limit = EXCERPT_CHARS[linksOnly ? "short" : format === "serp" ? "short" : excerpts];
+  // Leads rather than trails: "these results answer a different question than
+  // the one you asked" is worth knowing before reading them, not after.
+  const prefix = result.searchedAs ? `(searched as: ${result.searchedAs})\n\n` : "";
   if (format === "answer") {
     if (!result.answer) throw new BackendError("format=answer unsupported by this backend", 0);
-    return renderAnswer(result.answer, result.sources ?? result.hits.map((h) => h.url));
+    return prefix + renderAnswer(result.answer, result.sources ?? result.hits.map((h) => h.url));
   }
   if (format === "serp") {
     if (!result.hits.length && result.answer) {
       // A prose backend in SERP mode: hand back the citations, drop the essay.
       const urls = result.sources ?? [];
-      return urls.length ? urls.map((u) => `- ${u}`).join("\n") : "No results.";
+      return urls.length ? prefix + urls.map((u) => `- ${u}`).join("\n") : "No results.";
     }
-    return result.hits.length ? renderHits(result.hits, limit, linksOnly) : "No results.";
+    return result.hits.length ? prefix + renderHits(result.hits, limit, linksOnly) : "No results.";
   }
   // native
-  if (result.answer && !result.hits.length) return renderAnswer(result.answer, result.sources);
-  return result.hits.length ? renderHits(result.hits, limit, linksOnly) : "No results.";
+  if (result.answer && !result.hits.length) return prefix + renderAnswer(result.answer, result.sources);
+  return result.hits.length ? prefix + renderHits(result.hits, limit, linksOnly) : "No results.";
 }
 
 /* ---------------------------------------------------------------- chain */
@@ -439,6 +453,8 @@ export interface ChainOutcome {
   tried: string[];
   /** The excerpt length actually used, after any per-call override. */
   excerpts: Excerpts;
+  /** Set only when the backend rewrote the query it was given. */
+  searchedAs?: string;
 }
 
 export async function runSearchChain(
@@ -475,7 +491,7 @@ export async function runSearchChain(
     try {
       const result = await callBackend(backend, query, opts, cfg, key, deps.codex, signal);
       const text = render(result, cfg.format, cfg.excerpts, linksOnly);
-      return { text, backend, tried, excerpts: cfg.excerpts };
+      return { text, backend, tried, excerpts: cfg.excerpts, searchedAs: result.searchedAs };
     } catch (e) {
       const err = e as Error;
       if (signal?.aborted) throw err; // user cancelled: stop the whole chain

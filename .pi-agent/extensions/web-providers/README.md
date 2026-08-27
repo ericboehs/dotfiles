@@ -163,6 +163,27 @@ I/O at import: config is read on first use, keys are resolved only when a
 backend is actually reached, and a fetch that never escalates never touches the
 Keychain.
 
+### What was actually searched
+
+Brave silently spellchecks and rewrites queries. It reports this in
+`query.altered`, and only populates that field when it really did change
+something, so the rendered output leads with a line **only when the terms
+differed**:
+
+```
+(searched as: how do i exclude a directory from ripgrep search)
+
+- [Ignore a Folder in Ripgrep](https://blog.wxm.be/...)
+```
+
+An unconditional echo of the query would be noise — the caller already knows
+what it asked. The signal is the *divergence*, so that is the only thing
+reported. It also appears as `details.searchedAs` when present, and is absent
+entirely otherwise.
+
+Tavily echoes the query verbatim and Exa returns no autoprompt string, so
+neither has anything to report; this is a Brave-only annotation today.
+
 ## Keys
 
 Resolved from the environment first, then `fnox get <NAME>` (macOS Keychain),

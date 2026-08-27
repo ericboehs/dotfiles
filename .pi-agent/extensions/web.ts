@@ -631,6 +631,7 @@ export default function web(pi: ExtensionAPI): void {
           query: params.query,
           backend: outcome.backend,
           excerpts: outcome.excerpts,
+          ...(outcome.searchedAs ? { searchedAs: outcome.searchedAs } : {}),
           tried: outcome.tried,
         },
       };
