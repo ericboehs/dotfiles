@@ -14,6 +14,7 @@ import {
   type Excerpts,
   type Format,
   type SearchBackend,
+  type WebConfig,
 } from "./config.ts";
 
 export interface SearchHit {
@@ -90,30 +91,37 @@ function recencyDays(recency?: string): number | undefined {
 }
 
 /**
- * Classify an HTTP failure into a cool-off. The backend name is added by the
- * chain, so messages here stay unprefixed.
+ * How long a given HTTP status should bench a backend. Shared by the search
+ * chain and the fetch ladder so both agree on what "spent" means — Firecrawl
+ * bills one pool for both, so a 402 seen while fetching is the same news as a
+ * 402 seen while searching.
  *
  * Brave is the awkward one: it answers 422 both for a revoked subscription
  * token and for a malformed query, so the body has to break the tie. Guessing
  * "auth" would silently bench a working backend for a day; guessing "bug"
  * would re-hit a dead key on every search forever.
  */
-function httpError(status: number, body: string): BackendError {
-  const detail = body.slice(0, 200).replace(/\s+/g, " ").trim();
+export function cooloffForStatus(status: number, body = ""): number {
   const authShaped =
     /SUBSCRIPTION_TOKEN_INVALID|"component"\s*:\s*"authentication"|invalid api key|unauthorized/i.test(body);
-  if (status === 401 || status === 403 || (status === 422 && authShaped)) {
-    return new BackendError(`auth rejected (${status}) ${detail}`, QUOTA_COOLOFF_MS);
-  }
-  if (status === 402 || status === 429 || status === 432) {
-    return new BackendError(`quota exhausted (${status}) ${detail}`, QUOTA_COOLOFF_MS);
-  }
-  if (status >= 500) {
-    return new BackendError(`upstream ${status} ${detail}`, TRANSIENT_COOLOFF_MS);
-  }
+  if (status === 401 || status === 403 || (status === 422 && authShaped)) return QUOTA_COOLOFF_MS;
+  if (status === 402 || status === 429 || status === 432) return QUOTA_COOLOFF_MS;
+  if (status >= 500) return TRANSIENT_COOLOFF_MS;
   // Other 4xx: almost certainly our request shape. Do not cool off — surfacing
   // it on every call is how the bug gets noticed and fixed.
-  return new BackendError(`HTTP ${status} ${detail}`, 0);
+  return 0;
+}
+
+/** Classify an HTTP failure. The chain adds the backend name, so messages here stay unprefixed. */
+function httpError(status: number, body: string): BackendError {
+  const detail = body.slice(0, 200).replace(/\s+/g, " ").trim();
+  const cooloff = cooloffForStatus(status, body);
+  if (cooloff === 0) return new BackendError(`HTTP ${status} ${detail}`, 0);
+  if (status >= 500) return new BackendError(`upstream ${status} ${detail}`, cooloff);
+  if (status === 401 || status === 403 || status === 422) {
+    return new BackendError(`auth rejected (${status}) ${detail}`, cooloff);
+  }
+  return new BackendError(`quota exhausted (${status}) ${detail}`, cooloff);
 }
 
 /* ----------------------------------------------------------------- brave */
@@ -331,6 +339,40 @@ function render(result: BackendResult, format: Format, excerpts: Excerpts, links
 
 /* ---------------------------------------------------------------- chain */
 
+/**
+ * Dispatch one backend. Shared by the chain and by /web test so a probe
+ * exercises exactly the code path a real search would take — a diagnostic that
+ * tests something adjacent to the real thing is worse than no diagnostic.
+ */
+async function callBackend(
+  backend: SearchBackend,
+  query: string,
+  opts: SearchOptions,
+  cfg: WebConfig,
+  key: string | undefined,
+  codex: CodexRunner,
+  signal?: AbortSignal,
+): Promise<BackendResult> {
+  switch (backend) {
+    case "brave":
+      return braveSearch(query, opts, cfg.excerpts, key!, signal);
+    case "tavily":
+      return tavilySearch(query, opts, cfg.format, key!, signal);
+    case "exa":
+      return exaSearch(query, opts, cfg.excerpts, key!, signal);
+    case "firecrawl":
+      return firecrawlSearch(query, opts, key!, signal);
+    case "codex": {
+      const { answer, sources } = await codex(
+        query,
+        { recency: opts.recency, linksOnly: opts.linksOnly === true, wantAnswer: cfg.format !== "serp" },
+        signal,
+      );
+      return { hits: [], answer, sources };
+    }
+  }
+}
+
 export interface ChainOutcome {
   text: string;
   backend: SearchBackend;
@@ -366,30 +408,7 @@ export async function runSearchChain(
 
     deps.onAttempt?.(`${backend}: ${query}`);
     try {
-      let result: BackendResult;
-      switch (backend) {
-        case "brave":
-          result = await braveSearch(query, opts, cfg.excerpts, key!, signal);
-          break;
-        case "tavily":
-          result = await tavilySearch(query, opts, cfg.format, key!, signal);
-          break;
-        case "exa":
-          result = await exaSearch(query, opts, cfg.excerpts, key!, signal);
-          break;
-        case "firecrawl":
-          result = await firecrawlSearch(query, opts, key!, signal);
-          break;
-        case "codex": {
-          const { answer, sources } = await deps.codex(
-            query,
-            { recency: opts.recency, linksOnly, wantAnswer: cfg.format !== "serp" },
-            signal,
-          );
-          result = { hits: [], answer, sources };
-          break;
-        }
-      }
+      const result = await callBackend(backend, query, opts, cfg, key, deps.codex, signal);
       const text = render(result, cfg.format, cfg.excerpts, linksOnly);
       return { text, backend, tried };
     } catch (e) {
@@ -402,6 +421,93 @@ export async function runSearchChain(
   }
 
   throw new Error(`web_search: no backend answered.\n  - ${tried.join("\n  - ")}`);
+}
+
+/**
+ * What one call to each backend costs, for the /web test table. Static rather
+ * than measured: only Tavily reports usage, and a diagnostic should not need
+ * four different billing endpoints to tell you what it just spent.
+ */
+export const COST_PER_CALL: Record<SearchBackend, string> = {
+  brave: "1 req of 2000/mo",
+  tavily: "1 credit",
+  exa: "1 search (~$0.007)",
+  firecrawl: "2 credits",
+  codex: "subscription tokens",
+};
+
+export interface ProbeResult {
+  backend: SearchBackend;
+  state: "ready" | "off" | "cooling" | "no key";
+  ok: boolean;
+  ms: number;
+  chars: number;
+  hits: number;
+  detail?: string;
+}
+
+/**
+ * Probe every backend once, in chain order, and report. Deliberately does NOT
+ * write cool-offs: you run a diagnostic to learn the state of the world, not
+ * to change it. It also probes backends that are off or cooling, since "has it
+ * recovered yet?" is the main reason to ask.
+ */
+export async function probeBackends(
+  query: string,
+  backends: SearchBackend[],
+  deps: { codex: CodexRunner; onAttempt?: (msg: string) => void },
+  signal?: AbortSignal,
+): Promise<ProbeResult[]> {
+  const cfg = await loadConfig();
+  const now = Date.now();
+  const out: ProbeResult[] = [];
+
+  for (const backend of backends) {
+    const state: ProbeResult["state"] = cfg.search.off.includes(backend)
+      ? "off"
+      : cfg.skipUntil[backend] > now
+        ? "cooling"
+        : "ready";
+
+    let key: string | undefined;
+    if (backend !== "codex") {
+      key = await resolveKey(backend);
+      if (!key) {
+        out.push({ backend, state: "no key", ok: false, ms: 0, chars: 0, hits: 0 });
+        continue;
+      }
+    }
+
+    deps.onAttempt?.(backend);
+    const t0 = Date.now();
+    try {
+      const result = await callBackend(backend, query, {}, cfg, key, deps.codex, signal);
+      const text = render(result, cfg.format, cfg.excerpts, false);
+      out.push({
+        backend,
+        state,
+        ok: true,
+        ms: Date.now() - t0,
+        chars: text.length,
+        hits: result.hits.length || (result.answer ? 1 : 0),
+      });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      out.push({
+        backend,
+        state,
+        ok: false,
+        ms: Date.now() - t0,
+        chars: 0,
+        hits: 0,
+        detail: (e as Error).message.slice(0, 160),
+      });
+    }
+    // Brave allows one request per second; a probe that trips its own rate
+    // limit would report a failure it caused itself.
+    await new Promise((r) => setTimeout(r, 1100));
+  }
+  return out;
 }
 
 /** Footer chip text, e.g. "search:brave native". */

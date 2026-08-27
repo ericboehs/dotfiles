@@ -11,6 +11,7 @@ import {
   FORMATS,
   KEY_ENV,
   loadConfig,
+  markSkip,
   mutateConfig,
   resolveKey,
   SEARCH_BACKENDS,
@@ -20,7 +21,7 @@ import {
   type SearchBackend,
   type WebConfig,
 } from "./web-providers/config.ts";
-import { chipFor, runSearchChain } from "./web-providers/search.ts";
+import { chipFor, cooloffForStatus, COST_PER_CALL, probeBackends, runSearchChain } from "./web-providers/search.ts";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 // Plain OpenAI API keys speak the same Responses API shape, just at the
@@ -389,6 +390,45 @@ async function statusText(cfg: WebConfig): Promise<string> {
   return lines.join("\n");
 }
 
+const TEST_QUERY = "what is the capital of France";
+
+function pad(value: string, width: number): string {
+  return value.length >= width ? value : value + " ".repeat(width - value.length);
+}
+
+async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
+  const includeCodex = args[0]?.toLowerCase() === "all";
+  const query = (includeCodex ? args.slice(1) : args).join(" ").trim() || TEST_QUERY;
+  const backends = SEARCH_BACKENDS.filter((b) => includeCodex || b !== "codex");
+
+  const results = await probeBackends(query, [...backends], {
+    codex: (q, opts, s) => codexSearch(q, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
+  });
+
+  const lines = [
+    `query: "${query}"`,
+    "",
+    `${pad("backend", 11)}${pad("state", 9)}${pad("result", 10)}${pad("ms", 7)}${pad("chars", 8)}cost`,
+  ];
+  for (const r of results) {
+    const verdict = r.ok ? `${r.hits} hits` : "FAIL";
+    const ms = r.ok ? String(r.ms) : r.ms ? String(r.ms) : "\u2013";
+    lines.push(
+      `${pad(r.backend, 11)}${pad(r.state, 9)}${pad(verdict, 10)}${pad(ms, 7)}${pad(r.ok ? String(r.chars) : "\u2013", 8)}${COST_PER_CALL[r.backend]}`,
+    );
+  }
+
+  const failures = results.filter((r) => !r.ok && r.detail);
+  if (failures.length) {
+    lines.push("", ...failures.map((r) => `${r.backend}: ${r.detail}`));
+  }
+  // Only successes are counted as spend: auth and quota rejections are not
+  // billed, and claiming otherwise would make the number untrustworthy.
+  lines.push("", `${results.filter((r) => r.ok).length} successful call(s) billed. Cool-offs unchanged.`);
+  if (!includeCodex) lines.push("codex not probed \u2014 use /web test all to include it.");
+  return lines.join("\n");
+}
+
 const WEB_HELP = [
   "/web                                   show chains, keys, cool-offs",
   "/web search order brave tavily exa firecrawl codex",
@@ -397,6 +437,7 @@ const WEB_HELP = [
   "/web fetch off|on <name>",
   "/web format native|serp|answer",
   "/web excerpts auto|short|long",
+  "/web test [all] [query]                probe each backend: latency, size, cost",
   "/web reset                             clear cool-offs",
 ].join("\n");
 
@@ -430,6 +471,12 @@ async function handleWeb(args: string, ctx: ExtensionContext): Promise<void> {
     case "reset": {
       await clearSkips();
       notify(`Cool-offs cleared.\n\n${await statusText(await loadConfig())}`);
+      return;
+    }
+
+    case "test": {
+      notify(`Probing ${rest[0]?.toLowerCase() === "all" ? "all backends" : "API backends"}\u2026`);
+      notify(await runTest(rest, ctx));
       return;
     }
 
@@ -528,6 +575,8 @@ export default function web(pi: ExtensionAPI): void {
         "excerpts auto",
         "excerpts short",
         "excerpts long",
+        "test",
+        "test all",
         "reset",
         "help",
       ].map((value) => ({ value, label: value }));
@@ -616,6 +665,16 @@ export default function web(pi: ExtensionAPI): void {
         signal,
         order,
         firecrawlKey,
+        // Firecrawl bills search and fetch from one pool, so a quota rejection
+        // here has to bench it for the search chain too — even when a cheaper
+        // tier went on to answer this particular fetch.
+        onTierError: (tier, err) => {
+          if (tier !== "firecrawl") return;
+          const status = (err as { status?: number }).status;
+          if (typeof status !== "number") return;
+          const cooloff = cooloffForStatus(status, err.message);
+          if (cooloff > 0) void markSkip("firecrawl", cooloff);
+        },
         onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: msg }], details: undefined }),
       });
       return { content: [{ type: "text" as const, text: result.content }], details: { url: params.url, tier: result.tier } };

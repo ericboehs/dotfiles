@@ -226,6 +226,22 @@ async function tier3(
 }
 
 /**
+ * Thrown by a tier that got a real HTTP rejection, carrying the status so the
+ * caller can tell a spent quota from a bad request. Plain `Error` would force
+ * callers to regex the message, and a cool-off decision is too consequential
+ * to hang on string matching.
+ */
+export class TierHttpError extends Error {
+	readonly status: number;
+
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "TierHttpError";
+		this.status = status;
+	}
+}
+
+/**
  * Tier 5 — Firecrawl scrape. Costs a credit per page, so it sits last by
  * default and only runs once the free local tiers have denied or come back
  * empty. Returns markdown, which finish() passes through untouched.
@@ -242,7 +258,7 @@ async function tier5(url: string, key?: string, signal?: AbortSignal): Promise<R
 	const json = (await res.json().catch(() => ({}))) as any;
 	if (!res.ok || json?.success === false) {
 		const detail = JSON.stringify(json?.error ?? json ?? {}).slice(0, 200);
-		throw new Error(`firecrawl ${res.status}: ${detail}`);
+		throw new TierHttpError(`firecrawl ${res.status}: ${detail}`, res.status);
 	}
 	const meta = json?.data?.metadata ?? {};
 	return {
@@ -418,6 +434,12 @@ export interface FetchOptions {
 	order?: FetchTierName[];
 	/** Required for the firecrawl tier; resolved by the caller so this module owns no secrets. */
 	firecrawlKey?: string;
+	/**
+	 * Called when a tier throws, even if a later tier goes on to succeed. The
+	 * ladder is designed to swallow failures, but a paid tier hitting its quota
+	 * is news the caller needs whether or not this particular fetch recovered.
+	 */
+	onTierError?: (tier: FetchTierName, err: Error) => void;
 }
 
 const DEFAULT_ORDER: FetchTierName[] = ["plain", "curl", "chrome", "safari", "firecrawl"];
@@ -500,6 +522,8 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 			);
 		} catch (e) {
 			attempts.push(`tier ${tier}: ${(e as Error).message}`);
+			const name = (Object.keys(TIER_NUMBERS) as FetchTierName[]).find((n) => TIER_NUMBERS[n] === tier);
+			if (name) opts.onTierError?.(name, e as Error);
 		}
 	}
 
