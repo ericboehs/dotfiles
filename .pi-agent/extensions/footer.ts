@@ -86,6 +86,25 @@ const BOOT_LOG_MAX_BYTES = 200_000;
 /** Providers whose cost is meaningless (subscription-billed or local). */
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx"]);
 
+/**
+ * Usage chips written by baseten-usage.ts / openrouter-usage.ts via globalThis
+ * stashes (color.ts's contract pattern — an import would be a hard dependency
+ * and a missing extension aborts pi's launch). Replaces the session-cost slot:
+ * session cost is meaningless against providers that bill monthly in aggregate.
+ */
+function usageChip(provider: string | undefined): string | undefined {
+  const stashKey =
+    provider === "baseten" ? "__piBasetenUsage"
+    : provider === "openrouter" ? "__piOpenRouterUsage"
+    : undefined;
+  if (!stashKey) return undefined;
+  const stash = (globalThis as Record<string, unknown>)[stashKey] as
+    | { value?: unknown }
+    | undefined;
+  const value = stash?.value;
+  return typeof value === "string" && value ? value : undefined;
+}
+
 /** SuperGrok OAuth is subscription-billed; an xAI API key still has a real dollar cost. */
 /** ox-alpha reports a flat $0.0000 — meaningless, so hide it like the subscription providers. */
 const HIDE_COST_MODELS = /^stealth\/ox-alpha$/i;
@@ -895,9 +914,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
               contextColorCode(usage?.tokens, usage?.contextWindow),
               usage?.tokens == null ? "?" : formatCount(usage.tokens),
             )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
-            hideSessionCost(provider, ctx)
-              ? ""
-              : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
+            usageChip(provider)
+              ? color(GREEN, usageChip(provider) as string)
+              : hideSessionCost(provider, ctx)
+                ? ""
+                : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
             ...INLINE_STATUS_KEYS.map((key) => {
               const value = statuses.get(key);
               // Per-window coloring: a red 5h shouldn't paint the week red too.
@@ -966,6 +987,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (!enabled || !ctx.hasUI || !bypassed) return;
     ctx.ui.setWidget(GUARDIAN_WIDGET_KEY, undefined);
   }
+
+  // baseten-usage.ts / openrouter-usage.ts ping these after writing fresh MTD
+  // values to their globalThis stashes; without it the chip waits for the next
+  // render event.
+  pi.events.on("baseten-usage:updated", () => {
+    repaint?.();
+  });
+  pi.events.on("openrouter-usage:updated", () => {
+    repaint?.();
+  });
 
   pi.events.on(GUARDIAN_BYPASS_STATE_EVENT, (state: unknown) => {
     if (
