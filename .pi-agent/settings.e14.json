@@ -26,8 +26,8 @@
     "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/pr-review/skills"
   ],
-  "defaultProvider": "openrouter",
-  "defaultModel": "stealth/ox-alpha",
+  "defaultProvider": "omlx",
+  "defaultModel": "Ornith-1.5-35B-A3B-MLX-4bit",
   "defaultThinkingLevel": "high",
   "theme": "light/dark",
   "steeringMode": "all",
@@ -40,15 +40,12 @@
     "anthropicExtraUsage": false
   },
   "enabledModels": [
-    "omlx/Qwen3.8-27B-4bit",
-    "omlx/Qwen3.6-35B-A3B-UD-MLX-4bit",
-    "baseten/moonshotai/Kimi-K3",
-    "baseten/deepseek-ai/DeepSeek-V4-Pro-0813",
-    "baseten/deepseek-ai/DeepSeek-V4-Flash-0731",
+    "omlx/Ornith-1.5-35B-A3B-MLX-4bit",
     "openai-codex/gpt-5.6-sol",
     "github-copilot/claude-opus-5",
-    "openrouter/stealth/ox-alpha",
-    "xai/grok-4.6"
+    "xai/grok-4.6",
+    "openrouter/z-ai/glm-5.3-flash",
+    "baseten/zai-org/GLM-5.3-Flash"
   ],
   "showHardwareCursor": true,
   "editorPaddingX": 1,
@@ -58,5 +55,6 @@
   "tuiMode": "fullscreen",
   "fullscreenScrollbar": "auto",
   "fullscreenExitOutput": "resume-hint",
-  "enableInstallTelemetry": false
+  "enableInstallTelemetry": false,
+  "hideThinkingBlock": true
 }

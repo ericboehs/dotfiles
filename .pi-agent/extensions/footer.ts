@@ -83,8 +83,8 @@ const BOOT_BURST_WINDOW_S = 70;
 const BOOT_LOG_KEEP = 1_000;
 const BOOT_LOG_MAX_BYTES = 200_000;
 
-/** Providers whose cost is meaningless (subscription-billed). */
-const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+/** Providers whose cost is meaningless (subscription-billed or local). */
+const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx"]);
 
 /** SuperGrok OAuth is subscription-billed; an xAI API key still has a real dollar cost. */
 /** ox-alpha reports a flat $0.0000 — meaningless, so hide it like the subscription providers. */
@@ -141,6 +141,8 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^claude-(.+)$/i, "$1"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
+  [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
+  [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn-1.5"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];
 

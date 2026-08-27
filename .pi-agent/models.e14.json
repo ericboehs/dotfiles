@@ -356,6 +356,44 @@
       "baseUrl": "https://copilot-api.va.ghe.com"
     },
     "baseten": {
+      "models": [
+        {
+          "id": "zai-org/GLM-5.3-Flash",
+          "name": "GLM 5.3 Flash",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          },
+          "input": ["text", "image"],
+          "cost": {
+            "input": 0.15,
+            "output": 0.5,
+            "cacheRead": 0.03,
+            "cacheWrite": 0
+          },
+          "compat": {
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": true,
+            "supportsUsageInStreaming": true,
+            "maxTokensField": "max_tokens",
+            "supportsStrictMode": true,
+            "supportsLongCacheRetention": false,
+            "thinkingFormat": "baseten",
+            "chatTemplateArgs": {
+              "enable_thinking": { "$var": "thinking.enabled" }
+            }
+          },
+          "contextWindow": 1048576,
+          "maxTokens": 262144
+        }
+      ],
       "modelOverrides": {
         "moonshotai/Kimi-K3": {
           "contextWindow": 262144
@@ -367,6 +405,26 @@
           "contextWindow": 262144
         }
       }
+    },
+    "openrouter": {
+      "models": [
+        {
+          "id": "z-ai/glm-5.3-flash",
+          "name": "GLM-5.3 Flash (OpenRouter)",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1310720,
+          "maxTokens": 16384,
+          "cost": {
+            "input": 0.075,
+            "output": 0.25,
+            "cacheRead": 0.015,
+            "cacheWrite": 0
+          }
+        }
+      ]
     }
   }
 }
