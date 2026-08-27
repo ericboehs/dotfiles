@@ -14,6 +14,7 @@ import {
   markSkip,
   mutateConfig,
   resolveKey,
+  resolveKeyInfo,
   SEARCH_BACKENDS,
   type Excerpts,
   type FetchTierName,
@@ -376,10 +377,18 @@ async function statusText(cfg: WebConfig): Promise<string> {
       creds.push("codex      subscription (via /login)");
       continue;
     }
-    // Presence only. The value is never rendered, logged, or persisted.
-    const has = (await resolveKey(name)) ? "\u2713" : "\u2717";
-    const note = name === "firecrawl" ? "  (search + fetch share one credit pool)" : "";
-    creds.push(`${name.padEnd(10)} ${has} ${KEY_ENV[name]}${note}`);
+    // Presence and which variable won, never the value. Brave has two, and
+    // which one answered decides whether excerpts are extracts or teasers.
+    const found = await resolveKeyInfo(name);
+    const names = KEY_ENV[name] ?? [];
+    const label = found ? `\u2713 ${found.env}` : `\u2717 ${names.join(" or ")}`;
+    const note =
+      name === "firecrawl"
+        ? "  (search + fetch share one credit pool)"
+        : name === "brave" && found?.env === "BRAVE_API_KEY"
+          ? "  (no extra_snippets on this plan \u2014 teaser excerpts)"
+          : "";
+    creds.push(`${name.padEnd(10)} ${label}${note}`);
   }
   lines.push(...creds);
 

@@ -42,7 +42,7 @@ Measured on a three-query bake-off (Aug 2026):
 
 | backend | latency | size | answer in the excerpt? |
 |---|---:|---:|---|
-| brave | 0.4–0.8s | 1.5–3.0K | rarely — teaser snippets |
+| brave | 0.4–0.8s | 1.5–3.0K | rarely — teaser snippets (see "Brave's two plans") |
 | tavily | 0.2–2.1s | 5.6–6.2K | usually |
 | exa | 0.1–2.1s | 4.9–6.6K | usually |
 | firecrawl | 0.8–2.8s | 1.9–5.5K | best — clean tables |
@@ -134,11 +134,34 @@ This one is not uniform, because "more text" is a different product per vendor:
 |---|---|
 | tavily | nothing at the API; only raises the truncation ceiling (measured +436 chars) |
 | exa | asks for 8 highlight sentences instead of 4 (measured 6.0K → 8.1K) |
-| brave | requests `extra_snippets`, **which this plan ignores** — best effort |
+| brave | `extra_snippets`, on the "Data for AI" plan only (206 → ~1450 chars/result) |
 | firecrawl | nothing; it returns full extracts regardless |
 
 Brave silently dropping `extra_snippets` is not a failover reason. Treating it
 as one would push every long-excerpt query onto Tavily and drain it.
+
+### Brave's two plans
+
+Brave sells "Data for Search" and "Data for AI" as separate subscriptions with
+separate keys and separate 2000/month quotas. Only the AI plan includes
+`extra_snippets`, so `BRAVE_AI_API_KEY` is preferred over `BRAVE_API_KEY` when
+both are present, and `/web` names the variable that won.
+
+The AI plan returns `extra_snippets` **whether or not the parameter is set**,
+and the search plan omits them even when it is — so the decision that matters
+is ours, not the API's: the extras are rendered on `long` and dropped
+otherwise. Measured on the six ground-truth queries, including them scored
+**5/6 either way** while tripling the payload (1826 → 5900 chars). Much of the
+addition is boilerplate.
+
+On the pricing canary the extras are genuinely double-edged: they recovered the
+correct list price that truncation had cut off, and simultaneously surfaced a
+competing model's price that truncation had been hiding. More complete and
+more contaminated in the same breath. Worth it when depth was asked for,
+wasteful when it wasn't.
+
+Still gated even on "Free AI": the summarizer (`summary=1` returns null) and
+`/res/v1/llm/context` (`OPTION_NOT_IN_PLAN`).
 
 The tool also takes a per-call `excerpts` parameter, for when the model is
 chasing a specific number and wants the surrounding context. It overrides

@@ -152,14 +152,20 @@ export async function clearSkips(): Promise<void> {
 
 /* ------------------------------------------------------------------- keys */
 
-export const KEY_ENV: Record<string, string> = {
-  brave: "BRAVE_API_KEY",
-  tavily: "TAVILY_API_KEY",
-  exa: "EXA_API_KEY",
-  firecrawl: "FIRECRAWL_API_KEY",
+/**
+ * Env var per backend, in preference order. Brave takes two: the "Data for AI"
+ * plan is a different subscription with its own key and its own 2000/month,
+ * and it is the only one whose plan includes `extra_snippets` — the difference
+ * between a teaser and a real extract. Prefer it, fall back to the plain key.
+ */
+export const KEY_ENV: Record<string, string[]> = {
+  brave: ["BRAVE_AI_API_KEY", "BRAVE_API_KEY"],
+  tavily: ["TAVILY_API_KEY"],
+  exa: ["EXA_API_KEY"],
+  firecrawl: ["FIRECRAWL_API_KEY"],
 };
 
-const keyCache = new Map<string, string | undefined>();
+const keyCache = new Map<string, ResolvedKey | undefined>();
 
 function fnoxGet(name: string): Promise<string | undefined> {
   return new Promise((resolve) => {
@@ -179,13 +185,35 @@ function fnoxGet(name: string): Promise<string | undefined> {
  * Resolve a provider key from the environment, then fnox (Keychain). Values are
  * cached for the process and never logged, persisted, or shown by /web.
  */
-export async function resolveKey(backend: string): Promise<string | undefined> {
-  const env = KEY_ENV[backend];
-  if (!env) return undefined;
+/**
+ * Which credential a backend resolved to, so callers can adapt to the plan.
+ * `env` is the variable name only — the value never leaves this module except
+ * as `key`, and is never logged or persisted.
+ */
+export interface ResolvedKey {
+  key: string;
+  env: string;
+}
+
+export async function resolveKeyInfo(backend: string): Promise<ResolvedKey | undefined> {
+  const names = KEY_ENV[backend];
+  if (!names?.length) return undefined;
   if (keyCache.has(backend)) return keyCache.get(backend);
-  const value = process.env[env]?.trim() || (await fnoxGet(env));
-  keyCache.set(backend, value);
-  return value;
+
+  let found: ResolvedKey | undefined;
+  for (const env of names) {
+    const value = process.env[env]?.trim() || (await fnoxGet(env));
+    if (value) {
+      found = { key: value, env };
+      break;
+    }
+  }
+  keyCache.set(backend, found);
+  return found;
+}
+
+export async function resolveKey(backend: string): Promise<string | undefined> {
+  return (await resolveKeyInfo(backend))?.key;
 }
 
 export function forgetKeys(): void {

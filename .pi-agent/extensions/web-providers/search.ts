@@ -9,9 +9,10 @@ import {
   activeChain,
   loadConfig,
   markSkip,
-  resolveKey,
+  resolveKeyInfo,
   type Excerpts,
   type Format,
+  type ResolvedKey,
   type SearchBackend,
   type WebConfig,
 } from "./config.ts";
@@ -142,7 +143,7 @@ async function braveSearch(
   query: string,
   opts: SearchOptions,
   excerpts: Excerpts,
-  key: string,
+  cred: ResolvedKey,
   signal?: AbortSignal,
 ): Promise<BackendResult> {
   const params = new URLSearchParams({
@@ -153,11 +154,14 @@ async function braveSearch(
   });
   const days = recencyDays(opts.recency);
   if (days) params.set("freshness", days <= 1 ? "pd" : days <= 7 ? "pw" : days <= 31 ? "pm" : "py");
-  // Plan-gated: silently absent on the Search tier, harmless to ask for.
-  if (excerpts === "long") params.set("extra_snippets", "true");
+  // Always ask. The "Data for AI" plan returns extra_snippets whether or not
+  // the parameter is set, and the search-only plan omits them even when it is,
+  // so the parameter is really just future-proofing. What matters is whether
+  // we *render* them, decided below.
+  params.set("extra_snippets", "true");
 
   const url = `https://api.search.brave.com/res/v1/web/search?${params}`;
-  const headers = { "X-Subscription-Token": key, Accept: "application/json" };
+  const headers = { "X-Subscription-Token": cred.key, Accept: "application/json" };
 
   let res = await fetch(url, { headers, signal: timeout(signal) });
   if (res.status === 429) {
@@ -173,8 +177,16 @@ async function braveSearch(
 
   const data = (await res.json()) as any;
   const hits: SearchHit[] = [];
+  // extra_snippets roughly triples the response (206 -> ~1450 chars per
+  // result) and measured no better on a six-query ground-truth set: much of
+  // the addition is boilerplate. On the query that demoted Brave it surfaced
+  // the correct price that truncation had cut off *and* a competing model's
+  // price that truncation had been hiding -- more complete and more
+  // contaminated at once. That is a fair trade only when depth was asked for,
+  // so it rides on `long` rather than the default.
+  const useExtra = excerpts === "long";
   for (const r of data?.web?.results ?? []) {
-    const extra = Array.isArray(r.extra_snippets) ? r.extra_snippets.map(clean).join(" … ") : "";
+    const extra = useExtra && Array.isArray(r.extra_snippets) ? r.extra_snippets.map(clean).join(" … ") : "";
     const body = clean(r.description);
     hits.push({
       title: clean(r.title),
@@ -422,19 +434,19 @@ async function callBackend(
   query: string,
   opts: SearchOptions,
   cfg: WebConfig,
-  key: string | undefined,
+  cred: ResolvedKey | undefined,
   codex: CodexRunner,
   signal?: AbortSignal,
 ): Promise<BackendResult> {
   switch (backend) {
     case "brave":
-      return braveSearch(query, opts, cfg.excerpts, key!, signal);
+      return braveSearch(query, opts, cfg.excerpts, cred!, signal);
     case "tavily":
-      return tavilySearch(query, opts, cfg.format, key!, signal);
+      return tavilySearch(query, opts, cfg.format, cred!.key, signal);
     case "exa":
-      return exaSearch(query, opts, cfg.excerpts, cfg.format, key!, signal);
+      return exaSearch(query, opts, cfg.excerpts, cfg.format, cred!.key, signal);
     case "firecrawl":
-      return firecrawlSearch(query, opts, key!, signal);
+      return firecrawlSearch(query, opts, cred!.key, signal);
     case "codex": {
       const { answer, sources } = await codex(
         query,
@@ -477,10 +489,10 @@ export async function runSearchChain(
   }
 
   for (const backend of chain) {
-    let key: string | undefined;
+    let cred: ResolvedKey | undefined;
     if (backend !== "codex") {
-      key = await resolveKey(backend);
-      if (!key) {
+      cred = await resolveKeyInfo(backend);
+      if (!cred) {
         tried.push(`${backend}: no API key`);
         continue;
       }
@@ -488,7 +500,7 @@ export async function runSearchChain(
 
     deps.onAttempt?.(`${backend}: ${query}`);
     try {
-      const result = await callBackend(backend, query, opts, cfg, key, deps.codex, signal);
+      const result = await callBackend(backend, query, opts, cfg, cred, deps.codex, signal);
       const text = render(result, cfg.format, cfg.excerpts, linksOnly);
       return { text, backend, tried, excerpts: cfg.excerpts, searchedAs: result.searchedAs };
     } catch (e) {
@@ -549,10 +561,10 @@ export async function probeBackends(
         ? "cooling"
         : "ready";
 
-    let key: string | undefined;
+    let cred: ResolvedKey | undefined;
     if (backend !== "codex") {
-      key = await resolveKey(backend);
-      if (!key) {
+      cred = await resolveKeyInfo(backend);
+      if (!cred) {
         out.push({ backend, state: "no key", ok: false, ms: 0, chars: 0, hits: 0 });
         continue;
       }
@@ -561,7 +573,7 @@ export async function probeBackends(
     deps.onAttempt?.(backend);
     const t0 = Date.now();
     try {
-      const result = await callBackend(backend, query, {}, cfg, key, deps.codex, signal);
+      const result = await callBackend(backend, query, {}, cfg, cred, deps.codex, signal);
       const text = render(result, cfg.format, cfg.excerpts, false);
       out.push({
         backend,
