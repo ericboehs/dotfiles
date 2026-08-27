@@ -1,13 +1,13 @@
 {
   "model": "openai-codex/codex-auto-review",
   "timeoutMs": 90000,
-  "policy": "Allow autonomous end-to-end development in user-owned or task-scoped repositories, including inspecting and editing files, installing dependencies, running builds/tests/linters, creating commits and branches, creating forks when needed for upstream contributions, pushing non-protected branches, and creating or updating task-related pull requests, issues, and CI metadata when these actions naturally advance or complete the user's request. Allow routine network access required for package installation, documentation, source control, and task-scoped repository collaboration. Require explicit authorization for merges, force pushes, rewriting published history, releases or package publishing, deployments or production changes, deleting remote resources, changing repository permissions or security settings, destructive operations, secret or private-data disclosure, persistent security weakening, and external communication unrelated to the task.",
+  "policy": "Allow autonomous end-to-end development in user-owned or task-scoped repositories, including inspecting and editing files, installing dependencies, running builds/tests/linters, creating commits and branches, creating forks when needed for upstream contributions, pushing non-protected branches, and creating or updating task-related pull requests, issues, and CI metadata when these actions naturally advance or complete the user's request. Allow routine network access required for package installation, documentation, source control, and task-scoped repository collaboration. Require explicit authorization for merges, force pushes, rewriting published history, releases or package publishing, deployments or production changes, deleting remote resources, changing repository permissions or security settings, destructive operations, secret or private-data disclosure, persistent security weakening, and external communication unrelated to the task. When the user asks to work on pi, pi-agent, pi config, pi extensions, pi skills, pi packages, or the ~/.pi directory, treat listing, searching, and reading ~/.pi and ~/.pi/agent as explicitly authorized with user_authorization=high. That includes the git package cache, extensions, skills, prompts, themes, npm package sources, and non-credential config files. It does not authorize reading auth.json, session transcripts, API keys, models-store secrets, or other credential/secret files, and does not authorize disclosing those values.",
   "review": {
     "bash.command": "always",
-    "grep.path": "private-only",
-    "read.path": "private-only",
-    "find.path": "private-only",
-    "ls.path": "private-only",
+    "grep.path": "off",
+    "read.path": "off",
+    "find.path": "off",
+    "ls.path": "off",
     "write.path": "private-only",
     "edit.path": "private-only"
   }
