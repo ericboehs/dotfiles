@@ -43,8 +43,8 @@ Measured on a three-query bake-off (Aug 2026):
 | backend | latency | size | answer in the excerpt? |
 |---|---:|---:|---|
 | brave | 0.4–0.8s | 1.5–3.0K | rarely — teaser snippets |
-| tavily | 0.2–1.9s | 5.6–6.2K | usually |
-| exa | 0.2–2.1s | 5.4–6.5K | usually |
+| tavily | 0.2–2.1s | 5.6–6.2K | usually |
+| exa | 0.1–2.1s | 4.9–6.6K | usually |
 | firecrawl | 0.8–2.8s | 1.9–5.5K | best — clean tables |
 | codex | slowest | ~1.2K | best reasoning |
 
@@ -54,12 +54,19 @@ snippet quoted *a different model's price*, which a reader could easily take as
 the answer. Fuller extracts are both faster end-to-end and harder to misread,
 so Brave sits third as high-volume overflow.
 
+Tavily and Exa were then run head to head on six queries with a ground-truth
+string each. They tied at **6/6**, with near-identical output size (5971 vs
+5784 chars average); Tavily averaged 1036ms to Exa's 1219ms. Total capacity is
+order-invariant — 1000 Tavily credits plus ~1430 Exa searches is the same sum
+either way — so between two backends of equal quality the tiebreak is latency,
+and Tavily keeps the head.
+
 Firecrawl is deliberately behind Brave despite winning on quality: search costs
 2 credits out of the same 1000-credit pool that funds the fetch ladder's last
 tier, where it is the only thing that can rescue a page nothing else can read.
 A credit is worth more there than as a fourth opinion on a SERP.
 
-Caveat: n=3 queries, one afternoon. `/web search order …` reverts it.
+Caveat: n=3 and n=6, one afternoon. `/web search order …` reverts it.
 
 ## Output shape
 
@@ -69,6 +76,24 @@ Two axes, both set with `/web`, plus a per-call override.
 `native` renders whatever the backend is good at. `serp` forces a compact link
 list. `answer` demands prose, and any backend that cannot synthesize passes to
 the next one *without* a cool-off — it declined this request, it is not broken.
+
+In `answer` mode the chain effectively becomes **tavily → exa → codex**; Brave
+and Firecrawl always pass.
+
+Exa serves `answer` from its separate `/answer` endpoint, which is the rare case
+of synthesis being the *cheap* option: **$5/1k against `/search`'s $7/1k**, and
+336–626 characters instead of 10–17KB of raw results. It returns in 1.2–1.5s —
+occasionally faster than the plain search it replaces — so it is nothing like
+the nested-agent latency of Codex.
+
+The catch is the usual one for synthesis. Asked about GLM-5.3 **Flash**, it
+confidently answered about GLM-5.3, with citations. Prose hides the seam that a
+raw extract would have shown, which is why `/answer` is reachable only through
+`format answer` and never as the default rendering.
+
+`/answer` also takes no date filter, so it **declines** when `recency` is set
+rather than quietly answering a different question, and the call passes to a
+backend that can honour it.
 
 **`excerpts`** — `short` (~200 chars), `auto` (~1200), `long` (~2500).
 

@@ -221,13 +221,48 @@ async function tavilySearch(
 
 /* ------------------------------------------------------------------- exa */
 
+/**
+ * Exa's /answer endpoint: a synthesized answer with citations, at $5/1k
+ * against /search's $7/1k. Cheaper *and* smaller — measured 336–626 chars
+ * versus 10–17KB of raw results — and unlike a nested search agent it returns
+ * in 1.2–1.5s, occasionally faster than the plain search it replaces.
+ *
+ * The catch is the usual one for synthesis: it once answered confidently about
+ * GLM-5.3 when asked about GLM-5.3 *Flash*. That is why it is reachable only
+ * through `format answer`, never as the default rendering.
+ */
+async function exaAnswer(query: string, key: string, signal?: AbortSignal): Promise<BackendResult> {
+  const res = await fetch("https://api.exa.ai/answer", {
+    method: "POST",
+    headers: { "x-api-key": key, "Content-Type": "application/json" },
+    body: JSON.stringify({ query, text: false }),
+    signal: timeout(signal),
+  });
+  if (!res.ok) throw httpError(res.status, await res.text());
+
+  const data = (await res.json()) as any;
+  const answer = String(data?.answer ?? "").trim();
+  if (!answer) throw new BackendError("answer endpoint returned nothing", 0);
+  const sources = (data?.citations ?? []).map((c: any) => c?.url).filter(Boolean);
+  return { hits: [], answer, sources };
+}
+
 async function exaSearch(
   query: string,
   opts: SearchOptions,
   excerpts: Excerpts,
+  format: Format,
   key: string,
   signal?: AbortSignal,
 ): Promise<BackendResult> {
+  if (format === "answer") {
+    // /answer takes no date filter. Silently dropping a recency request would
+    // answer a different question than the one asked, so decline and let a
+    // backend that can honour it take the call.
+    if (opts.recency) throw new BackendError("answer endpoint cannot filter by recency", 0);
+    return exaAnswer(query, key, signal);
+  }
+
   const body: Record<string, unknown> = {
     query,
     numResults: opts.maxResults ?? 5,
@@ -361,7 +396,7 @@ async function callBackend(
     case "tavily":
       return tavilySearch(query, opts, cfg.format, key!, signal);
     case "exa":
-      return exaSearch(query, opts, cfg.excerpts, key!, signal);
+      return exaSearch(query, opts, cfg.excerpts, cfg.format, key!, signal);
     case "firecrawl":
       return firecrawlSearch(query, opts, key!, signal);
     case "codex": {
