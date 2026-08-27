@@ -21,7 +21,14 @@ writeFileSync(join(stubDir, "stub.mjs"), "export const getAgentDir = () => proce
 try {
 	const mod = await import(`${here}/../web.ts`);
 	const tools: any[] = [];
-	await mod.default({ registerTool: (t: any) => tools.push(t) });
+	let onSessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
+	await mod.default({
+		registerTool: (t: any) => tools.push(t),
+		registerCommand() {},
+		on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+			if (event === "session_start") onSessionStart = handler;
+		},
+	});
 
 	const names = tools.map((t) => t.name).sort();
 	console.log(`registered: ${names.join(", ")}`);
@@ -41,13 +48,36 @@ try {
 	const searchCall = searchTool.renderCall(
 		{ query: "GLM-4.5 Flash pricing", recency: "week", excerpts: "long", links_only: true },
 		theme,
+		{ toolCallId: "call-1" },
 	);
 	const renderedSearch = JSON.stringify(searchCall.render(200));
 	if (!renderedSearch.includes("GLM-4.5 Flash pricing")) throw new Error("renderCall omitted query");
 	if (!renderedSearch.includes("recency=week")) throw new Error("renderCall omitted recency");
 	if (!renderedSearch.includes("excerpts=long")) throw new Error("renderCall omitted excerpts");
 	if (!renderedSearch.includes("links_only")) throw new Error("renderCall omitted links_only");
+	if (renderedSearch.includes("tavily")) throw new Error("renderCall showed a backend before restore");
 	console.log("renderCall includes search params");
+
+	onSessionStart?.({}, {
+		sessionManager: {
+			getEntries: () => [
+				{
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolName: "web_search",
+						toolCallId: "call-1",
+						details: { backend: "tavily" },
+					},
+				},
+			],
+		},
+	});
+	const restored = JSON.stringify(
+		searchTool.renderCall({ query: "GLM-4.5 Flash pricing" }, theme, { toolCallId: "call-1" }).render(200),
+	);
+	if (!restored.includes("tavily")) throw new Error("renderCall omitted restored backend");
+	console.log("renderCall includes restored backend");
 
 	const result = await fetchTool.execute("test-id", { url: "https://example.com/" }, undefined, () => {});
 	console.log(`execute ok | isError=${result.isError ?? false}`);

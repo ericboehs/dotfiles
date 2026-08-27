@@ -35,6 +35,8 @@ export interface BackendResult {
    * sent would be noise the caller already knows.
    */
   searchedAs?: string;
+  /** Monthly requests still allowed. Brave is the only backend that reports this. */
+  remaining?: number;
 }
 
 export interface SearchOptions {
@@ -132,6 +134,16 @@ function httpError(status: number, body: string): BackendError {
   return new BackendError(`quota exhausted (${status}) ${detail}`, cooloff);
 }
 
+/**
+ * Brave's `X-RateLimit-Remaining` is `per-second, monthly`. Monthly 0 is a
+ * real value (spent), so distinguish it from a missing or unparseable header.
+ */
+export function parseBraveMonthlyRemaining(header: string | null): number | undefined {
+  const parts = (header ?? "").split(",").map((s) => Number(s.trim()));
+  const monthly = parts[1];
+  return parts.length > 1 && Number.isFinite(monthly) ? monthly : undefined;
+}
+
 /* ----------------------------------------------------------------- brave */
 
 /**
@@ -165,9 +177,8 @@ async function braveSearch(
 
   let res = await fetch(url, { headers, signal: timeout(signal) });
   if (res.status === 429) {
-    // "x-ratelimit-remaining: 0, 1985" -> per-second spent, monthly fine.
-    const remaining = (res.headers.get("x-ratelimit-remaining") ?? "").split(",").map((s) => Number(s.trim()));
-    const monthlyLeft = remaining.length > 1 ? remaining[1] : undefined;
+    // "0, 1985" -> per-second spent, monthly fine.
+    const monthlyLeft = parseBraveMonthlyRemaining(res.headers.get("x-ratelimit-remaining"));
     if (monthlyLeft === undefined || monthlyLeft > 0) {
       await new Promise((r) => setTimeout(r, 1100));
       res = await fetch(url, { headers, signal: timeout(signal) });
@@ -200,7 +211,7 @@ async function braveSearch(
   // which is not a change worth announcing.
   const altered = typeof data?.query?.altered === "string" ? data.query.altered.trim() : "";
   const searchedAs = altered && altered.toLowerCase() !== query.trim().toLowerCase() ? altered : undefined;
-  return { hits, searchedAs };
+  return { hits, searchedAs, remaining: parseBraveMonthlyRemaining(res.headers.get("x-ratelimit-remaining")) };
 }
 
 /* ---------------------------------------------------------------- tavily */
@@ -501,7 +512,12 @@ export async function runSearchChain(
     deps.onAttempt?.(`${backend}: ${query}`);
     try {
       const result = await callBackend(backend, query, opts, cfg, cred, deps.codex, signal);
-      const text = render(result, cfg.format, cfg.excerpts, linksOnly);
+      let text = render(result, cfg.format, cfg.excerpts, linksOnly);
+      // Brave is the only backend that reports remaining quota on the search
+      // response. Tavily/Exa/Firecrawl only say when it's gone (402).
+      if (result.remaining !== undefined) {
+        text += `\n\n---\n[${result.remaining} remaining this month]`;
+      }
       return { text, backend, tried, excerpts: cfg.excerpts, searchedAs: result.searchedAs };
     } catch (e) {
       const err = e as Error;

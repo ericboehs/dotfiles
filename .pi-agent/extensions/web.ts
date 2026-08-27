@@ -568,6 +568,28 @@ async function handleWeb(args: string, ctx: ExtensionContext): Promise<void> {
 /* -------------------------------------------------------------- extension */
 
 export default function web(pi: ExtensionAPI): void {
+  // toolCallId → backend currently being tried, then the one that answered.
+  // renderCall reads this so the header can show it; execute cannot touch the
+  // TUI row's renderer state, and defining renderResult would replace the
+  // default truncated result view.
+  const searchBackends = new Map<string, string>();
+
+  const restoreSearchBackends = (ctx: ExtensionContext) => {
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type !== "message") continue;
+      const msg = entry.message as {
+        role?: string;
+        toolName?: string;
+        toolCallId?: string;
+        details?: { backend?: string };
+      };
+      if (msg.role !== "toolResult" || msg.toolName !== "web_search") continue;
+      if (msg.toolCallId && msg.details?.backend) searchBackends.set(msg.toolCallId, msg.details.backend);
+    }
+  };
+  pi.on("session_start", (_event, ctx) => restoreSearchBackends(ctx));
+  pi.on("session_tree", (_event, ctx) => restoreSearchBackends(ctx));
+
   pi.registerCommand("web", {
     description: "Configure the web_search backend chain and web_fetch tier ladder",
     getArgumentCompletions: (prefix: string) => {
@@ -617,13 +639,15 @@ export default function web(pi: ExtensionAPI): void {
         }),
       ),
     }),
-    renderCall(args: any, theme: any) {
+    renderCall(args: any, theme: any, context: any) {
       let text = theme.fg("toolTitle", theme.bold("web_search "));
       text += theme.fg("accent", String(args.query ?? ""));
       const extras: string[] = [];
       if (args.recency) extras.push(`recency=${args.recency}`);
       if (args.excerpts) extras.push(`excerpts=${args.excerpts}`);
       if (args.links_only) extras.push("links_only");
+      const backend = context?.toolCallId ? searchBackends.get(context.toolCallId) : undefined;
+      if (backend) extras.push(backend);
       if (extras.length) text += theme.fg("muted", ` ${extras.join(" ")}`);
       return new Text(text, 0, 0);
     },
@@ -639,12 +663,15 @@ export default function web(pi: ExtensionAPI): void {
         { recency: params.recency, linksOnly: params.links_only, excerpts },
         {
           codex: (query, opts, s) => codexSearch(query, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
-          onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: `Searching ${msg}` }], details: undefined }),
+          onAttempt: (msg) => {
+            const name = msg.split(":")[0]?.trim();
+            if (name) searchBackends.set(_id, name);
+            onUpdate?.({ content: [{ type: "text", text: `Searching ${msg}` }], details: undefined });
+          },
         },
         signal,
       );
-      // No footer chip: which backend answered is per-result detail, not
-      // session state, and it is already on the tool call in details.backend.
+      searchBackends.set(_id, outcome.backend);
       return {
         content: [{ type: "text" as const, text: outcome.text }],
         details: {
