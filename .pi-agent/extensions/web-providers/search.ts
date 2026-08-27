@@ -227,24 +227,47 @@ async function tavilySearch(
  * versus 10–17KB of raw results — and unlike a nested search agent it returns
  * in 1.2–1.5s, occasionally faster than the plain search it replaces.
  *
- * The catch is the usual one for synthesis: it once answered confidently about
- * GLM-5.3 when asked about GLM-5.3 *Flash*. That is why it is reachable only
- * through `format answer`, never as the default rendering.
+ * The `subject` field is the point of the schema, not the tidy shape. Asked
+ * about GLM-5.3 *Flash*, this endpoint answered about GLM-5.3 and buried the
+ * swap in fluent prose. Making it name what it answered about turns a silent
+ * misattribution into one the reader can see. It is reported, never judged
+ * here: "GLM-5.3" is a substring of the query that asked for "GLM-5.3 Flash",
+ * so any automatic check would wave it through.
  */
+const ANSWER_SCHEMA = {
+  type: "object",
+  required: ["answer", "subject"],
+  properties: {
+    answer: { type: "string", description: "The answer in prose, with inline [n] citation markers." },
+    subject: {
+      type: "string",
+      description:
+        "The exact entity, product, or version the answer describes, copied verbatim from the source. Do not normalise it toward the question.",
+    },
+  },
+} as const;
+
 async function exaAnswer(query: string, key: string, signal?: AbortSignal): Promise<BackendResult> {
   const res = await fetch("https://api.exa.ai/answer", {
     method: "POST",
     headers: { "x-api-key": key, "Content-Type": "application/json" },
-    body: JSON.stringify({ query, text: false }),
+    body: JSON.stringify({ query, text: false, outputSchema: ANSWER_SCHEMA }),
     signal: timeout(signal),
   });
   if (!res.ok) throw httpError(res.status, await res.text());
 
   const data = (await res.json()) as any;
-  const answer = String(data?.answer ?? "").trim();
+  const raw = data?.answer;
+  // Tolerate a plain string: outputSchema is a request, not a guarantee.
+  const answer = String((typeof raw === "object" && raw ? raw.answer : raw) ?? "").trim();
   if (!answer) throw new BackendError("answer endpoint returned nothing", 0);
+  const subject = typeof raw === "object" && raw ? String(raw.subject ?? "").trim() : "";
   const sources = (data?.citations ?? []).map((c: any) => c?.url).filter(Boolean);
-  return { hits: [], answer, sources };
+  return {
+    hits: [],
+    answer: subject ? `${answer}\n\n(Exa answered about: ${subject})` : answer,
+    sources,
+  };
 }
 
 async function exaSearch(

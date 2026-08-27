@@ -86,10 +86,41 @@ of synthesis being the *cheap* option: **$5/1k against `/search`'s $7/1k**, and
 occasionally faster than the plain search it replaces — so it is nothing like
 the nested-agent latency of Codex.
 
-The catch is the usual one for synthesis. Asked about GLM-5.3 **Flash**, it
-confidently answered about GLM-5.3, with citations. Prose hides the seam that a
-raw extract would have shown, which is why `/answer` is reachable only through
-`format answer` and never as the default rendering.
+### Synthesis costs accuracy
+
+On six queries with a ground-truth string each, the same backends scored **6/6
+in `native`** and worse in `answer`:
+
+| | correct | avg latency | avg size |
+|---|---|---:|---:|
+| tavily `include_answer` | 4/6 | 704ms | 476 chars |
+| exa `/answer` | 5/6 — effectively 6/6 | 1537ms | 916 chars |
+
+Both Tavily misses were real, and one was the interesting kind: asked the price
+of Exa's **`/answer`** endpoint it answered for **`/search`**, then invented a
+20,000-request free tier. Exa's one "miss" was the benchmark's fault — it
+correctly described Brave's current public pricing while the expected string
+came from this account's plan-specific rate-limit header.
+
+So `answer` trades accuracy for ~10x fewer tokens. That is why `native` is the
+default and `answer` is opt-in.
+
+### The subject line
+
+Exa's answers are requested with an `outputSchema` carrying a `subject` field,
+and the rendered answer ends with:
+
+```
+(Exa answered about: GLM-5.3)
+```
+
+Asked about GLM-5.3 **Flash**, the endpoint answers about GLM-5.3 and buries
+the swap in fluent prose. Naming the subject makes that visible at a glance.
+Costs nothing extra ($0.005 either way) and adds ~200ms.
+
+It is **reported, never judged**. "GLM-5.3" is a substring of the query that
+asked for "GLM-5.3 Flash", so any automatic check would wave the mismatch
+through — the reader is better at this than a string comparison.
 
 `/answer` also takes no date filter, so it **declines** when `recency` is set
 rather than quietly answering a different question, and the call passes to a
