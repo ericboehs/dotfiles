@@ -167,6 +167,39 @@ The tool also takes a per-call `excerpts` parameter, for when the model is
 chasing a specific number and wants the surrounding context. It overrides
 length only — never the backend — and does not touch the saved config.
 
+### `long` does not buy accuracy
+
+Ten ground-truth queries, every backend, both modes (`web-providers/eval.mjs`):
+
+| mode | backend | correct | avg chars | correct per 10K chars |
+|---|---|---:|---:|---:|
+| auto | brave | 9/10 | 1850 | **48.7** |
+| auto | tavily | **10/10** | 5843 | 17.1 |
+| auto | exa | 9/10 | 5386 | 16.7 |
+| long | brave | 9/10 | 8038 | 11.2 |
+| long | tavily | 10/10 | 6256 | 16.0 |
+| long | exa | 9/10 | 7578 | 11.9 |
+
+Not one backend scored better on `long`, and **the misses were identical in
+both modes** — ripgrep for Brave, `max_connections` for Exa. Those are
+retrieval failures, not truncation failures: the answer was never on the pages
+that came back, and widening the window cannot add what was not retrieved.
+
+So `long` is for reading more of a page already known to be right, not for
+finding a page that `auto` missed. It is not a retry strategy.
+
+Brave on `auto` is three times more token-efficient than anything else here,
+which reads like an argument for promoting it. It is weaker than it looks: this
+eval asks whether the ground-truth string appears, and Brave's known failure
+mode is that the right string appears *next to the wrong subject* — the
+GLM-5.3 canary passes this check while being genuinely misleading. The eval
+cannot see the failure Brave is most prone to, so it does not get to settle the
+order.
+
+Latency was not comparable across modes here: the second pass reuses the first
+pass's queries and Brave and Tavily both served them from cache (544ms → 190ms,
+1244ms → 71ms). Efficiency numbers are per-character, so they are unaffected.
+
 ## What this costs before you ask it anything
 
 Measured, because both numbers are paid on every session whether or not a
