@@ -160,6 +160,7 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^claude-(.+)$/i, "$1"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
+  [/^z-ai\/GLM-5\.3-Flash$/i, "z/oxa"],
   [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
   [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn-1.5"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],

@@ -270,6 +270,8 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["moonshotai/Kimi-K3", "k3"],
     ["deepseek-ai/DeepSeek-V4-Pro-0813", "ds v4-pro"],
     ["deepseek-ai/DeepSeek-V4-Flash-0731", "ds v4-flash"],
+    ["zai-org/GLM-5.3-Flash", "oxa"],
+    ["z-ai/glm-5.3-flash", "z/oxa"],
     ["Qwen3.8-27B-4bit", "3.8-27b"],
     ["Qwen3.6-35B-A3B-UD-MLX-4bit", "3.6-35b-a3b"],
     ["gpt-5.2-codex", "gpt-5.2-codex"],
