@@ -112,11 +112,6 @@ export async function loadConfig(): Promise<WebConfig> {
   return cached;
 }
 
-/** Synchronous view for hot paths; falls back to defaults before the first load. */
-export function currentConfig(): WebConfig {
-  return cached ?? DEFAULT_CONFIG;
-}
-
 export async function saveConfig(next: WebConfig): Promise<void> {
   cached = next;
   const path = configPath();

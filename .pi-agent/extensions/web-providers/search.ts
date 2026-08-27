@@ -7,7 +7,6 @@
  */
 import {
   activeChain,
-  currentConfig,
   loadConfig,
   markSkip,
   resolveKey,
@@ -589,16 +588,4 @@ export async function probeBackends(
     await new Promise((r) => setTimeout(r, 1100));
   }
   return out;
-}
-
-/** Footer chip text, e.g. "search:brave long". */
-export function chipFor(backend: SearchBackend, excerpts?: Excerpts): string {
-  const cfg = currentConfig();
-  const used = excerpts ?? cfg.excerpts;
-  const bits = [`search:${backend}`];
-  if (cfg.format !== "native") bits.push(cfg.format);
-  // Show the length actually used, so a per-call override is visible rather
-  // than the chip quietly reporting the configured default instead.
-  if (used !== "auto") bits.push(used);
-  return bits.join(" ");
 }

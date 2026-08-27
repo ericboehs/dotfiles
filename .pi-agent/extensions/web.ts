@@ -21,7 +21,7 @@ import {
   type SearchBackend,
   type WebConfig,
 } from "./web-providers/config.ts";
-import { chipFor, cooloffForStatus, COST_PER_CALL, probeBackends, runSearchChain } from "./web-providers/search.ts";
+import { cooloffForStatus, COST_PER_CALL, probeBackends, runSearchChain } from "./web-providers/search.ts";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 // Plain OpenAI API keys speak the same Responses API shape, just at the
@@ -624,7 +624,8 @@ export default function web(pi: ExtensionAPI): void {
         },
         signal,
       );
-      ctx.ui.setStatus("web", chipFor(outcome.backend, outcome.excerpts));
+      // No footer chip: which backend answered is per-result detail, not
+      // session state, and it is already on the tool call in details.backend.
       return {
         content: [{ type: "text" as const, text: outcome.text }],
         details: {
