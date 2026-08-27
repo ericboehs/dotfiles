@@ -617,6 +617,16 @@ export default function web(pi: ExtensionAPI): void {
         }),
       ),
     }),
+    renderCall(args: any, theme: any) {
+      let text = theme.fg("toolTitle", theme.bold("web_search "));
+      text += theme.fg("accent", String(args.query ?? ""));
+      const extras: string[] = [];
+      if (args.recency) extras.push(`recency=${args.recency}`);
+      if (args.excerpts) extras.push(`excerpts=${args.excerpts}`);
+      if (args.links_only) extras.push("links_only");
+      if (extras.length) text += theme.fg("muted", ` ${extras.join(" ")}`);
+      return new Text(text, 0, 0);
+    },
     async execute(_id, params: any, signal, onUpdate, ctx) {
       // An out-of-range mode would index EXCERPT_CHARS to undefined and
       // truncate every excerpt to a single ellipsis, so drop it rather than

@@ -29,14 +29,25 @@ try {
 		throw new Error("expected web_search + web_fetch registrations");
 	}
 
+	const theme = { fg: (_name: string, text: string) => text, bold: (text: string) => text };
+
 	const fetchTool = tools.find((t) => t.name === "web_fetch");
-	const call = fetchTool.renderCall(
-		{ url: "https://example.com/" },
-		{ fg: (_name: string, text: string) => text, bold: (text: string) => text },
-	);
+	const call = fetchTool.renderCall({ url: "https://example.com/" }, theme);
 	const renderedCall = JSON.stringify(call.render(200));
 	if (!renderedCall.includes("https://example.com/")) throw new Error("renderCall omitted URL");
 	console.log("renderCall includes URL");
+
+	const searchTool = tools.find((t) => t.name === "web_search");
+	const searchCall = searchTool.renderCall(
+		{ query: "GLM-4.5 Flash pricing", recency: "week", excerpts: "long", links_only: true },
+		theme,
+	);
+	const renderedSearch = JSON.stringify(searchCall.render(200));
+	if (!renderedSearch.includes("GLM-4.5 Flash pricing")) throw new Error("renderCall omitted query");
+	if (!renderedSearch.includes("recency=week")) throw new Error("renderCall omitted recency");
+	if (!renderedSearch.includes("excerpts=long")) throw new Error("renderCall omitted excerpts");
+	if (!renderedSearch.includes("links_only")) throw new Error("renderCall omitted links_only");
+	console.log("renderCall includes search params");
 
 	const result = await fetchTool.execute("test-id", { url: "https://example.com/" }, undefined, () => {});
 	console.log(`execute ok | isError=${result.isError ?? false}`);
