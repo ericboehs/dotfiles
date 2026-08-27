@@ -30,9 +30,28 @@ export interface WebConfig {
   skipUntil: Record<string, number>;
 }
 
-/** Free tiers first, nested-LLM last: the chain spends the cheapest thing that works. */
+/**
+ * Default chains.
+ *
+ * Search is ordered best-extract-first rather than cheapest-first. Failover
+ * only fires on exhaustion, so the head of the chain serves nearly every
+ * query, and these monthly quotas do not roll over — unspent Tavily credits
+ * are simply lost, so there is nothing to save them for.
+ *
+ * Measured on a three-query bake-off: Brave answers in ~0.5s but returns
+ * teaser snippets, which cost a follow-up web_fetch and, worse, once produced
+ * a truncated line quoting a *different model's* price inside a pricing query.
+ * Fuller extracts are both faster end-to-end and less likely to be misread, so
+ * Brave now sits third as the high-volume overflow (2000/mo, the largest pool
+ * and the least useful per call).
+ *
+ * Firecrawl is deliberately behind Brave: search costs it 2 credits per call
+ * out of the same 1000-credit pool that funds the fetch ladder's last tier,
+ * where it is the only thing that can rescue a page nothing else can read.
+ * A credit is worth more there than as a fourth opinion on a SERP.
+ */
 export const DEFAULT_CONFIG: WebConfig = {
-  search: { order: ["brave", "tavily", "exa", "firecrawl", "codex"], off: [] },
+  search: { order: ["tavily", "exa", "brave", "firecrawl", "codex"], off: [] },
   fetch: { order: ["plain", "curl", "chrome", "safari", "firecrawl"], off: [] },
   format: "native",
   excerpts: "auto",

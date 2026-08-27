@@ -1,0 +1,139 @@
+# web-providers
+
+Backends for the `web_search` tool in `../web.ts`. One tool, several providers,
+one operator-owned order. The model never picks a vendor.
+
+- `config.ts` — persisted settings, chain state, key resolution
+- `search.ts` — the backends, the failover chain, and the `/web test` probe
+
+The fetch ladder lives next door in `../web-fetch-resilient/`; the two share a
+cool-off table, because Firecrawl bills both from one pool.
+
+## The chain
+
+```
+tavily → exa → brave → firecrawl → codex
+```
+
+Failover is **narrow on purpose**. A backend is only abandoned for auth
+(401/403, and Brave's 422), quota (402/429/432), 5xx, or a timeout. An empty
+result set is an answer, not a failure — otherwise one unlucky query walks the
+whole chain and spends four subscriptions to tell you the same nothing.
+
+Brave's one-request-per-second 429 is not exhaustion. That case sleeps 1.1s and
+retries the same backend; only a spent monthly counter moves on.
+
+Brave answers **422 for both a revoked token and a malformed query**, so the
+body breaks the tie (`SUBSCRIPTION_TOKEN_INVALID`, `component: authentication`).
+Guessing "auth" would bench a working backend for a day; guessing "bug" would
+re-hit a dead key on every search forever.
+
+Cool-offs: 24h for auth/quota, 10min for 5xx and timeouts, **none** for other
+4xx — those are our bug, and surfacing them every call is how they get fixed.
+State lives in `skipUntil` and self-heals: expired entries are dropped on read.
+
+### Why this order
+
+Failover fires only on exhaustion, so whatever sits at the head serves nearly
+every query. These monthly quotas do not roll over, so there is nothing to save
+them for — spend the best one first.
+
+Measured on a three-query bake-off (Aug 2026):
+
+| backend | latency | size | answer in the excerpt? |
+|---|---:|---:|---|
+| brave | 0.4–0.8s | 1.5–3.0K | rarely — teaser snippets |
+| tavily | 0.2–1.9s | 5.6–6.2K | usually |
+| exa | 0.2–2.1s | 5.4–6.5K | usually |
+| firecrawl | 0.8–2.8s | 1.9–5.5K | best — clean tables |
+| codex | slowest | ~1.2K | best reasoning |
+
+Brave is the fastest and the largest free pool (2000/mo) but returns teasers,
+which cost a follow-up `web_fetch` — and on a pricing query its truncated
+snippet quoted *a different model's price*, which a reader could easily take as
+the answer. Fuller extracts are both faster end-to-end and harder to misread,
+so Brave sits third as high-volume overflow.
+
+Firecrawl is deliberately behind Brave despite winning on quality: search costs
+2 credits out of the same 1000-credit pool that funds the fetch ladder's last
+tier, where it is the only thing that can rescue a page nothing else can read.
+A credit is worth more there than as a fourth opinion on a SERP.
+
+Caveat: n=3 queries, one afternoon. `/web search order …` reverts it.
+
+## Output shape
+
+Two axes, both set with `/web`, plus a per-call override.
+
+**`format`** — `native` (default), `serp`, `answer`.
+`native` renders whatever the backend is good at. `serp` forces a compact link
+list. `answer` demands prose, and any backend that cannot synthesize passes to
+the next one *without* a cool-off — it declined this request, it is not broken.
+
+**`excerpts`** — `short` (~200 chars), `auto` (~1200), `long` (~2500).
+
+This one is not uniform, because "more text" is a different product per vendor:
+
+| backend | what `long` actually does |
+|---|---|
+| tavily | nothing at the API; only raises the truncation ceiling (measured +436 chars) |
+| exa | asks for 8 highlight sentences instead of 4 (measured 6.0K → 8.1K) |
+| brave | requests `extra_snippets`, **which this plan ignores** — best effort |
+| firecrawl | nothing; it returns full extracts regardless |
+
+Brave silently dropping `extra_snippets` is not a failover reason. Treating it
+as one would push every long-excerpt query onto Tavily and drain it.
+
+The tool also takes a per-call `excerpts` parameter, for when the model is
+chasing a specific number and wants the surrounding context. It overrides
+length only — never the backend — and does not touch the saved config.
+
+## Keys
+
+Resolved from the environment first, then `fnox get <NAME>` (macOS Keychain),
+cached per process. Never logged, never written to `web.json`, never shown by
+`/web` — status prints presence only.
+
+`BRAVE_API_KEY` · `TAVILY_API_KEY` · `EXA_API_KEY` · `FIRECRAWL_API_KEY`
+
+A backend with no key is skipped silently rather than failing: an unconfigured
+provider is a chain that is shorter than you thought, not an error.
+
+Codex uses pi's own credentials via `/login`, so it needs the live model
+registry — which is why `/web test` skips it unless you ask for `test all`.
+
+## Config
+
+`<agent-dir>/web.json`, mode 0600, written atomically via rename. A malformed
+file degrades to defaults rather than taking web access down mid-session;
+unknown names are dropped on read.
+
+```
+/web                                   chains, key presence, cool-offs
+/web search order tavily exa brave firecrawl codex
+/web fetch  order plain curl chrome safari firecrawl
+/web search|fetch off|on <name>
+/web format native|serp|answer
+/web excerpts auto|short|long
+/web test [all] [query]                probe each backend: latency, size, cost
+/web reset                             clear cool-offs
+```
+
+A partial `order` reprioritises rather than amputates: names you leave out keep
+working and move to the back.
+
+`/web test` shares `callBackend()` with the chain, so a probe exercises the real
+path rather than something adjacent to it. It does **not** write cool-offs — a
+diagnostic tells you the state of the world, it does not change it — and it
+probes backends that are off or cooling, since "has it recovered?" is the main
+reason to ask. Its first run in a process is cold: TLS setup and Keychain
+resolution dominate, so expect the second run to be several times faster.
+
+## Adding a backend
+
+1. Add the name to `SEARCH_BACKENDS` and its env var to `KEY_ENV` in `config.ts`.
+2. Write `fooSearch(query, opts, …, key, signal)` returning `BackendResult`, and
+   throw `httpError(status, body)` on rejection so it inherits the cool-off
+   rules.
+3. Add a `case` to `callBackend()` — the chain and the probe both pick it up.
+4. Add a row to `COST_PER_CALL`.

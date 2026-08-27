@@ -35,6 +35,8 @@ export interface SearchOptions {
   recency?: string;
   linksOnly?: boolean;
   maxResults?: number;
+  /** Per-call override of the configured excerpt length. */
+  excerpts?: Excerpts;
 }
 
 export type CodexRunner = (
@@ -377,6 +379,8 @@ export interface ChainOutcome {
   text: string;
   backend: SearchBackend;
   tried: string[];
+  /** The excerpt length actually used, after any per-call override. */
+  excerpts: Excerpts;
 }
 
 export async function runSearchChain(
@@ -385,7 +389,10 @@ export async function runSearchChain(
   deps: { codex: CodexRunner; onAttempt?: (msg: string) => void },
   signal?: AbortSignal,
 ): Promise<ChainOutcome> {
-  const cfg = await loadConfig();
+  const stored = await loadConfig();
+  // A per-call override changes excerpt length only. Backend order stays
+  // operator-owned: the model may say how much text it wants, never from whom.
+  const cfg: WebConfig = opts.excerpts ? { ...stored, excerpts: opts.excerpts } : stored;
   const chain = activeChain(cfg.search.order, cfg.search.off, cfg.skipUntil);
   const tried: string[] = [];
   const linksOnly = opts.linksOnly === true;
@@ -410,7 +417,7 @@ export async function runSearchChain(
     try {
       const result = await callBackend(backend, query, opts, cfg, key, deps.codex, signal);
       const text = render(result, cfg.format, cfg.excerpts, linksOnly);
-      return { text, backend, tried };
+      return { text, backend, tried, excerpts: cfg.excerpts };
     } catch (e) {
       const err = e as Error;
       if (signal?.aborted) throw err; // user cancelled: stop the whole chain
@@ -510,11 +517,14 @@ export async function probeBackends(
   return out;
 }
 
-/** Footer chip text, e.g. "search:brave native". */
-export function chipFor(backend: SearchBackend): string {
+/** Footer chip text, e.g. "search:brave long". */
+export function chipFor(backend: SearchBackend, excerpts?: Excerpts): string {
   const cfg = currentConfig();
+  const used = excerpts ?? cfg.excerpts;
   const bits = [`search:${backend}`];
   if (cfg.format !== "native") bits.push(cfg.format);
-  if (cfg.excerpts !== "auto") bits.push(cfg.excerpts);
+  // Show the length actually used, so a per-call override is visible rather
+  // than the chip quietly reporting the configured default instead.
+  if (used !== "auto") bits.push(used);
   return bits.join(" ");
 }

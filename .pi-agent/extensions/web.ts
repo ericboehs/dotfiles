@@ -431,7 +431,7 @@ async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
 
 const WEB_HELP = [
   "/web                                   show chains, keys, cool-offs",
-  "/web search order brave tavily exa firecrawl codex",
+  "/web search order tavily exa brave firecrawl codex",
   "/web fetch order plain curl chrome safari firecrawl",
   "/web search off|on <name>",
   "/web fetch off|on <name>",
@@ -590,28 +590,39 @@ export default function web(pi: ExtensionAPI): void {
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web. Returns ranked results with excerpts from the first available provider (Brave, Tavily, Exa, Firecrawl, then Codex); the Codex backend answers in prose instead. Chain and output shape are configured with /web.",
+      "Search the web. Returns ranked results with excerpts from the first available provider in an operator-configured chain; some providers answer in prose instead. Chain and output shape are set with /web.",
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language search query" }),
       recency: Type.Optional(Type.String({ description: "Bias to recent sources: day, week, month, or year" })),
       links_only: Type.Optional(
         Type.Boolean({ description: "Skip excerpts, return just a ranked [title](url) list" }),
       ),
+      excerpts: Type.Optional(
+        Type.Union([Type.Literal("short"), Type.Literal("auto"), Type.Literal("long")], {
+          description:
+            "Excerpt length per result: short (~200 chars, just enough to pick a link), auto (~1200), long (~2500, use when chasing a specific number or quote). Defaults to the configured mode.",
+        }),
+      ),
     }),
     async execute(_id, params: any, signal, onUpdate, ctx) {
       const outcome = await runSearchChain(
         params.query,
-        { recency: params.recency, linksOnly: params.links_only },
+        { recency: params.recency, linksOnly: params.links_only, excerpts: params.excerpts },
         {
           codex: (query, opts, s) => codexSearch(query, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
           onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: `Searching ${msg}` }], details: undefined }),
         },
         signal,
       );
-      ctx.ui.setStatus("web", chipFor(outcome.backend));
+      ctx.ui.setStatus("web", chipFor(outcome.backend, outcome.excerpts));
       return {
         content: [{ type: "text" as const, text: outcome.text }],
-        details: { query: params.query, backend: outcome.backend, tried: outcome.tried },
+        details: {
+          query: params.query,
+          backend: outcome.backend,
+          excerpts: outcome.excerpts,
+          tried: outcome.tried,
+        },
       };
     },
   });
