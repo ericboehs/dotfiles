@@ -1,0 +1,121 @@
+#!/bin/bash
+# brave-search — web search via the Brave Search API.
+#
+# Usage:
+#   brave-search "query"                  # search results (title, url, snippet)
+#   brave-search -n 10 "query"            # more results
+#   brave-search -j "query"               # raw JSON
+#   brave-search -m news "query"          # news results
+#   brave-search -m images "query"        # image results
+#   brave-search -c US -l en "query"      # country/language
+#   brave-search --age pd "query"         # freshness: pd (24h), pw, pm, py
+#   brave-search -f "query"               # include AI/snippet answer when present
+#
+# Key: read from $BRAVE_API_KEY; falls back to `fnox get BRAVE_API_KEY`.
+
+set -euo pipefail
+
+API="https://api.search.brave.com/res/v1"
+
+usage() {
+  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+max_results=5
+mode="web"
+country="us"
+lang="en"
+freshness=""
+raw_json=0
+show_answer=0
+query=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--count)      max_results="$2"; shift 2 ;;
+    -m|--mode)       mode="$2"; shift 2 ;;
+    -c|--country)    country="$2"; shift 2 ;;
+    -l|--lang)       lang="$2"; shift 2 ;;
+    --age)           freshness="$2"; shift 2 ;;
+    -j|--json)       raw_json=1; shift ;;
+    -f|--answer)     show_answer=1; shift ;;
+    -h|--help)       usage 0 ;;
+    --)              shift; break ;;
+    -*)              echo "brave-search: unknown option $1" >&2; usage 1 ;;
+    *)               break ;;
+  esac
+done
+query="${*:-}"
+[[ -z "$query" ]] && { echo "brave-search: no query given" >&2; usage 1; }
+[[ "$mode" != "web" && "$mode" != "news" && "$mode" != "images" ]] && {
+  echo "brave-search: mode must be web, news, or images" >&2; exit 1; }
+
+# Resolve API key
+key="${BRAVE_API_KEY:-}"
+if [[ -z "$key" ]]; then
+  key=$(fnox get BRAVE_API_KEY 2>/dev/null) || true
+fi
+[[ -z "$key" ]] && { echo "brave-search: no API key (set BRAVE_API_KEY or fnox)" >&2; exit 1; }
+
+# Build request
+params=( "q=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$query")"
+         "country=$country" "search_lang=$lang" "count=$max_results" )
+[[ -n "$freshness" ]] && params+=("freshness=$freshness")
+url="$API/$mode/search?$(IFS='&'; echo "${params[*]}")"
+
+resp=$(curl -sf --max-time 15 \
+  -H "X-Subscription-Token: $key" \
+  -H "Accept: application/json" \
+  "$url") || { echo "brave-search: request failed" >&2; exit 1; }
+
+if [[ $raw_json -eq 1 ]]; then
+  printf '%s' "$resp" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), indent=2))'
+  exit 0
+fi
+
+printf '%s' "$resp" | python3 <(cat <<'PYEOF'
+import json, sys, gzip, io
+
+mode, max_results, show_answer = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
+data = json.load(sys.stdin)
+
+if show_answer:
+    summ = data.get("summarizer")
+    if summ and summ.get("content"):
+        print("== Answer ==\n" + summ["content"] + "\n")
+
+mixed = data.get("mixed", {}).get("main", [])
+items = []
+for ref in mixed:
+    t, idx = ref.get("type"), ref.get("index")
+    if t == "web" and data.get("web"):
+        results = data["web"].get("results", [])
+        if isinstance(idx, int) and idx < len(results):
+            items.append(("web", results[idx]))
+    elif t == "news" and data.get("news"):
+        results = data["news"].get("results", [])
+        if isinstance(idx, int) and idx < len(results):
+            items.append(("news", results[idx]))
+
+def desc(item):
+    d = item.get("description") or item.get("meta_url", {}).get("description") or ""
+    return d.replace("\n", " ").strip()
+
+if mode == "images" and data.get("image"):
+    for r in data["image"].get("results", [])[:max_results]:
+        print(f"- {r.get('title','')}\n  {r.get('url','')}")
+elif items:
+    for kind, r in items[:max_results]:
+        title = r.get("title", "")
+        url = r.get("url", "")
+        age = r.get("age") or r.get("page_age") or ""
+        suffix = f"  ({age})" if age else ""
+        print(f"- {title}{suffix}\n  {url}\n  {desc(r)}")
+elif data.get("news", {}).get("results"):
+    for r in data["news"]["results"][:max_results]:
+        print(f"- {r.get('title','')}  ({r.get('age','')})\n  {r.get('url','')}")
+else:
+    print("No results.")
+PYEOF
+) "$mode" "$max_results" "$show_answer"
