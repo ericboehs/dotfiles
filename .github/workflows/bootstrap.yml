@@ -139,10 +139,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # .claude/scripts/statusline.sh is not covered yet — it has pre-existing
-      # warnings that want fixing on their own.
-      - name: Run shellcheck
+
+      - name: Install mise
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          shellcheck .tmux/*.sh
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
+
+      # Ubuntu ships 0.9.0 and this machine runs 0.11.0, which disagree about
+      # what is clean, so take the version from the same tracked pin bootstrap
+      # installs rather than from apt.
+      - name: Install shellcheck at the tracked pin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # mise resolves versions via the releases API
+        run: |
+          set -e
+          version=$(sed -n 's/^shellcheck = "\([^"]*\)"$/\1/p' .config/mise/config.toml)
+          [ -n "$version" ] || { echo "no shellcheck pin in .config/mise/config.toml"; exit 1; }
+          mise use -g "shellcheck@$version"
+          shellcheck --version
+
+      # Every tracked bash/sh script, not just .tmux/*.sh. Scripts with
+      # pre-existing warnings are listed in .shellcheck-legacy and held to parse
+      # errors only; the list can only shrink, so this ratchets rather than
+      # demanding one big cleanup up front.
+      - name: Run shellcheck
+        run: bin/shell-lint

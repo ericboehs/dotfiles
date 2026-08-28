@@ -32,6 +32,11 @@ uv = "latest"
 gitleaks = "latest"
 hk = "latest"
 pkl = "latest"
+# Pinned, not "latest": CI lints the same scripts with the same binary, and
+# shellcheck adds checks between releases — a floating version means the job and
+# the machine disagree about what is clean. Bumping this is a deliberate act
+# that may retire lines from .shellcheck-legacy.
+shellcheck = "0.11.0"
 watchexec = "latest"
 aube = "latest"
 # Pinned, not "latest": this file is symlinked into ~/.config, so a version mise

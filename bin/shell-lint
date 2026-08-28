@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+
+# Shellcheck the repo's shell scripts, on a ratchet.
+# Usage: shell-lint [-h|--help] [--list]
+#
+# 71 of the 104 tracked shell scripts are already clean; the other 33 carry
+# pre-existing warnings that want fixing on their own schedule. Checking
+# everything strictly would mean a permanently red job nobody reads, and
+# checking everything loosely would let the clean majority rot. So: every
+# script is checked strictly except those named in .shellcheck-legacy, which
+# are held to parse errors only.
+#
+# The list only shrinks. Fix a legacy script and this fails until its line is
+# deleted, so the ratchet cannot quietly slip backwards.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $(basename "$0") [--list]"
+  echo ""
+  echo "Shellcheck every tracked shell script. Scripts named in .shellcheck-legacy"
+  echo "are checked for parse errors only; fixing one requires removing its line."
+  echo "--list prints the discovered scripts and their tier instead of checking."
+  exit 0
+fi
+
+# bin/ is symlinked to ~/bin, so resolve the real script location.
+target="${BASH_SOURCE[0]}"
+while [ -L "$target" ]; do
+  link="$(readlink "$target")"
+  case "$link" in
+    /*) target="$link" ;;
+    *) target="$(dirname "$target")/$link" ;;
+  esac
+done
+# -P for the same reason as bin/pi-ext-check: invoked through the ~/bin symlink,
+# a logical cd would strip the `..` textually and land in $HOME.
+REPO="$(cd -P "$(dirname "$target")/.." && pwd)"
+cd "$REPO"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+if ! command -v shellcheck >/dev/null; then
+  echo -e "${RED}❌ shellcheck is not on PATH${NC}" >&2
+  exit 1
+fi
+
+LEGACY_FILE=".shellcheck-legacy"
+
+# Tracked files only. An untracked scratch script in bin/ is nobody else's
+# problem, and it would make this pass or fail depending on the working tree.
+mapfile -t tracked < <(git ls-files bin .tmux .claude)
+
+strict=()
+legacy=()
+skipped_zsh=0
+
+is_legacy() {
+  local needle="$1" entry
+  for entry in "${legacy_entries[@]}"; do
+    [ "$entry" = "$needle" ] && return 0
+  done
+  return 1
+}
+
+legacy_entries=()
+if [ -f "$LEGACY_FILE" ]; then
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(printf '%s' "$line" | tr -d '[:space:]')"
+    [ -n "$line" ] && legacy_entries+=("$line")
+  done < "$LEGACY_FILE"
+fi
+
+for file in "${tracked[@]}"; do
+  [ -f "$file" ] || continue
+  # Language by shebang, not by extension: bin/ holds ruby, node, python, swift
+  # and osascript too. Files with no shebang are skipped because guessing wrong
+  # produces a wall of nonsense.
+  #
+  # Read bounded and strip NULs: bin/claude-code-proxy-or is a tracked symlink
+  # to a Mach-O binary, and bash warns about the null bytes in a command
+  # substitution otherwise.
+  shebang="$(head -c 512 "$file" 2>/dev/null | LC_ALL=C tr -d '\0' | head -1)"
+  case "$shebang" in
+    '#!'*zsh*) skipped_zsh=$((skipped_zsh + 1)); continue ;;
+    '#!'*bash* | '#!'*/bin/sh | '#!'*env\ sh) ;;
+    *) continue ;;
+  esac
+  if is_legacy "$file"; then
+    legacy+=("$file")
+  else
+    strict+=("$file")
+  fi
+done
+
+if [[ "${1:-}" == "--list" ]]; then
+  printf 'strict %s\n' "${strict[@]}"
+  printf 'legacy %s\n' "${legacy[@]}"
+  exit 0
+fi
+
+# "Nothing to check" must not read as success: a bad path or a shebang
+# convention change would otherwise print a green check for doing nothing.
+if [ ${#strict[@]} -eq 0 ]; then
+  echo -e "${RED}❌ no shell scripts found to check${NC}" >&2
+  exit 1
+fi
+
+status=0
+
+echo "Checking ${#strict[@]} scripts (${#legacy[@]} legacy, $skipped_zsh zsh skipped)..."
+if shellcheck "${strict[@]}"; then
+  echo -e "${GREEN}✅ shellcheck clean${NC}"
+else
+  echo -e "${RED}❌ shellcheck found problems${NC}" >&2
+  status=1
+fi
+
+# Legacy scripts still have to parse. SC1071 (an unsupported shell) and an
+# unclosed quote are not style opinions, and they are how a script breaks
+# outright rather than merely reading badly.
+if [ ${#legacy[@]} -gt 0 ]; then
+  if ! shellcheck --severity=error "${legacy[@]}"; then
+    echo -e "${RED}❌ a legacy script no longer parses${NC}" >&2
+    status=1
+  fi
+fi
+
+# The ratchet: anything on the list that has become clean has to come off it,
+# otherwise the list outlives the problems and stops meaning anything.
+graduated=()
+for file in "${legacy[@]}"; do
+  shellcheck "$file" >/dev/null 2>&1 && graduated+=("$file")
+done
+if [ ${#graduated[@]} -gt 0 ]; then
+  echo -e "${YELLOW}These are clean now — delete them from $LEGACY_FILE:${NC}" >&2
+  printf '   %s\n' "${graduated[@]}" >&2
+  status=1
+fi
+
+# A stale entry is a silent hole: the file was renamed or deleted, and a new
+# script arriving at that path would inherit the exemption.
+stale=()
+for entry in "${legacy_entries[@]}"; do
+  [ -f "$entry" ] || stale+=("$entry")
+done
+if [ ${#stale[@]} -gt 0 ]; then
+  echo -e "${RED}❌ $LEGACY_FILE names files that do not exist:${NC}" >&2
+  printf '   %s\n' "${stale[@]}" >&2
+  status=1
+fi
+
+exit "$status"
