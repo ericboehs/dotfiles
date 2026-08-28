@@ -9,9 +9,10 @@
  * A "run" is agent_start (if idle) → agent_settled, so compaction retries stay
  * one toast. Steps are attributed to the model on each turn_end message, so a
  * mid-run /model switch splits the count instead of pinning the whole wait on
- * whoever finished. Mixed runs show the split and are excluded from per-model
- * p50: opus gets the hard refactors, grok the one-liners, and averaging them
- * together is how you lie to yourself.
+ * whoever finished. Thinking level is recorded per step the same way, so
+ * opus-high and opus-off don't share a p50. Mixed runs (model or level) show
+ * the split and are excluded from p50: opus gets the hard refactors, grok the
+ * one-liners, and averaging them together is how you lie to yourself.
  *
  * Guardian blocks are sniffed from the rejection text pi stores on the blocked
  * toolResult (see pi-approval-guardian's rejectionReason). No import, so a
@@ -24,7 +25,7 @@
  * still show tokens when the provider reports them, not a fake TTFT "think".
  *
  * Each settled run is appended to turn-stats.jsonl. `/turn stats` is `/boot
- * stats` for models: 14-day p50 steps/time per model, median not mean.
+ * stats` for models: 14-day p50 steps/time per model+thinking, median not mean.
  */
 
 import { appendFile, readFile, writeFile } from "node:fs/promises";
@@ -61,8 +62,18 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];
 
+/** Short names for thinking levels (pi: off|minimal|low|medium|high|xhigh|max). */
+const THINKING_NAMES: Record<string, string> = {
+  minimal: "min",
+  low: "lo",
+  medium: "med",
+  high: "hi",
+  xhigh: "xhi",
+};
+
 interface ModelSlice {
   model: string;
+  thinking: string;
   steps: number;
   tools: number;
   thinkTok: number;
@@ -160,7 +171,8 @@ export default function (pi: ExtensionAPI) {
     const message = event.message;
     if (message.role !== "assistant") return;
     closeThink(run);
-    const key = modelKey(message.provider, message.model);
+    const thinking = shortThinking(pi.getThinkingLevel());
+    const key = sliceKey(modelKey(message.provider, message.model), thinking);
     const toolCount = event.toolResults.length;
     const blocked = event.toolResults.filter((result) => isGuardianBlock(result)).length;
     const out = message.usage?.output;
@@ -177,7 +189,8 @@ export default function (pi: ExtensionAPI) {
     if (think.estimated && think.tok > 0) run.thinkEst = true;
 
     const slice = run.models.get(key) ?? {
-      model: key,
+      model: modelKey(message.provider, message.model),
+      thinking,
       steps: 0,
       tools: 0,
       thinkTok: 0,
@@ -200,7 +213,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("turn", {
-    description: "Show 14-day per-model step/time stats, or /turn stats [n]",
+    description: "Show 14-day per-model/thinking step/time stats, or /turn stats [n]",
     getArgumentCompletions: (prefix: string) => {
       const items = [{ value: "stats", label: "stats" }];
       const filtered = items.filter((item) => item.value.startsWith(prefix));
@@ -298,7 +311,7 @@ function formatSummary(record: TurnRecord): string {
 }
 
 function formatSplit(models: readonly ModelSlice[]): string {
-  return models.map((slice) => `${shortModelId(slice.model)} ${slice.steps}`).join(" + ");
+  return models.map((slice) => `${sliceLabel(slice)} ${slice.steps}`).join(" + ");
 }
 
 async function showStats(
@@ -326,21 +339,23 @@ async function showStats(
   const single = records.filter((entry) => entry.models.length === 1);
   const byModel = new Map<string, TurnRecord[]>();
   for (const entry of single) {
-    const model = entry.models[0]?.model;
-    if (!model) continue;
-    const list = byModel.get(model) ?? [];
+    const slice = entry.models[0];
+    if (!slice) continue;
+    const key = sliceKey(slice.model, slice.thinking);
+    const list = byModel.get(key) ?? [];
     list.push(entry);
-    byModel.set(model, list);
+    byModel.set(key, list);
   }
 
   const ranked = [...byModel.entries()].sort((a, b) => b[1].length - a[1].length);
-  const nameWidth = Math.max(4, ...ranked.map(([model]) => shortModelId(model).length));
+  const labels = new Map(ranked.map(([key, entries]) => [key, sliceLabel(entries[0]?.models[0])]));
+  const nameWidth = Math.max(4, ...[...labels.values()].map((label) => label.length));
   const windowLabel = limit !== undefined ? `last ${records.length}` : "14d";
   const lines = [
     `${windowLabel} · ${single.length} single-model run${single.length === 1 ? "" : "s"}` +
       (mixed.length > 0 ? ` · ${mixed.length} mixed excluded from p50` : ""),
   ];
-  for (const [model, entries] of ranked) {
+  for (const [key, entries] of ranked) {
     const steps = percentile(
       entries.map((entry) => entry.steps).sort((a, b) => a - b),
       50,
@@ -358,7 +373,7 @@ async function showStats(
       thinkShares.length > 0 ? `${Math.round(percentile(thinkShares, 50) * 100)}% think` : "";
     const blocked = entries.reduce((sum, entry) => sum + entry.blocked, 0);
     const row =
-      `${pad(shortModelId(model), nameWidth)}  ${steps} steps · ${fmt(ms)}` +
+      `${pad(labels.get(key) ?? key, nameWidth)}  ${steps} steps · ${fmt(ms)}` +
       (rate ? ` · ${rate}` : "") +
       (thinkPct ? ` · ${thinkPct}` : "") +
       `   n=${entries.length}` +
@@ -406,6 +421,7 @@ async function readTurns(): Promise<TurnRecord[]> {
         thinkEst: parsed.thinkEst === true,
         models: parsed.models.filter(isSlice).map((slice) => ({
           model: slice.model,
+          thinking: typeof slice.thinking === "string" ? slice.thinking : "",
           steps: num(slice.steps),
           tools: num(slice.tools),
           thinkTok: num(slice.thinkTok),
@@ -479,6 +495,20 @@ function shortModelId(key: string): string {
     if (pattern.test(id)) return id.replace(pattern, replacement).toLowerCase();
   }
   return id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+}
+
+function shortThinking(level: string): string {
+  return THINKING_NAMES[level] ?? level;
+}
+
+function sliceKey(model: string, thinking: string): string {
+  return thinking ? `${model}\t${thinking}` : model;
+}
+
+function sliceLabel(slice: ModelSlice | undefined): string {
+  if (!slice) return "unknown";
+  const name = shortModelId(slice.model);
+  return slice.thinking ? `${name} ${slice.thinking}` : name;
 }
 
 function isGuardianBlock(result: unknown): boolean {
