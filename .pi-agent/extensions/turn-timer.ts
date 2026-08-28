@@ -294,11 +294,12 @@ function formatSummary(record: TurnRecord): string {
     record.thinkMs >= 1_000
       ? `⏱ ${fmt(record.ms)} (${fmt(record.thinkMs)} think)`
       : `⏱ ${fmt(record.ms)}`;
-  const parts = [clock, `${record.steps} step${record.steps === 1 ? "" : "s"}`];
-  if (record.models.length > 1) {
-    parts[1] += ` (${formatSplit(record.models)})`;
-  }
+  const parts = [clock];
   if (record.steps > 0) parts.push(`${fmtRate(record.ms / record.steps)}/step`);
+  parts.push(`${record.steps} step${record.steps === 1 ? "" : "s"}`);
+  if (record.models.length > 1) {
+    parts[2] += ` (${formatSplit(record.models)})`;
+  }
   if (record.tools > 0) parts.push(`${record.tools} tool${record.tools === 1 ? "" : "s"}`);
   const tokPart = formatThinkTokens(record);
   if (tokPart) parts.push(tokPart);
