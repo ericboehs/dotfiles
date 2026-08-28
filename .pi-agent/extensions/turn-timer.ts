@@ -259,7 +259,11 @@ function workingMessage(run: RunState): string {
   }
   const thinkMs = liveThinkMs(run);
   if (thinkMs >= 1_000) parts.push(`${fmt(thinkMs)} think`);
-  return `${parts.join(" · ")}...`;
+  const line = `${parts.join(" · ")}...`;
+  if (run.blocked === 0) return line;
+  const noun = run.blocked === 1 ? "tool call" : "tool calls";
+  // Indent to sit under the message, past the spinner cell.
+  return `${line}\n  ${run.blocked} ${noun} blocked`;
 }
 
 function liveThinkMs(run: RunState): number {
