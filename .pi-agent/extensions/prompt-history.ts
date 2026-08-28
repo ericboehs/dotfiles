@@ -32,7 +32,8 @@
 //
 // The Ctrl+R overlay follows npm:pi-input-history, which follows
 // mrshu/pi-readline-search; this one searches the same JSONL file rather than
-// mining sessions, and shows a list instead of one match at a time.
+// mining sessions, matches literally instead of fuzzily, and shows a list
+// instead of one match at a time.
 //
 // @see .pi-agent/test/prompt-history.test.mjs
 
@@ -113,6 +114,7 @@ export default function promptHistory(pi: ExtensionAPI) {
   let offset = 0;
   let seen = new Set<string>();
   let editor: EditorComponent | undefined;
+  let editorTui: TUI | undefined;
 
   /**
    * Pull in whatever other pis appended since the last look.
@@ -191,6 +193,7 @@ export default function promptHistory(pi: ExtensionAPI) {
       for (let i = items.length - 1; i >= 0; i--) component.addToHistory?.(items[i]!);
 
       editor = component;
+      editorTui = tui;
       watchForBrowse(component, keybindings, refresh);
       return component;
     };
@@ -216,7 +219,13 @@ export default function promptHistory(pi: ExtensionAPI) {
         { overlay: true, overlayOptions: { anchor: "bottom-center", width: "100%" } },
       );
 
-      if (picked) ctx.ui.setEditorText(picked);
+      if (picked) {
+        ctx.ui.setEditorText(picked);
+        // setEditorText goes straight to Editor.setText, which does not ask for
+        // a frame; without this the recalled prompt sits invisible until the
+        // next keystroke repaints the editor.
+        editorTui?.requestRender();
+      }
     },
   });
 }
@@ -240,6 +249,7 @@ class SearchOverlay implements Component, Focusable {
   private readonly done: (result: string | undefined) => void;
 
   private query = "";
+  private matcher: Matcher = matchAll;
   private matches: Entry[];
   private selected = 0;
 
@@ -288,9 +298,8 @@ class SearchOverlay implements Component, Focusable {
 
   private setQuery(query: string): void {
     this.query = query;
-    this.matches = query
-      ? this.entries.filter((entry) => fuzzyMatch(entry.text, query))
-      : this.entries;
+    this.matcher = buildMatcher(query, this.entries);
+    this.matches = this.entries.filter((entry) => this.matcher.test(entry.text));
     this.selected = 0;
   }
 
@@ -315,11 +324,14 @@ class SearchOverlay implements Component, Focusable {
     }
 
     const counter = this.matches.length > 0 ? `${this.selected + 1}/${this.matches.length}` : "0/0";
+    // Say so when nothing matched literally and the search went loose, so a
+    // scattered-looking result set is explained rather than baffling.
+    const status = `${this.matcher.loose ? "fuzzy " : ""}${counter}`;
     const query = `${theme.fg("accent", "search ")}${theme.fg("text", this.query)}${
       this.focused ? CURSOR_MARKER : ""
     }`;
-    const gap = Math.max(1, width - visibleWidth(query) - counter.length);
-    lines.push(`${query}${" ".repeat(gap)}${theme.fg("dim", counter)}`);
+    const gap = Math.max(1, width - visibleWidth(query) - status.length);
+    lines.push(`${query}${" ".repeat(gap)}${theme.fg("dim", status)}`);
     lines.push(
       truncateToWidth(
         theme.fg("dim", "ctrl+r/↓ older · ↑ newer · enter accept · esc cancel"),
@@ -345,44 +357,88 @@ class SearchOverlay implements Component, Focusable {
 
     const room = Math.max(10, width - 2 - suffix.length);
     const preview = truncateToWidth(entry.text.replace(/\s+/g, " ").trim(), room);
-    const body = isSelected ? highlight(preview, this.query, theme) : theme.fg("muted", preview);
+    const body = isSelected
+      ? highlight(preview, this.matcher, theme)
+      : theme.fg("muted", preview);
 
     return `${marker}${body}${theme.fg("dim", suffix)}`;
   }
 }
 
-/** Every whitespace-separated token must appear, in order, as a subsequence. */
-function fuzzyMatch(text: string, query: string): boolean {
-  const haystack = text.toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((token) => {
-      let at = 0;
-      for (const char of token) {
-        at = haystack.indexOf(char, at) + 1;
-        if (at === 0) return false;
+/**
+ * How a query is matched against a prompt.
+ *
+ * Plain subsequence matching on its own is useless at this scale: "kamal"
+ * happily matches any prompt with a k, an a, an m, an a and an l scattered
+ * across two sentences, and the handful of prompts that actually say kamal end
+ * up buried under hundreds of those. So every token has to appear literally,
+ * and the loose match is only a fallback for when that finds nothing at all.
+ */
+type Matcher = {
+  test: (text: string) => boolean;
+  hits: (text: string) => Set<number>;
+  loose: boolean;
+};
+
+const matchAll: Matcher = { test: () => true, hits: () => new Set(), loose: false };
+
+function buildMatcher(query: string, entries: Entry[]): Matcher {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return matchAll;
+
+  const literal: Matcher = {
+    test: (text) => {
+      const haystack = text.toLowerCase();
+      return tokens.every((token) => haystack.includes(token));
+    },
+    hits: (text) => {
+      const haystack = text.toLowerCase();
+      const positions = new Set<number>();
+      for (const token of tokens) {
+        for (let at = haystack.indexOf(token); at !== -1; at = haystack.indexOf(token, at + 1)) {
+          for (let i = 0; i < token.length; i++) positions.add(at + i);
+        }
       }
-      return true;
-    });
+      return positions;
+    },
+    loose: false,
+  };
+  if (entries.some((entry) => literal.test(entry.text))) return literal;
+
+  return {
+    test: (text) => {
+      const haystack = text.toLowerCase();
+      return tokens.every((token) => {
+        let at = 0;
+        for (const char of token) {
+          at = haystack.indexOf(char, at) + 1;
+          if (at === 0) return false;
+        }
+        return true;
+      });
+    },
+    hits: (text) => {
+      const haystack = text.toLowerCase();
+      const positions = new Set<number>();
+      for (const token of tokens) {
+        let at = 0;
+        for (const char of token) {
+          const found = haystack.indexOf(char, at);
+          if (found === -1) break;
+          positions.add(found);
+          at = found + 1;
+        }
+      }
+      return positions;
+    },
+    loose: true,
+  };
 }
 
 /** Accent the characters the query matched, so it is obvious why a row is here. */
-function highlight(text: string, query: string, theme: ExtensionUIContext["theme"]): string {
-  if (!query) return theme.fg("text", text);
-
-  const lower = text.toLowerCase();
-  const hits = new Set<number>();
-  for (const token of query.toLowerCase().split(/\s+/).filter(Boolean)) {
-    let at = 0;
-    for (const char of token) {
-      const found = lower.indexOf(char, at);
-      if (found === -1) break;
-      hits.add(found);
-      at = found + 1;
-    }
-  }
+function highlight(text: string, matcher: Matcher, theme: ExtensionUIContext["theme"]): string {
+  const hits = matcher.hits(text);
+  if (hits.size === 0) return theme.fg("text", text);
 
   let out = "";
   for (let i = 0; i < text.length; ) {

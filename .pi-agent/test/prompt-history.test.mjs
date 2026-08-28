@@ -34,6 +34,16 @@ function rows(overlay, width = 60) {
   return overlay.render(width).slice(0, -2);
 }
 
+/** The query line, which also carries the counter and the fuzzy flag. */
+function status(overlay, width = 60) {
+  return overlay
+    .render(width)
+    .at(-2)
+    .replace(/\u001b_pi:c\u0007/g, "") // the cursor marker pi places for us
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function type(overlay, text) {
   for (const char of text) overlay.handleInput(char);
 }
@@ -79,6 +89,8 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
   // Plain-text theme: assertions read the rendered lines directly.
   const theme = { fg: (_color, text) => text };
   const tui = { requestRender: () => {} };
+  const renders = [];
+  const editorTui = { requestRender: () => renders.push(true) };
 
   const ctx = {
     mode: "tui",
@@ -105,6 +117,7 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
     keystrokes,
     notices,
     editorText,
+    renders,
     ctx,
     /** Pretend another extension already owns the editor (cursor-focus does). */
     presetEditor: (factory) => {
@@ -112,7 +125,7 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
     },
     start: () => handlers.get("session_start")({}, ctx),
     /** Build the editor pi would build, and hand back the wrapped instance. */
-    openEditor: () => installed({}, {}, keybindings),
+    openEditor: () => installed(editorTui, {}, keybindings),
     submit: (text, overrides = {}) =>
       handlers.get("input")({ text, source: "interactive", ...overrides }, ctx),
     /** Open the Ctrl+R overlay; returns it plus the promise the handler is on. */
@@ -299,12 +312,14 @@ test("reload rewraps the editor underneath instead of stacking", async () => {
   assert.deepEqual(pi.added, ["only prompt"], "and seeded once, not once per reload");
 });
 
-test("ctrl+r narrows the history down and enter loads the match", async () => {
+test("ctrl+r matches what you actually typed, and enter loads it", async () => {
   const dir = newAgentDir();
   seedFile(dir, [
-    { t: 1, cwd: "/repo/a", text: "rebuild the solar shop wiring diagram" },
-    { t: 2, cwd: "/repo/a", text: "add a retry to the flaky spec" },
-    { t: 3, cwd: "/repo/a", text: "bump the ruby version" },
+    // Every one of these is a k-a-m-a-l subsequence, which is exactly why
+    // subsequence-only matching was useless: they drowned the real hit.
+    { t: 1, cwd: "/repo/a", text: "make a plan for the alpaca lot" },
+    { t: 2, cwd: "/repo/a", text: "kick off a migration and roll back the last" },
+    { t: 3, cwd: "/repo/a", text: "deploy the app with kamal" },
   ]);
 
   const pi = await mount(dir, { cwd: "/repo/a" });
@@ -315,25 +330,51 @@ test("ctrl+r narrows the history down and enter loads the match", async () => {
   const { overlay, done } = pi.search();
   assert.equal(rows(overlay).length, 3, "everything is a match until you type");
 
-  type(overlay, "flky");
+  type(overlay, "kamal");
   assert.deepEqual(
     rows(overlay).map((line) => line.trim()),
-    ["▸ add a retry to the flaky spec"],
-    "subsequence matching, not substring",
+    ["▸ deploy the app with kamal"],
+    "the literal hit, and only the literal hit",
   );
-
-  overlay.handleInput(BACKSPACE);
-  overlay.handleInput(BACKSPACE);
-  assert.equal(rows(overlay).length, 1, "'fl' still only matches the one");
+  assert.equal(status(overlay), "search kamal 1/1", "no fuzzy flag when it matched literally");
 
   overlay.handleInput(CTRL_U);
   assert.equal(rows(overlay).length, 3, "ctrl+u clears the query");
 
-  type(overlay, "aky");
+  type(overlay, "deploy kamal");
+  assert.equal(rows(overlay).length, 1, "every token has to appear, in any order");
+
   overlay.handleInput(ENTER);
   await done;
 
-  assert.deepEqual(pi.editorText, ["add a retry to the flaky spec"]);
+  assert.deepEqual(pi.editorText, ["deploy the app with kamal"]);
+  assert.equal(pi.renders.length, 1, "and the editor is asked to repaint, not left blank");
+});
+
+test("a typo falls back to loose matching, and says so", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [
+    { t: 1, cwd: "/repo/a", text: "bump the ruby version" },
+    { t: 2, cwd: "/repo/a", text: "deploy the app with kamal" },
+  ]);
+
+  const pi = await mount(dir, { cwd: "/repo/a" });
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const { overlay, done } = pi.search();
+  type(overlay, "kaml");
+
+  assert.deepEqual(
+    rows(overlay).map((line) => line.trim()),
+    ["▸ deploy the app with kamal"],
+    "nothing matches literally, so the subsequence search takes over",
+  );
+  assert.equal(status(overlay), "search kaml fuzzy 1/1");
+
+  overlay.handleInput(ESCAPE);
+  await done;
 });
 
 test("ctrl+r walks towards older prompts, escape leaves the editor alone", async () => {
