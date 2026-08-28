@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+# Detect packages that duplicate tracked local extensions in one or more Pi
+# profiles. Local replacements declare their old package with:
+#
+#   // @replaces npm:@scope/package
+#
+# Usage: pi-profile-check [PROFILE_DIR ...]
+# With no arguments, checks ~/.pi/agent and ~/.pi/assistant when present.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  cat <<'EOF'
+Usage: pi-profile-check [PROFILE_DIR ...]
+
+Check Pi profiles for installed packages superseded by a local extension's
+@replaces marker. Defaults to ~/.pi/agent and ~/.pi/assistant.
+EOF
+  exit 0
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "pi-profile-check: jq is required" >&2
+  exit 1
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  set -- "$HOME/.pi/agent" "$HOME/.pi/assistant"
+fi
+
+work="$(mktemp -d -t pi-profile-check.XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+status=0
+checked=0
+
+for profile in "$@"; do
+  settings="$profile/settings.json"
+  extensions="$profile/extensions"
+  [[ -f "$settings" && -d "$extensions" ]] || continue
+  checked=$((checked + 1))
+
+  packages="$work/packages.$checked"
+  if ! jq -r '(.packages // [])[] | if type == "string" then . else .source // empty end' \
+    "$settings" > "$packages"; then
+    echo "pi-profile-check: could not parse $settings" >&2
+    status=1
+    continue
+  fi
+
+  while IFS= read -r extension; do
+    while IFS= read -r replaced; do
+      [[ -n "$replaced" ]] || continue
+      while IFS= read -r package; do
+        case "$package" in
+          "$replaced"|"$replaced"@*)
+            relative="${extension#"$extensions"/}"
+            echo "pi-profile-check: $profile loads both $package and its local replacement extensions/$relative" >&2
+            status=1
+            ;;
+        esac
+      done < "$packages"
+    done < <(sed -nE 's/.*@replaces[[:space:]]+([^[:space:]]+).*/\1/p' "$extension")
+  done < <(find -H "$extensions" -maxdepth 2 -type f \( -name '*.ts' -o -name '*.js' \) -print)
+done
+
+if [[ "$status" -eq 0 && "$checked" -gt 0 ]]; then
+  echo "pi-profile-check: $checked profile(s) passed"
+fi
+
+exit "$status"

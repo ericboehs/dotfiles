@@ -662,6 +662,11 @@ if [ -e "$HOME/.pi/agent/settings.json" ] && [ ! -L "$HOME/.pi/agent/settings.js
 fi
 ln -sfn "$settings" "$HOME/.pi/agent/settings.json"
 
+# A tracked extension can replace an installed package while keeping the same
+# shortcut or command names. Catch stale package declarations before pi starts
+# with both copies loaded (and arbitrarily chooses one of their bindings).
+"$root/bin/pi-profile-check" "$HOME/.pi/agent"
+
 # Custom providers can be per host too. A host without models.<host>.json keeps
 # a real models.json alone, but removes a managed symlink whose tracked source
 # has gone away — otherwise deleting a provider leaves a dangling link forever.
@@ -868,6 +873,11 @@ done
 # directory rather than each file means a new extension lands in both profiles
 # on the next pull, with no second list to forget.
 ln -sfn "$root/.pi-agent/extensions" "$profile/extensions"
+
+# The package lists remain profile-specific, so a package removed from the
+# coding settings can survive here after its replacement lands in the shared
+# extension directory. Validate both profiles after all links are in place.
+"$root/bin/pi-profile-check" "$HOME/.pi/agent" "$profile"
 
 echo "bootstrap:pi-assistant: linked $profile from $source_dir"
 '''

@@ -6,7 +6,8 @@
  * the module) does not wipe it. Drafts stay in-process; they are not written
  * to disk and they do not enter model context.
  *
- * Replaces npm:@nicknisi/pi-stash. Do not load both — they both bind ctrl+s.
+ * @replaces npm:@nicknisi/pi-stash
+ * Do not load both — they both bind ctrl+s.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

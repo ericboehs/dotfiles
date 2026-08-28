@@ -31,6 +31,43 @@ credentials, and naming them there printed a warning on every launch.
 The runtime writes land in a tracked file on purpose — `git diff` after a week
 shows exactly what pi changed on its own.
 
+## Assistant profile (`pia`)
+
+`pia` is not a second Pi installation. The shell function in
+`.zsh/functions.zsh` runs the same `pi` executable with
+`PI_CODING_AGENT_DIR=~/.pi/assistant`. The second agent directory keeps life
+and work operations out of the coding profile without duplicating resources
+that should behave identically.
+
+`bootstrap:pi-assistant` builds the boundary as follows:
+
+| Resource | Relationship | Reason |
+| --- | --- | --- |
+| Pi executable | shared | `pia()` invokes `pi`, so upgrades apply to both |
+| `auth.json`, `models.json`, `keybindings.json` | symlinked from `~/.pi/agent` | same credentials, providers, and controls |
+| `npm/`, `git/`, `bin/` | symlinked from `~/.pi/agent` | one downloaded package/tool cache; package declarations are still separate |
+| `extensions/` | symlinked to this repo's `.pi-agent/extensions` | every tracked local extension loads in both profiles |
+| `enabledModels` | copied by `pia()` at launch and copied back on exit if changed | Pi stores the Ctrl+P scope inside otherwise-separate settings files |
+| `settings.json` other than `enabledModels` | separate | packages, skills, defaults, theme, and profile behavior can differ |
+| `AGENTS.md`, `approval-guardian.json`, `prompts/` | separate, linked from the private assistant source | assistant persona and workflows do not belong in the published coding config |
+| sessions, memory, trust, and other runtime state | separate | preserves the isolation that the second profile exists to provide |
+
+Because `extensions/` is shared while package declarations are separate, a
+vendored extension can replace a package in the coding settings but leave the
+assistant settings stale. Replacement extensions mark the old source with an
+`@replaces` comment. `bin/pi-profile-check` detects any marked package still
+loaded beside its replacement, and both Pi bootstrap tasks run it. Run it by
+hand after changing either profile:
+
+```sh
+bin/pi-profile-check
+```
+
+Do not symlink the complete settings file or blindly copy package and skill
+lists between profiles; that would erase the useful boundary. Put truly shared
+behavior in the linked resources above, and synchronize individual settings
+explicitly when both profiles need them.
+
 ## Checking the extensions
 
 ```sh
