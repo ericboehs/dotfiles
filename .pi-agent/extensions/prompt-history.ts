@@ -19,15 +19,20 @@
 // a hundred strings. Reading the last 256KB of a purpose-built file is ~1ms and
 // does not grow with how much the sessions have been used.
 //
-// Two hooks, both cheap:
+// Two hooks and a shortcut, all cheap:
 //
 //   input         append the submitted prompt (one write, no parsing)
 //   session_start install an editor factory that seeds history from the tail
+//   ctrl+r        fuzzy search the file, bash reverse-i-search style
 //
 // Between seeds, a pi only knows what existed when it booted, so the editor's
 // handleInput is wrapped to re-read the bytes appended since (a stat, and a read
 // only when the size moved) on the first Up of a browse — that is what makes
 // prompts from a pi still running in another pane show up here.
+//
+// The Ctrl+R overlay follows npm:pi-input-history, which follows
+// mrshu/pi-readline-search; this one searches the same JSONL file rather than
+// mining sessions, and shows a list instead of one match at a time.
 //
 // @see .pi-agent/test/prompt-history.test.mjs
 
@@ -41,10 +46,20 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { CustomEditor, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import type { EditorComponent } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  type Component,
+  type EditorComponent,
+  type Focusable,
+  type KeyId,
+  type TUI,
+} from "@earendil-works/pi-tui";
 
 /**
  * "project-first" ranks prompts typed in this cwd ahead of everything else, so
@@ -62,6 +77,16 @@ const TAIL_BYTES = 256 * 1024;
 /** Trim the file once it passes this, keeping the newest KEEP_BYTES. */
 const MAX_FILE_BYTES = 1024 * 1024;
 const KEEP_BYTES = 512 * 1024;
+
+/** Ctrl+R is bash muscle memory; keybindings.json moves /rename out of the way. */
+const SEARCH_KEY: KeyId = "ctrl+r";
+
+/** Matches shown around the selected one. Enough to scan, small enough to skim. */
+const SEARCH_ROWS = 7;
+
+/** Search reads deeper than the Up ring: it is a keypress, not startup. */
+const SEARCH_BYTES = 1024 * 1024;
+const SEARCH_MAX = 2000;
 
 /**
  * Bare slash commands ("/model", "/tree") are noise in a cross-session ring:
@@ -173,6 +198,228 @@ export default function promptHistory(pi: ExtensionAPI) {
 
     ctx.ui.setEditorComponent(factory);
   });
+
+  pi.registerShortcut(SEARCH_KEY, {
+    description: "Search prompt history",
+    handler: async (ctx) => {
+      // Read fresh rather than reusing the seed: search wants more than the 100
+      // entries the editor ring can hold, and this session's own prompts are
+      // already in the file.
+      const entries = readSearchable(path);
+      if (entries.length === 0) {
+        ctx.ui.notify("No prompt history yet.", "info");
+        return;
+      }
+
+      const picked = await ctx.ui.custom<string | undefined>(
+        (tui, theme, _keybindings, done) => new SearchOverlay(tui, theme, entries, ctx.cwd, done),
+        { overlay: true, overlayOptions: { anchor: "bottom-center", width: "100%" } },
+      );
+
+      if (picked) ctx.ui.setEditorText(picked);
+    },
+  });
+}
+
+type Entry = { text: string; cwd?: string };
+
+/**
+ * The search overlay: a filtered list over the history file.
+ *
+ * Deliberately not built on pi-tui's Input — the query is a plain string here,
+ * which keeps the cursor, the counter and the match list to one line each and
+ * avoids a second component to keep focus in sync with.
+ */
+class SearchOverlay implements Component, Focusable {
+  focused = false;
+
+  private readonly tui: TUI;
+  private readonly theme: ExtensionUIContext["theme"];
+  private readonly entries: Entry[];
+  private readonly cwd: string;
+  private readonly done: (result: string | undefined) => void;
+
+  private query = "";
+  private matches: Entry[];
+  private selected = 0;
+
+  constructor(
+    tui: TUI,
+    theme: ExtensionUIContext["theme"],
+    entries: Entry[],
+    cwd: string,
+    done: (result: string | undefined) => void,
+  ) {
+    this.tui = tui;
+    this.theme = theme;
+    this.entries = entries;
+    this.cwd = cwd;
+    this.done = done;
+    this.matches = entries;
+  }
+
+  handleInput(data: string): void {
+    // Older is down the list, the direction Ctrl+R walks in a shell.
+    if (matchesKey(data, SEARCH_KEY) || matchesKey(data, "down") || matchesKey(data, "ctrl+n")) {
+      this.move(1);
+    } else if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) {
+      this.move(-1);
+    } else if (matchesKey(data, "enter")) {
+      this.done(this.matches[this.selected]?.text);
+      return;
+    } else if (
+      matchesKey(data, "escape") ||
+      matchesKey(data, "ctrl+g") ||
+      matchesKey(data, "ctrl+c")
+    ) {
+      this.done(undefined);
+      return;
+    } else if (matchesKey(data, "backspace")) {
+      this.setQuery(this.query.slice(0, -1));
+    } else if (matchesKey(data, "ctrl+u")) {
+      this.setQuery("");
+    } else if (matchesKey(data, "ctrl+w")) {
+      this.setQuery(this.query.replace(/\s*\S*$/, ""));
+    } else if (isPrintable(data)) {
+      this.setQuery(this.query + data);
+    }
+    this.tui.requestRender();
+  }
+
+  private setQuery(query: string): void {
+    this.query = query;
+    this.matches = query
+      ? this.entries.filter((entry) => fuzzyMatch(entry.text, query))
+      : this.entries;
+    this.selected = 0;
+  }
+
+  private move(direction: number): void {
+    if (this.matches.length === 0) return;
+    this.selected = (this.selected + direction + this.matches.length) % this.matches.length;
+  }
+
+  render(width: number): string[] {
+    const theme = this.theme;
+    const lines: string[] = [];
+    // Keep the selection inside a fixed window so the list does not jump.
+    const start = Math.max(
+      0,
+      Math.min(this.selected - Math.floor(SEARCH_ROWS / 2), this.matches.length - SEARCH_ROWS),
+    );
+    const shown = this.matches.slice(start, start + SEARCH_ROWS);
+
+    if (shown.length === 0) lines.push(theme.fg("warning", "  no match"));
+    for (const [offset, entry] of shown.entries()) {
+      lines.push(this.renderEntry(entry, start + offset === this.selected, width));
+    }
+
+    const counter = this.matches.length > 0 ? `${this.selected + 1}/${this.matches.length}` : "0/0";
+    const query = `${theme.fg("accent", "search ")}${theme.fg("text", this.query)}${
+      this.focused ? CURSOR_MARKER : ""
+    }`;
+    const gap = Math.max(1, width - visibleWidth(query) - counter.length);
+    lines.push(`${query}${" ".repeat(gap)}${theme.fg("dim", counter)}`);
+    lines.push(
+      truncateToWidth(
+        theme.fg("dim", "ctrl+r/↓ older · ↑ newer · enter accept · esc cancel"),
+        width,
+      ),
+    );
+    return lines;
+  }
+
+  invalidate(): void {
+    // Nothing is cached between renders; the list is rebuilt from `matches`.
+  }
+
+  private renderEntry(entry: Entry, isSelected: boolean, width: number): string {
+    const theme = this.theme;
+    const marker = isSelected ? theme.fg("accent", "▸ ") : "  ";
+
+    // A prompt from another project is worth knowing about before running it
+    // again, so the repo name rides along on the right.
+    const elsewhere = entry.cwd && entry.cwd !== this.cwd ? ` ${basename(entry.cwd)}` : "";
+    const lineCount = entry.text.split("\n").length;
+    const suffix = `${lineCount > 1 ? ` ⏎${lineCount}` : ""}${elsewhere}`;
+
+    const room = Math.max(10, width - 2 - suffix.length);
+    const preview = truncateToWidth(entry.text.replace(/\s+/g, " ").trim(), room);
+    const body = isSelected ? highlight(preview, this.query, theme) : theme.fg("muted", preview);
+
+    return `${marker}${body}${theme.fg("dim", suffix)}`;
+  }
+}
+
+/** Every whitespace-separated token must appear, in order, as a subsequence. */
+function fuzzyMatch(text: string, query: string): boolean {
+  const haystack = text.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((token) => {
+      let at = 0;
+      for (const char of token) {
+        at = haystack.indexOf(char, at) + 1;
+        if (at === 0) return false;
+      }
+      return true;
+    });
+}
+
+/** Accent the characters the query matched, so it is obvious why a row is here. */
+function highlight(text: string, query: string, theme: ExtensionUIContext["theme"]): string {
+  if (!query) return theme.fg("text", text);
+
+  const lower = text.toLowerCase();
+  const hits = new Set<number>();
+  for (const token of query.toLowerCase().split(/\s+/).filter(Boolean)) {
+    let at = 0;
+    for (const char of token) {
+      const found = lower.indexOf(char, at);
+      if (found === -1) break;
+      hits.add(found);
+      at = found + 1;
+    }
+  }
+
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const hit = hits.has(i);
+    let j = i;
+    while (j < text.length && hits.has(j) === hit) j++;
+    const chunk = text.slice(i, j);
+    out += hit ? theme.fg("accent", chunk) : theme.fg("text", chunk);
+    i = j;
+  }
+  return out;
+}
+
+/** Printable text, as opposed to an escape sequence or a control character. */
+function isPrintable(data: string): boolean {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: telling keys from text is the point
+  return data.length > 0 && !/[\u0000-\u001f\u007f]/.test(data);
+}
+
+/** Newest-first, deduplicated prompts for the search overlay. */
+function readSearchable(path: string): Entry[] {
+  const size = fileSize(path);
+  if (size === 0) return [];
+  const start = Math.max(0, size - SEARCH_BYTES);
+  const chunk = readRange(path, start, size);
+  if (chunk === null) return [];
+
+  const all = texts(chunk, start > 0, true);
+  const entries: Entry[] = [];
+  const unique = new Set<string>();
+  for (let i = all.length - 1; i >= 0 && entries.length < SEARCH_MAX; i--) {
+    const [text, cwd] = all[i]!;
+    if (unique.has(text)) continue;
+    unique.add(text);
+    entries.push({ text, cwd });
+  }
+  return entries;
 }
 
 /**

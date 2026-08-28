@@ -17,12 +17,26 @@ import test from "node:test";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
+const ENTER = "\r";
+const ESCAPE = "\x1b";
+const BACKSPACE = "\x7f";
+const CTRL_R = "\x12";
+const CTRL_U = "\x15";
 const KEYS = {
   "tui.editor.cursorUp": UP,
   "tui.editor.cursorDown": DOWN,
   "tui.editor.historyPrevious": "\x10",
   "tui.editor.historyNext": "\x0e",
 };
+
+/** Rendered overlay rows, minus the query and help lines. */
+function rows(overlay, width = 60) {
+  return overlay.render(width).slice(0, -2);
+}
+
+function type(overlay, text) {
+  for (const char of text) overlay.handleInput(char);
+}
 
 /** Load a fresh copy: the extension keeps its offset and seen set in closure. */
 async function loadExtension() {
@@ -42,18 +56,29 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
   const extension = await loadExtension();
 
   const handlers = new Map();
-  const pi = { on: (name, handler) => handlers.set(name, handler) };
+  const shortcuts = new Map();
+  const pi = {
+    on: (name, handler) => handlers.set(name, handler),
+    registerShortcut: (key, options) => shortcuts.set(key, options),
+  };
   extension(pi);
 
   let installed;
   const added = [];
   const keystrokes = [];
+  const notices = [];
+  const editorText = [];
+  let overlay;
   const base = () => ({
     getText: () => "",
     setText: () => {},
     handleInput: (data) => keystrokes.push(data),
     addToHistory: (text) => added.push(text),
   });
+
+  // Plain-text theme: assertions read the rendered lines directly.
+  const theme = { fg: (_color, text) => text };
+  const tui = { requestRender: () => {} };
 
   const ctx = {
     mode: "tui",
@@ -63,6 +88,13 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
       setEditorComponent: (factory) => {
         installed = factory;
       },
+      notify: (message) => notices.push(message),
+      setEditorText: (text) => editorText.push(text),
+      custom: (factory) =>
+        new Promise((resolve) => {
+          overlay = factory(tui, theme, {}, resolve);
+          overlay.focused = true;
+        }),
     },
   };
 
@@ -71,6 +103,8 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
   return {
     added,
     keystrokes,
+    notices,
+    editorText,
     ctx,
     /** Pretend another extension already owns the editor (cursor-focus does). */
     presetEditor: (factory) => {
@@ -81,6 +115,12 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
     openEditor: () => installed({}, {}, keybindings),
     submit: (text, overrides = {}) =>
       handlers.get("input")({ text, source: "interactive", ...overrides }, ctx),
+    /** Open the Ctrl+R overlay; returns it plus the promise the handler is on. */
+    search: () => {
+      overlay = undefined;
+      const done = shortcuts.get("ctrl+r").handler(ctx);
+      return { overlay, done };
+    },
   };
 }
 
@@ -257,6 +297,109 @@ test("reload rewraps the editor underneath instead of stacking", async () => {
 
   assert.equal(baseCalls, 1, "the underlying editor is built once");
   assert.deepEqual(pi.added, ["only prompt"], "and seeded once, not once per reload");
+});
+
+test("ctrl+r narrows the history down and enter loads the match", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [
+    { t: 1, cwd: "/repo/a", text: "rebuild the solar shop wiring diagram" },
+    { t: 2, cwd: "/repo/a", text: "add a retry to the flaky spec" },
+    { t: 3, cwd: "/repo/a", text: "bump the ruby version" },
+  ]);
+
+  const pi = await mount(dir, { cwd: "/repo/a" });
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const { overlay, done } = pi.search();
+  assert.equal(rows(overlay).length, 3, "everything is a match until you type");
+
+  type(overlay, "flky");
+  assert.deepEqual(
+    rows(overlay).map((line) => line.trim()),
+    ["▸ add a retry to the flaky spec"],
+    "subsequence matching, not substring",
+  );
+
+  overlay.handleInput(BACKSPACE);
+  overlay.handleInput(BACKSPACE);
+  assert.equal(rows(overlay).length, 1, "'fl' still only matches the one");
+
+  overlay.handleInput(CTRL_U);
+  assert.equal(rows(overlay).length, 3, "ctrl+u clears the query");
+
+  type(overlay, "aky");
+  overlay.handleInput(ENTER);
+  await done;
+
+  assert.deepEqual(pi.editorText, ["add a retry to the flaky spec"]);
+});
+
+test("ctrl+r walks towards older prompts, escape leaves the editor alone", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [
+    { t: 1, cwd: "/repo/a", text: "oldest" },
+    { t: 2, cwd: "/repo/a", text: "middle" },
+    { t: 3, cwd: "/repo/a", text: "newest" },
+  ]);
+
+  const pi = await mount(dir, { cwd: "/repo/a" });
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const { overlay, done } = pi.search();
+  const selected = () => rows(overlay).find((line) => line.trim().startsWith("▸"))?.trim();
+
+  assert.equal(selected(), "▸ newest", "starts on the most recent");
+  overlay.handleInput(CTRL_R);
+  assert.equal(selected(), "▸ middle");
+  overlay.handleInput(CTRL_R);
+  assert.equal(selected(), "▸ oldest");
+  overlay.handleInput(UP);
+  assert.equal(selected(), "▸ middle", "and back towards newer");
+
+  overlay.handleInput(ESCAPE);
+  await done;
+
+  assert.deepEqual(pi.editorText, [], "a cancelled search does not touch the draft");
+});
+
+test("a match from another project says which one", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [
+    { t: 1, cwd: "/Users/e/Code/github.com/e/harvestenid", text: "regenerate the fixtures" },
+    { t: 2, cwd: "/repo/a", text: "regenerate the schema" },
+  ]);
+
+  const pi = await mount(dir, { cwd: "/repo/a" });
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const { overlay, done } = pi.search();
+  const rendered = rows(overlay).map((line) => line.trim());
+
+  assert.equal(rendered[0], "▸ regenerate the schema", "this project carries no label");
+  assert.equal(rendered[1], "regenerate the fixtures harvestenid");
+
+  overlay.handleInput(ESCAPE);
+  await done;
+});
+
+test("searching an empty history says so instead of opening", async () => {
+  const dir = newAgentDir();
+  const pi = await mount(dir);
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const { overlay, done } = pi.search();
+  await done;
+
+  assert.equal(overlay, undefined, "no overlay to dismiss");
+  assert.deepEqual(pi.notices, ["No prompt history yet."]);
 });
 
 test("the file is trimmed instead of growing forever", async () => {

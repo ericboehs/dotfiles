@@ -3,5 +3,6 @@
   "tui.editor.undo": ["ctrl+-", "super+z"],
   "app.message.followUp": "ctrl+enter",
   "app.models.save": "alt+s",
-  "app.session.toggleSort": "alt+s"
+  "app.session.toggleSort": "alt+s",
+  "app.session.rename": "alt+r"
 }
