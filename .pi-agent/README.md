@@ -106,6 +106,26 @@ since an update leaves the bundle stale and every launch ~115ms slower until it
 is rebuilt. Concurrent pi instances serialize on a lock directory; output lands
 in `~/.pi/agent/auto-bundle.log`. Set `PI_NO_AUTO_BUNDLE=1` to opt out.
 
+### OpenRouter route chip
+
+The model chip names the upstream provider OpenRouter picked: `or novita/oxa`,
+`or z/oxa`, `or modal/oxa`. OpenRouter reports the decision in
+`openrouter_metadata`, opted into per request with `X-OpenRouter-Metadata:
+enabled`, and delivers it in the response *body* — the last SSE chunk before
+`[DONE]`. pi hands extensions only status and headers
+(`after_provider_response`), so `extensions/openrouter-route.ts` wraps
+`globalThis.fetch` instead: pi-ai builds its OpenAI client per request and
+resolves fetch through the SDK's `getDefaultFetch()`, which reads the current
+global. The wrapper adds the header, streams the body through a pass-through
+transform that watches for the metadata line, and stashes the selected provider
+for the footer. Non-OpenRouter requests, error responses and empty bodies are
+handed back untouched.
+
+The documented alternative costs an API call per turn: pi records OpenRouter's
+generation id on the assistant message as `responseId`, and
+`GET /api/v1/generation?id=` reports `provider_name`. Cache hits never carry
+routing data either way, so the chip keeps the last known route for the model.
+
 `bin/pi-launch` also points node's V8 compile cache at `~/.cache/pi/v8`, worth
 another ~75ms. Compiling the bundle is the largest single thing pi does before
 `main()` — 8.7MB in one file — and it produces the same bytes every launch:

@@ -105,6 +105,48 @@ function usageChip(provider: string | undefined): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
+/**
+ * Short names for the upstream providers OpenRouter routes to, written by
+ * openrouter-route.ts. Anything unmapped is squashed to lowercase alphanumerics
+ * ("Parasail" → "parasail"), so a new provider still reads sensibly.
+ */
+const ROUTE_NAMES: Record<string, string> = {
+  "z.ai": "z",
+  baseten: "b10",
+  cloudflare: "cf",
+  deepinfra: "di",
+  digitalocean: "do",
+  gmicloud: "gmi",
+  "io net": "ionet",
+};
+
+/**
+ * Strip an OpenRouter preset suffix: `z-ai/glm-5.3-flash@preset/ox-alpha` is
+ * the same model as `z-ai/glm-5.3-flash`, routed by a saved config. Also drops
+ * a `:nitro`/`:floor` variant so aliases and route matching survive both.
+ */
+function baseModelId(model: string | undefined): string | undefined {
+  return model?.replace(/@preset\/[^:]*/i, "").replace(/:[^/]+$/, "");
+}
+
+/** `novita/` for the model chip, or "" when the route is unknown or stale. */
+function routePrefix(provider: string | undefined, modelId: string | undefined): string {
+  if (provider !== "openrouter") return "";
+  const route = (globalThis as Record<string, unknown>)["__piOpenRouterRoute"] as
+    | { provider?: unknown; model?: unknown }
+    | undefined;
+  const name = route?.provider;
+  if (typeof name !== "string" || !name) return "";
+  // A route recorded for another model (picker switch mid-session) is not ours.
+  // A preset resolves server-side, so compare the models it resolves between.
+  const routed = route?.model;
+  const current = baseModelId(modelId);
+  if (typeof routed === "string" && current && baseModelId(routed) !== current) return "";
+  const key = name.toLowerCase();
+  const slug = ROUTE_NAMES[key] ?? key.replace(/[^a-z0-9]+/g, "");
+  return slug ? `${slug}/` : "";
+}
+
 /** SuperGrok OAuth is subscription-billed; an xAI API key still has a real dollar cost. */
 /** ox-alpha reports a flat $0.0000 — meaningless, so hide it like the subscription providers. */
 const HIDE_COST_MODELS = /^stealth\/ox-alpha$/i;
@@ -160,7 +202,7 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^claude-(.+)$/i, "$1"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
-  [/^z-ai\/GLM-5\.3-Flash$/i, "z/oxa"],
+  [/^z-ai\/GLM-5\.3-Flash$/i, "oxa"],
   [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
   [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn-1.5"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
@@ -491,12 +533,13 @@ function shortProvider(provider: string | undefined): string {
 }
 
 function shortModel(model: string | undefined): string {
-  if (!model) return "no-model";
+  const base = baseModelId(model);
+  if (!base) return "no-model";
   for (const [pattern, replacement] of MODEL_RULES) {
     // Aliased ids render lowercase; unknown ids pass through with their original casing.
-    if (pattern.test(model)) return model.replace(pattern, replacement).toLowerCase();
+    if (pattern.test(base)) return base.replace(pattern, replacement).toLowerCase();
   }
-  return model;
+  return base;
 }
 
 function shortThinking(level: string): string {
@@ -907,7 +950,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const left: string[] = [
             color(BLUE, basename(ctx.cwd)),
             color(BRIGHT_YELLOW, shortProvider(provider)),
-            color(BRIGHT_YELLOW, shortModel(ctx.model?.id)),
+            color(
+              BRIGHT_YELLOW,
+              `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id)}`,
+            ),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
             formatGit(branch, gitState),
             // context-length / context-window share one segment (no spaces around "/")
@@ -996,6 +1042,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
     repaint?.();
   });
   pi.events.on("openrouter-usage:updated", () => {
+    repaint?.();
+  });
+
+  // openrouter-route.ts sniffs the served provider out of the response stream.
+  pi.events.on("openrouter-route:updated", () => {
     repaint?.();
   });
 

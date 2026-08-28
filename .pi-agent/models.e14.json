@@ -410,8 +410,8 @@
       "compat": { "thinkingFormat": "openrouter" },
       "models": [
         {
-          "id": "z-ai/glm-5.3-flash",
-          "name": "GLM-5.3 Flash (OpenRouter)",
+          "id": "z-ai/glm-5.3-flash@preset/ox-alpha",
+          "name": "GLM-5.3 Flash (OpenRouter, ox-alpha preset)",
           "reasoning": true,
           "thinkingLevelMap": {
             "off": "none",
@@ -425,9 +425,6 @@
           "input": [
             "text"
           ],
-          "samplingParams": {
-            "provider": { "order": ["Baseten"] }
-          },
           "contextWindow": 1310720,
           "maxTokens": 16384,
           "cost": {
