@@ -33,7 +33,11 @@ select_conversation() {
     fi
     
     echo "Available conversations:"
-    local files=($(ls "$project_dir"/*.jsonl 2>/dev/null))
+    local files=()
+    local candidate
+    for candidate in "$project_dir"/*.jsonl; do
+        [ -e "$candidate" ] && files+=("$candidate")
+    done
     
     if [ ${#files[@]} -eq 0 ]; then
         echo "No conversation files found in $project_dir"
@@ -41,12 +45,13 @@ select_conversation() {
     fi
     
     for i in "${!files[@]}"; do
-        local basename=$(basename "${files[$i]}" .jsonl)
+        local basename
+        basename=$(basename "${files[$i]}" .jsonl)
         echo "$((i+1)). $basename"
     done
     
     echo -n "Select conversation (1-${#files[@]}): "
-    read selection
+    read -r selection
     
     if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#files[@]}" ]; then
         echo "${files[$((selection-1))]}"
@@ -63,7 +68,10 @@ if [ -n "$LOGPATH" ]; then
         LOGFILES=("$LOGPATH")
     elif [ -d "$LOGPATH" ]; then
         # Directory provided - watch all files in it
-        LOGFILES=($(ls "$LOGPATH"/*.jsonl 2>/dev/null))
+        LOGFILES=()
+        for candidate in "$LOGPATH"/*.jsonl; do
+            [ -e "$candidate" ] && LOGFILES+=("$candidate")
+        done
         if [ ${#LOGFILES[@]} -eq 0 ]; then
             echo "No conversation files found in $LOGPATH"
             exit 1
@@ -87,7 +95,10 @@ else
         exit 1
     fi
     
-    LOGFILES=($(ls "$project_dir"/*.jsonl 2>/dev/null))
+    LOGFILES=()
+    for candidate in "$project_dir"/*.jsonl; do
+        [ -e "$candidate" ] && LOGFILES+=("$candidate")
+    done
     if [ ${#LOGFILES[@]} -eq 0 ]; then
         echo "No conversation files found in $project_dir"
         exit 1
@@ -125,13 +136,15 @@ process_tool_result() {
     local file="$2"
     
     # Find the corresponding tool call by looking for the tool_use_id
-    local tool_use_id=$(echo "$line" | jq -r '.message.content[0].tool_use_id // empty')
+    local tool_use_id
+    tool_use_id=$(echo "$line" | jq -r '.message.content[0].tool_use_id // empty')
     local tool_name="unknown tool"
     local command=""
     
     if [ -n "$tool_use_id" ]; then
         # Search backwards in the file for the tool call with this ID
-        local tool_line=$(tac "$file" | grep -m1 "\"id\":\"$tool_use_id\"" 2>/dev/null)
+        local tool_line
+        tool_line=$(tac "$file" | grep -m1 "\"id\":\"$tool_use_id\"" 2>/dev/null)
         if [ -n "$tool_line" ]; then
             tool_name=$(echo "$tool_line" | jq -r '.message.content[0].name // "unknown tool"' 2>/dev/null || echo "unknown tool")
             command=$(echo "$tool_line" | jq -r '.message.content[0].input.command // .message.content[0].input.description // .message.content[0].input.pattern // .message.content[0].input.file_path // empty' 2>/dev/null || echo "")
@@ -151,14 +164,16 @@ process_tool_result() {
     fi
     
     # Only show stdout if not empty
-    local stdout=$(echo "$line" | jq -r '.toolUseResult.stdout // empty')
+    local stdout
+    stdout=$(echo "$line" | jq -r '.toolUseResult.stdout // empty')
     if [ -n "$stdout" ]; then
         echo "$stdout"
         echo ""
     fi
     
     # Only show stderr if not empty
-    local stderr=$(echo "$line" | jq -r '.toolUseResult.stderr // empty')
+    local stderr
+    stderr=$(echo "$line" | jq -r '.toolUseResult.stderr // empty')
     if [ -n "$stderr" ]; then
         echo "STDERR:"
         echo "$stderr"
@@ -173,7 +188,8 @@ process_user_message() {
     local file="$2"
     
     # Extract user message content (handle both string and array formats)
-    local message=$(echo "$line" | jq -r '
+    local message
+    message=$(echo "$line" | jq -r '
         if (.message.content | type) == "string" then
             .message.content
         elif (.message.content | type) == "array" then
@@ -211,7 +227,8 @@ else
         # tail -f with multiple files prefixes lines with ==> filename <==
         if [[ "$line" =~ ^==\>.*\<==$ ]]; then
             # Extract filename from tail output
-            current_file=$(echo "$line" | sed 's/^==> \(.*\) <==/\1/')
+            current_file="${line#==> }"
+            current_file="${current_file% <==}"
             continue
         fi
         

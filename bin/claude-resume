@@ -57,7 +57,10 @@ if [ ! -d "$project_dir" ]; then
 fi
 
 # Find all .jsonl files in the project directory, sorted by modification time (newest first)
-sessions=($(ls -t "$project_dir"/*.jsonl 2>/dev/null))
+sessions=()
+while IFS= read -r session_path; do
+    sessions+=("$session_path")
+done < <(ls -t "$project_dir"/*.jsonl 2>/dev/null)
 
 if [ ${#sessions[@]} -eq 0 ]; then
     echo "No session files found in ${project_dir/$HOME/~}"
@@ -78,14 +81,16 @@ fi
 # Function to extract session info (fast mode)
 get_session_info() {
     local session_file="$1"
-    local basename=$(basename "$session_file" .jsonl)
+    local basename
+    basename=$(basename "$session_file" .jsonl)
     
-    # Get first user message and timestamp
-    local first_message=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | .message.content' | head -1)
-    local first_timestamp=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | .timestamp' | head -1)
+    # Get the first user message's timestamp
+    local first_timestamp
+    first_timestamp=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string") | .timestamp' | head -1)
     
     # Get message count
-    local message_count=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string")' | wc -l | tr -d ' ')
+    local message_count
+    message_count=$(cat "$session_file" | jq -r 'select(.type == "user" and (.message.content | type) == "string")' | wc -l | tr -d ' ')
     
     # Skip sessions with 0 messages
     if [ "$message_count" -eq 0 ]; then
@@ -103,9 +108,9 @@ get_session_info() {
 
 # Function to extract all messages from all sessions (slow mode)
 get_all_messages() {
-    local all_messages=""
     for session in "${sessions[@]}"; do
-        local basename=$(basename "$session" .jsonl)
+        local basename
+        basename=$(basename "$session" .jsonl)
         
         # Get user messages with timestamps, applying limit if set
         local messages
@@ -118,7 +123,8 @@ get_all_messages() {
         if [ -n "$messages" ]; then
             while IFS='|' read -r timestamp message; do
                 # Format timestamp
-                local formatted_time=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${timestamp%.*}" "+%m/%d %I:%M %p" 2>/dev/null || echo "${timestamp%.*}")
+                local formatted_time
+                formatted_time=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${timestamp%.*}" "+%m/%d %I:%M %p" 2>/dev/null || echo "${timestamp%.*}")
                 
                 # Create searchable line with session ID hidden at the start
                 printf "%s|%s - %s\n" "$basename" "$formatted_time" "$message"

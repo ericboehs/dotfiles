@@ -149,7 +149,7 @@ else
   dir_display=$(basename "$current_dir")
   [ ${#dir_display} -gt 30 ] && dir_display="${dir_display:0:29}…"
 fi
-if [ -n "$SSH_CONNECTION" ] || [ "$container" = "container" ]; then
+if [ -n "$SSH_CONNECTION" ] || [ -n "${container:-}" ]; then
   host=$(hostname -s)
   # Friendly hostname aliases
   case "$host" in
@@ -165,8 +165,7 @@ fi
 # --- Git branch + status ---
 seg_git_plain=""
 seg_git_color=""
-if [ -d "$current_dir/.git" ]; then
-  cd "$current_dir"
+if [ -d "$current_dir/.git" ] && cd "$current_dir"; then
   git_branch=$(git branch --show-current 2>/dev/null)
   if [ -n "$git_branch" ]; then
     [ ${#git_branch} -gt 30 ] && git_branch="${git_branch:0:29}…"
@@ -228,7 +227,7 @@ if echo "$ANTHROPIC_BASE_URL" | grep -qE ':4141'; then
     if [ "$usage_pct_int" -ge 80 ] 2>/dev/null; then uc='\033[31m'
     elif [ "$usage_pct_int" -ge 50 ] 2>/dev/null; then uc='\033[33m'
     else uc='\033[36m'; fi
-    usage_str=" ${uc}${usage_pct}%%\033[0m"
+    usage_str=" ${uc}${usage_pct}%\033[0m"
     usage_str_plain=" ${usage_pct}%"
     # Monthly pace projection against reset date
     if [ "$copilot_reset_epoch" -gt 0 ] 2>/dev/null && [ "$usage_pct_int" -gt 0 ] 2>/dev/null; then
@@ -246,10 +245,10 @@ if echo "$ANTHROPIC_BASE_URL" | grep -qE ':4141'; then
             elif [ "$ahead" -ge 10 ] 2>/dev/null; then pc='\033[33m'
             else pc='\033[36m'; fi
             if [ "$ahead" -gt 0 ] 2>/dev/null; then
-              pace_label="+${ahead}%%"
+              pace_label="+${ahead}%"
               pace_label_plain="+${ahead}%"
             else
-              pace_label="${ahead}%%"
+              pace_label="${ahead}%"
               pace_label_plain="${ahead}%"
             fi
             # Add time-to-reset when usage is high
@@ -316,16 +315,17 @@ elif proxy="${ANTHROPIC_BASE_URL:-${HTTPS_PROXY:-$HTTP_PROXY}}"; [ -n "$proxy" ]
       tok_proj=$(echo "$tok_result" | cut -d: -f1)
       tc=$(echo "$tok_result" | cut -d: -f2-)
       if [ "$req_proj" -ge 90 ] 2>/dev/null; then
-        usage_str="${usage_str} ${rc}r:~${req_proj}%%\033[0m"
+        usage_str="${usage_str} ${rc}r:~${req_proj}%\033[0m"
         usage_str_plain="${usage_str_plain} r:~${req_proj}%"
       fi
       if [ "$tok_proj" -ge 90 ] 2>/dev/null; then
-        usage_str="${usage_str} ${tc}t:~${tok_proj}%%\033[0m"
+        usage_str="${usage_str} ${tc}t:~${tok_proj}%\033[0m"
         usage_str_plain="${usage_str_plain} t:~${tok_proj}%"
       fi
     fi
   else
-    proxy_short=$(echo "$proxy" | sed 's|^https\?://||')
+    proxy_short="${proxy#http://}"
+    proxy_short="${proxy_short#https://}"
     seg_proxy_plain=" ${proxy_short}"
     seg_proxy_color=" \033[31m${proxy_short}\033[0m"
   fi
@@ -431,9 +431,9 @@ else
     # Color an actual usage % (high = red). Output: color escape code
     usage_color() {
       local pct=$1
-      if [ "$pct" -ge 90 ] 2>/dev/null; then echo '\033[31m'
-      elif [ "$pct" -ge 75 ] 2>/dev/null; then echo '\033[33m'
-      else echo '\033[36m'; fi
+      if [ "$pct" -ge 90 ] 2>/dev/null; then printf '%s\n' '\033[31m'
+      elif [ "$pct" -ge 75 ] 2>/dev/null; then printf '%s\n' '\033[33m'
+      else printf '%s\n' '\033[36m'; fi
     }
 
     # --- 5h window (18000s) ---
@@ -445,10 +445,10 @@ else
         five_behind=$(( -five_ahead ))
         if [ "$five_ahead" -ge "$PACE_AHEAD_THRESHOLD" ] 2>/dev/null || [ "$five_behind" -ge "$PACE_BEHIND_THRESHOLD" ] 2>/dev/null || [ "$five_pct" -ge "$USAGE_ALWAYS_SHOW" ] 2>/dev/null; then
           if [ "$five_ahead" -gt 0 ] 2>/dev/null; then
-            five_label="5h: +${five_ahead}%% @ ${five_pct}%%"
+            five_label="5h: +${five_ahead}% @ ${five_pct}%"
             five_label_plain="5h: +${five_ahead}% @ ${five_pct}%"
           else
-            five_label="5h: ${five_ahead}%%"
+            five_label="5h: ${five_ahead}%"
             five_label_plain="5h: ${five_ahead}%"
           fi
           # Add time-to-reset when usage is high
@@ -466,7 +466,7 @@ else
         # Actual usage %, always shown: elapsed/window prefix, e.g. 0.5/5H: 11%
         fc=$(usage_color "$five_pct")
         five_elapsed=$(fmt_elapsed "$five_reset_epoch" 18000 3600)
-        five_label="${five_elapsed}/5H: ${five_pct}%%"
+        five_label="${five_elapsed}/5H: ${five_pct}%"
         five_label_plain="${five_elapsed}/5H: ${five_pct}%"
         usage_str="${usage_str} ${fc}${five_label}\033[0m"
         usage_str_plain="${usage_str_plain} ${five_label_plain}"
@@ -482,10 +482,10 @@ else
         seven_behind=$(( -seven_ahead ))
         if [ "$seven_ahead" -ge "$PACE_AHEAD_THRESHOLD" ] 2>/dev/null || [ "$seven_behind" -ge "$PACE_BEHIND_THRESHOLD" ] 2>/dev/null || [ "$seven_pct" -ge "$USAGE_ALWAYS_SHOW" ] 2>/dev/null; then
           if [ "$seven_ahead" -gt 0 ] 2>/dev/null; then
-            seven_label="7d: +${seven_ahead}%% @ ${seven_pct}%%"
+            seven_label="7d: +${seven_ahead}% @ ${seven_pct}%"
             seven_label_plain="7d: +${seven_ahead}% @ ${seven_pct}%"
           else
-            seven_label="7d: ${seven_ahead}%%"
+            seven_label="7d: ${seven_ahead}%"
             seven_label_plain="7d: ${seven_ahead}%"
           fi
           if [ "$seven_pct" -ge 80 ] 2>/dev/null; then
@@ -502,7 +502,7 @@ else
         # Actual usage %, always shown: elapsed/window prefix, e.g. 2.5/7D: 18%
         sc=$(usage_color "$seven_pct")
         seven_elapsed=$(fmt_elapsed "$seven_reset_epoch" 604800 86400)
-        seven_label="${seven_elapsed}/7D: ${seven_pct}%%"
+        seven_label="${seven_elapsed}/7D: ${seven_pct}%"
         seven_label_plain="${seven_elapsed}/7D: ${seven_pct}%"
         usage_str="${usage_str} ${sc}${seven_label}\033[0m"
         usage_str_plain="${usage_str_plain} ${seven_label_plain}"
@@ -538,10 +538,10 @@ line1_plain="${seg_dir_plain}${seg_git_plain}${seg_proxy_plain}${seg_model_plain
 
 if [ ${#line1_plain} -le "$cols" ]; then
   # Fits on one line
-  printf "${seg_dir_color}${seg_git_color}${seg_proxy_color}${seg_model_color}${seg_ctx_color}${usage_str}"
+  printf '%b' "${seg_dir_color}${seg_git_color}${seg_proxy_color}${seg_model_color}${seg_ctx_color}${usage_str}"
 else
   # Split: dir+branch on line 1, rest on line 2
-  printf "${seg_dir_color}${seg_git_color}"
+  printf '%b' "${seg_dir_color}${seg_git_color}"
   printf "\n"
   # Remove leading space from first segment on line 2
   l2_proxy="${seg_proxy_color# }"
@@ -549,5 +549,5 @@ else
   if [ -z "$seg_proxy_plain" ]; then
     l2_model="${seg_model_color# }"
   fi
-  printf "${l2_proxy}${l2_model}${seg_ctx_color}${usage_str}"
+  printf '%b' "${l2_proxy}${l2_model}${seg_ctx_color}${usage_str}"
 fi

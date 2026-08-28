@@ -139,7 +139,8 @@ select_pane() {
 # Function to monitor a pane
 monitor_pane() {
     local pane="$1"
-    local pane_title=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}"' | grep "^$pane " | cut -d'"' -f2)
+    local pane_title
+    pane_title=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}"' | grep "^$pane " | cut -d'"' -f2)
 
     echo "Monitoring $pane ($pane_title)..."
     if [[ $TIMEOUT -gt 0 ]]; then
@@ -275,7 +276,7 @@ monitor_pane() {
 
                     if [[ -n "$last_user_line" ]]; then
                         # Show from the last user input to the end
-                        echo "$full_output" | tail -n +$last_user_line
+                        echo "$full_output" | tail -n +"$last_user_line"
                     else
                         # Fallback to last 100 lines if no user input found
                         tmux capture-pane -t "$pane" -p | tail -100
@@ -400,8 +401,10 @@ send_message() {
     tmux send-keys -t "$pane" C-m  # Send message (Ctrl+M = Enter)
 
     # Show confirmation with message preview
-    local preview=$(echo "$message" | head -3)
-    local line_count=$(echo "$message" | wc -l)
+    local preview
+    preview=$(echo "$message" | head -3)
+    local line_count
+    line_count=$(echo "$message" | wc -l)
 
     if [[ $line_count -gt 3 ]]; then
         echo "Message sent to $pane ($line_count lines):"
@@ -474,7 +477,8 @@ interrupt_session() {
 # Function to view pane output
 view_pane() {
     local pane="$1"
-    local pane_title=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}"' | grep "^$pane " | cut -d'"' -f2)
+    local pane_title
+    pane_title=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} "#{pane_title}"' | grep "^$pane " | cut -d'"' -f2)
 
     echo "Session output for $pane ($pane_title):"
     echo "---"
@@ -488,7 +492,7 @@ view_pane() {
 
     if [[ -n "$last_user_line" ]]; then
         # Show from the last user input to the end
-        echo "$full_output" | tail -n +$last_user_line
+        echo "$full_output" | tail -n +"$last_user_line"
     else
         # Fallback to last 100 lines if no user input found
         tmux capture-pane -t "$pane" -p | tail -100
@@ -512,7 +516,7 @@ main_menu() {
         echo "6. List all Claude sessions"
         echo "7. Exit"
         echo ""
-        read -p "Select option (1-7): " choice
+        read -r -p "Select option (1-7): " choice
 
         case $choice in
             1)

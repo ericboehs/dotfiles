@@ -1,21 +1,16 @@
 # Scripts with pre-existing shellcheck warnings, held to parse errors only.
 # The list only shrinks: fix a script, then delete its line here.
-# bin/shell-lint fails if an entry has become clean or no longer exists.
+# bin/shell-lint fails if an entry has become clean or is no longer tracked.
+#
+# Everything left is a symlink into a sibling repo (claude-config, agent-notify,
+# pearl-agents, slackdumper). They are checked out on my machine and dangle in
+# CI, and the fix belongs in the repo that owns the file.
 
-.claude/scripts/statusline.sh
 bin/agent-notify
 bin/claude-active
-bin/claude-man
 bin/claude-manager-tickler
-bin/claude-resume
 bin/claude-sessions
 bin/claude-tail
-bin/claude-watcher
-bin/gh-pm
-bin/gh-reruns
-bin/gh-reviews-by-user
-bin/ghmpr
-bin/llama-serve
 bin/pearl
 bin/slack-reader
 bin/slackdumper

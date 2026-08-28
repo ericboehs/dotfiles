@@ -4,7 +4,9 @@
 
 set -e
 
-# Source XDG environment
+# Source XDG environment. The file is machine-local config outside this repo,
+# so there is nothing for shellcheck to follow.
+# shellcheck source=/dev/null
 source ~/.config/llama.cpp/xdg-env.sh
 
 MODELS_CONF="$LLAMA_CONFIG_DIR/models.conf"
@@ -92,7 +94,8 @@ get_current_model() {
 
 is_server_running() {
     if [[ -f "$PID_FILE" ]]; then
-        local pid=$(cat "$PID_FILE")
+        local pid
+        pid=$(cat "$PID_FILE")
         if ps -p "$pid" > /dev/null 2>&1; then
             return 0
         fi
@@ -104,7 +107,8 @@ server_status() {
     echo -e "${BLUE}Server Status:${NC}"
 
     if is_server_running; then
-        local pid=$(cat "$PID_FILE")
+        local pid
+        pid=$(cat "$PID_FILE")
         echo -e "Process:     ${GREEN}running${NC} (PID: $pid)"
 
         # Check if actually responding
@@ -125,7 +129,8 @@ server_status() {
         fi
 
         # Show current model from state file
-        local current=$(get_current_model)
+        local current
+        current=$(get_current_model)
         if [[ "$current" != "none" ]]; then
             echo -e "Config:      $current"
         fi
@@ -144,7 +149,8 @@ stop_server() {
     echo "Stopping llama.cpp server..."
 
     if is_server_running; then
-        local pid=$(cat "$PID_FILE")
+        local pid
+        pid=$(cat "$PID_FILE")
         kill "$pid" 2>/dev/null || true
 
         # Wait for process to die

@@ -13,6 +13,10 @@ if [[ ! -f "$CACHE_FILE" ]] || [[ ! -s "$CACHE_FILE" ]] || [[ -n "$(find "$CACHE
   gh pm list --limit 100 > "$CACHE_FILE"
 fi
 
+# Every --bind body is single-quoted on purpose: fzf hands them to a child
+# shell when the key is pressed, and $CACHE_FILE (exported above) and fzf's
+# own {+1} placeholders have to survive this shell untouched.
+# shellcheck disable=SC2016
 cat "$CACHE_FILE" | fzf \
   --delimiter='\s\s+' \
   --tac \

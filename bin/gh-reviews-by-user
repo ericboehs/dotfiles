@@ -91,12 +91,16 @@ echo
 
 # Function to check and handle rate limiting
 check_rate_limit() {
-  local rate_info=$(gh api rate_limit 2>/dev/null || echo '{}')
-  local remaining=$(echo "$rate_info" | jq -r '.rate.remaining // 5000')
-  local reset_time=$(echo "$rate_info" | jq -r '.rate.reset // 0')
+  local rate_info
+  rate_info=$(gh api rate_limit 2>/dev/null || echo '{}')
+  local remaining
+  remaining=$(echo "$rate_info" | jq -r '.rate.remaining // 5000')
+  local reset_time
+  reset_time=$(echo "$rate_info" | jq -r '.rate.reset // 0')
 
   if [[ "$remaining" -lt 10 ]]; then
-    local current_time=$(date +%s)
+    local current_time
+    current_time=$(date +%s)
     local sleep_time=$((reset_time - current_time))
     if [[ $sleep_time -gt 0 ]]; then
       echo "Rate limit almost exceeded ($remaining requests remaining). Sleeping for $sleep_time seconds..." >&2
@@ -119,7 +123,8 @@ fetch_all_prs() {
       after_clause=", after: \"$after\""
     fi
 
-    local result=$(gh api graphql -f query="
+    local result
+    result=$(gh api graphql -f query="
     query {
       search(query: \"org:$ORG type:pr reviewed-by:$USERNAME\", type: ISSUE, first: 100$after_clause) {
         pageInfo {
@@ -148,9 +153,12 @@ fetch_all_prs() {
       }
     }")
 
-    local has_next_page=$(echo "$result" | jq -r '.data.search.pageInfo.hasNextPage')
-    local end_cursor=$(echo "$result" | jq -r '.data.search.pageInfo.endCursor')
-    local nodes=$(echo "$result" | jq '.data.search.nodes')
+    local has_next_page
+    has_next_page=$(echo "$result" | jq -r '.data.search.pageInfo.hasNextPage')
+    local end_cursor
+    end_cursor=$(echo "$result" | jq -r '.data.search.pageInfo.endCursor')
+    local nodes
+    nodes=$(echo "$result" | jq '.data.search.nodes')
 
     all_results=$(echo "$all_results" | jq ". + $nodes")
 
