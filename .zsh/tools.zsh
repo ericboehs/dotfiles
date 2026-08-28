@@ -14,12 +14,11 @@ fi
 # fnox setup
 if command -v fnox >/dev/null 2>&1; then
   export FNOX_SHELL_OUTPUT=none
-  # Two calls, not one redundant pair: `activate`'s own hook-env only resolves
-  # the global ~/.config/fnox/config.toml, while _fnox_hook merges the
-  # fnox.toml of the current directory on top. Dropping it silently loses
-  # every project-scoped secret (verified: CLOUDFLARE_ACCOUNT_ID under
-  # ~/Workspaces goes missing), so the ~0.33s it costs buys something.
+  # activate's hook-env loads global ~/.config/fnox/config.toml (needed for
+  # COPILOT_TOKEN etc.). _fnox_hook then merges the current directory's
+  # fnox.toml (CLOUDFLARE_ACCOUNT_ID under ~/Workspaces, etc.).
+  # Defer only the extra hook: `sched 0` is Dec 31; `sched +0` is next idle.
   eval "$(fnox activate zsh --if-missing ignore)"
-  _fnox_hook        # run once at startup for current dir
   precmd_functions=( ${precmd_functions[@]:#_fnox_hook} )
+  (( $+functions[_fnox_hook] )) && sched +0 _fnox_hook
 fi
