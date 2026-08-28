@@ -95,7 +95,16 @@ async function loadConfigMetadata(): Promise<Map<string, ModelMeta>> {
   return map;
 }
 
-export default async function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI): void {
+  // Don't await the localhost probe in the factory: pi awaits async factories,
+  // so a refused :8000 was 23ms of every boot. session_start is after
+  // modelRuntime exists, so registerProvider still sticks; /reload re-runs this.
+  pi.on("session_start", () => {
+    void register(pi);
+  });
+}
+
+async function register(pi: ExtensionAPI): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
 
