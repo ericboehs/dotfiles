@@ -763,7 +763,7 @@ class TailwindPlusServer < Sinatra::Base
     end
   end
 
-  def get_subcategory_order(subcategory_item)
+  def get_subcategory_order(_subcategory_item)
     # We could implement ordering logic here based on URL or other factors
     # For now, just return a default
     999
@@ -788,7 +788,7 @@ class TailwindPlusServer < Sinatra::Base
     end
 
     # Sort categories by order
-    categories.sort_by { |key, info| info[:order] }.to_h
+    categories.sort_by { |_key, info| info[:order] }.to_h
   end
 
   def get_category_description(category_key)
@@ -1005,7 +1005,7 @@ class TailwindPlusServer < Sinatra::Base
 
     # Sort each category's subcategories by order
     subcategory_groups.each do |parent, subcategories|
-      subcategory_groups[parent] = subcategories.sort_by { |name, info| info[:order] }.to_h
+      subcategory_groups[parent] = subcategories.sort_by { |_name, info| info[:order] }.to_h
     end
 
     subcategory_groups
@@ -1017,11 +1017,11 @@ class TailwindPlusServer < Sinatra::Base
 
     # Filter out any subcategories that have 0 components
     subcategory_groups.each do |parent, subcategories|
-      subcategory_groups[parent] = subcategories.select { |name, info| info[:count] > 0 }
+      subcategory_groups[parent] = subcategories.select { |_name, info| info[:count] > 0 }
     end
 
     # Remove any parent categories that have no subcategories left
-    subcategory_groups.select! { |parent, subcategories| !subcategories.empty? }
+    subcategory_groups.select! { |_parent, subcategories| !subcategories.empty? }
 
     subcategory_groups
   end
@@ -1078,7 +1078,7 @@ class TailwindPlusServer < Sinatra::Base
     end
   end
 
-  def generate_category_screenshot(category, output_path)
+  def generate_category_screenshot(_category, _output_path)
     # For now, we don't generate category screenshots - only section screenshots
     # This method can be removed or simplified to return nil
     nil
@@ -1135,7 +1135,8 @@ class TailwindPlusServer < Sinatra::Base
             file.write(response.body)
           end
           puts "Downloaded preview image for #{section_path}"
-          return
+          # Deliberate: stop the whole download attempt, not just this block.
+          return # rubocop:disable Lint/NonLocalExitFromIterator
         end
       end
     rescue => e
@@ -2596,7 +2597,7 @@ def main
     options[:json] = ARGV.include?('--json')
 
     # Parse format flag
-    if format_idx = ARGV.index('--format')
+    if (format_idx = ARGV.index('--format'))
       if ARGV[format_idx + 1]
         format = ARGV[format_idx + 1].downcase
         if ['html', 'react', 'vue'].include?(format)

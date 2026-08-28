@@ -15,21 +15,26 @@ def print_all_schedules_names_and_ids
   url = "https://api.pagerduty.com/schedules?limit=100"
 
   puts "To list a scheudle, run one of the following commands:\n\n"
+  # URI#open on a literal https url is an HTTP fetch, not Kernel#open.
+  # rubocop:disable Security/Open
   URI.open(url, 'Authorization' => "Token token=#{ENV['DSVA_PD_API_TOKEN']}") do |response|
     json = JSON.parse response.gets
     json['schedules'].each do |schedule|
       puts "#{File.basename $PROGRAM_NAME} #{schedule['id']} #{BOLD}# #{schedule['name']}#{NORMAL}"
     end
   end
+  # rubocop:enable Security/Open
 end
 
 def print_schedule(id)
   url = "https://#{PAGERDUTY_BASE}.pagerduty.com/api/v1/schedules/#{id}?since=#{`date +%Y-%m-%d`}&until=#{`date -v+6m +%Y-%m-%d`}"
 
+  # rubocop:disable Security/Open
   URI.open(url, 'Authorization' => "Token token=#{ENV['DSVA_PD_API_TOKEN']}") do |response|
     json = JSON.parse response.gets
     json['schedule']['final_schedule']['rendered_schedule_entries'].map {|h| { h['user']['summary'] => h['start'].split('T').first } }.uniq(&:keys).map(&:invert).reduce(Hash.new, :merge).each { |date, dude| puts "#{date}: #{dude}"}
   end
+  # rubocop:enable Security/Open
 end
 
 if ARGV[0] == 'list'

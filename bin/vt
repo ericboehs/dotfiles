@@ -4,7 +4,6 @@
 
 case ARGV[0]
 when 'mfa' # MFAs with Amazon pulling TOTP from 1Password (also stores session keys in ~/.zshrc.local for new shells)
-  require 'pry'; binding.pry
   system %{
     eval $(op signin my --cache)
     sed -i '' '/export OP_SESSION_my/d' ~/.zshrc.local
@@ -36,8 +35,10 @@ when 'ssm'
   ssm_command =  %{aws ssm start-session --target #{instance_id}}
   puts "Running: #{ssm_command}"
   Kernel.exec ssm_command, 'vt hi'
-when 'hi'
+when 'hi' # deliberate: this subcommand exists to open a console
+  # rubocop:disable Lint/Debugger
   require 'pry'; binding.pry
+  # rubocop:enable Lint/Debugger
 else
   puts 'Sub-command not found.'
   exit 1

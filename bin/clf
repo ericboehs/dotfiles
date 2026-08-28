@@ -39,7 +39,7 @@ class ChangeLogFinder
 
   def url_contents url
     @url_contents ||= {}
-    @url_contents[url] ||= open(url).read.split "\n" rescue false
+    @url_contents[url] ||= URI.parse(url).open.read.split "\n" rescue false
   end
 
   def find_link page:, search:

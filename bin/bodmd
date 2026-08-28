@@ -9,7 +9,7 @@ require 'time'
 require 'pry' #TODO: Remove
 
 class OudatedGemCollection
-  attr_reader :file_name, :gems
+  attr_reader :file_name
 
   def initialize(file_name:)
     @file_name = file_name
@@ -77,9 +77,9 @@ class OudatedGemCollection
         next if line.empty?
 
         line = line[0..-2] # Remove closing paranthesis
-        line.gsub! /(newest|installed)/, ''
+        line.gsub!(/(newest|installed)/, '')
         gem_name, gem_info = line.split ' ( '
-        new_version, installed_version = gem_info.split ', '
+        _new_version, installed_version = gem_info.split ', '
         installed_version = installed_version.strip
         resp = Net::HTTP.get(URI("https://rubygems.org/api/v1/gems/#{gem_name}.json"))
         next if resp.include? 'This rubygem could not be found.'

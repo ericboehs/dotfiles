@@ -1,0 +1,28 @@
+# Lint and Security only. The Style and Layout departments are opinions about
+# code I mostly write once and read rarely, and turning them on across bin/
+# means 900 offenses nobody will ever work through — which trains you to ignore
+# the tool. Lint is the department that finds bugs: duplicate methods, useless
+# assignments, debuggers left in, non-local exits from iterators.
+AllCops:
+  DisabledByDefault: true
+  NewCops: disable
+  # bin/ scripts are extensionless with a ruby shebang, and rubocop only walks
+  # into those when told. bin/script-lint passes the files explicitly, so this
+  # is here for a bare `rubocop` run in the repo.
+  Include:
+    - "bin/**/*"
+  Exclude:
+    - "bin/yt-assets/**/*"
+    - "**/node_modules/**/*"
+
+Lint:
+  Enabled: true
+
+# Every inline `# rubocop:disable Metrics/...` in bin/ looks redundant once the
+# Metrics department is off, and deleting those directives would be wrong: they
+# are there for anyone who runs rubocop with a fuller config.
+Lint/RedundantCopDisableDirective:
+  Enabled: false
+
+Security:
+  Enabled: true
