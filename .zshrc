@@ -28,6 +28,9 @@ source "$HOME/.zsh/tools.zsh"
 # Prompt
 source "$HOME/.zsh/p10k.zsh"
 
+# Recompile stale .zwc in the background. zsh auto-loads them next start.
+source "$HOME/.zsh/zcompile.zsh"
+
 # Local overrides. Spelled as `if` rather than `[[ … ]] && source …` because
 # the && form leaves $? = 1 when the file is absent, and this is the last
 # statement in .zshrc — so p10k painted the very first prompt's ❯ red on every

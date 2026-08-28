@@ -14,10 +14,30 @@
 #      real locale category — the price of not editing sshd on every box.
 #
 # Synchronous, unlike the background refresh this replaced: an exported value
-# has to be right before the shell's first `ssh`, not eventually. The `defaults`
-# call it costs runs only on macOS, at ~9ms.
-export LC_APPEARANCE=$(~/bin/appearance)
+# has to be right before the shell's first `ssh`, not eventually.
+#
+# Skip the fork when a parent already exported LC_APPEARANCE (tmux pane, nested
+# zsh, SSH hop). On Darwin, call `defaults` directly instead of bin/appearance:
+# that wrapper is bash + `command -v` + `defaults` + `grep`, ~23ms, vs one
+# `defaults` at ~8–10ms. Linux still uses the script (no defaults(1)).
+if [[ -z $LC_APPEARANCE ]]; then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    if [[ "$(/usr/bin/defaults read -g AppleInterfaceStyle 2>/dev/null)" == Dark ]]; then
+      export LC_APPEARANCE=dark
+    else
+      export LC_APPEARANCE=light
+    fi
+  else
+    export LC_APPEARANCE=$(~/bin/appearance)
+  fi
+else
+  export LC_APPEARANCE
+fi
 
-# Atomic write, so a reader never catches the file mid-update.
-print -r -- $LC_APPEARANCE > ~/.cache/dark-mode.$$ &&
-  mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode
+# Atomic write, so a reader never catches the file mid-update. Skip when the
+# cache already matches — tmux panes inherit LC_APPEARANCE and would otherwise
+# rewrite the same byte every split.
+if [[ ! -r ~/.cache/dark-mode || "$(< ~/.cache/dark-mode)" != "$LC_APPEARANCE" ]]; then
+  print -r -- $LC_APPEARANCE > ~/.cache/dark-mode.$$ &&
+    mv ~/.cache/dark-mode.$$ ~/.cache/dark-mode
+fi

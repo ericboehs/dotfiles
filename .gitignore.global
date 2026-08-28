@@ -1,3 +1,4 @@
+*.zwc
 .tool-versions
 .DS_Store
 .tags

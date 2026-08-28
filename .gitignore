@@ -1,3 +1,4 @@
+*.zwc
 .bundle
 .zshrc.local
 .tmux/plugins
