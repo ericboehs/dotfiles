@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const SEARCH_BACKENDS = ["brave", "tavily", "exa", "firecrawl", "codex"] as const;
-export const FETCH_TIERS = ["plain", "curl", "chrome", "safari", "firecrawl"] as const;
+export const FETCH_TIERS = ["plain", "curl", "chrome", "safari", "firecrawl", "tinyfish"] as const;
 
 export type SearchBackend = (typeof SEARCH_BACKENDS)[number];
 export type FetchTierName = (typeof FETCH_TIERS)[number];
@@ -49,10 +49,17 @@ export interface WebConfig {
  * out of the same 1000-credit pool that funds the fetch ladder's last tier,
  * where it is the only thing that can rescue a page nothing else can read.
  * A credit is worth more there than as a fourth opinion on a SERP.
+ *
+ * The fetch ladder runs local-first, then TinyFish, then Firecrawl, then
+ * Safari. TinyFish renders in a real Chromium and costs nothing at any wallet
+ * balance, so it takes the first rescue attempt and leaves Firecrawl's credits
+ * for the pages it cannot read. Safari is last despite being free: it drives
+ * the real GUI app, so it is the one tier a user can *see* running, and that
+ * makes it a last resort rather than a mid-ladder default.
  */
 export const DEFAULT_CONFIG: WebConfig = {
   search: { order: ["tavily", "exa", "brave", "firecrawl", "codex"], off: [] },
-  fetch: { order: ["plain", "curl", "chrome", "safari", "firecrawl"], off: [] },
+  fetch: { order: ["plain", "curl", "chrome", "tinyfish", "firecrawl", "safari"], off: [] },
   format: "native",
   excerpts: "auto",
   skipUntil: {},
@@ -157,12 +164,17 @@ export async function clearSkips(): Promise<void> {
  * plan is a different subscription with its own key and its own 2000/month,
  * and it is the only one whose plan includes `extra_snippets` — the difference
  * between a teaser and a real extract. Prefer it, fall back to the plain key.
+ *
+ * TinyFish also takes two: their own docs use TINYFISH_API_KEY, but the key is
+ * stored here under TINY_FISH_API_KEY. Accept both so a fresh machine that
+ * followed the vendor docs still resolves.
  */
 export const KEY_ENV: Record<string, string[]> = {
   brave: ["BRAVE_AI_API_KEY", "BRAVE_API_KEY"],
   tavily: ["TAVILY_API_KEY"],
   exa: ["EXA_API_KEY"],
   firecrawl: ["FIRECRAWL_API_KEY"],
+  tinyfish: ["TINY_FISH_API_KEY", "TINYFISH_API_KEY"],
 };
 
 const keyCache = new Map<string, ResolvedKey | undefined>();

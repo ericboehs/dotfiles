@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { spawn } from "node:child_process";
 import { Text } from "@earendil-works/pi-tui";
-import { resilientFetch } from "./web-fetch-resilient/fetch-core.ts";
+import { probeFetchTiers, resilientFetch } from "./web-fetch-resilient/fetch-core.ts";
 import {
   activeChain,
   clearSkips,
@@ -33,6 +33,13 @@ const FETCH_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_CHARS = 20_000;
 const MIN_MAX_CHARS = 1_000;
 const MAX_MAX_CHARS = 100_000;
+
+/**
+ * TinyFish caps requests per *minute* (30 search / 150 fetch on the free tier),
+ * not per month. Long enough for the window to roll over, short enough that a
+ * burst never costs us the only free rescue tier for a whole session.
+ */
+const TINYFISH_PACE_COOLOFF_MS = 60_000;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36";
 
@@ -392,6 +399,12 @@ async function statusText(cfg: WebConfig): Promise<string> {
   }
   lines.push(...creds);
 
+  // tinyfish is a fetch tier, so it never appears in SEARCH_BACKENDS — but a
+  // key that failed to resolve is just as worth seeing as any other tier's.
+  const tf = await resolveKeyInfo("tinyfish");
+  const tfLabel = tf ? `\u2713 ${tf.env}` : `\u2717 ${(KEY_ENV.tinyfish ?? []).join(" or ")}`;
+  lines.push(`${"tinyfish".padEnd(10)} ${tfLabel}  (fetch tier only \u2014 free, no quota)`);
+
   const skipped = Object.entries(cfg.skipUntil).filter(([, until]) => until > Date.now());
   if (skipped.length) {
     lines.push("", ...skipped.map(([name, until]) => `skipped   ${name} for ${relative(until)}`));
@@ -401,14 +414,37 @@ async function statusText(cfg: WebConfig): Promise<string> {
 
 const TEST_QUERY = "what is the capital of France";
 
+/**
+ * A liveness probe, not a quality one: every tier must be able to reach and
+ * extract this, so any FAIL is about the tier rather than the page. Quality
+ * across hostile pages is what web-fetch-resilient/eval.ts is for.
+ */
+const FETCH_TEST_URL = "https://example.com/";
+
+/** What one probe costs. Safari's entry is a warning about attention, not money. */
+const FETCH_COST_PER_CALL: Record<FetchTierName, string> = {
+  plain: "free",
+  curl: "free",
+  chrome: "free (warm profile)",
+  tinyfish: "free",
+  firecrawl: "1 credit",
+  safari: "free \u2014 opens a GUI window",
+};
+
+/**
+ * Probed only under `/web test all`. Firecrawl bills a credit and Safari steals
+ * focus, and a diagnostic you hesitate to run is one you stop running.
+ */
+const GUARDED_TIERS: FetchTierName[] = ["firecrawl", "safari"];
+
 function pad(value: string, width: number): string {
   return value.length >= width ? value : value + " ".repeat(width - value.length);
 }
 
 async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
-  const includeCodex = args[0]?.toLowerCase() === "all";
-  const query = (includeCodex ? args.slice(1) : args).join(" ").trim() || TEST_QUERY;
-  const backends = SEARCH_BACKENDS.filter((b) => includeCodex || b !== "codex");
+  const includeAll = args[0]?.toLowerCase() === "all";
+  const query = (includeAll ? args.slice(1) : args).join(" ").trim() || TEST_QUERY;
+  const backends = SEARCH_BACKENDS.filter((b) => includeAll || b !== "codex");
 
   const results = await probeBackends(query, [...backends], {
     codex: (q, opts, s) => codexSearch(q, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
@@ -431,22 +467,60 @@ async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
   if (failures.length) {
     lines.push("", ...failures.map((r) => `${r.backend}: ${r.detail}`));
   }
+
+  // The fetch ladder gets the same treatment. Without this the newest tier is
+  // the one with no diagnostic, which is exactly backwards.
+  const cfg = await loadConfig();
+  const tiers = FETCH_TIERS.filter((t) => includeAll || !GUARDED_TIERS.includes(t));
+  const fetchResults = await probeFetchTiers(FETCH_TEST_URL, [...tiers], {
+    firecrawlKey: tiers.includes("firecrawl") ? await resolveKey("firecrawl") : undefined,
+    tinyfishKey: tiers.includes("tinyfish") ? await resolveKey("tinyfish") : undefined,
+  });
+
+  const now = Date.now();
+  lines.push(
+    "",
+    `fetch ladder probe: ${FETCH_TEST_URL}`,
+    "",
+    `${pad("tier", 11)}${pad("state", 9)}${pad("result", 10)}${pad("ms", 7)}${pad("chars", 8)}cost`,
+  );
+  for (const r of fetchResults) {
+    const state = cfg.fetch.off.includes(r.tier)
+      ? "off"
+      : (cfg.skipUntil[r.tier] ?? 0) > now
+        ? "cooling"
+        : "ready";
+    lines.push(
+      `${pad(r.tier, 11)}${pad(state, 9)}${pad(r.ok ? "ok" : "FAIL", 10)}${pad(String(r.ms), 7)}${pad(r.ok ? String(r.chars) : "\u2013", 8)}${FETCH_COST_PER_CALL[r.tier]}`,
+    );
+  }
+  const fetchFailures = fetchResults.filter((r) => !r.ok && r.detail);
+  if (fetchFailures.length) {
+    lines.push("", ...fetchFailures.map((r) => `${r.tier}: ${r.detail}`));
+  }
+
   // Only successes are counted as spend: auth and quota rejections are not
   // billed, and claiming otherwise would make the number untrustworthy.
-  lines.push("", `${results.filter((r) => r.ok).length} successful call(s) billed. Cool-offs unchanged.`);
-  if (!includeCodex) lines.push("codex not probed \u2014 use /web test all to include it.");
+  const billed =
+    results.filter((r) => r.ok).length + fetchResults.filter((r) => r.ok && r.tier === "firecrawl").length;
+  lines.push("", `${billed} successful call(s) billed. Cool-offs unchanged.`);
+  if (!includeAll) {
+    lines.push(
+      `not probed: codex (search), ${GUARDED_TIERS.join(" + ")} (fetch tiers) \u2014 use /web test all, which costs a Firecrawl credit and opens a Safari window.`,
+    );
+  }
   return lines.join("\n");
 }
 
 const WEB_HELP = [
   "/web                                   show chains, keys, cool-offs",
   "/web search order tavily exa brave firecrawl codex",
-  "/web fetch order plain curl chrome safari firecrawl",
+  "/web fetch order plain curl chrome tinyfish firecrawl safari",
   "/web search off|on <name>",
   "/web fetch off|on <name>",
   "/web format native|serp|answer",
   "/web excerpts auto|short|long",
-  "/web test [all] [query]                probe each backend: latency, size, cost",
+  "/web test [all] [query]                probe search backends + fetch tiers",
   "/web reset                             clear cool-offs",
 ].join("\n");
 
@@ -485,7 +559,10 @@ async function handleWeb(args: string, ctx: ExtensionContext): Promise<void> {
     }
 
     case "test": {
-      notify(`Probing ${rest[0]?.toLowerCase() === "all" ? "all backends" : "API backends"}\u2026`);
+      const all = rest[0]?.toLowerCase() === "all";
+      notify(
+        `Probing ${all ? "all backends and every fetch tier" : "API backends and the free fetch tiers"}\u2026`,
+      );
       notify(await runTest(rest, ctx));
       return;
     }
@@ -729,21 +806,33 @@ export default function web(pi: ExtensionAPI): void {
       // Resolve the key only when the tier is actually in play, so a fetch that
       // never reaches Firecrawl never touches the Keychain.
       const firecrawlKey = order.includes("firecrawl") ? await resolveKey("firecrawl") : undefined;
+      const tinyfishKey = order.includes("tinyfish") ? await resolveKey("tinyfish") : undefined;
 
       const result = await resilientFetch(params.url, {
         maxChars,
         signal,
         order,
         firecrawlKey,
-        // Firecrawl bills search and fetch from one pool, so a quota rejection
-        // here has to bench it for the search chain too — even when a cheaper
-        // tier went on to answer this particular fetch.
+        tinyfishKey,
         onTierError: (tier, err) => {
-          if (tier !== "firecrawl") return;
           const status = (err as { status?: number }).status;
           if (typeof status !== "number") return;
-          const cooloff = cooloffForStatus(status, err.message);
-          if (cooloff > 0) void markSkip("firecrawl", cooloff);
+          // Firecrawl bills search and fetch from one pool, so a quota rejection
+          // here has to bench it for the search chain too — even when a cheaper
+          // tier went on to answer this particular fetch.
+          if (tier === "firecrawl") {
+            const cooloff = cooloffForStatus(status, err.message);
+            if (cooloff > 0) void markSkip("firecrawl", cooloff);
+            return;
+          }
+          // TinyFish's 429 is a pace limit, which cooloffForStatus would read as
+          // an exhausted monthly allowance and bench for a day. Everything else
+          // — 401, 403, 5xx — means what it usually means.
+          if (tier === "tinyfish") {
+            const cooloff =
+              status === 429 ? TINYFISH_PACE_COOLOFF_MS : cooloffForStatus(status, err.message);
+            if (cooloff > 0) void markSkip("tinyfish", cooloff);
+          }
         },
         onAttempt: (msg) => onUpdate?.({ content: [{ type: "text", text: msg }], details: undefined }),
       });

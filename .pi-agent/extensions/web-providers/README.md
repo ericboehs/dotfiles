@@ -7,7 +7,8 @@ one operator-owned order. The model never picks a vendor.
 - `search.ts` — the backends, the failover chain, and the `/web test` probe
 
 The fetch ladder lives next door in `../web-fetch-resilient/`; the two share a
-cool-off table, because Firecrawl bills both from one pool.
+cool-off table, because Firecrawl bills both from one pool. TinyFish is a fetch
+tier only — see "Why TinyFish is not in the search chain" below.
 
 ## The chain
 
@@ -67,6 +68,52 @@ tier, where it is the only thing that can rescue a page nothing else can read.
 A credit is worth more there than as a fourth opinion on a SERP.
 
 Caveat: n=3 and n=6, one afternoon. `/web search order …` reverts it.
+
+### Why TinyFish is not in the search chain
+
+TinyFish Search is free at any wallet balance, which makes it look like an
+obvious addition. Measured head-to-head over 5 queries at `excerpts=auto`, it
+is dominated by a backend already in the chain:
+
+| backend | mean ms | chars/result |
+|---|---|---|
+| brave | **633** (583–661) | 262 |
+| tinyfish | 979 cold | **134** |
+| exa | 1598 | 3880 |
+| tavily | 1615 | 1192 |
+
+Those are raw API values, before `render()` truncates each hit to
+`EXCERPT_CHARS`. At `auto` (1200) the cap binds on Exa and roughly meets
+Tavily, so the two converge to ~1200 in the output that actually reaches the
+model — which is why `eval.mjs` scores them at 5386 and 5843 average chars.
+Brave and TinyFish are unaffected because they never reach the cap.
+
+That is the whole point: 134 is a **ceiling, not a cap**. Every other backend
+will give you more text if you ask for it; TinyFish has no more to give at any
+excerpt setting.
+
+Brave is faster *and* returns roughly twice the excerpt, so TinyFish could only
+ever sit behind it — and since failover fires only on exhaustion, a slot behind
+Brave's 2000/month is a slot that never serves a query.
+
+The 134 chars/result is disqualifying on its own. It is below the `short`
+budget (200), so `EXCERPT_CHARS` never binds and `excerpts: long` is a no-op:
+there is no depth to truncate. That is the same teaser failure that demoted
+Brave, one step worse. On the GLM-5.3-Flash pricing query TinyFish returned
+`$0.045 per task` and `$17.50/1M` (a *video* rate) alongside the real token
+prices — all correctly attributed to the right model, all unlabelled at 134
+characters. The failure mode is not wrong-model, it is right-model/wrong-unit,
+and a teaser is exactly the wrong length to catch it.
+
+Watch the latency claim too: repeat queries return byte-identical payloads in
+110–200ms, so the sub-second figures in TinyFish's marketing are cache hits.
+Cold, novel queries average ~1s despite an advertised P50 of 488ms.
+
+Its Fetch endpoint is a different story, and that is where it landed — as the
+strongest single tier in the fetch ladder, 11/13 on the hostile-page eval. Free
+and thin is a bad trade for a snippet and a good one for a full page render.
+
+Caveat: n=5, one afternoon, from one location.
 
 ## Output shape
 
@@ -246,7 +293,9 @@ Resolved from the environment first, then `fnox get <NAME>` (macOS Keychain),
 cached per process. Never logged, never written to `web.json`, never shown by
 `/web` — status prints presence only.
 
-`BRAVE_API_KEY` · `TAVILY_API_KEY` · `EXA_API_KEY` · `FIRECRAWL_API_KEY`
+`BRAVE_API_KEY` · `TAVILY_API_KEY` · `EXA_API_KEY` · `FIRECRAWL_API_KEY` ·
+`TINY_FISH_API_KEY` (fetch tier; `TINYFISH_API_KEY` also accepted, since that is
+the name TinyFish's own docs use)
 
 A backend with no key is skipped silently rather than failing: an unconfigured
 provider is a chain that is shorter than you thought, not an error.
@@ -263,7 +312,7 @@ unknown names are dropped on read.
 ```
 /web                                   chains, key presence, cool-offs
 /web search order tavily exa brave firecrawl codex
-/web fetch  order plain curl chrome safari firecrawl
+/web fetch  order plain curl chrome tinyfish firecrawl safari
 /web search|fetch off|on <name>
 /web format native|serp|answer
 /web excerpts auto|short|long
@@ -280,6 +329,14 @@ diagnostic tells you the state of the world, it does not change it — and it
 probes backends that are off or cooling, since "has it recovered?" is the main
 reason to ask. Its first run in a process is cold: TLS setup and Keychain
 resolution dominate, so expect the second run to be several times faster.
+
+It prints a second table for the fetch ladder, probing each tier once against
+`example.com` via `probeFetchTiers()` — same no-cool-off rule, same real code
+path (a one-name `order`). Firecrawl and Safari are skipped unless you ask for
+`/web test all`, because one bills a credit and the other opens a window, and a
+diagnostic you hesitate to run is one you stop running. That is a liveness
+check; scored quality across hostile pages lives in
+`../web-fetch-resilient/eval.ts`.
 
 ## Adding a backend
 

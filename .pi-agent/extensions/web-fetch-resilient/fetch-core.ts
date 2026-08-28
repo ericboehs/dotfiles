@@ -51,10 +51,10 @@ function htmlDeps(): Promise<HtmlDeps> {
 	return htmlDepsPromise;
 }
 
-type FetchTier = 1 | 2 | 3 | 4 | 5;
+type FetchTier = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Stable name → tier number. Reordering never renumbers a tier. */
-export const TIER_NUMBERS = { plain: 1, curl: 2, chrome: 3, safari: 4, firecrawl: 5 } as const;
+export const TIER_NUMBERS = { plain: 1, curl: 2, chrome: 3, safari: 4, firecrawl: 5, tinyfish: 6 } as const;
 export type FetchTierName = keyof typeof TIER_NUMBERS;
 
 export interface FetchResult {
@@ -300,6 +300,57 @@ async function tier5(url: string, key?: string, signal?: AbortSignal): Promise<R
 	};
 }
 
+/**
+ * Tier 6 — TinyFish fetch: a real Chromium render returned as markdown, free
+ * at any wallet balance. It sits ahead of Firecrawl because both rescue pages
+ * the local ladder cannot read, but only one of them spends a credit that the
+ * search chain draws on too.
+ *
+ * The API takes a batch and reports per-URL outcomes in `errors` instead of
+ * failing the request, so a dead link arrives as HTTP 200 with an empty
+ * `results`. Surfacing that inner status is what lets the caller tell a 404
+ * (no cool-off) from a spent or rejected key (cool-off).
+ */
+async function tier6(url: string, key?: string, signal?: AbortSignal): Promise<RawResult> {
+	if (!key) throw new Error("no TINY_FISH_API_KEY (env or fnox)");
+	const signals = [AbortSignal.timeout(60_000), ...(signal ? [signal] : [])];
+	const res = await fetch("https://api.fetch.tinyfish.ai", {
+		method: "POST",
+		headers: { "X-API-Key": key, "Content-Type": "application/json" },
+		body: JSON.stringify({ urls: [url] }),
+		signal: AbortSignal.any(signals),
+	});
+	const json = (await res.json().catch(() => ({}))) as any;
+	if (!res.ok) {
+		const detail = JSON.stringify(json?.error ?? json ?? {}).slice(0, 200);
+		throw new TierHttpError(`tinyfish ${res.status}: ${detail}`, res.status);
+	}
+	const hit = json?.results?.[0];
+	if (!hit) {
+		const failure = json?.errors?.[0];
+		const status = typeof failure?.status === "number" ? failure.status : res.status;
+		throw new TierHttpError(`tinyfish ${status}: ${failure?.error ?? "no result returned"}`, status);
+	}
+	const title = String(hit.title ?? "").trim();
+	const body = String(hit.text ?? "");
+	return {
+		status: res.status,
+		// TinyFish returns the title as a separate field and leaves it out of
+		// `text`. The HTML tiers get a `# Title` line for free from Readability and
+		// Firecrawl's markdown carries its own, so without this a TinyFish result
+		// is the only one in the ladder missing the page's own name — which reads
+		// as a worse extraction than it is. thin() strips this line before judging
+		// content, so restoring it cannot disguise a shell.
+		body: title && !body.trimStart().startsWith("#") ? `# ${title}\n\n${body}` : body,
+		// `text` carries the extracted body and `format` names its dialect. It is
+		// markdown in practice; anything else is still plain text, never HTML that
+		// finish() would need to re-parse.
+		contentType: hit.format === "markdown" ? "text/markdown" : "text/plain",
+		finalUrl: hit.final_url ?? hit.url ?? url,
+		note: "tinyfish fetch",
+	};
+}
+
 /** Tier 4 — dedicated minimized private Safari window (macOS only). */
 async function tier4(url: string, headers?: Record<string, string>): Promise<RawResult> {
 	const { safariFetch } = await import("./safari.ts");
@@ -419,6 +470,7 @@ function tierDescription(tier: FetchTier): string {
 	if (tier === 3) return ": headless Chrome";
 	if (tier === 4) return ": private Safari";
 	if (tier === 5) return ": Firecrawl";
+	if (tier === 6) return ": TinyFish";
 	return "";
 }
 
@@ -454,6 +506,71 @@ async function finish(
 	};
 }
 
+export interface FetchProbeResult {
+	tier: FetchTierName;
+	ok: boolean;
+	ms: number;
+	chars: number;
+	detail?: string;
+}
+
+/**
+ * Probe each tier once, in isolation, against a known-good URL. Forcing a
+ * one-name order means the probe runs the real ladder code rather than
+ * something adjacent to it, exactly as the search-side probe shares
+ * callBackend() with the chain.
+ *
+ * Deliberately writes no cool-offs: a diagnostic reports the state of the
+ * world, it does not change it. Callers decide which tiers to include — this
+ * module has no opinion about which ones cost money or open a window.
+ *
+ * A shell counts as failure. "200 OK and nothing readable" is the outcome the
+ * ladder exists to avoid, so reporting it as success would hide the only thing
+ * worth probing for.
+ */
+export async function probeFetchTiers(
+	url: string,
+	tiers: FetchTierName[],
+	opts: {
+		firecrawlKey?: string;
+		tinyfishKey?: string;
+		signal?: AbortSignal;
+		onAttempt?: (tier: FetchTierName) => void;
+	} = {},
+): Promise<FetchProbeResult[]> {
+	const out: FetchProbeResult[] = [];
+	for (const tier of tiers) {
+		opts.onAttempt?.(tier);
+		const t0 = Date.now();
+		try {
+			const r = await resilientFetch(url, {
+				order: [tier],
+				firecrawlKey: opts.firecrawlKey,
+				tinyfishKey: opts.tinyfishKey,
+				signal: opts.signal,
+			});
+			const shell = /WARNING: no readable content extracted/.test(r.content);
+			out.push({
+				tier,
+				ok: !shell,
+				ms: Date.now() - t0,
+				chars: r.content.length,
+				detail: shell ? "no readable content extracted" : undefined,
+			});
+		} catch (e) {
+			if (opts.signal?.aborted) throw e;
+			out.push({
+				tier,
+				ok: false,
+				ms: Date.now() - t0,
+				chars: 0,
+				detail: (e as Error).message.split("\n")[0].slice(0, 160),
+			});
+		}
+	}
+	return out;
+}
+
 export interface FetchOptions {
 	maxChars?: number;
 	profileDir?: string;
@@ -464,6 +581,8 @@ export interface FetchOptions {
 	order?: FetchTierName[];
 	/** Required for the firecrawl tier; resolved by the caller so this module owns no secrets. */
 	firecrawlKey?: string;
+	/** Required for the tinyfish tier; resolved by the caller so this module owns no secrets. */
+	tinyfishKey?: string;
 	/**
 	 * Called when a tier throws, even if a later tier goes on to succeed. The
 	 * ladder is designed to swallow failures, but a paid tier hitting its quota
@@ -472,7 +591,7 @@ export interface FetchOptions {
 	onTierError?: (tier: FetchTierName, err: Error) => void;
 }
 
-const DEFAULT_ORDER: FetchTierName[] = ["plain", "curl", "chrome", "safari", "firecrawl"];
+const DEFAULT_ORDER: FetchTierName[] = ["plain", "curl", "chrome", "tinyfish", "firecrawl", "safari"];
 
 /**
  * Fetch `url` through the tier ladder. Returns the first acceptable result,
@@ -509,6 +628,7 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 		chrome: () => tier3(url, opts.profileDir, opts.headers),
 		safari: () => tier4(url, opts.headers),
 		firecrawl: () => tier5(url, opts.firecrawlKey, opts.signal),
+		tinyfish: () => tier6(url, opts.tinyfishKey, opts.signal),
 	};
 	const order = opts.order?.length ? opts.order : DEFAULT_ORDER;
 	const tiers: Array<[FetchTier, () => Promise<RawResult>]> = order.map((name) => [
@@ -524,7 +644,7 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 	for (const [tier, run] of tiers) {
 		try {
 			opts.onAttempt?.(
-				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : tier === 5 ? " (Firecrawl)" : ""}...`,
+				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : tier === 5 ? " (Firecrawl)" : tier === 6 ? " (TinyFish)" : ""}...`,
 			);
 			const raw = await run();
 			// Only real browsers earn the "this 4xx is genuine" fallback below;
