@@ -90,6 +90,47 @@ jobs:
           after=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
           [ "$before" = "$after" ] || { echo "dry-run modified state"; exit 1; }
 
+  pi-extensions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        run: |
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
+
+      # bin/pi-ext-check borrows its types from the globally installed pi rather
+      # than pinning versions of its own, so CI has to reproduce that install.
+      # Both versions come from the tracked pins that bootstrap uses, so an
+      # upgrade lands in CI and on the machine together.
+      - name: Install node and pi at the tracked pins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # mise resolves versions via the releases API
+        run: |
+          set -e
+          config=.config/mise/config.toml
+          node_version=$(sed -n 's/^node = "\([^"]*\)"$/\1/p' "$config")
+          pi_version=$(sed -n 's|^"npm:@earendil-works/pi-coding-agent" = "\([^"]*\)"$|\1|p' "$config")
+          [ -n "$node_version" ] || { echo "no node pin in $config"; exit 1; }
+          [ -n "$pi_version" ] || { echo "no pi pin in $config"; exit 1; }
+          echo "node $node_version, pi $pi_version"
+          mise use -g "node@$node_version"
+          # Plain npm, not mise's npm backend: pi-ext-check resolves the install
+          # through `npm root -g`, which only sees the active node's prefix.
+          npm install -g "@earendil-works/pi-coding-agent@$pi_version"
+
+      # Import guard, tsc and the extension test suite. tsc alone would pass on
+      # an extension that imports a gitignored helper, which aborts pi's launch
+      # on every host but this one — exactly what CI is here to catch.
+      - name: Check pi extensions
+        run: bin/pi-ext-check
+
   shellcheck:
     runs-on: ubuntu-latest
     permissions:
