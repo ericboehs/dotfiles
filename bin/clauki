@@ -8,7 +8,9 @@ MODEL="accounts/fireworks/routers/kimi-k2p5-turbo"
 
 export ANTHROPIC_BASE_URL="https://api.fireworks.ai/inference"
 # Use direct binary path — mise shim causes infinite recursion (fnox → shim → mise → fnox → ...)
-export ANTHROPIC_AUTH_TOKEN="$("$(mise where fnox)/fnox" get FIREWORKS_API_KEY)"
+fnox_bin="$(mise where fnox)/fnox"
+ANTHROPIC_AUTH_TOKEN="$("$fnox_bin" get FIREWORKS_API_KEY)"
+export ANTHROPIC_AUTH_TOKEN
 export ANTHROPIC_MODEL="${MODEL}"
 export ANTHROPIC_SMALL_FAST_MODEL="${MODEL}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${MODEL}"

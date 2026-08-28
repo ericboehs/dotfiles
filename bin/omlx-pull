@@ -131,6 +131,9 @@ CFG
 }
 export -f fetch; export DEST REPO MAX_ATTEMPTS HUGGING_FACE_API_KEY
 
+# $0..$2 are the positional parameters of the `bash -c` child, filled in by
+# xargs -n3, not variables of this shell.
+# shellcheck disable=SC2016
 awk -F'\t' '{print $1"\t"$2"\t"$3}' "$MANIFEST" \
   | tr '\t' '\n' \
   | xargs -P "$JOBS" -n3 bash -c 'fetch "$0" "$1" "$2"'

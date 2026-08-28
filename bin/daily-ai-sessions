@@ -13,6 +13,9 @@ notes_dir="$HOME/Documents/Wiki/daily"
 cutoff=$(date -v-1y +%Y-%m-%d)
 
 # grep finds files with sessions, sort orders newest first, perl parses in one pass
+# The perl body is deliberately single-quoted: $cutoff, $ARGV and friends are
+# perl's variables, and the shell must not touch them.
+# shellcheck disable=SC2016
 formatted=$(grep -l "## Claude Sessions" "$notes_dir"/????-??-??.md 2>/dev/null | sort -r | \
   xargs perl -ne '
     BEGIN { $cutoff = shift @ARGV }

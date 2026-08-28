@@ -3,6 +3,9 @@
 # ssm-param-envs
 
 show_help() {
+  # The curly quotes and check marks below are deliberate help-text
+  # typography, not a copy-paste accident.
+  # shellcheck disable=SC1111
   cat <<EOF
 Usage:
   $0 [--help] [--direct-only] [--exists-only] [--plain] [/param/path …]

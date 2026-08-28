@@ -70,6 +70,9 @@ cmd_status() {
   '
   echo
   echo "=== NAS worker ==="
+  # Single quotes on purpose: this body is shell source that runs on the NAS,
+  # so $d and $$ have to survive the trip unexpanded.
+  # shellcheck disable=SC2016
   "${NAS[@]}" '
     found=0
     for d in /proc/[0-9]*; do

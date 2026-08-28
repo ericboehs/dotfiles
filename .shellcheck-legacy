@@ -4,7 +4,6 @@
 
 .claude/scripts/statusline.sh
 bin/agent-notify
-bin/autolights.sh
 bin/claude-active
 bin/claude-jsx-to-html
 bin/claude-man
@@ -13,26 +12,18 @@ bin/claude-resume
 bin/claude-sessions
 bin/claude-tail
 bin/claude-watcher
-bin/clauki
-bin/colors
-bin/daily-ai-sessions
 bin/devin
-bin/gbzp
 bin/gh-action-trace
 bin/gh-pm
 bin/gh-reruns
 bin/gh-reviews-by-user
 bin/ghmpr
 bin/llama-serve
-bin/nas-backup-ctl
-bin/omlx-pull
 bin/pearl
 bin/putio
 bin/recent-tmp-path
 bin/slack-reader
 bin/slackdumper
-bin/ssm-param-envs
 bin/watch-ci
 bin/watch-copilot-reviews
-bin/wso
 bin/ytdl

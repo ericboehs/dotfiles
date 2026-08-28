@@ -4,7 +4,7 @@
 
 echo "Monitoring camera stream."
 
-log stream --predicate 'composedMessage contains "AVFCapture"' | while read line; do
+log stream --predicate 'composedMessage contains "AVFCapture"' | while read -r line; do
   
   # The camera start event has been caught and is set to 'On', turn the light on
   if echo "$line" | grep -qE "AVCaptureSession_Tundra startRunning"; then

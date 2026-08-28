@@ -23,7 +23,10 @@ show_usage() {
 
 launch_opencode() {
   local workspace_dir="$1"
-  cd "$workspace_dir"
+  cd "$workspace_dir" || {
+    echo "wso: no such workspace: $workspace_dir" >&2
+    return 1
+  }
 
   # Export OPENCODE_CONFIG to use the local opencode.json
   export OPENCODE_CONFIG="./opencode.json"
