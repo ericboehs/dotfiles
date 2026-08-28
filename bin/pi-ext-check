@@ -111,7 +111,9 @@ if [[ "$MODE" != "--test-only" ]]; then
 
   # Buffered so the TS1294 hint below can inspect the output; tsc says little
   # enough that nothing is lost by printing it in one go.
-  tsc_log="$(mktemp -t pi-ext-check)"
+  # GNU mktemp rejects a -t template without X's, so spell the template out:
+  # this form is the one both BSD (macOS) and GNU accept.
+  tsc_log="$(mktemp "${TMPDIR:-/tmp}/pi-ext-check.XXXXXX")"
   trap 'rm -f "$tsc_log"' EXIT
 
   echo "Typechecking $PI_AGENT/extensions..."
