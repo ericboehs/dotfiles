@@ -2,15 +2,10 @@
 # The list only shrinks: fix a script, then delete its line here.
 # bin/shell-lint fails if an entry has become clean or is no longer tracked.
 #
-# Everything left is a symlink into a sibling repo (claude-config, agent-notify,
-# pearl-agents, slackdumper). They are checked out on my machine and dangle in
-# CI, and the fix belongs in the repo that owns the file.
+# Everything left is a symlink into a sibling repo (pearl-agents,
+# slackdumper). They are checked out on my machine and dangle in CI, and the
+# fix belongs in the repo that owns the file.
 
-bin/agent-notify
-bin/claude-active
-bin/claude-manager-tickler
-bin/claude-sessions
-bin/claude-tail
 bin/pearl
 bin/slack-reader
 bin/slackdumper
