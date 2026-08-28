@@ -128,7 +128,8 @@ for (const tier of tiers) {
       }
     } catch (e) {
       fails++;
-      notes.push(`${new URL(url).hostname} (${(e as Error).message.split("\n")[0].slice(0, 48)})`);
+      const first = (e as Error).message.split("\n")[0] ?? (e as Error).message;
+      notes.push(`${new URL(url).hostname} (${first.slice(0, 48)})`);
     }
     ms += Date.now() - t0;
     chars += text.length;

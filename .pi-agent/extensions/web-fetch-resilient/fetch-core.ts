@@ -506,6 +506,15 @@ async function finish(
 	};
 }
 
+/**
+ * First line of a message. Written out rather than inlined as `split()[0]`
+ * because under `noUncheckedIndexedAccess` that index is `string | undefined`,
+ * even though split always yields at least one element.
+ */
+function firstLine(message: string): string {
+	return message.split("\n")[0] ?? message;
+}
+
 export interface FetchProbeResult {
 	tier: FetchTierName;
 	ok: boolean;
@@ -564,7 +573,7 @@ export async function probeFetchTiers(
 				ok: false,
 				ms: Date.now() - t0,
 				chars: 0,
-				detail: (e as Error).message.split("\n")[0].slice(0, 160),
+				detail: firstLine((e as Error).message).slice(0, 160),
 			});
 		}
 	}
