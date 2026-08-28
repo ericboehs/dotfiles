@@ -60,8 +60,10 @@ async function loadExtension() {
  *
  * The fake editor records addToHistory in call order, which is the reverse of
  * what Up walks: pi-tui unshifts, so the last call is the first entry offered.
+ * It also keeps the ring itself, because that array is what the extension
+ * splices other panes' prompts into.
  */
-async function mount(agentDir, { cwd = "/repo/a" } = {}) {
+async function mount(agentDir, { cwd = "/repo/a", session } = {}) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   const extension = await loadExtension();
 
@@ -74,17 +76,27 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
   extension(pi);
 
   let installed;
+  let opened;
   const added = [];
   const keystrokes = [];
   const notices = [];
   const editorText = [];
   let overlay;
-  const base = () => ({
-    getText: () => "",
-    setText: () => {},
-    handleInput: (data) => keystrokes.push(data),
-    addToHistory: (text) => added.push(text),
-  });
+  const base = () => {
+    const editor = {
+      // pi-tui's Editor holds its history here, newest first.
+      history: [],
+      getText: () => "",
+      setText: () => {},
+      handleInput: (data) => keystrokes.push(data),
+      addToHistory: (text) => {
+        added.push(text);
+        if (editor.history[0] === text) return; // pi-tui skips repeats
+        editor.history.unshift(text);
+      },
+    };
+    return editor;
+  };
 
   // Plain-text theme: assertions read the rendered lines directly.
   const theme = { fg: (_color, text) => text };
@@ -95,6 +107,7 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
   const ctx = {
     mode: "tui",
     cwd,
+    sessionManager: { getSessionId: () => session },
     ui: {
       getEditorComponent: () => installed,
       setEditorComponent: (factory) => {
@@ -125,9 +138,18 @@ async function mount(agentDir, { cwd = "/repo/a" } = {}) {
     },
     start: () => handlers.get("session_start")({}, ctx),
     /** Build the editor pi would build, and hand back the wrapped instance. */
-    openEditor: () => installed(editorTui, {}, keybindings),
-    submit: (text, overrides = {}) =>
-      handlers.get("input")({ text, source: "interactive", ...overrides }, ctx),
+    openEditor: () => {
+      opened = installed(editorTui, {}, keybindings);
+      return opened;
+    },
+    /** What Up would walk, newest first. */
+    ring: () => opened.history,
+    /** Submit like pi does: extensions see the input, then the ring gets it. */
+    submit: (text, overrides = {}) => {
+      const event = { text, source: "interactive", ...overrides };
+      handlers.get("input")(event, ctx);
+      if (event.source === "interactive" && text.trim()) opened?.addToHistory(text.trim());
+    },
     /** Open the Ctrl+R overlay; returns it plus the promise the handler is on. */
     search: () => {
       overlay = undefined;
@@ -155,7 +177,7 @@ function seedFile(agentDir, records) {
 
 test("submitted prompts are appended with their project", async () => {
   const dir = newAgentDir();
-  const pi = await mount(dir, { cwd: "/repo/a" });
+  const pi = await mount(dir, { cwd: "/repo/a", session: "01JD" });
   pi.presetEditor();
   pi.start();
   pi.openEditor();
@@ -165,6 +187,7 @@ test("submitted prompts are appended with their project", async () => {
   const [record] = historyLines(dir);
   assert.equal(record.text, "fix the flaky test", "stored trimmed");
   assert.equal(record.cwd, "/repo/a");
+  assert.equal(record.s, "01JD", "and the session, so Up can tell mine from yours");
   assert.ok(record.t > 0, "timestamped for later ranking");
 });
 
@@ -257,26 +280,90 @@ test("Up picks up a prompt typed in another pane since boot", async () => {
   pane2.openEditor();
   pane2.submit("typed in the other pane");
 
-  assert.deepEqual(pane1.added, [], "nothing arrives until the ring is consulted");
+  assert.deepEqual(pane1.ring(), [], "nothing arrives until the ring is consulted");
 
   editor.handleInput(UP);
-  assert.deepEqual(pane1.added, ["typed in the other pane"]);
+  assert.deepEqual(pane1.ring(), ["typed in the other pane"]);
   assert.deepEqual(pane1.keystrokes, [UP], "the key still reaches the editor");
 
   editor.handleInput(UP);
   editor.handleInput(DOWN);
   editor.handleInput(UP);
-  assert.deepEqual(pane1.added, ["typed in the other pane"], "never twice, and never mid-browse");
+  assert.deepEqual(pane1.ring(), ["typed in the other pane"], "never twice, and never mid-browse");
 
   pane2.submit("and another one");
   editor.handleInput("x");
   editor.handleInput(UP);
-  assert.deepEqual(pane1.added, ["typed in the other pane", "and another one"], "a new browse looks again");
+  assert.deepEqual(
+    pane1.ring(),
+    ["and another one", "typed in the other pane"],
+    "a new browse looks again",
+  );
+});
+
+test("another pane's prompts queue up behind your own", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [{ t: 1, cwd: "/repo/a", text: "from before either pi" }]);
+
+  const mine = await mount(dir, { cwd: "/repo/a", session: "mine" });
+  mine.presetEditor();
+  mine.start();
+  const editor = mine.openEditor();
+
+  const theirs = await mount(dir, { cwd: "/repo/a", session: "theirs" });
+  theirs.presetEditor();
+  theirs.start();
+  theirs.openEditor();
+
+  mine.submit("what I am working on");
+  theirs.submit("what the other pane is working on");
+  mine.submit("my newest thought");
+
+  editor.handleInput(UP);
+  assert.deepEqual(
+    mine.ring(),
+    [
+      "my newest thought",
+      "what I am working on",
+      "what the other pane is working on",
+      "from before either pi",
+    ],
+    "the first Up is still mine; the other pane lands underneath, not on top",
+  );
+});
+
+test("a resumed session gets its own prompts back first", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [
+    { t: 1, cwd: "/repo/a", s: "resumed", text: "what I was doing yesterday" },
+    { t: 2, cwd: "/repo/a", s: "someone else", text: "what another pi did since" },
+  ]);
+
+  const pi = await mount(dir, { cwd: "/repo/a", session: "resumed" });
+  pi.presetEditor();
+  pi.start();
+  const editor = pi.openEditor();
+
+  assert.deepEqual(
+    pi.ring(),
+    ["what I was doing yesterday", "what another pi did since"],
+    "pi -c picks up where this session left off, not where the machine did",
+  );
+
+  // And the prompts it brought back are protected like ones typed just now.
+  const other = await mount(dir, { cwd: "/repo/a", session: "someone else" });
+  other.presetEditor();
+  other.start();
+  other.openEditor();
+  other.submit("a brand new interruption");
+
+  editor.handleInput(UP);
+  assert.deepEqual(pi.ring()[0], "what I was doing yesterday");
 });
 
 test("a pi does not re-import its own prompts", async () => {
   const dir = newAgentDir();
-  const pi = await mount(dir, { cwd: "/repo/a" });
+  const pi = await mount(dir, { cwd: "/repo/a", session: "only" });
   pi.presetEditor();
   pi.start();
   const editor = pi.openEditor();
@@ -284,7 +371,7 @@ test("a pi does not re-import its own prompts", async () => {
   pi.submit("my own prompt");
   editor.handleInput(UP);
 
-  assert.deepEqual(pi.added, [], "pi's own editor already recorded it");
+  assert.deepEqual(pi.ring(), ["my own prompt"], "pi's own editor already recorded it");
 });
 
 test("reload rewraps the editor underneath instead of stacking", async () => {

@@ -8,7 +8,13 @@
 // yesterday's sessions.
 //
 //   ${PI_CODING_AGENT_DIR:-~/.pi/agent}/prompt-history.jsonl
-//   {"t":1764259200000,"cwd":"/Users/x/Code/foo","text":"fix the flaky test"}
+//   {"t":1764259200000,"cwd":"/Users/x/Code/foo","s":"01JD…","text":"fix the flaky test"}
+//
+// Shared does not mean undifferentiated: the first Up has to be the prompt you
+// yourself last sent, or the ring is worse than no ring. Every record carries
+// the session that wrote it, and the ring is ordered this session's prompts,
+// then this project's, then the machine's — so Up walks outwards from where you
+// are standing rather than handing you whatever some other pane typed last.
 //
 // Speed is the whole point of the file. The obvious implementation (see
 // npm:pi-input-history and pi discussion #1496) mines past sessions instead:
@@ -28,7 +34,9 @@
 // Between seeds, a pi only knows what existed when it booted, so the editor's
 // handleInput is wrapped to re-read the bytes appended since (a stat, and a read
 // only when the size moved) on the first Up of a browse — that is what makes
-// prompts from a pi still running in another pane show up here.
+// prompts from a pi still running in another pane show up here. Those arrivals
+// are spliced in behind this session's own prompts (see foldIn) rather than
+// unshifted on top of them.
 //
 // The Ctrl+R overlay follows npm:pi-input-history, which follows
 // mrshu/pi-readline-search; this one searches the same JSONL file rather than
@@ -63,14 +71,15 @@ import {
 } from "@earendil-works/pi-tui";
 
 /**
- * "project-first" ranks prompts typed in this cwd ahead of everything else, so
- * Up in a repo walks that repo's prompts and falls through to the rest of the
- * machine. "recent" is strict bash-style recency across all projects.
+ * How everything that is not this session's own gets ranked. "project-first"
+ * puts prompts typed in this cwd ahead of the rest of the machine; "recent" is
+ * strict bash-style recency across all projects. Prompts from this session come
+ * before either, always — that is not a policy, it is what Up means.
  */
 const SCOPE: "project-first" | "recent" = "project-first";
 
 /** pi-tui's Editor caps its ring at 100, so seeding more than that is wasted work. */
-const SEED_MAX = 100;
+const RING_MAX = 100;
 
 /** How far back to look for those 100 prompts. ~2000 records; ~1ms to parse. */
 const TAIL_BYTES = 256 * 1024;
@@ -107,7 +116,10 @@ const BARE_COMMAND = /^\/[\w:.-]*$/;
 /** Marks our editor factory so /reload rewraps the base instead of stacking. */
 const WRAPPED = "__promptHistoryBase";
 
-type Record_ = { t?: number; cwd?: string; text?: unknown };
+type Record_ = { t?: number; cwd?: string; s?: unknown; text?: unknown };
+
+/** One history record, as the readers care about it. */
+type Parsed = { text: string; cwd?: string; session?: string };
 
 /** EditorFactory is not re-exported from the package root, so recover it here. */
 type EditorFactory = NonNullable<ReturnType<ExtensionUIContext["getEditorComponent"]>>;
@@ -123,6 +135,12 @@ export default function promptHistory(pi: ExtensionAPI) {
   let seen = new Set<string>();
   let editor: EditorComponent | undefined;
   let editorTui: TUI | undefined;
+
+  // Prompts this session sent, including the ones a resume brought back. pi
+  // unshifts each of them as it is sent, so they are the front of the ring, and
+  // knowing them is what lets foldIn slot other pis in underneath.
+  const local = new Set<string>();
+  let session: string | undefined;
 
   /**
    * Pull in whatever other pis appended since the last look.
@@ -143,11 +161,13 @@ export default function promptHistory(pi: ExtensionAPI) {
     const chunk = readRange(path, offset, size);
     offset = size;
     if (!chunk) return;
+    const fresh: string[] = [];
     for (const text of texts(chunk, false)) {
       if (seen.has(text)) continue;
       seen.add(text);
-      editor.addToHistory?.(text);
+      fresh.push(text);
     }
+    if (fresh.length > 0) foldIn(editor, fresh, local);
   };
 
   const append = (text: string, cwd: string) => {
@@ -156,7 +176,9 @@ export default function promptHistory(pi: ExtensionAPI) {
     // prompts and keep them in true chronological order behind our own.
     refresh();
     try {
-      appendFileSync(path, `${JSON.stringify({ t: Date.now(), cwd, text })}\n`);
+      // JSON.stringify drops an undefined `s`, so an unidentifiable session
+      // just writes the record it always wrote.
+      appendFileSync(path, `${JSON.stringify({ t: Date.now(), cwd, s: session, text })}\n`);
       seen.add(text);
       offset = fileSize(path);
       rotate(path, () => {
@@ -173,12 +195,19 @@ export default function promptHistory(pi: ExtensionAPI) {
     // something the user would reach for with Up.
     if (event.source !== "interactive") return;
     const text = event.text.trim();
-    if (!text || BARE_COMMAND.test(text)) return;
+    if (!text) return;
+    // pi puts every submission in the ring, bare commands included, so they all
+    // count as ours: the pinned prefix has to match what is actually in front.
+    local.add(text);
+    // A resume or a fork moves the session out from under us mid-run.
+    session = sessionOf(ctx);
+    if (BARE_COMMAND.test(text)) return;
     append(text, ctx.cwd);
   });
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
+    session = sessionOf(ctx);
 
     // Unwrap any factory of ours from a previous load: /reload runs this again
     // with a fresh module, and chaining our own wrapper would seed twice.
@@ -194,9 +223,12 @@ export default function promptHistory(pi: ExtensionAPI) {
       // Seed here rather than in session_start so that a second editor (a TUI
       // mode switch, another extension rebuilding the chain) also gets current
       // history, and so the byte offset is taken at the same instant.
-      const { items, size } = readSeed(path, ctx.cwd);
+      const { items, mine, size } = readSeed(path, ctx.cwd, session);
       offset = size;
       seen = new Set(items);
+      // On a resume these were typed in this session before the restart, so they
+      // are ours to protect even though this process never saw them sent.
+      for (const text of mine) local.add(text);
       // addToHistory unshifts, so feed oldest first to land items[0] under Up.
       for (let i = items.length - 1; i >= 0; i--) component.addToHistory?.(items[i]!);
 
@@ -520,7 +552,7 @@ function readSearchable(path: string): Entry[] {
     searchCache = [];
     searchSeen = new Set();
     for (let i = all.length - 1; i >= 0 && searchCache.length < SEARCH_MAX; i--) {
-      const [text, cwd] = all[i]!;
+      const { text, cwd } = all[i]!;
       if (searchSeen.has(text)) continue;
       searchSeen.add(text);
       searchCache.push({ text, lower: text.toLowerCase(), cwd });
@@ -532,7 +564,7 @@ function readSearchable(path: string): Entry[] {
     const chunk = readRange(path, searchOffset, size);
     searchOffset = size;
     if (chunk === null) return searchCache;
-    for (const [text, cwd] of texts(chunk, false, true)) {
+    for (const { text, cwd } of texts(chunk, false, true)) {
       if (searchSeen.has(text)) continue;
       searchSeen.add(text);
       searchCache.unshift({ text, lower: text.toLowerCase(), cwd });
@@ -551,9 +583,9 @@ function readSearchable(path: string): Entry[] {
  * Wrapping the instance rather than subclassing keeps this compatible with
  * whatever editor the rest of the chain produced (cursor-focus.ts, a modal
  * editor, ...) — there is no class to extend when the previous factory returns
- * something of its own. The guard matters because addToHistory unshifts:
- * inserting entries mid-browse would shift the index the editor is holding, so
- * new prompts are only folded in when a browse starts, never during one.
+ * something of its own. The guard matters because the ring is spliced: folding
+ * entries in mid-browse would shift the index the editor is holding, so new
+ * prompts are only picked up when a browse starts, never during one.
  */
 function watchForBrowse(
   component: EditorComponent,
@@ -575,38 +607,97 @@ function watchForBrowse(
   };
 }
 
-/** Newest-first prompts to seed a new editor with, and the size they were read at. */
-function readSeed(path: string, cwd: string): { items: string[]; size: number } {
+/**
+ * Add prompts the other pis wrote without letting them jump the queue.
+ *
+ * addToHistory unshifts, which is exactly backwards here: a prompt another pane
+ * sent while you were reading would land under the first Up ahead of the one
+ * you typed yourself, which is the whole complaint about a shared ring. pi-tui
+ * keeps its history in a plain array, so splice the newcomers in behind this
+ * session's own prompts instead — still one Up away, just not in front.
+ */
+function foldIn(editor: EditorComponent, fresh: string[], local: Set<string>): void {
+  const ring = (editor as { history?: unknown }).history;
+  if (!Array.isArray(ring)) {
+    // Some other editor implementation: unshifting is all the interface offers.
+    for (const text of fresh) editor.addToHistory?.(text);
+    return;
+  }
+
+  // Our prompts are the prefix pi unshifted as they were sent (plus whatever a
+  // resume seeded); the first entry we do not recognise is where the shared
+  // history starts, and that is where the other pis belong.
+  let at = 0;
+  while (at < ring.length && local.has(ring[at] as string)) at++;
+
+  fresh.reverse(); // texts() yields oldest first; the ring is newest first.
+  ring.splice(at, 0, ...fresh);
+  // splice bypasses the cap addToHistory enforces, so re-apply it.
+  if (ring.length > RING_MAX) ring.length = RING_MAX;
+}
+
+/**
+ * Which pi a prompt came from.
+ *
+ * The session id, not the pid: it survives a resume, so `pi -c` still knows
+ * which prompts were its own and keeps them under Up ahead of whatever the rest
+ * of the machine has been doing since.
+ */
+function sessionOf(ctx: { sessionManager?: { getSessionId?: () => string } }): string | undefined {
+  try {
+    return ctx.sessionManager?.getSessionId?.() || undefined;
+  } catch {
+    // An ephemeral or half-built session is simply unidentified.
+    return undefined;
+  }
+}
+
+/**
+ * Newest-first prompts to seed a new editor with, the ones this session sent,
+ * and the size they were read at.
+ */
+function readSeed(
+  path: string,
+  cwd: string,
+  session: string | undefined,
+): { items: string[]; mine: string[]; size: number } {
   const size = fileSize(path);
-  if (size === 0) return { items: [], size: 0 };
+  if (size === 0) return { items: [], mine: [], size: 0 };
 
   const start = Math.max(0, size - TAIL_BYTES);
   const chunk = readRange(path, start, size);
-  if (chunk === null) return { items: [], size };
+  if (chunk === null) return { items: [], mine: [], size };
 
+  const mine: string[] = [];
   const project: string[] = [];
   const other: string[] = [];
   const unique = new Set<string>();
 
   const all = texts(chunk, start > 0, true);
   for (let i = all.length - 1; i >= 0; i--) {
-    const [text, recordCwd] = all[i]!;
-    if (unique.has(text)) continue;
-    unique.add(text);
-    const bucket = SCOPE === "project-first" && recordCwd !== cwd ? other : project;
-    if (bucket.length < SEED_MAX) bucket.push(text);
-    if (project.length >= SEED_MAX && (SCOPE !== "project-first" || other.length >= SEED_MAX)) {
+    const record = all[i]!;
+    if (unique.has(record.text)) continue;
+    unique.add(record.text);
+    const bucket =
+      session !== undefined && record.session === session
+        ? mine
+        : SCOPE === "project-first" && record.cwd !== cwd
+          ? other
+          : project;
+    if (bucket.length < RING_MAX) bucket.push(record.text);
+    if (mine.length >= RING_MAX) break;
+    if (project.length >= RING_MAX && (SCOPE !== "project-first" || other.length >= RING_MAX)) {
       break;
     }
   }
 
-  return { items: [...project, ...other].slice(0, SEED_MAX), size };
+  return { items: [...mine, ...project, ...other].slice(0, RING_MAX), mine, size };
 }
 
 /** Parse JSONL, dropping the leading fragment when the read started mid-file. */
 function texts(chunk: string, dropPartial: boolean): string[];
-function texts(chunk: string, dropPartial: boolean, withCwd: true): [string, string | undefined][];
-function texts(chunk: string, dropPartial: boolean, withCwd?: true): unknown[] {
+function texts(chunk: string, dropPartial: boolean, detailed: true): Parsed[];
+function texts(chunk: string, dropPartial: boolean, detailed?: true): unknown[] {
   const lines = chunk.split("\n");
   if (dropPartial) lines.shift();
   const out: unknown[] = [];
@@ -622,9 +713,14 @@ function texts(chunk: string, dropPartial: boolean, withCwd?: true): unknown[] {
     }
     const text = record?.text;
     if (typeof text !== "string" || !text) continue;
-    out.push(withCwd ? [text, typeof record.cwd === "string" ? record.cwd : undefined] : text);
+    out.push(detailed ? { text, cwd: str(record.cwd), session: str(record.s) } : text);
   }
   return out;
+}
+
+/** A non-empty string field, or nothing. */
+function str(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
 }
 
 function fileSize(path: string): number {
