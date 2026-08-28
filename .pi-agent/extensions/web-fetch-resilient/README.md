@@ -38,14 +38,22 @@ Thirteen URLs, ground-truth string per page, each tier forced in isolation
 | firecrawl | 8/13 | 0 | 4 | 10004 | 417 |
 
 The headline is not that TinyFish scores highest. It is that **Chrome and
-TinyFish fail on disjoint pages**, and the ladder gets the union.
+TinyFish fail on disjoint pages**.
 
 TinyFish misses exactly two: `g2.com` and `glassdoor.com`, which reject
 datacenter IPs outright — G2 with a 403, Glassdoor with a flat `bot_blocked`.
 Chrome fetches both without complaint, because it is coming from a residential
 connection with a real sensor result. Chrome in turn misses Reddit,
 StackOverflow, Bloomberg, Zillow and Indeed, all of which TinyFish renders.
-Run in sequence, `chrome → tinyfish` clears all thirteen.
+
+An earlier draft of this file concluded from that table that `chrome →
+tinyfish` therefore clears all thirteen. **It does not, and the reason is worth
+more than the claim was.** Isolated scores are an *oracle*: they say what the
+best tier per page would return if something asked it. The ladder only escalates
+when a tier *throws*, so a tier that returns a plausible-looking wall ends the
+chain above the tier that would have worked. Measured end to end with
+`--ladder`, the union that the table predicts at 15/16 actually delivered 12/16
+until `thin()` was tightened. Always measure the chain, not the parts.
 
 That is the argument for keeping a hosted renderer *behind* a local browser
 rather than in front of it: they are not redundant, they fail differently, and
@@ -85,15 +93,57 @@ Two integration details that are easy to get wrong, both found by the eval:
 
 Caveat: n=13, one afternoon, one location, single run. Bot scoring is not a
 pure function of the request — Chrome has thrown on pages it fetched minutes
-earlier — so re-run `eval.ts` before concluding a tier regressed.
+earlier — so re-run `eval.ts` before concluding a tier regressed. This table
+also predates two corrections below, and over-counts slightly: it was scored
+when the Tractor Supply marker still matched the page title, which every tier
+can read off a bot wall.
+
+### What the ladder actually returns
+
+`eval.ts --ladder` runs the configured order end to end and reports which tier
+answered. Sixteen URLs, same markers:
+
+| | isolated oracle | ladder, before | ladder, after |
+|---|---:|---:|---:|
+| correct | 15/16 | 12/16 | **13/16** |
+
+The gap between the first two columns was entirely `thin()`. Reddit came back
+from Chrome as 321 characters of "Sign in with Apple / Continue with Email",
+Indeed as 296 of "Create an account or sign in" — both over the flat
+200-character floor, so both were accepted as the page. Tractor Supply was
+worse: 599 characters of pure navigation that *passed the eval* on its title.
+
+So the floor now scales with the size of the document that produced it
+(`rawBytes / 300`, clamped to 200–1000) and registration walls are matched
+outright. Reddit now resolves at TinyFish with 5,679 characters, Indeed at
+TinyFish with 2,565, Tractor Supply at Chrome with 10,418.
+
+Escalating more eagerly costs latency, and it is worth knowing how much: the
+full suite went **176.3s → 172.7s**, i.e. nothing outside noise. No easy page
+regressed — all five still answer at tier 1. Tractor Supply individually pays
+11.5s to climb to Chrome, which is the honest price of not returning a navbar.
+
+Three remain unresolved, and only one is a ladder failure. Instagram is a
+deliberate ceiling: every tier renders the profile header, none reach the
+posts. Zillow returns 2,755 characters of accessibility boilerplate, which is
+too much prose to call thin without endangering genuinely terse pages.
+Bloomberg flipped from pass to fail between two runs of the same code, which is
+the stochasticity caveat above, in the wild.
 
 ## Evals and probes
 
 ```sh
-node --experimental-strip-types eval.ts                      # free headless tiers
+node --experimental-strip-types eval.ts                      # free headless tiers, in isolation
 node --experimental-strip-types eval.ts --all                # + firecrawl (credits) + safari (GUI)
 node --experimental-strip-types eval.ts --tiers chrome,tinyfish
+node --experimental-strip-types eval.ts --ladder             # the real chain, escalating
 ```
+
+Two modes, answering different questions. The default forces one tier at a time
+and scores each in isolation. `--ladder` reads the persisted config and runs the
+shipped order end to end, reporting which tier actually answered. Run both:
+isolated scores are an upper bound the chain does not automatically reach, and
+the 12/16-vs-15/16 gap above is what that looks like when it goes wrong.
 
 `eval.ts` scores **after extraction and truncation**, because that is the only
 boundary that matters: a raw API payload flatters whichever backend sends the
@@ -105,13 +155,22 @@ Ground-truth strings have to clear two bars — stable enough that a miss means
 retrieval failed rather than the fact moved, and present inside the 20K
 truncation window, or the eval measures the budget instead of the tier.
 Reddit is checked for a `u/handle`, Glassdoor for a `media.glassdoor.com` asset
-URL, and Hacker News for a post score, all for a related reason: every tier can
-scrape a title out of a bot wall, so a marker the failing tiers can satisfy
-would score the wall as a success.
+URL, Hacker News for a post score, and Tractor Supply for a category name, all
+for a related reason: every tier can scrape a title out of a bot wall, so a
+marker the failing tiers can satisfy would score the wall as a success. Tractor
+Supply proved that the hard way — it was scored green for four runs on a title
+match while returning nothing but a navbar.
 
-The 13 cases run from `example.com` up through Akamai, Cloudflare, PerimeterX
-and outright datacenter-IP bans, so the table separates tiers instead of
-flattering all of them. Six easy pages would have every tier at 5/6.
+Every URL is confirmed live and every marker confirmed reachable by at least
+one tier, except Instagram, which is deliberately a ceiling. That check is not
+ceremony: an earlier draft used a dead ASIN whose 404 page reads "Continue
+shopping", which looks exactly like a bot wall and was very nearly recorded as
+one. Amazon fetches fine with a live URL.
+
+The 16 cases run from `example.com` up through Akamai, Cloudflare, PerimeterX,
+registration walls and outright datacenter-IP bans, so the table separates
+tiers instead of flattering all of them. Six easy pages would have every tier
+at 5/6.
 
 For a liveness check rather than a quality one, `/web test` probes each tier
 once against `example.com` and prints latency, size, and cost beside the search

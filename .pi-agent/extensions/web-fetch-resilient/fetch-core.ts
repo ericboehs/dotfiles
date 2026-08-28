@@ -419,9 +419,48 @@ async function pdfToText(bytes: Buffer): Promise<string> {
  * Size is half the judgement. example.com is 1.2KB of HTML and 167 characters
  * of prose, and that is the entire page — not a shell. Only a document big
  * enough to have had something to say is suspicious for saying nothing.
+ *
+ * The 200-character floor is a floor, not a threshold: it was set for empty
+ * shells and is far too low for a large page. Measured 2026-08-28, Reddit
+ * returned 321 characters of "Sign in with Apple / Continue with Email" and
+ * Indeed 296 of "Create an account or sign in" — both comfortably over 200, so
+ * both were accepted, and the ladder stopped one rung above the tier that
+ * renders the page. So the floor scales with the size of the document that
+ * produced it, and known auth walls are matched outright.
+ *
+ * Being wrong in this direction is cheap. resilientFetch keeps the best thin
+ * answer it has seen, so a false positive costs a tier of latency and returns
+ * the same text anyway; a false negative returns a sign-in box as the page.
  */
 const THIN_CHARS = 200;
 const SHELL_BYTES = 8_000;
+const THIN_CEILING = 1_000;
+const THIN_RATIO = 300;
+
+/**
+ * Registration walls. These are not shells — they are a fully rendered page,
+ * just not the one that was asked for, so no amount of size heuristic
+ * separates them from a short article. The phrases are the generic ones every
+ * federated login box shares, and the check is gated on a short body so that
+ * an article merely *mentioning* a sign-in link is not thrown away.
+ */
+const AUTH_WALL =
+	/\b(?:sign in with|continue with (?:email|phone|apple|google)|create an account or sign in|log in to continue)\b/i;
+const AUTH_WALL_MAX = 2_000;
+
+export function looksLikeAuthWall(body: string): boolean {
+	return body.length < AUTH_WALL_MAX && AUTH_WALL.test(body);
+}
+
+/**
+ * Minimum prose a document of this size should have yielded. Sub-linear on
+ * purpose: a 40KB page owing ~130 characters is a weaker claim than a 300KB
+ * page owing 1,000, and the ceiling keeps a genuinely terse page from being
+ * rejected for being terse.
+ */
+export function thinFloor(rawBytes: number): number {
+	return Math.min(THIN_CEILING, Math.max(THIN_CHARS, Math.round(rawBytes / THIN_RATIO)));
+}
 
 /**
  * Compact JavaScript application shells. These are well-formed 200s that
@@ -461,8 +500,10 @@ function thin(result: FetchResult, raw: RawResult): boolean {
 	// Drop the `# Title` line and the footer finish() adds: a shell has a title
 	// and nothing else, and the footer is never evidence of content.
 	const body = (result.content.replace(/^#[^\n]*\n/, "").split("\n\n---\n[via tier")[0] ?? "").trim();
-	if (body.length >= THIN_CHARS) return false;
-	return rawLen(raw) >= SHELL_BYTES;
+	// A small document is its own evidence: there was never room for more.
+	if (rawLen(raw) < SHELL_BYTES) return false;
+	if (looksLikeAuthWall(body)) return true;
+	return body.length < thinFloor(rawLen(raw));
 }
 
 function tierDescription(tier: FetchTier): string {
