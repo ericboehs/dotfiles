@@ -179,9 +179,7 @@
   #   - verbose: Enable instant prompt and print a warning when detecting console output during
   #              zsh initialization. Choose this if you've never tried instant prompt, haven't
   #              seen the warning, or if you are unsure what this all means.
-  # Off: a fake prompt before highlighting/autosuggestions are hooked made a
-  # paste in a new pane flash raw bracketed-paste 200~ until zshrc finished.
-  typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
+  typeset -g POWERLEVEL9K_INSTANT_PROMPT=verbose
 
   # Hot reload allows you to change POWERLEVEL9K options after Powerlevel10k has been initialized.
   # For example, you can type POWERLEVEL9K_BACKGROUND=red and see your prompt turn red. Hot reload
