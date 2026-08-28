@@ -205,9 +205,8 @@ jobs:
           mise use -g "shellcheck@$version"
           shellcheck --version
 
-      # Every tracked bash/sh script, not just .tmux/*.sh. Scripts with
-      # pre-existing warnings are listed in .shellcheck-legacy and held to parse
-      # errors only; the list can only shrink, so this ratchets rather than
-      # demanding one big cleanup up front.
+      # Every tracked bash/sh script, not just .tmux/*.sh. This began as a
+      # ratchet over 33 exempted scripts; the exemption list is empty now, so
+      # every script is held to a clean run.
       - name: Run shellcheck
         run: bin/shell-lint

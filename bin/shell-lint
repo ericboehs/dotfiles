@@ -1,26 +1,21 @@
 #!/usr/bin/env bash
 
-# Shellcheck the repo's shell scripts, on a ratchet.
+# Shellcheck the repo's shell scripts.
 # Usage: shell-lint [-h|--help] [--list]
 #
-# 71 of the 104 tracked shell scripts are already clean; the other 33 carry
-# pre-existing warnings that want fixing on their own schedule. Checking
-# everything strictly would mean a permanently red job nobody reads, and
-# checking everything loosely would let the clean majority rot. So: every
-# script is checked strictly except those named in .shellcheck-legacy, which
-# are held to parse errors only.
-#
-# The list only shrinks. Fix a legacy script and this fails until its line is
-# deleted, so the ratchet cannot quietly slip backwards.
+# Every tracked bash/sh script is checked strictly. This started as a ratchet:
+# 71 of 104 scripts were clean and the other 33 were exempted by name in
+# .shellcheck-legacy, held to parse errors only, on a list that could only
+# shrink. The list reached zero, so the exemption machinery is gone — it is one
+# `git revert` away if a large script ever arrives dirty.
 
 set -euo pipefail
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "Usage: $(basename "$0") [--list]"
   echo ""
-  echo "Shellcheck every tracked shell script. Scripts named in .shellcheck-legacy"
-  echo "are checked for parse errors only; fixing one requires removing its line."
-  echo "--list prints the discovered scripts and their tier instead of checking."
+  echo "Shellcheck every tracked shell script."
+  echo "--list prints the discovered scripts instead of checking them."
   exit 0
 fi
 
@@ -40,7 +35,6 @@ cd "$REPO"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
 
 if ! command -v shellcheck >/dev/null; then
@@ -48,32 +42,12 @@ if ! command -v shellcheck >/dev/null; then
   exit 1
 fi
 
-LEGACY_FILE=".shellcheck-legacy"
-
 # Tracked files only. An untracked scratch script in bin/ is nobody else's
 # problem, and it would make this pass or fail depending on the working tree.
 mapfile -t tracked < <(git ls-files bin .tmux .claude)
 
 strict=()
-legacy=()
 skipped_zsh=0
-
-is_legacy() {
-  local needle="$1" entry
-  for entry in "${legacy_entries[@]}"; do
-    [ "$entry" = "$needle" ] && return 0
-  done
-  return 1
-}
-
-legacy_entries=()
-if [ -f "$LEGACY_FILE" ]; then
-  while IFS= read -r line; do
-    line="${line%%#*}"
-    line="$(printf '%s' "$line" | tr -d '[:space:]')"
-    [ -n "$line" ] && legacy_entries+=("$line")
-  done < "$LEGACY_FILE"
-fi
 
 for file in "${tracked[@]}"; do
   # Skips dangling symlinks as well as directories: bin/ has symlinks into
@@ -92,16 +66,11 @@ for file in "${tracked[@]}"; do
     '#!'*bash* | '#!'*/bin/sh | '#!'*env\ sh) ;;
     *) continue ;;
   esac
-  if is_legacy "$file"; then
-    legacy+=("$file")
-  else
-    strict+=("$file")
-  fi
+  strict+=("$file")
 done
 
 if [[ "${1:-}" == "--list" ]]; then
-  printf 'strict %s\n' "${strict[@]}"
-  printf 'legacy %s\n' "${legacy[@]}"
+  printf '%s\n' "${strict[@]}"
   exit 0
 fi
 
@@ -114,48 +83,11 @@ fi
 
 status=0
 
-echo "Checking ${#strict[@]} scripts (${#legacy[@]} legacy, $skipped_zsh zsh skipped)..."
+echo "Checking ${#strict[@]} scripts ($skipped_zsh zsh skipped)..."
 if shellcheck "${strict[@]}"; then
   echo -e "${GREEN}✅ shellcheck clean${NC}"
 else
   echo -e "${RED}❌ shellcheck found problems${NC}" >&2
-  status=1
-fi
-
-# Legacy scripts still have to parse. SC1071 (an unsupported shell) and an
-# unclosed quote are not style opinions, and they are how a script breaks
-# outright rather than merely reading badly.
-if [ ${#legacy[@]} -gt 0 ]; then
-  if ! shellcheck --severity=error "${legacy[@]}"; then
-    echo -e "${RED}❌ a legacy script no longer parses${NC}" >&2
-    status=1
-  fi
-fi
-
-# The ratchet: anything on the list that has become clean has to come off it,
-# otherwise the list outlives the problems and stops meaning anything.
-graduated=()
-for file in "${legacy[@]}"; do
-  shellcheck "$file" >/dev/null 2>&1 && graduated+=("$file")
-done
-if [ ${#graduated[@]} -gt 0 ]; then
-  echo -e "${YELLOW}These are clean now — delete them from $LEGACY_FILE:${NC}" >&2
-  printf '   %s\n' "${graduated[@]}" >&2
-  status=1
-fi
-
-# A stale entry is a silent hole: the file was renamed or deleted, and a new
-# script arriving at that path would inherit the exemption. Tracked-ness is the
-# test, not existence on disk — several bin/ entries are symlinks to other repos
-# that resolve on my machine and dangle in CI, and the list has to mean the same
-# thing in both places.
-stale=()
-for entry in "${legacy_entries[@]}"; do
-  git ls-files --error-unmatch "$entry" >/dev/null 2>&1 || stale+=("$entry")
-done
-if [ ${#stale[@]} -gt 0 ]; then
-  echo -e "${RED}❌ $LEGACY_FILE names files git does not track:${NC}" >&2
-  printf '   %s\n' "${stale[@]}" >&2
   status=1
 fi
 
