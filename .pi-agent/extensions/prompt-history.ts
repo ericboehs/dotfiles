@@ -75,9 +75,13 @@ const SEED_MAX = 100;
 /** How far back to look for those 100 prompts. ~2000 records; ~1ms to parse. */
 const TAIL_BYTES = 256 * 1024;
 
-/** Trim the file once it passes this, keeping the newest KEEP_BYTES. */
-const MAX_FILE_BYTES = 1024 * 1024;
-const KEEP_BYTES = 512 * 1024;
+/**
+ * Trim the file once it passes this, keeping the newest KEEP_BYTES. At the
+ * ~60KB/day this fills at, that is roughly a year of prompts kept and a rewrite
+ * every couple of months.
+ */
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const KEEP_BYTES = 12 * 1024 * 1024;
 
 /** Ctrl+R is bash muscle memory; keybindings.json moves /rename out of the way. */
 const SEARCH_KEY: KeyId = "ctrl+r";
@@ -85,9 +89,13 @@ const SEARCH_KEY: KeyId = "ctrl+r";
 /** Matches shown around the selected one. Enough to scan, small enough to skim. */
 const SEARCH_ROWS = 7;
 
-/** Search reads deeper than the Up ring: it is a keypress, not startup. */
-const SEARCH_BYTES = 1024 * 1024;
-const SEARCH_MAX = 2000;
+/**
+ * Search reads the whole file, not a tail window: recall is the entire point,
+ * and the cost is paid once per session (see readSearchable) rather than per
+ * keypress. The entry cap bounds the memory the lowercased copies take.
+ */
+const SEARCH_BYTES = MAX_FILE_BYTES;
+const SEARCH_MAX = 20000;
 
 /**
  * Bare slash commands ("/model", "/tree") are noise in a cross-session ring:
@@ -230,7 +238,16 @@ export default function promptHistory(pi: ExtensionAPI) {
   });
 }
 
-type Entry = { text: string; cwd?: string };
+type Entry = { text: string; lower: string; cwd?: string };
+
+/**
+ * Parsed search corpus, newest first, and how far into the file it reflects.
+ * Module scope rather than closure scope so /reload starts over: the file is
+ * the source of truth and a fresh parse is only paid once per session.
+ */
+let searchCache: Entry[] = [];
+let searchSeen = new Set<string>();
+let searchOffset = 0;
 
 /**
  * The search overlay: a filtered list over the history file.
@@ -299,7 +316,7 @@ class SearchOverlay implements Component, Focusable {
   private setQuery(query: string): void {
     this.query = query;
     this.matcher = buildMatcher(query, this.entries);
-    this.matches = this.entries.filter((entry) => this.matcher.test(entry.text));
+    this.matches = this.entries.filter((entry) => this.matcher.test(entry.lower));
     this.selected = 0;
   }
 
@@ -375,7 +392,8 @@ class SearchOverlay implements Component, Focusable {
  * and the loose match is only a fallback for when that finds nothing at all.
  */
 type Matcher = {
-  test: (text: string) => boolean;
+  /** Takes the pre-lowercased text: the query runs against 20k entries a keystroke. */
+  test: (lower: string) => boolean;
   hits: (text: string) => Set<number>;
   loose: boolean;
 };
@@ -387,10 +405,7 @@ function buildMatcher(query: string, entries: Entry[]): Matcher {
   if (tokens.length === 0) return matchAll;
 
   const literal: Matcher = {
-    test: (text) => {
-      const haystack = text.toLowerCase();
-      return tokens.every((token) => haystack.includes(token));
-    },
+    test: (lower) => tokens.every((token) => lower.includes(token)),
     hits: (text) => {
       const haystack = text.toLowerCase();
       const positions = new Set<number>();
@@ -403,20 +418,18 @@ function buildMatcher(query: string, entries: Entry[]): Matcher {
     },
     loose: false,
   };
-  if (entries.some((entry) => literal.test(entry.text))) return literal;
+  if (entries.some((entry) => literal.test(entry.lower))) return literal;
 
   return {
-    test: (text) => {
-      const haystack = text.toLowerCase();
-      return tokens.every((token) => {
+    test: (lower) =>
+      tokens.every((token) => {
         let at = 0;
         for (const char of token) {
-          at = haystack.indexOf(char, at) + 1;
+          at = lower.indexOf(char, at) + 1;
           if (at === 0) return false;
         }
         return true;
-      });
-    },
+      }),
     hits: (text) => {
       const haystack = text.toLowerCase();
       const positions = new Set<number>();
@@ -462,20 +475,42 @@ function isPrintable(data: string): boolean {
 function readSearchable(path: string): Entry[] {
   const size = fileSize(path);
   if (size === 0) return [];
-  const start = Math.max(0, size - SEARCH_BYTES);
-  const chunk = readRange(path, start, size);
-  if (chunk === null) return [];
 
-  const all = texts(chunk, start > 0, true);
-  const entries: Entry[] = [];
-  const unique = new Set<string>();
-  for (let i = all.length - 1; i >= 0 && entries.length < SEARCH_MAX; i--) {
-    const [text, cwd] = all[i]!;
-    if (unique.has(text)) continue;
-    unique.add(text);
-    entries.push({ text, cwd });
+  // Parsing a year of prompts costs real milliseconds, so it happens once and
+  // later opens only read whatever was appended since — by this pi or another.
+  if (size < searchOffset || searchCache.length === 0) {
+    const start = Math.max(0, size - SEARCH_BYTES);
+    const chunk = readRange(path, start, size);
+    searchOffset = size;
+    if (chunk === null) return searchCache;
+
+    const all = texts(chunk, start > 0, true);
+    searchCache = [];
+    searchSeen = new Set();
+    for (let i = all.length - 1; i >= 0 && searchCache.length < SEARCH_MAX; i--) {
+      const [text, cwd] = all[i]!;
+      if (searchSeen.has(text)) continue;
+      searchSeen.add(text);
+      searchCache.push({ text, lower: text.toLowerCase(), cwd });
+    }
+    return searchCache;
   }
-  return entries;
+
+  if (size > searchOffset) {
+    const chunk = readRange(path, searchOffset, size);
+    searchOffset = size;
+    if (chunk === null) return searchCache;
+    for (const [text, cwd] of texts(chunk, false, true)) {
+      if (searchSeen.has(text)) continue;
+      searchSeen.add(text);
+      searchCache.unshift({ text, lower: text.toLowerCase(), cwd });
+    }
+    if (searchCache.length > SEARCH_MAX) {
+      for (const entry of searchCache.splice(SEARCH_MAX)) searchSeen.delete(entry.text);
+    }
+  }
+
+  return searchCache;
 }
 
 /**

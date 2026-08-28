@@ -443,12 +443,38 @@ test("searching an empty history says so instead of opening", async () => {
   assert.deepEqual(pi.notices, ["No prompt history yet."]);
 });
 
+test("a prompt typed after the last search shows up in the next one", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [{ t: 1, cwd: "/repo/a", text: "the prompt that was already there" }]);
+
+  const pi = await mount(dir, { cwd: "/repo/a" });
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const first = pi.search();
+  assert.equal(rows(first.overlay).length, 1);
+  first.overlay.handleInput(ESCAPE);
+  await first.done;
+
+  pi.submit("a brand new prompt");
+
+  const second = pi.search();
+  assert.deepEqual(
+    rows(second.overlay).map((line) => line.trim()),
+    ["▸ a brand new prompt", "the prompt that was already there"],
+    "the cached corpus picks up the appended bytes instead of going stale",
+  );
+  second.overlay.handleInput(ESCAPE);
+  await second.done;
+});
+
 test("the file is trimmed instead of growing forever", async () => {
   const dir = newAgentDir();
   const filler = "y".repeat(1000);
   seedFile(
     dir,
-    Array.from({ length: 1200 }, (_, i) => ({ t: i, cwd: "/repo/a", text: `${filler}${i}` })),
+    Array.from({ length: 17000 }, (_, i) => ({ t: i, cwd: "/repo/a", text: `${filler}${i}` })),
   );
 
   const pi = await mount(dir, { cwd: "/repo/a" });
@@ -459,7 +485,8 @@ test("the file is trimmed instead of growing forever", async () => {
 
   const lines = historyLines(dir);
   const bytes = readFileSync(join(dir, "prompt-history.jsonl")).length;
-  assert.ok(bytes < 1024 * 1024, `trimmed to ${bytes} bytes`);
+  assert.ok(bytes < 16 * 1024 * 1024, `trimmed to ${bytes} bytes`);
+  assert.ok(bytes > 8 * 1024 * 1024, `but a year of prompts is kept, not 512KB (${bytes})`);
   assert.equal(lines.at(-1).text, "the write that tips it over", "newest survives");
   assert.equal(lines.at(0).text.startsWith(filler), true, "and it is whole records that remain");
 });
