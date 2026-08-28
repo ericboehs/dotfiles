@@ -1,0 +1,304 @@
+#! /usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'fileutils'
+require 'json'
+require 'net/http'
+require 'optparse'
+require 'time'
+require 'uri'
+
+# Scan Hacker News for stories that are breaking, not just sitting on the
+# homepage. Default is a dry print so you can see the filter work. --notify
+# slacks new hits via slack-noti and remembers them.
+class HNWatch
+  ALGOLIA = 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=30'
+  FIREBASE_TOP = 'https://hacker-news.firebaseio.com/v0/topstories.json'
+  FIREBASE_ITEM = 'https://hacker-news.firebaseio.com/v0/item/%s.json'
+  HN_ITEM = 'https://news.ycombinator.com/item?id=%s'
+  CACHE_DIR = File.expand_path('~/.cache/hn-watch')
+  SEEN_PATH = File.join(CACHE_DIR, 'seen.json')
+  USER_AGENT = 'hn-watch (ericboehs/dotfiles)'
+
+  DEFAULTS = {
+    min_points: 300,
+    max_age_points: 4.0,
+    min_pph: 100.0,
+    min_pph_points: 40,
+    max_age: 6.0,
+    source: 'algolia'
+  }.freeze
+
+  Story = Struct.new(
+    :id, :title, :url, :points, :comments, :created_at, :age_h, :pph,
+    keyword_init: true
+  ) do
+    def hn_url
+      format(HN_ITEM, id)
+    end
+  end
+
+  def initialize(argv)
+    @opts = DEFAULTS.dup.merge(notify: false, reset: false, list_seen: false, watch: nil)
+    parse! argv
+  end
+
+  def run
+    if @opts[:reset]
+      reset_seen
+      return
+    end
+    if @opts[:list_seen]
+      print_seen
+      return
+    end
+
+    if @opts[:watch]
+      loop { tick; sleep @opts[:watch] }
+    else
+      tick
+    end
+  end
+
+  private
+
+  def parse!(argv)
+    parser = OptionParser.new do |o|
+      o.banner = <<~BANNER
+        Usage: hn-watch [options]
+
+        Print the HN front page with velocity and whether each story would
+        fire. Does not Slack or record anything unless --notify.
+        --watch re-scans (and --notify still slacks new fires each tick).
+
+        A story fires when either:
+          points >= #{DEFAULTS[:min_points]} and age < #{DEFAULTS[:max_age_points]}h
+          pph    >= #{DEFAULTS[:min_pph]} and points >= #{DEFAULTS[:min_pph_points]} and age < #{DEFAULTS[:max_age]}h
+      BANNER
+      o.on('--notify', 'Slack new fires via slack-noti and remember them') { @opts[:notify] = true }
+      o.on('--watch [SECONDS]', Integer, 'Re-scan every SECONDS (default 180). Works with --notify') do |v|
+        interval = v || 180
+        raise OptionParser::InvalidArgument, 'watch interval must be at least 15' if interval < 15
+
+        @opts[:watch] = interval
+      end
+      o.on('--seen', 'List remembered story IDs') { @opts[:list_seen] = true }
+      o.on('--reset', 'Forget remembered story IDs') { @opts[:reset] = true }
+      o.on('--source NAME', %w[algolia firebase], 'algolia (default) or firebase') { |v| @opts[:source] = v }
+      o.on('--min-points N', Integer, "Points floor (default #{DEFAULTS[:min_points]})") { |v| @opts[:min_points] = v }
+      o.on('--max-age-points H', Float, "Max age hours for the points rule (default #{DEFAULTS[:max_age_points]})") { |v| @opts[:max_age_points] = v }
+      o.on('--min-pph N', Float, "Points-per-hour floor (default #{DEFAULTS[:min_pph]})") { |v| @opts[:min_pph] = v }
+      o.on('--min-pph-points N', Integer, "Points floor when using pph (default #{DEFAULTS[:min_pph_points]})") { |v| @opts[:min_pph_points] = v }
+      o.on('--max-age H', Float, "Max age hours for the pph rule (default #{DEFAULTS[:max_age]})") { |v| @opts[:max_age] = v }
+      o.on('-h', '--help', 'Show this help') do
+        puts o
+        exit
+      end
+    end
+    parser.parse! argv
+  end
+
+  def tick
+    stories = fetch_stories.sort_by { |s| -s.pph }
+    seen = load_seen
+    reprint_board stories, seen
+    notify_new(stories, seen) if @opts[:notify]
+  rescue StandardError => e
+    raise unless @opts[:watch]
+
+    warn "#{Time.now.strftime('%H:%M:%S')}  #{e.message}"
+  end
+
+  def reprint_board(stories, seen)
+    print "\e[2J\e[H" if @opts[:watch] && $stdout.tty?
+    puts "#{Time.now.strftime('%H:%M:%S')}  source=#{@opts[:source]}" if @opts[:watch]
+    print_board stories, seen
+    return unless @opts[:watch]
+
+    extra = @opts[:notify] ? '  notifying new fires' : ''
+    puts "next in #{@opts[:watch]}s#{extra}  (Ctrl-C to stop)"
+  end
+
+  def notify_new(stories, seen)
+    fires = stories.select { |s| fire?(s) && !seen.key?(s.id.to_s) }
+    if fires.empty?
+      warn 'Nothing new to notify.' unless @opts[:watch]
+      return
+    end
+    fires.each { |story| notify story, seen }
+    save_seen seen
+  end
+
+  def fetch_stories
+    @opts[:source] == 'firebase' ? firebase_stories : algolia_stories
+  end
+
+  def algolia_stories
+    json = get_json ALGOLIA
+    now = Time.now.to_f
+    json.fetch('hits').filter_map { |hit| story_from_algolia hit, now }
+  end
+
+  def story_from_algolia(hit, now)
+    created = hit['created_at_i'] or return
+    points = hit['points'] || 0
+    age_h = [(now - created) / 3600.0, 0.05].max
+    Story.new(
+      id: (hit['objectID'] || hit['story_id']).to_i,
+      title: hit['title'] || '(untitled)',
+      url: hit['url'],
+      points: points,
+      comments: hit['num_comments'] || 0,
+      created_at: Time.at(created),
+      age_h: age_h,
+      pph: points / age_h
+    )
+  end
+
+  def firebase_stories
+    ids = get_json(FIREBASE_TOP).first(30)
+    now = Time.now.to_f
+    ids.filter_map do |id|
+      item = get_json(format(FIREBASE_ITEM, id))
+      next unless item && item['type'] == 'story' && item['time']
+
+      points = item['score'] || 0
+      age_h = [(now - item['time']) / 3600.0, 0.05].max
+      Story.new(
+        id: item['id'],
+        title: item['title'] || '(untitled)',
+        url: item['url'],
+        points: points,
+        comments: item['descendants'] || 0,
+        created_at: Time.at(item['time']),
+        age_h: age_h,
+        pph: points / age_h
+      )
+    end
+  end
+
+  def fire?(story)
+    points_hit = story.points >= @opts[:min_points] && story.age_h < @opts[:max_age_points]
+    pph_hit = story.pph >= @opts[:min_pph] &&
+              story.points >= @opts[:min_pph_points] &&
+              story.age_h < @opts[:max_age]
+    points_hit || pph_hit
+  end
+
+  def fire_reason(story)
+    reasons = []
+    reasons << 'pts' if story.points >= @opts[:min_points] && story.age_h < @opts[:max_age_points]
+    if story.pph >= @opts[:min_pph] && story.points >= @opts[:min_pph_points] && story.age_h < @opts[:max_age]
+      reasons << 'pph'
+    end
+    reasons.join('+')
+  end
+
+  def print_board(stories, seen)
+    puts format('%5s %5s %6s %7s  %-8s %s', 'pts', 'cmt', 'age', 'pph', 'flag', 'title')
+    stories.each do |story|
+      flag =
+        if seen.key?(story.id.to_s)
+          'seen'
+        elsif fire?(story)
+          fire_reason(story)
+        else
+          '-'
+        end
+      puts format(
+        '%5d %5d %6s %7.1f  %-8s %s',
+        story.points,
+        story.comments,
+        format_age(story.age_h),
+        story.pph,
+        flag,
+        story.title
+      )
+    end
+  end
+
+  def format_age(hours)
+    if hours < 1
+      format('%dm', (hours * 60).round)
+    else
+      format('%.1fh', hours)
+    end
+  end
+
+  def notify(story, seen)
+    body = [
+      "*#{story.title}*",
+      format(
+        '%d pts · %d comments · %s · %.0f pph',
+        story.points, story.comments, format_age(story.age_h), story.pph
+      ),
+      story.hn_url,
+      story.url
+    ].compact.join("\n")
+
+    ok = system 'slack-noti', body
+    raise "slack-noti failed for #{story.id}" unless ok
+
+    seen[story.id.to_s] = {
+      'title' => story.title,
+      'points' => story.points,
+      'pph' => story.pph.round(1),
+      'notified_at' => Time.now.utc.iso8601
+    }
+    warn "notified #{story.id}  #{story.title}"
+  end
+
+  def load_seen
+    return {} unless File.exist?(SEEN_PATH)
+
+    JSON.parse(File.read(SEEN_PATH))
+  rescue JSON::ParserError
+    {}
+  end
+
+  def save_seen(seen)
+    FileUtils.mkdir_p CACHE_DIR
+    tmp = "#{SEEN_PATH}.tmp"
+    File.write tmp, JSON.pretty_generate(seen)
+    File.rename tmp, SEEN_PATH
+  end
+
+  def reset_seen
+    FileUtils.rm_f SEEN_PATH
+    warn "cleared #{SEEN_PATH}"
+  end
+
+  def print_seen
+    seen = load_seen
+    if seen.empty?
+      puts 'No remembered stories.'
+      return
+    end
+    seen.each do |id, meta|
+      puts format('%s  %s  %s', id, meta['notified_at'], meta['title'])
+    end
+  end
+
+  def get_json(url)
+    uri = URI(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == 'https'
+    http.open_timeout = 10
+    http.read_timeout = 15
+    req = Net::HTTP::Get.new(uri)
+    req['User-Agent'] = USER_AGENT
+    res = http.request req
+    raise "GET #{url} -> #{res.code}" unless res.is_a?(Net::HTTPSuccess)
+
+    JSON.parse res.body
+  end
+end
+
+Signal.trap('SIGINT') { exit 1 }
+
+begin
+  HNWatch.new(ARGV).run
+rescue StandardError => e
+  warn e.message
+  exit 1
+end
