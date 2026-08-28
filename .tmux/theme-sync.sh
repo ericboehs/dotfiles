@@ -6,6 +6,38 @@
 # both modes (it reads on either background, so the active window is the same
 # color all day), and @time_fg stays Latte's overlay1 for the same reason.
 
+# Every attached client evaluates #() independently, and active output can
+# redraw the status line more often than status-interval. Share one appearance
+# check per tmux server for a short window; two seconds still makes a system
+# appearance toggle feel immediate. Set THEME_SYNC_INTERVAL=0 to only dedupe
+# concurrent checks.
+interval=${THEME_SYNC_INTERVAL:-2}
+case $interval in ''|*[!0-9]*) interval=2 ;; esac
+server_id=${TMUX#*,}; server_id=${server_id%%,*}
+check_cache=${TMPDIR:-/tmp}/tmux-theme-sync-check.$EUID.${server_id:-unknown}
+check_lock=$check_cache.lock
+now=$(printf '%(%s)T' -1)
+read -r last_check 2>/dev/null <"$check_cache"
+if [[ $last_check =~ ^[0-9]+$ ]] && ((now - last_check < interval)); then
+  exit 0
+fi
+
+if ! mkdir "$check_lock" 2>/dev/null; then
+  if [[ -n $(find "$check_lock" -maxdepth 0 -mmin +1 2>/dev/null) ]]; then
+    rmdir "$check_lock" 2>/dev/null
+    mkdir "$check_lock" 2>/dev/null || exit 0
+  else
+    exit 0
+  fi
+fi
+trap 'rmdir "$check_lock" 2>/dev/null' EXIT
+
+# Recheck after taking the lock in case another client just completed.
+read -r last_check 2>/dev/null <"$check_cache"
+if [[ $last_check =~ ^[0-9]+$ ]] && ((now - last_check < interval)); then
+  exit 0
+fi
+
 # Detecting inline here used to mean calling `defaults`, which does not exist on
 # Linux and failed into the light branch — leaving coop's status bar in Latte
 # against a dark terminal no matter what the Mac was set to. bin/appearance
@@ -31,6 +63,10 @@ else
   warn="#df8e1d"; crit="#d20f39"; peach="#fe640b"
   mark="#8839ef"; mark_fg="#eff1f5"
 fi
+
+# Mark the check before applying a changed theme; the lock remains held until
+# exit, so another client cannot observe this timestamp mid-update.
+printf '%s\n' "$now" >"$check_cache.$$" && mv -f "$check_cache.$$" "$check_cache"
 
 # This script runs on every status redraw. Re-applying ~20 options each time is
 # pure waste, so bail out unless the appearance actually flipped. Editing the

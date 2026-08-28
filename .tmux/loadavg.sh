@@ -6,6 +6,42 @@
 #   >= half           yellow, the machine is working
 #   > CPU count       red, runnable work is queueing behind the CPUs
 
+# tmux evaluates #() separately for every attached client and may do so on
+# redraws between status-interval ticks. The load numbers only need the same
+# five-second cadence as the status bar, so share the rendered result per tmux
+# server. Set LOADAVG_INTERVAL=0 to keep only concurrent-call deduplication.
+interval=${LOADAVG_INTERVAL:-5}
+case $interval in ''|*[!0-9]*) interval=5 ;; esac
+server_id=${TMUX#*,}; server_id=${server_id%%,*}
+cache=${TMPDIR:-/tmp}/tmux-loadavg.$EUID.${server_id:-unknown}
+lock=$cache.lock
+now=$(printf '%(%s)T' -1)
+IFS=$'\t' read -r stamp cached 2>/dev/null <"$cache"
+if [[ $stamp =~ ^[0-9]+$ ]] && ((now - stamp < interval)); then
+  printf '%s' "$cached"
+  exit 0
+fi
+
+if ! mkdir "$lock" 2>/dev/null; then
+  # A slightly stale value is preferable to a blank status segment while the
+  # other client refreshes it. Recover abandoned locks after one minute.
+  if [[ -n $(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null) ]]; then
+    rmdir "$lock" 2>/dev/null
+    mkdir "$lock" 2>/dev/null || exit 0
+  else
+    [[ -n $cached ]] && printf '%s' "$cached"
+    exit 0
+  fi
+fi
+trap 'rmdir "$lock" 2>/dev/null' EXIT
+
+# Another client may have refreshed the cache immediately before lock acquire.
+IFS=$'\t' read -r stamp cached 2>/dev/null <"$cache"
+if [[ $stamp =~ ^[0-9]+$ ]] && ((now - stamp < interval)); then
+  printf '%s' "$cached"
+  exit 0
+fi
+
 # Linux keeps both in /proc; macOS has neither, and answers via sysctl instead.
 if [[ -r /proc/loadavg ]]; then
   ncpu=$(nproc)
@@ -19,9 +55,9 @@ fi
 # Reset to @time_fg rather than "default": the surrounding status-format sets
 # @time_fg before calling this, and "default" would reset to the brighter
 # status-style fg, leaving later numbers lighter than the earlier ones.
-base_fg=$(tmux show-options -gqv @time_fg)
-warn_fg=$(tmux show-options -gqv @load_warn_fg)
-crit_fg=$(tmux show-options -gqv @load_crit_fg)
+IFS=' ' read -r base_fg warn_fg crit_fg < <(
+  tmux display -p '#{@time_fg} #{@load_warn_fg} #{@load_crit_fg}'
+)
 
 color() {
   local v=$1 band
@@ -39,4 +75,7 @@ color() {
   esac
 }
 
-printf '%s %s %s' "$(color "$one")" "$(color "$five")" "$(color "$fifteen")"
+rendered=$(printf '%s %s %s' \
+  "$(color "$one")" "$(color "$five")" "$(color "$fifteen")")
+printf '%s\t%s\n' "$now" "$rendered" >"$cache.$$" && mv -f "$cache.$$" "$cache"
+printf '%s' "$rendered"

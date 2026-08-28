@@ -9,7 +9,9 @@
 #     outside the ignore list AND not on the alternate screen. TUI apps
 #     (vim, less, htop) flip alt-screen; batch jobs (cargo build, rspec) don't.
 #
-# Cost control — this runs every status-interval seconds, so it stays cheap:
+# Cost control — tmux may re-run #() on every redraw, once per attached client:
+#   * A per-server timestamp and atomic lock collapse those redraws into one
+#     sweep per AGENT_SYNC_INTERVAL (five seconds by default).
 #   * Agents leave a sticky @agent_pane=<agent pid> marker on their pane while
 #     their session lives. Idle agents report odd foreground commands ("node",
 #     bare version strings) that would otherwise look like jobs; the marker
@@ -22,6 +24,40 @@
 #
 # The ignore list defaults below; override with the @busy_ignore option:
 #   tmux set-option -g @busy_ignore "zsh fish python3 ..."
+
+# Two attached clients otherwise launch two full process-table scans together,
+# and active pane output can retrigger them between status-interval ticks. Keep
+# the throttle per tmux server so independent servers still maintain their own
+# pane options. Setting AGENT_SYNC_INTERVAL=0 keeps only the concurrency lock.
+interval=${AGENT_SYNC_INTERVAL:-5}
+case $interval in ''|*[!0-9]*) interval=5 ;; esac
+server_id=${TMUX#*,}; server_id=${server_id%%,*}
+run_cache=${TMPDIR:-/tmp}/tmux-agent-sync-run.$EUID.${server_id:-unknown}
+run_lock=$run_cache.lock
+now=$(printf '%(%s)T' -1)
+read -r last_run 2>/dev/null <"$run_cache"
+if [[ $last_run =~ ^[0-9]+$ ]] && ((now - last_run < interval)); then
+  exit 0
+fi
+
+if ! mkdir "$run_lock" 2>/dev/null; then
+  # Recover from a process killed while holding the lock; a sweep never takes
+  # remotely close to a minute under normal conditions.
+  if [[ -n $(find "$run_lock" -maxdepth 0 -mmin +1 2>/dev/null) ]]; then
+    rmdir "$run_lock" 2>/dev/null
+    mkdir "$run_lock" 2>/dev/null || exit 0
+  else
+    exit 0
+  fi
+fi
+trap 'rmdir "$run_lock" 2>/dev/null' EXIT
+
+# The other client may have completed while this process was acquiring the lock.
+read -r last_run 2>/dev/null <"$run_cache"
+if [[ $last_run =~ ^[0-9]+$ ]] && ((now - last_run < interval)); then
+  exit 0
+fi
+
 ignore=$(tmux show-options -gv @busy_ignore 2>/dev/null)
 ignore=${ignore:-zsh bash fish sh nu ksh dash pwsh \
   ssh mosh-client \
@@ -154,3 +190,7 @@ while [ "$i" -lt "${#wins[@]}" ]; do
   fi
   i=$((i+1))
 done
+
+# Publish only after a complete sweep. Atomic replacement means every redraw
+# sees either the previous successful timestamp or this one, never a partial.
+printf '%s\n' "$now" >"$run_cache.$$" && mv -f "$run_cache.$$" "$run_cache"
