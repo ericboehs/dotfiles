@@ -39,7 +39,6 @@ MAX_DEPTH=2
 FORMAT="both"
 SEARCH_EXTERNAL=false
 OUTPUT_FILE=""
-CHECK_RUNS=""
 CHECK_RUNS_FROM=""
 CHECK_RUNS_TO=""
 QUIET=false
@@ -171,7 +170,6 @@ parse_args() {
       --external) SEARCH_EXTERNAL=true; shift ;;
       --output) OUTPUT_FILE="$2"; shift 2 ;;
       --check-runs)
-        CHECK_RUNS="$2"
         CHECK_RUNS_FROM="${2%%\.\.*}"
         CHECK_RUNS_TO="${2##*\.\.}"
         if [[ -z "$CHECK_RUNS_TO" ]]; then
@@ -785,7 +783,9 @@ find_callers_of_workflow() {
     repo=$(echo "$item" | jq -r '.repository.full_name')
     path=$(echo "$item" | jq -r '.path')
 
-    local caller_id="${repo}/${path}->$(echo "$workflow_ref" | md5sum | cut -c1-8 2>/dev/null || md5 -q -s "$workflow_ref" 2>/dev/null || echo "$workflow_ref")"
+    local ref_hash
+    ref_hash=$(echo "$workflow_ref" | md5sum | cut -c1-8 2>/dev/null || md5 -q -s "$workflow_ref" 2>/dev/null || echo "$workflow_ref")
+    local caller_id="${repo}/${path}->${ref_hash}"
     if is_visited "$caller_id"; then
       continue
     fi

@@ -12,16 +12,19 @@
 # @raycast.author Eric Boehs
 # @raycast.authorURL boehs.com
 
-# Get the most recently added file in ~/tmp
-recent_file=$(ls -t ~/tmp | head -n 1)
+# Get the most recently added file in ~/tmp. stat sorts by mtime without
+# parsing ls output; this is a Raycast script, so BSD stat is a safe bet.
+recent_file=$(find "$HOME/tmp" -maxdepth 1 -mindepth 1 -exec stat -f '%m %N' {} + 2>/dev/null \
+  | sort -rn | head -n 1 | cut -d' ' -f2- | xargs -I{} basename {})
 
 if [ -z "$recent_file" ]; then
     echo "No files found in ~/tmp"
     exit 1
 fi
 
-# Create the full path and escape it
-full_path="~/tmp/$recent_file"
+# Create the full path and escape it. $HOME, not a literal tilde: printf %q
+# escapes the tilde too, and "\~/tmp/x" is not a path any shell will expand.
+full_path="$HOME/tmp/$recent_file"
 escaped_path=$(printf '%q' "$full_path")
 
 # Copy to clipboard

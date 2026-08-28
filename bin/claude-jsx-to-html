@@ -32,6 +32,9 @@ if [[ -z "$COMPONENT" ]]; then
 fi
 
 # Extract the title from the component name (add spaces before capitals)
+# Splitting camelCase needs the capture groups; ${var//search/replace}
+# has no way to reference them.
+# shellcheck disable=SC2001
 TITLE=$(echo "$COMPONENT" | sed 's/\([a-z]\)\([A-Z]\)/\1 \2/g')
 
 # Collect all imported package names (excluding react/react-dom)
@@ -93,8 +96,10 @@ HTMLIMPORTMAP
 grep "^import " "$INPUT" | grep -v "from 'react'" | grep -v "from 'react-dom" >> "$OUTPUT" || true
 
 # Write the processed JSX body
-echo "" >> "$OUTPUT"
-echo "$JSX_BODY" >> "$OUTPUT"
+{
+  echo ""
+  echo "$JSX_BODY"
+} >> "$OUTPUT"
 
 cat >> "$OUTPUT" << HTMLFOOT
 

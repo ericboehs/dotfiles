@@ -87,7 +87,8 @@ echo "⏱️  Refresh interval: ${INTERVAL}s (press Ctrl+C to stop)"
 echo ""
 
 show_review_status() {
-  local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+  local timestamp
+  timestamp=$(date "+%Y-%m-%d %H:%M:%S")
 
   clear_screen
   echo -e "🤖 Copilot Review Status for ${BLUE}${REPO}#${PR_NUMBER}${NC}"
@@ -186,7 +187,10 @@ show_review_status() {
         cbody=$(echo "$comments" | jq -r ".[$j].body // \"\"")
 
         echo -e "  ${BLUE}$path${NC}:${YELLOW}$line${NC}"
-        # Strip code suggestion blocks for cleaner terminal output
+        # Strip code suggestion blocks for cleaner terminal output. The sed
+        # scripts are single-quoted so the shell leaves the ^ anchors and the
+        # backticks alone.
+        # shellcheck disable=SC2016
         echo "$cbody" | sed '/^```suggestion/,/^```$/d' | fold -s -w 76 | sed 's/^/    /'
         echo ""
         j=$((j + 1))
@@ -215,7 +219,7 @@ show_review_status() {
 
 # Initial display
 show_review_status && rc=$? || rc=$?
-if [ $rc -eq 2 ]; then
+if [ "$rc" -eq 2 ]; then
   exit 0
 fi
 

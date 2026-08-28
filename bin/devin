@@ -175,8 +175,7 @@ case "$cmd" in
     # Auto-select session if not provided (optimized for view command)
     if [ -z "$session_id" ]; then
       echo "🔍  Fetching recent sessions..." >&2
-      resp=$(curl -s --max-time 5 -H "$AUTH_HEADER" "$BASE_URL/sessions?limit=20")
-      if [ $? -ne 0 ]; then
+      if ! resp=$(curl -s --max-time 5 -H "$AUTH_HEADER" "$BASE_URL/sessions?limit=20"); then
         echo "❌  Failed to fetch sessions (timeout or network error)" >&2
         echo "💡  Try specifying a session ID explicitly: devin view <session_id>" >&2
         exit 1
@@ -274,9 +273,8 @@ case "$cmd" in
       
       while true; do
         sleep 3
-        new_session_resp=$(curl -s --max-time 5 -H "$AUTH_HEADER" "$BASE_URL/session/$session_id" 2>/dev/null)
-        
-        if [ $? -eq 0 ] && echo "$new_session_resp" | jq . >/dev/null 2>&1; then
+        if new_session_resp=$(curl -s --max-time 5 -H "$AUTH_HEADER" "$BASE_URL/session/$session_id" 2>/dev/null) \
+           && echo "$new_session_resp" | jq . >/dev/null 2>&1; then
           new_message_count=$(echo "$new_session_resp" | jq '.messages | length')
           
           if [ "$new_message_count" -gt "$last_message_count" ]; then

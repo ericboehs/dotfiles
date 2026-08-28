@@ -255,7 +255,7 @@ cmd_summary() {
     .transfers | sort_by(if .status == "DOWNLOADING" then 0 elif .status == "WAITING" then 1 elif .status == "SEEDING" then 2 else 3 end)[:10][] |
     [.status, (.percent_done | tostring), (.downloaded // 0 | tostring), (.size // 0 | tostring), .name] |
     @tsv
-  ' | while IFS=$'\t' read -r status percent downloaded size name; do
+  ' | while IFS=$'\t' read -r status percent _ size name; do
     local icon
     case "$status" in
       COMPLETED) icon="✅" ;;
@@ -275,7 +275,8 @@ cmd_summary() {
       local pct_int=${percent%.*}
       local filled=$((pct_int / 5))
       local empty=$((20 - filled))
-      local bar=$(printf '█%.0s' $(seq 1 $filled 2>/dev/null) ; printf '░%.0s' $(seq 1 $empty 2>/dev/null))
+      local bar
+      bar=$(printf '█%.0s' $(seq 1 "$filled" 2>/dev/null) ; printf '░%.0s' $(seq 1 "$empty" 2>/dev/null))
       printf "   %s %3.0f%% [%s] %s\n" "$icon" "$percent" "$bar" "$short_name"
     elif [[ "$status" == "WAITING" ]]; then
       printf "   %s waiting %s\n" "$icon" "$short_name"

@@ -63,7 +63,8 @@ echo ""
 
 # Returns: 0 = checks still running, 1 = failure detected, 2 = all checks passed
 show_ci_status() {
-  local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+  local timestamp
+  timestamp=$(date "+%Y-%m-%d %H:%M:%S")
 
   clear_screen
   echo -e "🔍 CI Status for branch: ${BLUE}$BRANCH${NC}"
@@ -193,10 +194,10 @@ show_ci_status() {
 
 # Initial display
 show_ci_status && rc=$? || rc=$?
-if [ $rc -eq 2 ]; then
+if [ "$rc" -eq 2 ]; then
   exit 0
 fi
-if [ $rc -eq 1 ]; then
+if [ "$rc" -eq 1 ]; then
   exit 1
 fi
 
