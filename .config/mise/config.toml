@@ -37,6 +37,10 @@ pkl = "latest"
 # the machine disagree about what is clean. Bumping this is a deliberate act
 # that may retire lines from .shellcheck-legacy.
 shellcheck = "0.11.0"
+# Pinned for the same reason as shellcheck: rubocop adds cops between releases,
+# and CI and this machine have to agree on what counts as clean. The repo's
+# .rubocop.yml keeps it to the Lint and Security departments.
+"gem:rubocop" = "1.89.0"
 watchexec = "latest"
 aube = "latest"
 # Pinned, not "latest": this file is symlinked into ~/.config, so a version mise

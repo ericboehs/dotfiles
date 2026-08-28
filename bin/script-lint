@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+# Check the repo's non-shell scripts: ruby, node and python.
+# Usage: script-lint [-h|--help] [--list]
+#
+# Sibling of bin/shell-lint, which handles bash and sh. Two checks per language:
+# every script has to parse, and ruby additionally goes through rubocop.
+#
+# Parsing is the floor. bin/ scripts are mostly run by me, by hand, months
+# apart, so a typo in a branch nobody took that day sits there until the day it
+# matters — and every one of these languages can say "this file is broken"
+# without running it.
+#
+# rubocop is configured (.rubocop.yml) to the Lint and Security departments
+# only. Style across bin/ is 900 offenses of opinion; Lint is duplicate
+# methods, useless assignments and debuggers left in the code.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $(basename "$0") [--list]"
+  echo ""
+  echo "Syntax-check every tracked ruby, node and python script, and run rubocop"
+  echo "(Lint + Security) over the ruby ones. --list prints what was discovered."
+  exit 0
+fi
+
+# bin/ is symlinked to ~/bin, so resolve the real script location.
+target="${BASH_SOURCE[0]}"
+while [ -L "$target" ]; do
+  link="$(readlink "$target")"
+  case "$link" in
+    /*) target="$link" ;;
+    *) target="$(dirname "$target")/$link" ;;
+  esac
+done
+# -P for the same reason as bin/shell-lint: through the ~/bin symlink a logical
+# cd would strip the `..` textually and land in $HOME.
+REPO="$(cd -P "$(dirname "$target")/.." && pwd)"
+cd "$REPO"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+ruby_files=()
+node_files=()
+python_files=()
+
+# Tracked files only, and language by shebang: bin/ is extensionless, so the
+# shebang is the only thing that knows what a file is.
+while IFS= read -r file; do
+  # Skips directories (submodules) and dangling symlinks into sibling repos,
+  # which are checked out on my machine and absent in CI.
+  [ -f "$file" ] || continue
+  # Bounded read with NULs stripped: bin/claude-code-proxy-or is a tracked
+  # symlink to a Mach-O binary.
+  shebang="$(head -c 512 "$file" 2>/dev/null | LC_ALL=C tr -d '\0' | head -1)"
+  case "$shebang" in
+    '#!'*ruby*) ruby_files+=("$file") ;;
+    '#!'*node*) node_files+=("$file") ;;
+    '#!'*python*) python_files+=("$file") ;;
+  esac
+done < <(git ls-files bin .claude .tmux)
+
+if [[ "${1:-}" == "--list" ]]; then
+  printf 'ruby   %s\n' "${ruby_files[@]}"
+  printf 'node   %s\n' "${node_files[@]}"
+  printf 'python %s\n' "${python_files[@]}"
+  exit 0
+fi
+
+# "Nothing found" is a broken discovery, not a pass.
+if [ ${#ruby_files[@]} -eq 0 ] && [ ${#node_files[@]} -eq 0 ] && [ ${#python_files[@]} -eq 0 ]; then
+  echo -e "${RED}❌ no ruby, node or python scripts found${NC}" >&2
+  exit 1
+fi
+
+status=0
+
+syntax_check() {
+  local label="$1" missing_hint="$2"
+  shift 2
+  local -a files=("$@")
+  [ ${#files[@]} -eq 0 ] && return 0
+
+  echo "Parsing ${#files[@]} $label scripts..."
+  local failed=0 file
+  for file in "${files[@]}"; do
+    case "$label" in
+      ruby) ruby -c "$file" >/dev/null || failed=1 ;;
+      node) node --check "$file" || failed=1 ;;
+      python) python3 -m py_compile "$file" || failed=1 ;;
+    esac
+  done
+  if [ "$failed" -eq 0 ]; then
+    echo -e "${GREEN}✅ $label parses${NC}"
+  else
+    echo -e "${RED}❌ $label syntax errors${NC} ($missing_hint)" >&2
+    status=1
+  fi
+}
+
+for interp in ruby node python3; do
+  command -v "$interp" >/dev/null || {
+    echo -e "${RED}❌ $interp is not on PATH${NC}" >&2
+    exit 1
+  }
+done
+
+syntax_check ruby "ruby -c" "${ruby_files[@]}"
+syntax_check node "node --check" "${node_files[@]}"
+syntax_check python "python3 -m py_compile" "${python_files[@]}"
+# py_compile leaves __pycache__ next to whatever it touched.
+rm -rf bin/__pycache__ .claude/__pycache__ .tmux/__pycache__
+
+if [ ${#ruby_files[@]} -gt 0 ]; then
+  if ! command -v rubocop >/dev/null; then
+    echo -e "${YELLOW}rubocop not on PATH — skipping the ruby lint${NC}" >&2
+  else
+    echo "Running rubocop over ${#ruby_files[@]} ruby scripts..."
+    if rubocop --format simple "${ruby_files[@]}"; then
+      echo -e "${GREEN}✅ rubocop clean${NC}"
+    else
+      echo -e "${RED}❌ rubocop found problems${NC}" >&2
+      status=1
+    fi
+  fi
+fi
+
+exit "$status"

@@ -131,6 +131,52 @@ jobs:
       - name: Check pi extensions
         run: bin/pi-ext-check
 
+  # Ruby, node and python scripts: bin/ has 21 of the first and a handful of
+  # the others, and until this job nothing checked that any of them parse.
+  scripts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        run: |
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
+
+      # Versions come from the tracked pins, so the interpreters here are the
+      # ones bootstrap installs. rubocop is pinned too: a floating linter turns
+      # CI red on someone else's release schedule.
+      - name: Install the interpreters at the tracked pins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # mise resolves versions via the releases API
+        run: |
+          set -e
+          config=.config/mise/config.toml
+          pin() {
+            local value
+            value=$(sed -n "s/^$1 = \"\([^\"]*\)\"$/\1/p" "$config")
+            [ -n "$value" ] || { echo "no $1 pin in $config"; exit 1; }
+            printf '%s' "$value"
+          }
+          ruby_version=$(pin ruby)
+          node_version=$(pin node)
+          python_version=$(pin python)
+          rubocop_version=$(pin '"gem:rubocop"')
+          echo "ruby $ruby_version, node $node_version, python $python_version, rubocop $rubocop_version"
+          # ruby.compile=false in the tracked settings, so this takes a prebuilt
+          # binary rather than spending ten minutes building one.
+          mise settings set ruby.compile false
+          mise use -g "ruby@$ruby_version" "node@$node_version" "python@$python_version"
+          mise use -g "gem:rubocop@$rubocop_version"
+
+      - name: Check scripts
+        run: bin/script-lint
+
   shellcheck:
     runs-on: ubuntu-latest
     permissions:
