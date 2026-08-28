@@ -25,6 +25,9 @@
     "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/pr-review/skills"
   ],
+  "prompts": [
+    "~/Code/github.com/ericboehs/claude-config/prompts"
+  ],
   "defaultProvider": "omlx",
   "defaultModel": "Ornith-1.5-35B-A3B-MLX-4bit",
   "defaultThinkingLevel": "high",
@@ -55,5 +58,5 @@
   "fullscreenScrollbar": "auto",
   "fullscreenExitOutput": "resume-hint",
   "enableInstallTelemetry": false,
-  "hideThinkingBlock": true
+  "hideThinkingBlock": false
 }
