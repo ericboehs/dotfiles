@@ -33,7 +33,7 @@ function withAgentDir(fn) {
 /** Build the extension, drive session_start, and return a rendering handle. */
 async function mount(overrides = {}) {
   const {
-    model = { id: "stealth/ox-alpha", provider: "openrouter", reasoning: true },
+    model = { id: "claude-opus-5", provider: "github-copilot", reasoning: true },
     contextUsage = { tokens: 41234, contextWindow: 1000000, percent: 4 },
     branch = "master",
     sessionName = undefined,
@@ -184,12 +184,12 @@ function strip(text) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal((await ui.settled())[0], "dotfiles or ox hi master* 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles copilot opus-5 hi master* 41.2k/1m");
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {
   const ui = await mount();
-  assert.equal(ui.plain()[0], "dotfiles or ox hi master 41.2k/1m");
+  assert.equal(ui.plain()[0], "dotfiles copilot opus-5 hi master 41.2k/1m");
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
@@ -209,7 +209,7 @@ test("git runs one porcelain + one rev-list per refresh, cached for 5s", async (
 
 test("non-repo directories drop the git segments", async () => {
   const ui = await mount({ branch: null, gitCode: 128, porcelain: "" });
-  assert.equal((await ui.settled())[0], "dotfiles or ox hi 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles copilot opus-5 hi 41.2k/1m");
 });
 
 test("dirty marker: any change earns a single '*' glued to the branch", async () => {
@@ -268,7 +268,6 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["claude-opus-5", "opus-5"],
     ["moonshotai/Kimi-K3", "k3"],
     ["deepseek-ai/DeepSeek-V4-Pro-0813", "ds v4-pro"],
-    ["stealth/ox-alpha", "ox"],
     ["deepseek-ai/DeepSeek-V4-Flash-0731", "ds v4-flash"],
     ["zai-org/GLM-5.3-Flash", "oxa"],
     ["z-ai/glm-5.3-flash", "oxa"],
@@ -340,7 +339,7 @@ test("thinking levels are abbreviated, and hidden for non-reasoning models", asy
     assert.equal(ui.plain()[0].split(" ")[3], expected, level);
   }
   const plain = await mount({
-    model: { id: "stealth/ox-alpha", provider: "openrouter", reasoning: false },
+    model: { id: "claude-opus-5", provider: "github-copilot", reasoning: false },
   });
   assert.equal(plain.plain()[0].split(" ")[3], "master");
 });
@@ -352,9 +351,6 @@ test("cost formatting and subscription providers", async () => {
 
   const pricey = await mount({ costs: [1.5, 2.25], model: billableModel });
   assert.match(pricey.plain()[0], /\$3\.75$/);
-
-  const ox = await mount();
-  assert.doesNotMatch(ox.plain()[0], /\$/, "ox-alpha reports a meaningless flat zero");
 
   for (const provider of ["openai-codex", "github-copilot"]) {
     const ui = await mount({ model: { id: "claude-opus-5", provider, reasoning: true } });
@@ -427,7 +423,7 @@ test("update notice shows both versions in a right-aligned widget above the prom
   const widget = widgetFactory({ requestRender: () => {} });
   const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
-  assert.equal(main, "dotfiles or ox hi master* 41.2k/1m");
+  assert.equal(main, "dotfiles copilot opus-5 hi master* 41.2k/1m");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
   assert.match(
     widget.render(80)[0],
@@ -514,7 +510,7 @@ test("no peer registry means no right-hand segment at all", async () => {
   try {
     const ui = await mount({ sessionName: undefined });
     const [main] = await ui.settled(80);
-    assert.equal(main, "dotfiles or ox hi master* 41.2k/1m", "no padding, no trailing gap");
+    assert.equal(main, "dotfiles copilot opus-5 hi master* 41.2k/1m", "no padding, no trailing gap");
   } finally {
     restore();
   }

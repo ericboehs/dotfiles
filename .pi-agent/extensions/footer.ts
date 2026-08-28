@@ -148,13 +148,9 @@ function routePrefix(provider: string | undefined, modelId: string | undefined):
 }
 
 /** SuperGrok OAuth is subscription-billed; an xAI API key still has a real dollar cost. */
-/** ox-alpha reports a flat $0.0000 — meaningless, so hide it like the subscription providers. */
-const HIDE_COST_MODELS = /^stealth\/ox-alpha$/i;
-
 function hideSessionCost(provider: string | undefined, ctx: ExtensionContext): boolean {
   if (!provider) return false;
   if (HIDE_COST_PROVIDERS.has(provider)) return true;
-  if (ctx.model?.id && HIDE_COST_MODELS.test(ctx.model.id)) return true;
   return provider === "xai" && ctx.model != null && ctx.modelRegistry.isUsingOAuth(ctx.model);
 }
 
@@ -197,7 +193,6 @@ const THINKING_NAMES: Record<string, string> = {
 
 /** Ordered rewrite rules for verbose model ids; first match wins. Results are lowercased. */
 const MODEL_RULES: Array<[RegExp, string]> = [
-  [/^stealth\/ox-alpha$/i, "ox"],
   [/^gpt-[\d.]+-sol$/i, "sol"],
   [/^claude-(.+)$/i, "$1"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
