@@ -11,16 +11,17 @@
  *   Boot:    ~20ms. Single file, no npm dependencies. Nothing is started at
  *            factory time; all resources come up in session_start.
  *
- * Foreground auto-background (Claude Code-style):
- *   Without `background`, commands run in the foreground for up to
- *   PI_BG_FG_TIMEOUT seconds (default 120). A model-supplied `timeout` can
- *   only shorten that wait, never extend it (models otherwise pass
- *   timeout=sleepDuration and defeat the cap). Then adopted as bg jobs: the tool result
- *   returns "moved to background" + log path immediately, and the normal
- *   completion wake delivers exit code + tail later — no polling tokens.
- *   Completion of an in-budget foreground job is silent (quiet): the tool
- *   result already carries the outcome. PI_BG_FG_TIMEOUT=0 restores pi's
- *   built-in semantics (no default timeout; explicit timeout kills).
+ * Foreground auto-background:
+ *   Without `background` or an explicit `timeout`, commands run in the
+ *   foreground for up to PI_BG_FG_TIMEOUT seconds (default 120), then are
+ *   adopted as bg jobs. The tool result returns "moved to background" + log
+ *   path immediately, and the normal completion wake delivers exit code +
+ *   tail later — no polling tokens. On a foreground command, an explicit
+ *   `timeout` keeps pi's built-in hard-deadline semantics and kills the command
+ *   if it expires. PI_BG_MAX_TIMEOUT caps that deadline (default 600 seconds).
+ *   Completion within the foreground budget is silent (quiet): the result already
+ *   carries the outcome. PI_BG_FG_TIMEOUT=0 disables
+ *   auto-backgrounding.
  *
  * UI:
  *   footer          "● 2 bg · rspec 1m12s · vite 12s"   (zero tokens, TUI only)
@@ -47,6 +48,8 @@
  *   PI_BG_WAKE        followUp | nextTurn | off  (default followUp)
  *   PI_BG_FG_TIMEOUT  foreground seconds before auto-background (default
  *                     120; 0 disables auto-background)
+ *   PI_BG_MAX_TIMEOUT maximum explicit foreground timeout in seconds (default
+ *                     600); larger values are clamped
  */
 
 import { spawn } from "node:child_process";
@@ -92,13 +95,18 @@ const STATUS_KEY = "bg";
 const MAX_STATUS_JOBS = 3;
 
 /**
- * Foreground wait budget before a non-background command is adopted as a bg
- * job (Claude Code-style auto-background) instead of blocking the turn
- * indefinitely. 0 disables the feature entirely.
+ * Foreground wait budget before a command with no explicit timeout is adopted
+ * as a bg job instead of blocking the turn indefinitely. 0 disables the
+ * feature entirely.
  */
 const FG_TIMEOUT_SECS = (() => {
 	const parsed = Number.parseInt(process.env.PI_BG_FG_TIMEOUT ?? "120", 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 120;
+})();
+/** Hard ceiling for model-supplied foreground timeouts, matching Claude's default. */
+const MAX_TIMEOUT_SECS = (() => {
+	const parsed = Number(process.env.PI_BG_MAX_TIMEOUT ?? "600");
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 600;
 })();
 /** Cap for partial output streamed to the TUI while a foreground job runs. */
 const PARTIAL_CAP_BYTES = 64 * 1024;
@@ -788,8 +796,8 @@ export default function (pi: ExtensionAPI) {
 
 	const autoBackgroundNote =
 		FG_TIMEOUT_SECS > 0
-			? ` Foreground commands auto-background after ${FG_TIMEOUT_SECS}s and report on completion. timeout only shortens that wait.`
-			: "";
+			? ` Foreground commands without a timeout auto-background after ${FG_TIMEOUT_SECS}s and report on completion. A foreground command with an explicit timeout is killed if it expires (maximum ${MAX_TIMEOUT_SECS}s).`
+			: ` Explicit foreground timeouts are capped at ${MAX_TIMEOUT_SECS}s.`;
 
 	// ---- bash override: +~55 tokens, the entire discovery surface -------------
 
@@ -809,7 +817,9 @@ export default function (pi: ExtensionAPI) {
 	function baseFor(cwd: string): ReturnType<typeof createBashToolDefinition> {
 		let definition = baseByCwd.get(cwd);
 		if (definition === undefined) {
-			definition = createBashToolDefinition(cwd);
+			definition = createBashToolDefinition(cwd, {
+				commandPrefix: shellCommandPrefix(cwd),
+			});
 			baseByCwd.set(cwd, definition);
 		}
 		return definition;
@@ -823,14 +833,11 @@ export default function (pi: ExtensionAPI) {
 		description: `${base.description}${autoBackgroundNote}`,
 		parameters: Type.Object({
 			...baseProperties,
-			timeout:
-				FG_TIMEOUT_SECS > 0
-					? Type.Optional(
-						Type.Number({
-							description: `Optional; shorten the ${FG_TIMEOUT_SECS}s foreground wait (cannot extend it)`,
-						}),
-					)
-					: (baseProperties.timeout as never),
+			timeout: Type.Optional(
+				Type.Number({
+					description: `Hard deadline in seconds (optional, maximum ${MAX_TIMEOUT_SECS})`,
+				}),
+			),
 			background: Type.Optional(
 				Type.Boolean({
 					description:
@@ -863,21 +870,31 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// Auto-background disabled: pi's built-in semantics (no default timeout;
-			// explicit timeout kills the process tree).
-			if (FG_TIMEOUT_SECS === 0) {
-				return baseFor(cwd).execute(toolCallId, input, signal, onUpdate, ctx);
+			// Auto-backgrounding is only the fallback for commands with no deadline.
+			// An explicit timeout keeps pi's built-in hard-deadline semantics and
+			// kills the process tree if it expires. Passing only built-in fields also
+			// keeps the override's `background` option out of the base implementation.
+			if (FG_TIMEOUT_SECS === 0 || input.timeout !== undefined) {
+				const timeout =
+					input.timeout === undefined
+						? undefined
+						: Math.min(input.timeout, MAX_TIMEOUT_SECS);
+				return baseFor(cwd).execute(
+					toolCallId,
+					{
+						command: input.command,
+						...(timeout !== undefined ? { timeout } : {}),
+					},
+					signal,
+					onUpdate,
+					ctx,
+				);
 			}
 
 			// Foreground race: run as a quiet bg job so the process can be adopted
 			// instead of killed if it outlives the budget (non-idempotent commands
 			// keep running rather than being re-run).
-			// Cap at FG_TIMEOUT_SECS so a model passing timeout=sleepDuration
-			// cannot defeat auto-background. timeout may only shorten the wait.
-			const budgetSecs =
-				input.timeout && input.timeout > 0
-					? Math.min(input.timeout, FG_TIMEOUT_SECS)
-					: FG_TIMEOUT_SECS;
+			const budgetSecs = FG_TIMEOUT_SECS;
 			const prefix = shellCommandPrefix(cwd);
 			const command = prefix ? `${prefix}\n${input.command}` : input.command;
 			const { job, exited } = await start(command, cwd, { quiet: true, ctx });
