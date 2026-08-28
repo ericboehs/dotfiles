@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+# git pre-push hook: run bin/pi-ext-check against the commits being pushed.
+#
+# Wired up in .gitconfig as a config hook (`[hook "pi-extensions"]`), which is
+# global, so the first thing this does is check whether the repo being pushed
+# even has a bin/pi-ext-check -- everywhere else it exits 0 without a word.
+#
+# Two things it deliberately does not do:
+#
+#   * It does not check the working tree. Three agent sessions and a human share
+#     this clone, so at any moment the tree holds someone else's half-finished
+#     file. A commit that passes here has to be the commit that lands, so the
+#     check runs in a detached worktree built from the pushed sha -- which also
+#     never mutates shared state the way `git stash` does.
+#
+#   * It does not run when nothing under .pi-agent/ changed, because it costs
+#     tens of seconds and most pushes here are shell scripts and config.
+#
+# This exists because master went red twice in one afternoon on TS2532 from two
+# different sessions, both of which had "checked" their work with tooling that
+# does not typecheck.
+
+set -euo pipefail
+
+ZERO='0000000000000000000000000000000000000000'
+
+# Hooks inherit GIT_DIR and friends pointing at the pushing repo, which then
+# leak into the nested git calls below (git worktree add especially) and make
+# them operate on the wrong thing.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$root" ] || exit 0
+
+# The only scoping this hook gets: no checker, not our repo, nothing to do.
+[ -x "$root/bin/pi-ext-check" ] || exit 0
+
+# A machine without a global pi cannot run the check at all. Warn and let the
+# push through rather than making a fresh clone unpushable -- CI still gates it.
+if ! command -v npm >/dev/null 2>&1 ||
+  [ ! -d "$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent" ]; then
+  echo "pi-ext-prepush: pi is not installed globally, skipping the extension check" >&2
+  exit 0
+fi
+
+# git feeds pre-push one line per ref: <local ref> <local sha> <remote ref> <remote sha>
+check_sha=''
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  # Branch deletions push nothing to check.
+  [ "$local_sha" = "$ZERO" ] && continue
+
+  if [ "$remote_sha" != "$ZERO" ] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+    base="$remote_sha"
+  else
+    # A new branch, or a remote sha this clone has never fetched: fall back to
+    # where it forked from the default branch.
+    base="$(git merge-base "$local_sha" origin/HEAD 2>/dev/null || true)"
+  fi
+
+  if [ -n "$base" ]; then
+    git diff --quiet "$base" "$local_sha" -- .pi-agent && continue
+  fi
+  # No base to diff against means no way to rule the extensions out, so check.
+
+  check_sha="$local_sha"
+done
+
+[ -n "$check_sha" ] || exit 0
+
+worktree="$(mktemp -d "${TMPDIR:-/tmp}/pi-ext-prepush.XXXXXX")"
+# shellcheck disable=SC2329  # invoked by the trap below
+cleanup() {
+  git -C "$root" worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
+}
+trap cleanup EXIT
+
+echo "pi-ext-prepush: checking $(git rev-parse --short "$check_sha") in a detached worktree..."
+# --force: mktemp already created the directory, which git otherwise refuses.
+git -C "$root" worktree add --detach --quiet --force "$worktree" "$check_sha"
+
+if "$worktree/bin/pi-ext-check"; then
+  exit 0
+fi
+
+echo "" >&2
+echo "pi-ext-prepush: the commit you are pushing does not pass bin/pi-ext-check." >&2
+echo "Fix it and amend rather than pushing -- master is shared with other sessions." >&2
+exit 1

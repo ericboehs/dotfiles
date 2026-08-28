@@ -84,6 +84,19 @@ loads `.ts` extensions through Node's type stripping — syntax that needs real
 compilation (parameter properties, enums, namespaces) fails at load time
 otherwise.
 
+A `pre-push` hook runs the same check automatically. It is wired up globally in
+`.gitconfig` as a config hook (git 2.36+ `[hook "pi-extensions"]`) and scopes
+itself by exiting silently in any repo without a `bin/pi-ext-check`, so pushes
+elsewhere are unaffected. Two details worth knowing:
+
+- It checks a **detached worktree built from the pushed sha**, never the working
+  tree. Several agent sessions share this clone, so the tree usually holds
+  someone else's half-finished file; the commit that lands is what has to pass.
+  This is also why it does not use `git stash`, which mutates shared state.
+- It only runs when the pushed commits touch `.pi-agent/` (0.2s otherwise, ~15s
+  when it does), and it lets the push through with a warning on a machine with
+  no globally installed pi, where the check cannot run at all.
+
 `tsconfig.json`, `package.json` and `test/` deliberately sit beside
 `extensions/` rather than inside it: mise links that directory as a whole to
 `~/.pi/agent/extensions`, so anything in it becomes something pi tries to load.

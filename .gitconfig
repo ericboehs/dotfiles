@@ -124,6 +124,13 @@
 [hook "gitleaks"]
 	event = pre-commit
 	command = gitleaks git --staged --redact --no-banner -c ~/.config/gitleaks/config.toml
+[hook "pi-extensions"]
+	# Global, so the script itself decides whether a repo is in scope: it exits 0
+	# unless the repo has a bin/pi-ext-check. The test guard keeps every other
+	# repo's push from failing on a missing command. git appends the hook args to
+	# the command string, so it has to end in something that accepts them.
+	event = pre-push
+	command = "sh -c 'test -x ./bin/pi-ext-prepush || exit 0; exec ./bin/pi-ext-prepush \"$@\"' pi-ext-prepush"
 [user]
 	signingkey = ~/.ssh/id_ed25519.pub
 [credential "https://github.ec.va.gov"]

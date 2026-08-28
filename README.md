@@ -137,7 +137,7 @@ Collection of utility scripts in `bin/` including:
 - **GitHub CLI extensions**: gh-pm, gh-reruns, gh-reviews-by-user, gh-labeler, ghb
 - **Tmux utilities**: toggle_notes_pane, monitor_tmux_pane, notes
 - **Development tools**: refresh_safari, colors, true-colors, utcdate
-- **Pi**: pi-bundle (faster startup), pi-launch, pi-ext-check (typecheck + test extensions)
+- **Pi**: pi-bundle (faster startup), pi-launch, pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
 - **Throwaway macOS VMs**: `vm` (see below)
 
 ## Throwaway macOS VMs
