@@ -351,7 +351,7 @@ function chainLine(order: string[], off: string[], skipUntil: Record<string, num
   return order
     .map((name) => {
       if (off.includes(name)) return `${name} (off)`;
-      if (skipUntil[name] > now) return `${name} (skipped)`;
+      if ((skipUntil[name] ?? 0) > now) return `${name} (skipped)`;
       return name;
     })
     .join(" \u203a ");
@@ -471,7 +471,8 @@ async function handleWeb(args: string, ctx: ExtensionContext): Promise<void> {
     return;
   }
 
-  const [head, ...rest] = words;
+  const head = words[0]!;
+  const rest = words.slice(1);
   switch (head.toLowerCase()) {
     case "help":
       notify(WEB_HELP);

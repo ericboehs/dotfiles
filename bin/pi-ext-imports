@@ -65,8 +65,10 @@ function walk(dir) {
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const path = join(dir, entry.name);
 		const isDir = entry.isDirectory() || (entry.isSymbolicLink() && statSync(path).isDirectory());
-		if (isDir) found.push(...walk(path));
-		else if (/\.m?ts$/.test(entry.name)) found.push(path);
+		// Extension-local packages are installed from their tracked package.json;
+		// their node_modules are intentionally ignored and are not extension source.
+		if (isDir && entry.name !== "node_modules") found.push(...walk(path));
+		else if (!isDir && /\.m?ts$/.test(entry.name)) found.push(path);
 	}
 	return found.sort();
 }

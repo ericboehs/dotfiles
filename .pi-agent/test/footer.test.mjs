@@ -184,12 +184,12 @@ function strip(text) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal((await ui.settled())[0], "dotfiles or ox hi master* 41.2k/1m $0.5123");
+  assert.equal((await ui.settled())[0], "dotfiles or ox hi master* 41.2k/1m");
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {
   const ui = await mount();
-  assert.equal(ui.plain()[0], "dotfiles or ox hi master 41.2k/1m $0.5123");
+  assert.equal(ui.plain()[0], "dotfiles or ox hi master 41.2k/1m");
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
@@ -209,7 +209,7 @@ test("git runs one porcelain + one rev-list per refresh, cached for 5s", async (
 
 test("non-repo directories drop the git segments", async () => {
   const ui = await mount({ branch: null, gitCode: 128, porcelain: "" });
-  assert.equal((await ui.settled())[0], "dotfiles or ox hi 41.2k/1m $0.5123");
+  assert.equal((await ui.settled())[0], "dotfiles or ox hi 41.2k/1m");
 });
 
 test("dirty marker: any change earns a single '*' glued to the branch", async () => {
@@ -306,11 +306,15 @@ test("thinking levels are abbreviated, and hidden for non-reasoning models", asy
 });
 
 test("cost formatting and subscription providers", async () => {
-  const cheap = await mount({ costs: [0.0123] });
+  const billableModel = { id: "gpt-5.4", provider: "openai", reasoning: true };
+  const cheap = await mount({ costs: [0.0123], model: billableModel });
   assert.match(cheap.plain()[0], /\$0\.0123$/);
 
-  const pricey = await mount({ costs: [1.5, 2.25] });
+  const pricey = await mount({ costs: [1.5, 2.25], model: billableModel });
   assert.match(pricey.plain()[0], /\$3\.75$/);
+
+  const ox = await mount();
+  assert.doesNotMatch(ox.plain()[0], /\$/, "ox-alpha reports a meaningless flat zero");
 
   for (const provider of ["openai-codex", "github-copilot"]) {
     const ui = await mount({ model: { id: "claude-opus-5", provider, reasoning: true } });
@@ -355,7 +359,7 @@ test("usage chips color by pace warnings", async () => {
 
 test("unknown context tokens render as ?", async () => {
   const ui = await mount({ contextUsage: { tokens: null, contextWindow: 200000, percent: null } });
-  assert.match(ui.plain()[0], /\?\/200k /);
+  assert.match(ui.plain()[0], /\?\/200k$/);
 });
 
 test("session name is right-aligned and statuses split inline vs status row", async () => {
@@ -383,7 +387,7 @@ test("update notice shows both versions in a right-aligned widget above the prom
   const widget = widgetFactory({ requestRender: () => {} });
   const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
-  assert.equal(main, "dotfiles or ox hi master* 41.2k/1m $0.5123");
+  assert.equal(main, "dotfiles or ox hi master* 41.2k/1m");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
   assert.match(
     widget.render(80)[0],
@@ -470,7 +474,7 @@ test("no peer registry means no right-hand segment at all", async () => {
   try {
     const ui = await mount({ sessionName: undefined });
     const [main] = await ui.settled(80);
-    assert.equal(main, "dotfiles or ox hi master* 41.2k/1m $0.5123", "no padding, no trailing gap");
+    assert.equal(main, "dotfiles or ox hi master* 41.2k/1m", "no padding, no trailing gap");
   } finally {
     restore();
   }
@@ -514,8 +518,8 @@ test("/bypass drives the guardian and shows a bright red marker", async () => {
 
   await ui.run("bypass");
   assert.deepEqual(ui.guardianRequests, [true]);
-  // Last segment before the flex gap, after cost and the inline statuses.
-  assert.match(ui.plain()[0], /\$0\.5123 codex 12% bypass$/);
+  // Last segment before the flex gap, after the inline statuses.
+  assert.match(ui.plain()[0], /codex 12% bypass$/);
   assert.match(ui.raw()[0], /\x1B\[91mbypass\x1B\[39m/, "bright red");
 
   await ui.run("bypass");

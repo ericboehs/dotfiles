@@ -69,6 +69,17 @@ if [ ! -d "$PI_PKG" ]; then
   exit 1
 fi
 
+# Extension-local dependencies are runtime state and stay gitignored. Restore
+# them from each tracked lockfile before checking so a fresh clone behaves like
+# this machine, including dev-only declaration packages needed by tsc.
+for manifest in "$PI_AGENT"/extensions/*/package.json; do
+  [ -f "$manifest" ] || continue
+  package_dir="${manifest%/package.json}"
+  echo "Installing check dependencies in $package_dir..."
+  npm install --prefix "$package_dir" --include=dev --legacy-peer-deps \
+    --ignore-scripts --no-audit --no-fund
+done
+
 # Fresh links every run: the global pi moves with each node version bump, and a
 # stale symlink fails in ways that read like a broken extension.
 mkdir -p "$PI_AGENT/node_modules/@earendil-works" "$PI_AGENT/node_modules/@types"

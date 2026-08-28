@@ -132,7 +132,7 @@ export async function mutateConfig(fn: (cfg: WebConfig) => void): Promise<WebCon
 /** Names in configured order, minus disabled ones and minus anything still cooling off. */
 export function activeChain<T extends string>(order: T[], off: T[], skipUntil: Record<string, number>): T[] {
   const now = Date.now();
-  return order.filter((name) => !off.includes(name) && !(skipUntil[name] > now));
+  return order.filter((name) => !off.includes(name) && !((skipUntil[name] ?? 0) > now));
 }
 
 export async function markSkip(name: string, ms: number): Promise<void> {
@@ -140,7 +140,7 @@ export async function markSkip(name: string, ms: number): Promise<void> {
   await mutateConfig((cfg) => {
     // Never shorten an existing cool-off: two failures in one turn would
     // otherwise reset the longer quota window to the shorter transient one.
-    if (!(cfg.skipUntil[name] > until)) cfg.skipUntil[name] = until;
+    if (!((cfg.skipUntil[name] ?? 0) > until)) cfg.skipUntil[name] = until;
   });
 }
 

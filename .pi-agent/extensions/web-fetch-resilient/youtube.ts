@@ -22,7 +22,7 @@ export function youtubeVideoId(url: string): string | null {
 			const v = u.searchParams.get("v");
 			if (v) return v;
 			const m = u.pathname.match(/\/(shorts|embed|live)\/([\w-]{6,})/);
-			if (m) return m[2];
+			if (m) return m[2] ?? null;
 		}
 	} catch {
 		/* not a url */

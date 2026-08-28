@@ -120,7 +120,7 @@ async function providerApiKey(
   return undefined;
 }
 
-function toNumber(value: number | string | undefined): number {
+function toNumber(value: number | string | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (typeof value === "string") {
     const parsed = Number.parseFloat(value);
@@ -953,7 +953,7 @@ async function refreshDriver(
     }
     // The footer reads stashes during renders; poke it so a new cost-slot chip
     // paints immediately instead of waiting for the next render event.
-    if (driver.updateEvent) pi.events.emit(driver.updateEvent);
+    if (driver.updateEvent) pi.events.emit(driver.updateEvent, undefined);
     return display;
   } catch (err) {
     if (driver.statusKey && !state.last) {

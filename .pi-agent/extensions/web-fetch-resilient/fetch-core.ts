@@ -33,7 +33,7 @@ interface HtmlDeps {
 	JSDOM: typeof import("jsdom").JSDOM;
 	VirtualConsole: typeof import("jsdom").VirtualConsole;
 	Readability: typeof import("@mozilla/readability").Readability;
-	TurndownService: typeof import("turndown").default;
+	TurndownService: typeof import("turndown");
 }
 let htmlDepsPromise: Promise<HtmlDeps> | undefined;
 
@@ -186,7 +186,13 @@ async function tier2(url: string, signal?: AbortSignal): Promise<RawResult> {
 		});
 		const [statusStr, finalUrl] = out.trim().split("\t");
 		const bytes = await readFile(bodyFile).catch(() => Buffer.alloc(0));
-		return { status: Number(statusStr) || undefined, body: "", bytes, contentType: "", finalUrl };
+		return {
+			status: Number(statusStr) || undefined,
+			body: "",
+			bytes,
+			contentType: "",
+			finalUrl: finalUrl ?? url,
+		};
 	} finally {
 		await rm(dir, { recursive: true, force: true }).catch(() => {});
 	}
@@ -403,7 +409,7 @@ function thin(result: FetchResult, raw: RawResult): boolean {
 	if (looksLikeJsShell(rawText(raw))) return true;
 	// Drop the `# Title` line and the footer finish() adds: a shell has a title
 	// and nothing else, and the footer is never evidence of content.
-	const body = result.content.replace(/^#[^\n]*\n/, "").split("\n\n---\n[via tier")[0].trim();
+	const body = (result.content.replace(/^#[^\n]*\n/, "").split("\n\n---\n[via tier")[0] ?? "").trim();
 	if (body.length >= THIN_CHARS) return false;
 	return rawLen(raw) >= SHELL_BYTES;
 }

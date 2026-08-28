@@ -107,7 +107,11 @@ test("with no background-tasks extension, only the first probe pays the timeout"
   assert.ok(second < 100, `later turns should not wait again, took ${second}ms`);
 
   assert.equal(pi.requests.length, 1, "silence is latched, so no second broadcast");
-  assert.equal(pi.execCalls.length, 4, "both turns still mark the window");
+  assert.equal(
+    pi.execCalls.filter((call) => call.includes("@special_activity")).length,
+    2,
+    "both turns still mark the window",
+  );
 });
 
 test("the one unavoidable probe is spent at startup, not on the first turn", async () => {
@@ -135,7 +139,15 @@ test("a running background task suppresses the indicator", async () => {
 
   await pi.settle();
 
-  assert.deepEqual(pi.execCalls, [], "the completion notification will handle it");
+  assert.equal(
+    pi.execCalls.filter((call) => call.includes("@special_activity")).length,
+    0,
+    "the completion notification will handle attention",
+  );
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("@agent_running")),
+    "settling still clears the pane's running marker",
+  );
 });
 
 test("a reply that lands after the timeout still lifts the silence latch", async () => {

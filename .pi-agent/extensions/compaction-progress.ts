@@ -79,7 +79,7 @@ function median(values: number[]): number | undefined {
 	if (values.length === 0) return undefined;
 	const sorted = [...values].sort((a, b) => a - b);
 	const mid = Math.floor(sorted.length / 2);
-	return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+	return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -203,7 +203,7 @@ export default function (pi: ExtensionAPI) {
 		const exact = Math.max(0, Math.min(1, p)) * BAR_WIDTH;
 		const whole = Math.floor(exact);
 		const fracIdx = Math.round((exact - whole) * (FILL_STEPS.length - 1));
-		const filled = FILL_STEPS[FILL_STEPS.length - 1].repeat(whole) + FILL_STEPS[fracIdx];
+		const filled = FILL_STEPS[FILL_STEPS.length - 1]!.repeat(whole) + FILL_STEPS[fracIdx]!;
 		const rest = "░".repeat(Math.max(0, BAR_WIDTH - whole - (fracIdx > 0 ? 1 : 0)));
 		return { filled, rest };
 	}

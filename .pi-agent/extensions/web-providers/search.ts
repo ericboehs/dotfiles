@@ -573,7 +573,7 @@ export async function probeBackends(
   for (const backend of backends) {
     const state: ProbeResult["state"] = cfg.search.off.includes(backend)
       ? "off"
-      : cfg.skipUntil[backend] > now
+      : (cfg.skipUntil[backend] ?? 0) > now
         ? "cooling"
         : "ready";
 

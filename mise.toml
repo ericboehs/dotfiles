@@ -667,6 +667,16 @@ ln -sfn "$settings" "$HOME/.pi/agent/settings.json"
 # with both copies loaded (and arbitrarily chooses one of their bindings).
 "$root/bin/pi-profile-check" "$HOME/.pi/agent"
 
+# Local extension packages keep their dependencies beside the extension, where
+# Node's resolver expects them. node_modules stays ignored; reconstruct the
+# production tree from each tracked manifest/lockfile on every host.
+for manifest in "$root"/.pi-agent/extensions/*/package.json; do
+  [ -f "$manifest" ] || continue
+  package_dir=${manifest%/package.json}
+  npm install --prefix "$package_dir" --omit=dev --legacy-peer-deps \
+    --ignore-scripts --no-audit --no-fund
+done
+
 # Custom providers can be per host too. A host without models.<host>.json keeps
 # a real models.json alone, but removes a managed symlink whose tracked source
 # has gone away — otherwise deleting a provider leaves a dangling link forever.
