@@ -316,7 +316,15 @@ class SearchOverlay implements Component, Focusable {
   private setQuery(query: string): void {
     this.query = query;
     this.matcher = buildMatcher(query, this.entries);
-    this.matches = this.entries.filter((entry) => this.matcher.test(entry.lower));
+    const scored: { entry: Entry; score: number }[] = [];
+    for (const entry of this.entries) {
+      const score = this.matcher.score(entry.lower);
+      if (score !== null) scored.push({ entry, score });
+    }
+    // Stable, so a literal search (every score 0) keeps recency order while a
+    // loose one floats the tightest matches to the top.
+    scored.sort((a, b) => a.score - b.score);
+    this.matches = scored.map((match) => match.entry);
     this.selected = 0;
   }
 
@@ -392,20 +400,23 @@ class SearchOverlay implements Component, Focusable {
  * and the loose match is only a fallback for when that finds nothing at all.
  */
 type Matcher = {
-  /** Takes the pre-lowercased text: the query runs against 20k entries a keystroke. */
-  test: (lower: string) => boolean;
+  /**
+   * null when the entry does not match, otherwise a rank where lower is better.
+   * Takes the pre-lowercased text: this runs over 20k entries per keystroke.
+   */
+  score: (lower: string) => number | null;
   hits: (text: string) => Set<number>;
   loose: boolean;
 };
 
-const matchAll: Matcher = { test: () => true, hits: () => new Set(), loose: false };
+const matchAll: Matcher = { score: () => 0, hits: () => new Set(), loose: false };
 
 function buildMatcher(query: string, entries: Entry[]): Matcher {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return matchAll;
 
   const literal: Matcher = {
-    test: (lower) => tokens.every((token) => lower.includes(token)),
+    score: (lower) => (tokens.every((token) => lower.includes(token)) ? 0 : null),
     hits: (text) => {
       const haystack = text.toLowerCase();
       const positions = new Set<number>();
@@ -418,34 +429,55 @@ function buildMatcher(query: string, entries: Entry[]): Matcher {
     },
     loose: false,
   };
-  if (entries.some((entry) => literal.test(entry.lower))) return literal;
+  if (entries.some((entry) => literal.score(entry.lower) !== null)) return literal;
 
+  // The fallback is typo tolerance, not a wildcard: the letters have to land
+  // near each other. Unbounded, "solar" matched 664 of 1657 real prompts by
+  // finding an s, an o, an l, an a and an r strewn across a paragraph.
   return {
-    test: (lower) =>
-      tokens.every((token) => {
-        let at = 0;
-        for (const char of token) {
-          at = lower.indexOf(char, at) + 1;
-          if (at === 0) return false;
-        }
-        return true;
-      }),
+    score: (lower) => {
+      let total = 0;
+      for (const token of tokens) {
+        const found = looseMatch(lower, token);
+        if (found === null) return null;
+        const span = found[found.length - 1]! - found[0]! + 1;
+        if (span > token.length * 2 + 2) return null;
+        total += span;
+      }
+      return total;
+    },
     hits: (text) => {
       const haystack = text.toLowerCase();
       const positions = new Set<number>();
       for (const token of tokens) {
-        let at = 0;
-        for (const char of token) {
-          const found = haystack.indexOf(char, at);
-          if (found === -1) break;
-          positions.add(found);
-          at = found + 1;
-        }
+        for (const position of looseMatch(haystack, token) ?? []) positions.add(position);
       }
       return positions;
     },
     loose: true,
   };
+}
+
+/**
+ * Where a token sits in the text as a subsequence, tightened: match forward
+ * greedily to find an end, then walk backwards from there so the run is as
+ * compact as the text allows. Null when a character is missing.
+ */
+function looseMatch(haystack: string, token: string): number[] | null {
+  let at = 0;
+  for (const char of token) {
+    const found = haystack.indexOf(char, at);
+    if (found === -1) return null;
+    at = found + 1;
+  }
+
+  const positions = [at - 1];
+  for (let i = token.length - 2; i >= 0; i--) {
+    const found = haystack.lastIndexOf(token[i]!, positions[0]! - 1);
+    if (found === -1) return null;
+    positions.unshift(found);
+  }
+  return positions;
 }
 
 /** Accent the characters the query matched, so it is obvious why a row is here. */

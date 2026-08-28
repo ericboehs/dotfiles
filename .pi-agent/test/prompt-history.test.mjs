@@ -377,6 +377,33 @@ test("a typo falls back to loose matching, and says so", async () => {
   await done;
 });
 
+test("loose matching will not accept letters strewn across a sentence", async () => {
+  const dir = newAgentDir();
+  seedFile(dir, [
+    // s-o-l-r in order, but strewn over the whole line: the kind of match that
+    // used to bury the real ones 664 rows deep.
+    { t: 1, cwd: "/repo/a", text: "set the odometer log and read the meter" },
+    { t: 2, cwd: "/repo/a", text: "wire up the solar panel" },
+  ]);
+
+  const pi = await mount(dir, { cwd: "/repo/a" });
+  pi.presetEditor();
+  pi.start();
+  pi.openEditor();
+
+  const { overlay, done } = pi.search();
+  type(overlay, "solr");
+
+  assert.deepEqual(
+    rows(overlay).map((line) => line.trim()),
+    ["▸ wire up the solar panel"],
+    "a typo away is a match, a paragraph away is not",
+  );
+
+  overlay.handleInput(ESCAPE);
+  await done;
+});
+
 test("ctrl+r walks towards older prompts, escape leaves the editor alone", async () => {
   const dir = newAgentDir();
   seedFile(dir, [
