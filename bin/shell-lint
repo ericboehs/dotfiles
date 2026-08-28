@@ -76,6 +76,8 @@ if [ -f "$LEGACY_FILE" ]; then
 fi
 
 for file in "${tracked[@]}"; do
+  # Skips dangling symlinks as well as directories: bin/ has symlinks into
+  # sibling repos that only resolve where those repos are checked out.
   [ -f "$file" ] || continue
   # Language by shebang, not by extension: bin/ holds ruby, node, python, swift
   # and osascript too. Files with no shebang are skipped because guessing wrong
@@ -143,13 +145,16 @@ if [ ${#graduated[@]} -gt 0 ]; then
 fi
 
 # A stale entry is a silent hole: the file was renamed or deleted, and a new
-# script arriving at that path would inherit the exemption.
+# script arriving at that path would inherit the exemption. Tracked-ness is the
+# test, not existence on disk — several bin/ entries are symlinks to other repos
+# that resolve on my machine and dangle in CI, and the list has to mean the same
+# thing in both places.
 stale=()
 for entry in "${legacy_entries[@]}"; do
-  [ -f "$entry" ] || stale+=("$entry")
+  git ls-files --error-unmatch "$entry" >/dev/null 2>&1 || stale+=("$entry")
 done
 if [ ${#stale[@]} -gt 0 ]; then
-  echo -e "${RED}❌ $LEGACY_FILE names files that do not exist:${NC}" >&2
+  echo -e "${RED}❌ $LEGACY_FILE names files git does not track:${NC}" >&2
   printf '   %s\n' "${stale[@]}" >&2
   status=1
 fi
