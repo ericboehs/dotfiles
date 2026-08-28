@@ -12,7 +12,7 @@
 #      (`import.meta.url` then `../..`), which moves when everything collapses
 #      into one file.
 #   2. It only uses the in-memory `virtualModules` path when it believes it is
-#      a Bun binary. Without that, the first extension that imports
+#      a compiled or explicitly bundled binary. Without that, the first extension that imports
 #      @earendil-works/pi-coding-agent resolves to dist/index.js on disk and
 #      jiti loads pi's entire module graph a second time — which makes the
 #      bundle *slower* than the stock build. Measured at +313ms on one
@@ -183,25 +183,29 @@ const fs = require("node:fs");
 const file = process.argv[2];
 let src = fs.readFileSync(file, "utf8");
 
-const edits = [
-  // The bundle sits at dist/bundle.mjs, so anchor on dist/ and re-add the
-  // segments the original path math assumes.
-  [
-    "    const __dirname = path.dirname(fileURLToPath(import.meta.url));",
-    '    const __dirname = path.join(path.dirname(fileURLToPath(import.meta.url)), "core/extensions");',
-  ],
-  // Take the virtualModules branch: extensions must get the copies of pi that
-  // are already in this bundle, not a second graph loaded off disk.
-  ["        ...(isBunBinary\n", "        ...(true\n"],
-];
-
-for (const [from, to] of edits) {
-  if (!src.includes(from)) {
-    console.error("pattern not found: " + JSON.stringify(from.trim().slice(0, 70)));
-    process.exit(1);
-  }
-  src = src.split(from).join(to);
+const dirnameFrom = "    const __dirname = path.dirname(fileURLToPath(import.meta.url));";
+const dirnameTo =
+  '    const __dirname = path.join(path.dirname(fileURLToPath(import.meta.url)), "core/extensions");';
+if (!src.includes(dirnameFrom)) {
+  console.error("pattern not found: " + JSON.stringify(dirnameFrom.trim().slice(0, 70)));
+  process.exit(1);
 }
+src = src.split(dirnameFrom).join(dirnameTo);
+
+// Take the virtualModules branch: extensions must get the copies of pi that
+// are already in this bundle, not a second graph loaded off disk. Pi 0.84
+// widened the condition for Node SEA and its own bundled-node build, so accept
+// both layouts while still failing closed on an unfamiliar loader.
+const virtualConditions = [
+  "        ...(isBunBinary || isNodeSeaBinary || isBundledNode\n",
+  "        ...(isBunBinary\n",
+];
+const virtualCondition = virtualConditions.find((candidate) => src.includes(candidate));
+if (!virtualCondition) {
+  console.error("virtualModules condition not found");
+  process.exit(1);
+}
+src = src.split(virtualCondition).join("        ...(true\n");
 fs.writeFileSync(file, src);
 PATCH
 
