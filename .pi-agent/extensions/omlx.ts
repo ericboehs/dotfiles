@@ -15,6 +15,11 @@ const OMLX_BASE_URL = process.env.OMLX_BASE_URL ?? "http://localhost:8000/v1";
 const OMLX_MODEL_DIR =
   process.env.OMLX_MODEL_DIR ?? join(homedir(), ".omlx", "models");
 const MAX_OUTPUT_TOKENS = 32768;
+// The probe runs in the factory, on the boot path: a refused port fails
+// instantly, but a hung server would hold every launch open for the whole
+// budget. A local server that has not answered in 750ms is not worth waiting
+// for — pi starts without omlx models and /reload re-runs the factory.
+const PROBE_TIMEOUT_MS = 750;
 
 interface OmlxApiModel {
   id: string;
@@ -95,18 +100,19 @@ async function loadConfigMetadata(): Promise<Map<string, ModelMeta>> {
   return map;
 }
 
-export default function (pi: ExtensionAPI): void {
-  // Don't await the localhost probe in the factory: pi awaits async factories,
-  // so a refused :8000 was 23ms of every boot. session_start is after
-  // modelRuntime exists, so registerProvider still sticks; /reload re-runs this.
-  pi.on("session_start", () => {
-    void register(pi);
-  });
+export default async function (pi: ExtensionAPI): Promise<void> {
+  // Register in the factory, awaited. Deferring to session_start made the
+  // factory 0ms, but pi resolves the model scope from modelRuntime.getAvailable()
+  // *before* session_start fires, so every launch warned "No models match
+  // pattern omlx/..." about models the server had loaded all along. The probe
+  // is ~23ms when :8000 refuses the connection and less when it answers;
+  // a misleading warning on every boot costs more than that.
+  await register(pi);
 }
 
 async function register(pi: ExtensionAPI): Promise<void> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
+  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   let apiModels: OmlxApiModel[] = [];
   try {
