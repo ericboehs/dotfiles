@@ -43,7 +43,6 @@
     "openai-codex/gpt-5.6-sol",
     "github-copilot/claude-opus-5",
     "xai/grok-4.6",
-    "openrouter/z-ai/glm-5.3-flash",
     "baseten/zai-org/GLM-5.3-Flash"
   ],
   "showHardwareCursor": true,
