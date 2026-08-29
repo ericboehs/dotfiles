@@ -5,7 +5,7 @@
     "git:github.com/ericboehs/pi-claude-link@78e01168ddccbf1f5ef3a3474b70cf030a6bd551",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
     "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
-    "git:github.com/ericboehs/agent-notify@2682bb078e610f78989d5e2e38ec2e063790ce7d"
+    "git:github.com/ericboehs/agent-notify@21f906cfd41799422488fb9fed1751f00280bc9a"
   ],
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
