@@ -198,12 +198,14 @@ const THINKING_NAMES: Record<string, string> = {
 /** Ordered rewrite rules for verbose model ids; first match wins. Results are lowercased. */
 const MODEL_RULES: Array<[RegExp, string]> = [
   [/^gpt-[\d.]+-sol$/i, "sol"],
+  [/^gpt-[\d.]+-luna$/i, "luna"],
+  [/^gpt-[\d.]+-terra$/i, "terra"],
   [/^claude-(.+)$/i, "$1"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
   [/^z-ai\/GLM-5\.3-Flash$/i, "oxa"],
   [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
-  [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn-1.5"],
+  [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];
 
@@ -534,11 +536,9 @@ function shortProvider(provider: string | undefined): string {
 function shortModel(model: string | undefined, provider?: string): string {
   const base = baseModelId(model);
   if (!base) return "no-model";
-  // xai: grok-4.6 → 4.6 (provider chip already says "x")
-  if (provider === "xai") {
-    const version = /^grok-(.+)$/i.exec(base)?.[1];
-    if (version) return version.toLowerCase();
-  }
+  // xai: grok-4.6 → grok (provider chip already says "x")
+  if (provider === "xai" && /^grok-(.+)$/i.test(base)) return "grok";
+  if (provider === "github-copilot" && /^claude-opus-5$/i.test(base)) return "opus";
   for (const [pattern, replacement] of MODEL_RULES) {
     // Aliased ids render lowercase; unknown ids pass through with their original casing.
     if (pattern.test(base)) return base.replace(pattern, replacement).toLowerCase();

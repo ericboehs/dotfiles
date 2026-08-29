@@ -184,12 +184,12 @@ function strip(text) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal((await ui.settled())[0], "dotfiles gh opus-5 hi master* 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles gh opus hi master* 41.2k/1m");
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {
   const ui = await mount();
-  assert.equal(ui.plain()[0], "dotfiles gh opus-5 hi master 41.2k/1m");
+  assert.equal(ui.plain()[0], "dotfiles gh opus hi master 41.2k/1m");
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
@@ -209,7 +209,7 @@ test("git runs one porcelain + one rev-list per refresh, cached for 5s", async (
 
 test("non-repo directories drop the git segments", async () => {
   const ui = await mount({ branch: null, gitCode: 128, porcelain: "" });
-  assert.equal((await ui.settled())[0], "dotfiles gh opus-5 hi 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles gh opus hi 41.2k/1m");
 });
 
 test("dirty marker: any change earns a single '*' glued to the branch", async () => {
@@ -267,6 +267,8 @@ test("provider aliases", async () => {
 test("model aliases are lowercased, unknown ids pass through", async () => {
   const cases = [
     ["gpt-5.6-sol", "sol"],
+    ["gpt-5.6-luna", "luna"],
+    ["gpt-5.6-terra", "terra"],
     ["claude-opus-5", "opus-5"],
     ["moonshotai/Kimi-K3", "k3"],
     ["deepseek-ai/DeepSeek-V4-Pro-0813", "ds v4-pro"],
@@ -276,6 +278,7 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["z-ai/glm-5.3-flash@preset/ox-alpha", "oxa"],
     ["Qwen3.8-27B-4bit", "3.8-27b"],
     ["Qwen3.6-35B-A3B-UD-MLX-4bit", "3.6-35b-a3b"],
+    ["Ornith-1.5-35B-A3B-MLX-4bit", "orn"],
     ["gpt-5.2-codex", "gpt-5.2-codex"],
     ["GLM-4.6", "GLM-4.6"],
   ];
@@ -284,6 +287,17 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     // "dir provider model ..." — the alias may contain a space ("ds v4-pro").
     const rest = ui.plain()[0].split(" ").slice(2).join(" ");
     assert.ok(rest.startsWith(`${expected} `), `${id} -> ${rest}`);
+  }
+});
+
+test("provider-specific model aliases", async () => {
+  for (const [model, expected] of [
+    [{ id: "claude-opus-5", provider: "github-copilot", reasoning: true }, "opus"],
+    [{ id: "grok-4.6", provider: "xai", reasoning: true }, "grok"],
+  ]) {
+    const ui = await mount({ model });
+    const rest = ui.plain()[0].split(" ").slice(2).join(" ");
+    assert.ok(rest.startsWith(`${expected} `), `${model.provider}/${model.id} -> ${rest}`);
   }
 });
 
@@ -425,7 +439,7 @@ test("update notice shows both versions in a right-aligned widget above the prom
   const widget = widgetFactory({ requestRender: () => {} });
   const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
-  assert.equal(main, "dotfiles gh opus-5 hi master* 41.2k/1m");
+  assert.equal(main, "dotfiles gh opus hi master* 41.2k/1m");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
   assert.match(
     widget.render(80)[0],
@@ -512,7 +526,7 @@ test("no peer registry means no right-hand segment at all", async () => {
   try {
     const ui = await mount({ sessionName: undefined });
     const [main] = await ui.settled(80);
-    assert.equal(main, "dotfiles gh opus-5 hi master* 41.2k/1m", "no padding, no trailing gap");
+    assert.equal(main, "dotfiles gh opus hi master* 41.2k/1m", "no padding, no trailing gap");
   } finally {
     restore();
   }

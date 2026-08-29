@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.84.3",
+  "lastChangelogVersion": "0.84.4",
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@bde157396387766d570a93eecc0f0489f41f0935",
     "git:github.com/ericboehs/pi-context",
@@ -28,9 +28,9 @@
   "prompts": [
     "~/Code/github.com/ericboehs/claude-config/prompts"
   ],
-  "defaultProvider": "omlx",
-  "defaultModel": "Ornith-1.5-35B-A3B-MLX-4bit",
-  "defaultThinkingLevel": "high",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-terra",
+  "defaultThinkingLevel": "xhigh",
   "theme": "light/dark",
   "steeringMode": "all",
   "transport": "auto",
@@ -42,12 +42,13 @@
     "anthropicExtraUsage": false
   },
   "enabledModels": [
-    "omlx/Ornith-1.5-35B-A3B-MLX-4bit",
+    "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
     "github-copilot/claude-opus-5",
     "xai/grok-4.6",
     "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha",
-    "baseten/zai-org/GLM-5.3-Flash"
+    "baseten/zai-org/GLM-5.3-Flash",
+    "omlx/Ornith-1.5-35B-A3B-MLX-4bit"
   ],
   "showHardwareCursor": true,
   "editorPaddingX": 1,
