@@ -1,5 +1,5 @@
 ---
-description: Design a polished single-file HTML artifact and publish it to a shareable URL
+description: Design a distinctive single-file HTML artifact and publish it to a shareable URL
 argument-hint: "<what to build>"
 ---
 
@@ -7,87 +7,109 @@ Build a self-contained HTML artifact: **$@**
 
 Then publish it and give me the link.
 
+*(Design guidance below is adapted from Anthropic's `frontend-design` skill,
+github.com/anthropics/skills, Apache 2.0.)*
+
 ---
 
-## Step 1 — Plan before you write
+Approach this as the design lead at a small studio known for giving every client a visual
+identity that could not be mistaken for anyone else's. This client has already rejected
+proposals that felt templated and is paying for a distinctive point of view. Make
+deliberate, opinionated choices about palette, typography, and layout that are specific
+to *this* brief, and take one real aesthetic risk you can justify.
 
-State in one or two lines: the **archetype** you're using, the **accent color**, and the
-**typeface pairing**. Then write the file. Don't narrate further; just build it.
+## Ground it in the subject
 
-## Step 2 — Pick an archetype
+If the brief doesn't pin down what the subject is, pin it yourself before designing: name
+one concrete subject, its audience, and the page's single job, and state your choice. The
+subject's own world — its materials, instruments, artifacts, and vernacular — is where
+distinctive choices come from. Build with the brief's real content and subject matter
+throughout.
 
-| Archetype | Use when | Skeleton |
-|---|---|---|
-| `report` | Analysis, findings, writeups | Title block w/ eyebrow + date · lede paragraph · sectioned prose at `68ch` · pull-quotes · footnotes |
-| `dashboard` | Metrics, status, monitoring | Sticky header · 3–4 KPI cards in a grid · one hero chart · dense table below |
-| `landing` | Pitching an idea or product | Hero w/ one clear claim · 3-up feature grid · social proof strip · single CTA |
-| `deck` | Sequential narrative | Full-viewport `<section>` slides · scroll-snap · arrow-key nav · slide counter |
-| `explorer` | Data someone will poke at | Toolbar (search + filters) · sortable table or card grid · empty + loading states |
-| `toy` | Interactive demo, simulation, game | Centered canvas/stage · minimal chrome · controls docked to one edge · reset button |
+## Do not converge on the defaults
 
-If none fit, say so and design from first principles — don't jam it into the wrong shape.
+AI-generated design right now clusters around three looks:
 
-## Step 3 — Design system
+1. Warm cream background (near `#F4F1EA`), high-contrast serif display, terracotta accent
+2. Near-black background with a single bright acid-green or vermilion accent
+3. Broadsheet layout — hairline rules, zero border-radius, dense newspaper columns
 
-**Tokens.** Define these once in `:root` and use them everywhere. Never hardcode a color
-twice.
+All three are legitimate for *some* briefs, but they are defaults rather than choices, and
+they show up regardless of subject. If the brief names a direction, follow it exactly.
+Where it leaves an axis free, don't spend that freedom on one of these.
 
-```css
-:root {
-  --bg: #fbfbfa;  --surface: #fff;    --border: #e6e4e0;
-  --text: #1a1917; --muted: #6b6862;  --accent: /* pick one */;
-  --radius: 10px;
-  --shadow: 0 1px 2px rgb(0 0 0 / .04), 0 4px 12px rgb(0 0 0 / .05);
-}
-@media (prefers-color-scheme: dark) {
-  :root { --bg:#0e0f11; --surface:#16181c; --border:#262a30;
-          --text:#e8eaed; --muted:#9aa0a8; }
-}
-```
+Also avoid: excessive centered layouts, purple gradients, uniform rounded corners
+everywhere, and Inter as the default face.
 
-- **Never** `#000` on `#fff`. Use warm-neutral or cool-neutral ramps, pick one, commit.
-- One accent, used sparingly — links, primary action, one chart series. Not decoration.
-- Dark mode is required, via `prefers-color-scheme`. Check contrast in both.
+## Design principles
 
-**Typography.**
-- Pair a UI face with an accent face. Good pairs: `Inter`/`Instrument Serif`,
-  `Geist`/`Source Serif 4`, `IBM Plex Sans`/`IBM Plex Serif`. System stack is fine too —
-  a well-set system stack beats a badly-set webfont.
-- Type scale ~1.25. Body 16–17px. Line-height 1.6 for prose, 1.3 for headings.
-- Prose measure capped at `68ch`. Tabular numerals (`font-variant-numeric: tabular-nums`)
-  for anything in a column.
-- Headings get `letter-spacing: -0.02em`. Small caps eyebrows get `+0.08em` and `--muted`.
+**The hero is a thesis.** Open with the most characteristic thing in the subject's world,
+in whatever form fits: a headline, an image, an animation, a live demo, an interactive
+moment. A big number with a small label plus supporting stats and a gradient accent is
+the template answer — use it only if it's genuinely best.
 
-**Space.** 4px grid. Be generous — the single most common failure is cramped padding.
-Section rhythm ≥ 64px. Card padding ≥ 20px.
+**Typography carries the personality.** Pair display and body faces deliberately, not the
+families you'd reach for on any other project. Set a clear scale with intentional weights,
+widths, and spacing. Make the type treatment itself memorable, not a neutral delivery
+vehicle.
 
-**Depth.** One shadow token, used at most on cards. Prefer 1px borders over shadows.
-No gradients unless the archetype is `landing`.
+**Structure is information.** Numbering, eyebrows, dividers, labels should encode
+something true about the content, not decorate it. `01 / 02 / 03` markers are only
+appropriate if the content really is a sequence.
 
-## Step 4 — Non-negotiables
+**Motion, deliberately.** One orchestrated moment usually lands harder than scattered
+effects. Sometimes less is more — extra animation is a tell that a design is AI-generated.
 
-- [ ] Single file. No build step. Works opened from `file://`.
-- [ ] Responsive and *checked* at 375 / 768 / 1440. No horizontal scroll at 375.
-- [ ] `<title>`, `<meta name="description">`, and OG tags (`og:title`, `og:description`)
-- [ ] Semantic HTML — real `<header> <main> <section> <table> <button>`, not div soup
-- [ ] Visible `:focus-visible` ring. Keyboard-operable controls. WCAG AA contrast.
-- [ ] `@media (prefers-reduced-motion: reduce) { *{animation:none!important;transition:none!important} }`
-- [ ] A `@media print` block that drops chrome and goes to black-on-white
-- [ ] Real content. No lorem ipsum. If data is invented, label it as sample data.
-- [ ] Empty / loading / error states for anything interactive
+**Match complexity to the vision.** Maximalist directions need elaborate execution;
+minimal directions need precision in spacing, type, and detail.
 
-## Step 5 — Dependencies
+## Process: plan → critique → build → critique
 
-Prefer zero. Hand-written CSS with the tokens above will look better than default
-Tailwind. If you genuinely need them, these are allowed via CDN:
+Work in two passes, mostly in your thinking. Only show me things you're confident about.
 
-- `cdn.tailwindcss.com` — only if the thing is component-dense
-- `fonts.googleapis.com` / `fonts.gstatic.com` — webfonts
-- `cdn.jsdelivr.net` — charts (prefer hand-rolled SVG for anything simple)
+**Pass 1 — the plan.** A compact token system for this brief:
+- **Color** — 4–6 named hex values
+- **Type** — faces for 2+ roles: a characterful display face used with restraint, a
+  complementary body face, a utility face for captions or data if needed
+- **Layout** — a one-sentence concept plus an ASCII wireframe; compare two or three
+- **Signature** — the single element this page will be remembered by
 
-Never fetch user data, never `fetch()` an external API, never include analytics.
+**Pass 2 — critique the plan before writing code.** Work through a similar generic prompt
+in your head. If you'd have arrived at the same place, that part is a default, not a
+choice. Revise it and say what you changed and why. Only then write the code, deriving
+every color and type decision from the revised plan.
 
-## Step 6 — Publish
+Watch CSS specificity while building — type selectors like `.section` and element
+selectors like `.cta` cancel each other out easily, especially on section padding.
+
+## Restraint
+
+Spend your boldness in one place. Let the signature element be the memorable thing and
+keep everything around it quiet and disciplined. Not taking a risk is itself a risk. Then
+take Chanel's advice: before leaving the house, look in the mirror and remove one
+accessory.
+
+**Quality floor — meet it without announcing it:** responsive to mobile, visible keyboard
+focus, reduced motion respected, WCAG AA contrast, semantic HTML, real empty/error states.
+Take screenshots and critique your own work — a picture is worth 1000 tokens.
+
+## Copy
+
+Words are design material, not decoration. Write from the user's side of the screen: name
+things by what people control, not how the system is built. Active voice; a control says
+exactly what happens ("Save changes," not "Submit"), and keeps that name through the whole
+flow. Errors explain what went wrong and how to fix it — they don't apologize and are
+never vague. An empty screen is an invitation to act. Specific beats clever. No lorem
+ipsum; if data is invented, label it as sample data.
+
+## Constraints
+
+Single file, no build step, works from `file://`. Include `<title>`, a description meta,
+and OG tags. Prefer zero dependencies — hand-written CSS beats default Tailwind. If needed:
+`cdn.tailwindcss.com`, `fonts.googleapis.com`/`gstatic.com`, `cdn.jsdelivr.net` for charts.
+Never `fetch()` an external API, never include analytics.
+
+## Publish
 
 Write the file to the current directory, then:
 
@@ -95,12 +117,10 @@ Write the file to the current directory, then:
 pub -o -d "<short title>" <file>.html
 ```
 
-`pub` uploads it as a secret gist and prints a `gistpreview.github.io` URL, already
-copied to the clipboard. Report the URL back to me as the last line of your response.
+`pub` uploads it as a secret gist and prints a `gistpreview.github.io` URL, already copied
+to the clipboard. Report the URL as the last line of your response. To revise: edit, then
+`pub -u <gist-id> <file>.html` — the URL stays the same.
 
-To revise after I give feedback: edit the file, then `pub -u <gist-id> <file>.html` —
-the URL stays the same.
-
-**Before publishing, confirm the artifact contains no secrets, tokens, internal
-hostnames, PII, or VA/Oddball-internal information.** Secret gists are unlisted, not
-private. If in doubt, ask me first and skip the publish step.
+**Before publishing, confirm the artifact contains no secrets, tokens, internal hostnames,
+PII, or VA/Oddball-internal information.** Secret gists are unlisted, not private. If in
+doubt, ask me first and skip the publish step.
