@@ -556,13 +556,13 @@ test("/bypass drives the guardian and shows a bright red marker", async () => {
 
   await ui.run("bypass");
   assert.deepEqual(ui.guardianRequests, [true]);
-  // Last segment before the flex gap, after the inline statuses.
-  assert.match(ui.plain()[0], /codex 12% bypass$/);
-  assert.match(ui.raw()[0], /\x1B\[91mbypass\x1B\[39m/, "bright red");
+  // Its own second line, left-aligned, so narrow terminals can't truncate it.
+  assert.match(ui.plain()[1], /^bypass$/);
+  assert.match(ui.raw()[1], /\x1B\[91mbypass\x1B\[39m/, "bright red");
 
   await ui.run("bypass");
   assert.deepEqual(ui.guardianRequests, [true, false]);
-  assert.doesNotMatch(ui.plain()[0], /bypass/);
+  assert.doesNotMatch(ui.plain().join("\n"), /bypass/);
 });
 
 test("/bypass takes explicit on/off and rejects anything else", async () => {

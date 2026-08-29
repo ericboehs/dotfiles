@@ -2,11 +2,13 @@
  * Minimal footer/statusline for pi — a lean replacement for the pi-footer package.
  *
  * Renders a main line:
- *   dir provider model thinking branch* ⇣⇡ ctx/window $cost [inline statuses] ⚡boot bypass   session-name
+ *   dir provider model thinking branch* ⇣⇡ ctx/window $cost [inline statuses] ⚡boot   session-name
  * plus an optional dim row of other extension statuses (from ctx.ui.setStatus).
  * A pending-update notice is a separate right-aligned widget above the prompt.
- * The boot timer shows until the first message; "bypass" replaces it as the
- * right-most main-line marker while Approval Guardian is bypassed.
+ * The boot timer shows until the first message; while Approval Guardian is
+ * bypassed, a bright-red "bypass" marker renders as a second footer line,
+ * left-aligned under the main line (its own line so narrow terminals can't
+ * truncate it off the main line).
  *
  * Design notes:
  * - No config UI, no widget registry: the layout is this file.
@@ -978,8 +980,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
                 : "";
             }),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
-            // Last before the flex gap, so it sits closest to the right edge.
-            bypassed ? color(BRIGHT_RED, "bypass") : "",
           ];
 
           const leftLine = left.filter(Boolean).join(" ");
@@ -1000,7 +1000,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
               padBetween(leftLine, right, width)
             : truncateToWidth(leftLine, width, "…");
 
+          // Own line: inline at the end of the main line got truncated away
+          // entirely on narrow terminals.
           const lines = [mainLine];
+          if (bypassed) lines.push(color(BRIGHT_RED, "bypass"));
           const extra: string[] = [];
           for (const [key, value] of statuses) {
             if (!value || (INLINE_STATUS_KEYS as readonly string[]).includes(key)) continue;
