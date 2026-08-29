@@ -9,6 +9,7 @@ Tracked here:
 - custom keybindings (e.g. Opt+Enter inserts a newline)
 - approval-guardian policy
 - local TypeScript extensions, plus the tooling to check them
+- prompt templates, and the vendored design skills behind `/artifact`
 
 ## Per-host settings
 
@@ -266,6 +267,106 @@ cleared by `/color off`: the theme file watcher stops, so editing the active
 custom theme's JSON no longer hot-reloads, and `light/dark` auto-switching
 stops following the terminal. Picking a theme in `/settings` drops the tint;
 the next `/color` re-tints from whatever is current.
+
+## Artifacts
+
+`/artifact` builds one self-contained HTML page and publishes it to a shareable
+URL — Claude's Artifacts "Publish" button, reproduced with a prompt template and
+two scripts.
+
+```text
+/artifact a dashboard for my solar production data
+```
+
+### A prompt template, not a skill
+
+Skills announce themselves in the system prompt on every turn; a name and
+description sit in context forever whether or not they are ever used. Prompt
+templates cost nothing until typed. Building an artifact is always a deliberate
+act — never something the model should decide to start on its own — so
+`prompts/artifact.md` is the right shape: ~590 tokens that are free until
+invoked, and which then pull in one skill file for ~2,650 tokens on a typical
+run.
+
+### The design guidance is vendored, not written
+
+`artifact-skills/` holds Anthropic's own design skills, copied verbatim from
+[`anthropics/skills`](https://github.com/anthropics/skills) (Apache 2.0) and
+pinned by commit in each `MANIFEST`. Only `SKILL.md` and `LICENSE.txt` are
+taken; the upstream scripts and assets are not.
+
+| Skill | Tokens | Read when |
+| --- | --- | --- |
+| `frontend-design` | ~2,060 | always — the core methodology |
+| `web-artifacts-builder` | ~770 | React, state, shadcn |
+| `algorithmic-art` | ~4,940 | generative visuals, p5.js |
+| `canvas-design` | ~2,980 | static poster or PDF |
+| `brand-guidelines` | ~560 | Anthropic brand |
+
+`artifact.md` names that table and tells the agent which file to read, so a
+plain data dashboard never loads the 4,940-token art skill. Pinning matters for
+the same reason it does for packages: upstream edits should not silently change
+what the prompt does.
+
+```sh
+bin/artifact-skills-sync            # sync to the pinned commit
+bin/artifact-skills-sync --check    # has upstream moved?
+bin/artifact-skills-sync --update   # repin, then review the diff
+bin/artifact-skills-sync --list     # token estimates
+```
+
+This directory is published, and `.gitignore` here is a deny-by-default
+allowlist, so the vendored files need explicit rules to be tracked at all.
+
+**Do not hand-write a design system for this.** The first version did — fixed
+`:root` tokens plus six named layout archetypes — and every page it produced
+looked the same, because a fixed token set is a house style with extra steps.
+Worse, it landed on a warm cream background with a serif display face and a
+terracotta accent, which is the first of the three AI-default clusters
+`frontend-design` calls out by name. The real skill inverts the approach: name
+the subject and the page's single job, invent a bespoke palette and type scale
+per brief, then critique that plan against a generic answer to the same prompt
+before writing any code.
+
+The test that it is working is that two artifacts from the same pipeline share
+no palette, typeface, hero pattern or layout axis.
+
+### Screenshot it before publishing
+
+Rendering and looking at the result caught ten defects across the first two
+artifacts that were invisible in the source, two of them CSS specificity bugs
+of exactly the kind the skill warns about: a `font:` shorthand on a parent
+silently overriding a child rule that set only size and weight, and a CSS
+`fill` rule beating an SVG `fill` attribute. Both produced valid, error-free
+pages that were simply wrong.
+
+Playwright cannot load `file://` on macOS, so serve the directory first:
+
+```sh
+python3 -m http.server 8899
+playwright-cli -s=art open http://localhost:8899/page.html
+```
+
+Check 375 / 768 / 1440, both color schemes, and every interactive state
+including the empty one.
+
+### Publishing
+
+```sh
+pub report.html              # publish; URL printed and copied
+pub -u <gist-id> file.html   # revise in place, URL unchanged
+pub -l                       # list
+pub -r <gist-id>             # delete
+```
+
+`bin/pub` writes the file to a secret gist as `index.html` and hands back a
+`gistpreview.github.io/?<id>` URL. Transport limits worth knowing: secret gists
+are *unlisted*, not private; the renderer is third-party and volunteer-run
+(`bl.ocks.org`, the same idea, is dead); there is no control over CSP, so a
+page could beacon data out; and there is no versioning or expiry. `artifact.md`
+therefore ends with an explicit check for secrets, tokens, internal hostnames,
+PII and client-internal material before anything is published — anything that
+fails it stays local.
 
 ## Schedulers
 
