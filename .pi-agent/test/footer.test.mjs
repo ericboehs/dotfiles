@@ -184,12 +184,12 @@ function strip(text) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal((await ui.settled())[0], "dotfiles copilot opus-5 hi master* 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles gh opus-5 hi master* 41.2k/1m");
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {
   const ui = await mount();
-  assert.equal(ui.plain()[0], "dotfiles copilot opus-5 hi master 41.2k/1m");
+  assert.equal(ui.plain()[0], "dotfiles gh opus-5 hi master 41.2k/1m");
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
@@ -209,7 +209,7 @@ test("git runs one porcelain + one rev-list per refresh, cached for 5s", async (
 
 test("non-repo directories drop the git segments", async () => {
   const ui = await mount({ branch: null, gitCode: 128, porcelain: "" });
-  assert.equal((await ui.settled())[0], "dotfiles copilot opus-5 hi 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles gh opus-5 hi 41.2k/1m");
 });
 
 test("dirty marker: any change earns a single '*' glued to the branch", async () => {
@@ -251,8 +251,10 @@ test("p10k-style arrows, unnumbered, cyan, dropped when in sync", async () => {
 test("provider aliases", async () => {
   const cases = [
     ["openrouter", "or"],
-    ["github-copilot", "copilot"],
-    ["openai-codex", "oai"],
+    ["github-copilot", "gh"],
+    ["openai-codex", "o"],
+    ["openai", "o"],
+    ["xai", "x"],
     ["baseten", "b10"],
     ["omlx", "omlx"],
   ];
@@ -423,7 +425,7 @@ test("update notice shows both versions in a right-aligned widget above the prom
   const widget = widgetFactory({ requestRender: () => {} });
   const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
-  assert.equal(main, "dotfiles copilot opus-5 hi master* 41.2k/1m");
+  assert.equal(main, "dotfiles gh opus-5 hi master* 41.2k/1m");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
   assert.match(
     widget.render(80)[0],
@@ -510,7 +512,7 @@ test("no peer registry means no right-hand segment at all", async () => {
   try {
     const ui = await mount({ sessionName: undefined });
     const [main] = await ui.settled(80);
-    assert.equal(main, "dotfiles copilot opus-5 hi master* 41.2k/1m", "no padding, no trailing gap");
+    assert.equal(main, "dotfiles gh opus-5 hi master* 41.2k/1m", "no padding, no trailing gap");
   } finally {
     restore();
   }

@@ -177,8 +177,10 @@ const BRIGHT_RED = 91;
 /** Short names for verbose provider ids. */
 const PROVIDER_NAMES: Record<string, string> = {
   openrouter: "or",
-  "github-copilot": "copilot",
-  "openai-codex": "oai",
+  "github-copilot": "gh",
+  "openai-codex": "o",
+  openai: "o",
+  xai: "x",
   baseten: "b10",
 };
 
@@ -527,9 +529,14 @@ function shortProvider(provider: string | undefined): string {
   return PROVIDER_NAMES[provider] ?? provider;
 }
 
-function shortModel(model: string | undefined): string {
+function shortModel(model: string | undefined, provider?: string): string {
   const base = baseModelId(model);
   if (!base) return "no-model";
+  // xai: grok-4.6 → 4.6 (provider chip already says "x")
+  if (provider === "xai") {
+    const version = /^grok-(.+)$/i.exec(base)?.[1];
+    if (version) return version.toLowerCase();
+  }
   for (const [pattern, replacement] of MODEL_RULES) {
     // Aliased ids render lowercase; unknown ids pass through with their original casing.
     if (pattern.test(base)) return base.replace(pattern, replacement).toLowerCase();
@@ -947,7 +954,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             color(BRIGHT_YELLOW, shortProvider(provider)),
             color(
               BRIGHT_YELLOW,
-              `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id)}`,
+              `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id, provider)}`,
             ),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
             formatGit(branch, gitState),
