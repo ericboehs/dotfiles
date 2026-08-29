@@ -32,6 +32,32 @@ credentials, and naming them there printed a warning on every launch.
 The runtime writes land in a tracked file on purpose — `git diff` after a week
 shows exactly what pi changed on its own.
 
+### Edit through the link, never over it
+
+`~/.pi/agent/settings.json` is a symlink to the file above, so anything that
+*replaces* it rather than writing into it — `jq … > tmp && mv tmp
+~/.pi/agent/settings.json` is the easy way to get this wrong — swaps the link
+for a regular file. Nothing complains: pi reads the new file happily, and the
+edit appears to have worked. Then `bootstrap:pi` finds a real file where a link
+belongs, moves it aside as `settings.json.bak`, and relinks — and every change
+made since is in the `.bak`, not in effect. The tell is a session that comes
+back missing packages you know you installed.
+
+Write through the link:
+
+```sh
+jq '…' ~/.pi/agent/settings.json > /tmp/s.json && cat /tmp/s.json > ~/.pi/agent/settings.json
+```
+
+Better, edit `settings.<host>.json` here and commit it — the change is then on
+every host rather than one. `pi install` and `pi remove` are safe either way:
+they rewrite in place, so their edits land in the tracked copy.
+
+The same holds for every other file `bootstrap:pi` links — `keybindings.json`,
+`models.json`, the assistant profile's `AGENTS.md`, `approval-guardian.json`
+and `prompts/`. Each one has a bootstrap step that will quietly restore the
+link over whatever replaced it.
+
 ## Assistant profile (`pia`)
 
 `pia` is not a second Pi installation. The shell function in
