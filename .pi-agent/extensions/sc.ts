@@ -96,6 +96,10 @@ export default function (pi: ExtensionAPI) {
 
       const when = age(found.mtime);
       const instruction = args?.trim() || "Read this screenshot.";
+      // Commands can be invoked while the agent is working. Steering delivers
+      // this attachment before its next model request; when idle it starts a
+      // normal turn immediately.
+      const delivery = { deliverAs: "steer" as const };
       const mimeType = IMAGE_TYPES[found.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ""];
       // The path is included even though the image is attached inline: it makes
       // the file reachable to tools (re-read a region at full resolution, sips,
@@ -108,6 +112,7 @@ export default function (pi: ExtensionAPI) {
         // Not an image — nothing is attached, so the path is the whole payload.
         await pi.sendUserMessage(
           `Latest in iCloud Downloads: "${found.path}" (${when}). It's not an image; read the file. ${instruction}`,
+          delivery,
         );
         return;
       }
@@ -116,7 +121,7 @@ export default function (pi: ExtensionAPI) {
       await pi.sendUserMessage([
         { type: "text", text: `${label}. ${instruction}` },
         { type: "image", data, mimeType },
-      ]);
+      ], delivery);
     },
   });
 }
