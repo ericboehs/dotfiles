@@ -284,8 +284,8 @@ Skills announce themselves in the system prompt on every turn; a name and
 description sit in context forever whether or not they are ever used. Prompt
 templates cost nothing until typed. Building an artifact is always a deliberate
 act — never something the model should decide to start on its own — so
-`prompts/artifact.md` is the right shape: ~590 tokens that are free until
-invoked, and which then pull in one skill file for ~2,650 tokens on a typical
+`prompts/artifact.md` is the right shape: ~940 tokens that are free until
+invoked, and which then pull in one skill file for ~3,000 tokens on a typical
 run.
 
 ### The design guidance is vendored, not written

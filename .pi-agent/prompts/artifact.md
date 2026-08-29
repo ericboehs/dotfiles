@@ -37,7 +37,39 @@ Everything in `frontend-design` applies. On top of it:
 - Never `fetch()` an external API. No analytics.
 - No lorem ipsum. If the data is invented, label it as sample data in the artifact.
 
-## Step 3 — Publish
+## Step 3 — Render it and look at it
+
+Do not publish a page you have not seen. Reading the source is not sufficient: this
+step routinely catches defects that produce a valid, error-free, *wrong-looking*
+page — a `font:` shorthand on a parent silently overriding a child rule, a CSS
+`fill` beating an SVG `fill` attribute, labels clipped outside a viewBox, text
+colliding where two shapes cross.
+
+Playwright cannot load `file://` on macOS, so serve the directory first:
+
+```bash
+python3 -m http.server 8899 &
+playwright-cli -s=art open http://localhost:8899/<file>.html
+playwright-cli -s=art screenshot --filename=shot.png
+```
+
+Then **read the PNG** and write out an explicit list of what is wrong with it before
+changing anything. Work through:
+
+- 375 / 768 / 1440 — check `document.documentElement.scrollWidth > innerWidth`
+- both colour schemes:
+  `run-code "async page => await page.emulateMedia({colorScheme:'dark'})"`
+- every interactive state, including the empty one
+- the console is clean
+- nothing clipped, colliding, or overflowing its container
+- computed styles match intent where CSS could be fighting itself:
+  `--raw eval "getComputedStyle(document.querySelector('.x')).fontFamily"`
+
+Fix each defect and re-shoot until the list is empty. Then stop the server and delete
+the PNGs and `.playwright-cli/` — they must not end up in the published file's directory
+or a git commit.
+
+## Step 4 — Publish
 
 Write the file to the current directory, then:
 
