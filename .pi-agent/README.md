@@ -292,7 +292,7 @@ run.
 
 `artifact-skills/` holds Anthropic's own design skills, copied verbatim from
 [`anthropics/skills`](https://github.com/anthropics/skills) (Apache 2.0) and
-pinned by commit in each `MANIFEST`. Only `SKILL.md` and `LICENSE.txt` are
+pinned by commit in `MANIFEST`. Only `SKILL.md` and `LICENSE.txt` are
 taken; the upstream scripts and assets are not.
 
 | Skill | Tokens | Read when |
