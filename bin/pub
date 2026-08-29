@@ -1,0 +1,125 @@
+#!/bin/bash
+# pub — publish a self-contained HTML file to a shareable gistpreview URL.
+#
+# Usage:
+#   pub report.html                 # publish, print + copy the preview URL
+#   pub < report.html               # read HTML from stdin
+#   pub -o report.html              # ...and open it in the browser
+#   pub -p report.html              # public gist (default: secret / unlisted)
+#   pub -d "Q3 numbers" report.html # set the gist description
+#   pub -u <id> report.html         # update an existing artifact (URL stays the same)
+#   pub -l                          # list previously published artifacts
+#   pub -r <id>                     # delete an artifact
+#
+# The file is uploaded as index.html so the URL stays short:
+#   https://gistpreview.github.io/?<gist-id>
+#
+# Caveats: gistpreview is a third-party renderer and secret gists are unlisted,
+# not private. Don't publish anything sensitive.
+
+set -euo pipefail
+
+PREVIEW="https://gistpreview.github.io/?"
+MARKER="[pub]"
+
+usage() {
+  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+open_after=0
+public=0
+desc=""
+update_id=""
+action="publish"
+file=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--open)   open_after=1; shift ;;
+    -p|--public) public=1; shift ;;
+    -d|--desc)   desc="${2:?-d needs a description}"; shift 2 ;;
+    -u|--update) update_id="${2:?-u needs a gist id}"; action="update"; shift 2 ;;
+    -l|--list)   action="list"; shift ;;
+    -r|--rm|--delete) update_id="${2:?-r needs a gist id}"; action="delete"; shift 2 ;;
+    -h|--help)   usage 0 ;;
+    -*)          die "unknown flag: $1 (try --help)" ;;
+    *)           file="$1"; shift ;;
+  esac
+done
+
+command -v gh >/dev/null || die "gh is not installed"
+gh auth status >/dev/null 2>&1 || die "gh is not authenticated (run: gh auth login)"
+
+# Accept a bare id or a full gist/preview URL for -u / -r.
+normalize_id() {
+  printf '%s' "${1##*[/?]}"
+}
+
+emit() {
+  local id="$1" url="${PREVIEW}$1"
+  if command -v pbcopy >/dev/null; then printf '%s' "$url" | pbcopy; copied=" (copied)"; else copied=""; fi
+  printf '\033[32m✓\033[0m \033[1m%s\033[0m%s\n' "$url" "$copied"
+  printf '  gist  https://gist.github.com/%s\n' "$id"
+  printf '  edit  pub -u %s <file>\n' "$id"
+  [[ $open_after -eq 1 ]] && open "$url"
+  return 0
+}
+
+# Stage the HTML as index.html in a temp dir so the preview URL needs no filename.
+stage() {
+  local src="$1" dir
+  dir="$(mktemp -d)"
+  if [[ -n "$src" ]]; then
+    [[ -f "$src" ]] || die "no such file: $src"
+    cat "$src" > "$dir/index.html"
+  else
+    [[ -t 0 ]] && die "no input: pass a file or pipe HTML on stdin"
+    cat > "$dir/index.html"
+  fi
+  [[ -s "$dir/index.html" ]] || die "input is empty"
+  printf '%s' "$dir/index.html"
+}
+
+case "$action" in
+  publish)
+    staged="$(stage "$file")"
+    [[ -n "$desc" ]] || desc="$(basename "${file:-artifact.html}")"
+    args=(gist create "$staged" --desc "$desc $MARKER")
+    [[ $public -eq 1 ]] && args+=(--public)
+    out="$(gh "${args[@]}" 2>&1)" || die "$out"
+    gist_url="$(printf '%s\n' "$out" | grep -o 'https://gist.github.com/[^ ]*' | tail -1)"
+    [[ -n "$gist_url" ]] || die "could not parse gist url from: $out"
+    emit "$(normalize_id "$gist_url")"
+    ;;
+
+  update)
+    id="$(normalize_id "$update_id")"
+    staged="$(stage "$file")"
+    gh gist edit "$id" --filename index.html "$staged" >/dev/null \
+      || die "update failed (is $id yours?)"
+    [[ -n "$desc" ]] && gh gist edit "$id" --desc "$desc $MARKER" >/dev/null
+    emit "$id"
+    ;;
+
+  delete)
+    id="$(normalize_id "$update_id")"
+    gh gist delete "$id" --yes >/dev/null 2>&1 || gh gist delete "$id" >/dev/null
+    printf '\033[33m✗\033[0m deleted %s\n' "$id"
+    ;;
+
+  list)
+    gh api '/gists?per_page=100' --jq '
+      .[]
+      | select(.description | test("\\[pub\\]"))
+      | [.id, (.public | if . then "public" else "secret" end),
+         (.updated_at | sub("T.*";"")),
+         (.description | sub(" \\[pub\\]$";""))]
+      | @tsv' 2>/dev/null \
+    | while IFS=$'\t' read -r id vis updated d; do
+        printf '\033[1m%s\033[0m  %-6s %s  %s\n' "${PREVIEW}${id}" "$vis" "$updated" "$d"
+      done
+    ;;
+esac

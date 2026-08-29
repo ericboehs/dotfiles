@@ -7,6 +7,12 @@
 !keybindings.json
 !approval-guardian.json
 !web-search.json
+
+# Prompt templates. Zero token cost until invoked via /<name>.
+!prompts/
+prompts/*
+!prompts/*.md
+
 !extensions/
 extensions/*
 !extensions/*.ts
