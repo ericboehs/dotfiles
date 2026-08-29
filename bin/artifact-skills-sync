@@ -1,0 +1,117 @@
+#!/bin/bash
+# artifact-skills-sync — vendor Anthropic's design skills for the /artifact prompt.
+#
+# Usage:
+#   artifact-skills-sync            # sync to the pinned commit in MANIFEST
+#   artifact-skills-sync --update   # move the pin to latest main, show what changed
+#   artifact-skills-sync --check    # report drift vs upstream main, write nothing
+#   artifact-skills-sync --list     # show what's vendored, with token estimates
+#
+# Vendors SKILL.md + LICENSE.txt only — no fonts, no binaries. The files sit on
+# disk costing nothing until /artifact tells the agent to read one.
+#
+# Source: github.com/anthropics/skills (Apache 2.0)
+
+set -euo pipefail
+
+REPO="anthropics/skills"
+RAW="https://raw.githubusercontent.com/$REPO"
+SKILLS=(frontend-design web-artifacts-builder canvas-design algorithmic-art brand-guidelines)
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.pi-agent/artifact-skills" 2>/dev/null && pwd)" \
+  || DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.pi-agent/artifact-skills"
+MANIFEST="$DIR/MANIFEST"
+
+usage(){ sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+die(){ printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+dim(){ printf '\033[2m%s\033[0m\n' "$*"; }
+
+pinned_sha(){ [[ -f "$MANIFEST" ]] && awk '/^commit:/{print $2}' "$MANIFEST" || true; }
+latest_sha(){ gh api "/repos/$REPO/commits/main" --jq .sha 2>/dev/null \
+                || die "could not reach GitHub (gh auth?)"; }
+
+fetch(){  # fetch <sha> <path> -> stdout, empty on 404
+  curl -fsSL "$RAW/$1/$2" 2>/dev/null || true
+}
+
+sync_to(){
+  local sha="$1" changed=0
+  mkdir -p "$DIR"
+  for s in "${SKILLS[@]}"; do
+    local body; body="$(fetch "$sha" "skills/$s/SKILL.md")"
+    [[ -n "$body" ]] || { printf '  \033[33m—\033[0m %-24s not found upstream\n' "$s"; continue; }
+    mkdir -p "$DIR/$s"
+    if [[ -f "$DIR/$s/SKILL.md" ]] && [[ "$body" == "$(cat "$DIR/$s/SKILL.md")" ]]; then
+      printf '  \033[2m=\033[0m %-24s unchanged\n' "$s"
+    else
+      printf '%s' "$body" > "$DIR/$s/SKILL.md"
+      printf '  \033[32m↓\033[0m %-24s %s bytes\n' "$s" "${#body}"
+      changed=1
+    fi
+    fetch "$sha" "skills/$s/LICENSE.txt" > "$DIR/$s/LICENSE.txt" 2>/dev/null || true
+    [[ -s "$DIR/$s/LICENSE.txt" ]] || rm -f "$DIR/$s/LICENSE.txt"
+  done
+
+  {
+    echo "# Vendored from github.com/$REPO (Apache 2.0). Do not edit by hand."
+    echo "# Refresh with: artifact-skills-sync --update"
+    echo "commit: $sha"
+    echo "synced: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "skills: ${SKILLS[*]}"
+  } > "$MANIFEST"
+
+  return $changed
+}
+
+case "${1:-sync}" in
+  -h|--help) usage 0 ;;
+
+  --list)
+    [[ -f "$MANIFEST" ]] || die "nothing vendored yet — run: artifact-skills-sync"
+    dim "$(awk '/^commit:|^synced:/' "$MANIFEST" | tr '\n' ' ')"
+    for f in "$DIR"/*/SKILL.md; do
+      [[ -e "$f" ]] || continue
+      n=$(wc -c < "$f")
+      printf '  %-24s %6s bytes  ~%s tokens\n' "$(basename "$(dirname "$f")")" "$n" "$((n/4))"
+    done
+    ;;
+
+  --check)
+    pin="$(pinned_sha)"; latest="$(latest_sha)"
+    if [[ "$pin" == "$latest" ]]; then
+      printf '\033[32m✓\033[0m up to date with upstream main (%s)\n' "${latest:0:8}"
+    else
+      printf '\033[33m!\033[0m pinned %s, upstream main is %s\n' "${pin:0:8}" "${latest:0:8}"
+      for s in "${SKILLS[@]}"; do
+        a="$(cat "$DIR/$s/SKILL.md" 2>/dev/null || true)"
+        b="$(fetch "$latest" "skills/$s/SKILL.md")"
+        [[ "$a" == "$b" ]] || printf '    changed: %s\n' "$s"
+      done
+      dim "run --update to pull, then review the diff"
+    fi
+    ;;
+
+  --update)
+    latest="$(latest_sha)"
+    printf 'syncing to %s\n' "${latest:0:8}"
+    sync_to "$latest" || true
+    printf '\033[32m✓\033[0m pinned to %s\n' "${latest:0:8}"
+    if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+      dim "review: git -C $(git -C "$DIR" rev-parse --show-toplevel) diff -- .pi-agent/artifact-skills"
+    fi
+    ;;
+
+  sync)
+    sha="$(pinned_sha)"
+    if [[ -z "$sha" ]]; then
+      sha="$(latest_sha)"
+      printf 'no pin yet — vendoring from main %s\n' "${sha:0:8}"
+    else
+      printf 'syncing to pinned %s\n' "${sha:0:8}"
+    fi
+    sync_to "$sha" || true
+    printf '\033[32m✓\033[0m %s\n' "$DIR"
+    ;;
+
+  *) die "unknown option: $1 (try --help)" ;;
+esac

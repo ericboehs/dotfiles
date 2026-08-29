@@ -13,6 +13,17 @@
 prompts/*
 !prompts/*.md
 
+# Design skills vendored verbatim from anthropics/skills (Apache 2.0) by
+# bin/artifact-skills-sync. Text only -- no fonts or binaries. Read on demand
+# by /artifact, so they cost nothing until that prompt runs.
+!artifact-skills/
+artifact-skills/*
+!artifact-skills/MANIFEST
+!artifact-skills/*/
+artifact-skills/*/*
+!artifact-skills/*/SKILL.md
+!artifact-skills/*/LICENSE.txt
+
 !extensions/
 extensions/*
 !extensions/*.ts

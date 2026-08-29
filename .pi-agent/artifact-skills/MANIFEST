@@ -1,0 +1,5 @@
+# Vendored from github.com/anthropics/skills (Apache 2.0). Do not edit by hand.
+# Refresh with: artifact-skills-sync --update
+commit: 3b3fad96af16a10759d930941b4520ba0c40edae
+synced: 2026-08-29T13:59:01Z
+skills: frontend-design web-artifacts-builder canvas-design algorithmic-art brand-guidelines
