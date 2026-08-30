@@ -18,6 +18,10 @@ class HNWatch
   HN_ITEM = 'https://news.ycombinator.com/item?id=%s'
   CACHE_DIR = File.expand_path('~/.cache/hn-watch')
   SEEN_PATH = File.join(CACHE_DIR, 'seen.json')
+  LOCK_PATH = File.join(CACHE_DIR, 'seen.lock')
+  LOG_PATH = File.join(CACHE_DIR, 'launchd.log')
+  LABEL = 'com.ericboehs.hn-watch'
+  PLIST_PATH = File.expand_path("~/Library/LaunchAgents/#{LABEL}.plist")
   USER_AGENT = 'hn-watch (ericboehs/dotfiles)'
 
   DEFAULTS = {
@@ -39,11 +43,23 @@ class HNWatch
   end
 
   def initialize(argv)
-    @opts = DEFAULTS.dup.merge(notify: false, reset: false, list_seen: false, watch: nil)
+    @opts = DEFAULTS.dup.merge(
+      notify: false, reset: false, list_seen: false, watch: nil,
+      install: false, uninstall: false
+    )
     parse! argv
   end
 
   def run
+    $stdout.sync = $stderr.sync = true
+    if @opts[:install]
+      install_launch_agent
+      return
+    end
+    if @opts[:uninstall]
+      uninstall_launch_agent
+      return
+    end
     if @opts[:reset]
       reset_seen
       return
@@ -70,6 +86,7 @@ class HNWatch
         Print the HN front page with velocity and whether each story would
         fire. Does not Slack or record anything unless --notify.
         --watch re-scans (and --notify still slacks new fires each tick).
+        --install loads a LaunchAgent that runs --watch --notify in the background.
 
         A story fires when either:
           points >= #{DEFAULTS[:min_points]} and age < #{DEFAULTS[:max_age_points]}h
@@ -82,6 +99,8 @@ class HNWatch
 
         @opts[:watch] = interval
       end
+      o.on('--install', 'Load LaunchAgent for --watch --notify') { @opts[:install] = true }
+      o.on('--uninstall', 'Unload LaunchAgent') { @opts[:uninstall] = true }
       o.on('--seen', 'List remembered story IDs') { @opts[:list_seen] = true }
       o.on('--reset', 'Forget remembered story IDs') { @opts[:reset] = true }
       o.on('--source NAME', %w[algolia firebase], 'algolia (default) or firebase') { |v| @opts[:source] = v }
@@ -110,6 +129,16 @@ class HNWatch
   end
 
   def reprint_board(stories, seen)
+    if @opts[:watch] && !$stdout.tty?
+      fires = stories.count { |s| fire?(s) && !seen.key?(s.id.to_s) }
+      puts format(
+        '%s  %d stories  %d new fire  %d seen  next %ds',
+        Time.now.strftime('%H:%M:%S'), stories.size, fires,
+        seen.size, @opts[:watch]
+      )
+      return
+    end
+
     print "\e[2J\e[H" if @opts[:watch] && $stdout.tty?
     puts "#{Time.now.strftime('%H:%M:%S')}  source=#{@opts[:source]}" if @opts[:watch]
     print_board stories, seen
@@ -119,14 +148,17 @@ class HNWatch
     puts "next in #{@opts[:watch]}s#{extra}  (Ctrl-C to stop)"
   end
 
-  def notify_new(stories, seen)
-    fires = stories.select { |s| fire?(s) && !seen.key?(s.id.to_s) }
-    if fires.empty?
-      warn 'Nothing new to notify.' unless @opts[:watch]
-      return
+  def notify_new(stories, _seen)
+    with_seen_lock do
+      seen = load_seen
+      fires = stories.select { |s| fire?(s) && !seen.key?(s.id.to_s) }
+      if fires.empty?
+        warn 'Nothing new to notify.' unless @opts[:watch]
+        return
+      end
+      fires.each { |story| notify story, seen }
+      save_seen seen
     end
-    fires.each { |story| notify story, seen }
-    save_seen seen
   end
 
   def fetch_stories
@@ -277,6 +309,89 @@ class HNWatch
     seen.each do |id, meta|
       puts format('%s  %s  %s', id, meta['notified_at'], meta['title'])
     end
+  end
+
+  def with_seen_lock
+    FileUtils.mkdir_p CACHE_DIR
+    File.open(LOCK_PATH, File::RDWR | File::CREAT, 0o644) do |file|
+      file.flock(File::LOCK_EX)
+      yield
+    end
+  end
+
+  def install_launch_agent
+    FileUtils.mkdir_p CACHE_DIR
+    FileUtils.mkdir_p File.dirname(PLIST_PATH)
+    File.write PLIST_PATH, launch_agent_plist
+    launchctl 'bootout', "#{launch_domain}/#{LABEL}"
+    unless launchctl 'bootstrap', launch_domain, PLIST_PATH
+      raise "launchctl bootstrap failed for #{LABEL}"
+    end
+    warn "loaded #{LABEL}"
+    warn "logs: #{LOG_PATH}"
+  end
+
+  def uninstall_launch_agent
+    launchctl 'bootout', "#{launch_domain}/#{LABEL}"
+    FileUtils.rm_f PLIST_PATH
+    warn "unloaded #{LABEL}"
+  end
+
+  def launch_domain
+    "gui/#{Process::UID.eid}"
+  end
+
+  def launchctl(*args)
+    system('launchctl', *args, out: File::NULL, err: File::NULL)
+  end
+
+  def launch_agent_plist
+    home = Dir.home
+    command = 'mkdir -p "$HOME/.cache/hn-watch" && ' \
+              'eval "$(fnox hook-env -s zsh --if-missing ignore </dev/null 2>/dev/null)" && ' \
+              'exec hn-watch --watch --notify'
+    <<~XML
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+      <dict>
+        <key>Label</key>
+        <string>#{LABEL}</string>
+        <key>ProgramArguments</key>
+        <array>
+          <string>/bin/zsh</string>
+          <string>-l</string>
+          <string>-c</string>
+          <string>#{xml_escape(command)}</string>
+        </array>
+        <key>WorkingDirectory</key>
+        <string>#{xml_escape(home)}</string>
+        <key>EnvironmentVariables</key>
+        <dict>
+          <key>HOME</key>
+          <string>#{xml_escape(home)}</string>
+        </dict>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>KeepAlive</key>
+        <true/>
+        <key>ThrottleInterval</key>
+        <integer>60</integer>
+        <key>ProcessType</key>
+        <string>Background</string>
+        <key>LowPriorityIO</key>
+        <true/>
+        <key>StandardOutPath</key>
+        <string>#{xml_escape(LOG_PATH)}</string>
+        <key>StandardErrorPath</key>
+        <string>#{xml_escape(LOG_PATH)}</string>
+      </dict>
+      </plist>
+    XML
+  end
+
+  def xml_escape(text)
+    text.to_s.gsub('&', '&amp;').gsub('<', '&lt;').gsub('>', '&gt;')
   end
 
   def get_json(url)
