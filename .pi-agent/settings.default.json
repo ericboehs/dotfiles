@@ -16,6 +16,6 @@
     "git:github.com/ericboehs/pi-claude-link@78e01168ddccbf1f5ef3a3474b70cf030a6bd551",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
     "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
-    "git:github.com/ericboehs/agent-notify@21f906cfd41799422488fb9fed1751f00280bc9a"
+    "git:github.com/ericboehs/agent-notify@b57ffa4fff94425daff9bca0b7b037c97271f366"
   ]
 }
