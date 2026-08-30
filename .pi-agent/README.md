@@ -58,6 +58,21 @@ The same holds for every other file `bootstrap:pi` links — `keybindings.json`,
 and `prompts/`. Each one has a bootstrap step that will quietly restore the
 link over whatever replaced it.
 
+Three things now say so out loud, because the gap between the mistake and the
+symptom is what made it expensive:
+
+```sh
+bin/pi-profile-check --links-only   # audit both profiles (~35ms)
+```
+
+- `bin/pi-launch` tests three managed paths on every launch — three shell
+  builtins, no subprocess — and prints a warning before starting pi. A clobber
+  is announced at the next session rather than at the next bootstrap.
+- The `pre-dotfiles` hook runs the audit *before* mise relinks, so the paths it
+  is about to rename are named while their contents still matter.
+- The audit also catches the quieter variants: a link left pointing at another
+  host's `settings.<host>.json` after a rename, and a dangling one.
+
 ## Assistant profile (`pia`)
 
 `pia` is not a second Pi installation. The shell function in
@@ -83,12 +98,21 @@ Because `extensions/` is shared while package declarations are separate, a
 vendored extension can replace a package in the coding settings but leave the
 assistant settings stale. Replacement extensions mark the old source with an
 `@replaces` comment. `bin/pi-profile-check` detects any marked package still
-loaded beside its replacement, and both Pi bootstrap tasks run it. Run it by
-hand after changing either profile:
+loaded beside its replacement — and, with the link audit above, any managed
+path in either profile that is no longer the link bootstrap made. Both Pi
+bootstrap tasks run it. Run it by hand after changing either profile:
 
 ```sh
-bin/pi-profile-check
+bin/pi-profile-check                # packages and links, both profiles
+bin/pi-profile-check --links-only
+bin/pi-profile-check --packages-only
 ```
+
+The list of managed paths is read out of `mise.toml`'s dotfiles table rather
+than repeated in the checker, so a link added there is audited without touching
+the script. The two per-host links (`settings.json`, `models.json`) are the
+exception: `bootstrap:pi` makes those itself, and the checker resolves the host
+the same way it does.
 
 Do not symlink the complete settings file or blindly copy package and skill
 lists between profiles; that would erase the useful boundary. Put truly shared

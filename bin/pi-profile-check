@@ -1,24 +1,44 @@
 #!/usr/bin/env bash
 
-# Detect packages that duplicate tracked local extensions in one or more Pi
-# profiles. Local replacements declare their old package with:
+# Check that Pi profiles are wired the way bootstrap left them. Two failures,
+# both of which leave a profile working but wrong:
 #
-#   // @replaces npm:@scope/package
+#   packages  a package still declared beside the local extension that replaced
+#             it, marked in the extension with  // @replaces npm:@scope/package
+#   links     a real file where a symlink into this repo belongs, which means
+#             edits to it are lost the next time bootstrap moves it aside
 #
-# Usage: pi-profile-check [PROFILE_DIR ...]
+# Usage: pi-profile-check [--links-only|--packages-only] [PROFILE_DIR ...]
 # With no arguments, checks ~/.pi/agent and ~/.pi/assistant when present.
 
 set -euo pipefail
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  cat <<'EOF'
-Usage: pi-profile-check [PROFILE_DIR ...]
+check_packages=1
+check_links=1
 
-Check Pi profiles for installed packages superseded by a local extension's
-@replaces marker. Defaults to ~/.pi/agent and ~/.pi/assistant.
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      cat <<'EOF'
+Usage: pi-profile-check [--links-only|--packages-only] [PROFILE_DIR ...]
+
+Check Pi profiles for:
+  - installed packages superseded by a local extension's @replaces marker
+  - managed paths that are regular files where a symlink into the dotfiles
+    repo belongs (the next bootstrap renames those to .bak, taking any edit
+    made through them with it)
+
+Defaults to ~/.pi/agent and ~/.pi/assistant.
 EOF
-  exit 0
-fi
+      exit 0
+      ;;
+    --links-only) check_packages=0; shift ;;
+    --packages-only) check_links=0; shift ;;
+    --) shift; break ;;
+    -*) echo "pi-profile-check: unknown option $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "pi-profile-check: jq is required" >&2
@@ -29,12 +49,18 @@ if [[ "$#" -eq 0 ]]; then
   set -- "$HOME/.pi/agent" "$HOME/.pi/assistant"
 fi
 
+# This script is reached through ~/bin, itself a link to the repo's bin/, so
+# resolve physically rather than trusting $0's directory.
+root="${PI_DOTFILES_ROOT:-$(cd -P "$(dirname "$0")" && pwd)}"
+root="${root%/bin}"
+
 work="$(mktemp -d -t pi-profile-check.XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 status=0
 checked=0
 
 for profile in "$@"; do
+  [[ "$check_packages" -eq 1 ]] || continue
   settings="$profile/settings.json"
   extensions="$profile/extensions"
   [[ -f "$settings" && -d "$extensions" ]] || continue
@@ -62,6 +88,71 @@ for profile in "$@"; do
       done < "$packages"
     done < <(sed -nE 's/.*@replaces[[:space:]]+([^[:space:]]+).*/\1/p' "$extension")
   done < <(find -H "$extensions" -maxdepth 2 -type f \( -name '*.ts' -o -name '*.js' \) -print)
+done
+
+# Which paths in a profile bootstrap owns, and what each should point at. The
+# coding profile's list is read out of mise.toml rather than repeated here: the
+# dotfiles table already names every link, and a second copy would be wrong the
+# first time one is added. "-" means the source is not knowable from this repo
+# (the assistant's persona files live in a private one) — being a link at all is
+# still checkable, and is the part that matters.
+expected_links() {
+  local profile="$1" name host
+
+  if [[ "$profile" == "$HOME/.pi/agent" ]]; then
+    sed -nE 's|^"~/(\.pi/agent/[^"]+)"[[:space:]]*=[[:space:]]*"([^"]+)".*|\1\t\2|p' \
+      "$root/mise.toml" 2>/dev/null |
+      while IFS=$'\t' read -r target source; do
+        printf '%s\t%s\n' "$HOME/${target}" "$root/$source"
+      done
+
+    # settings.json and models.json are per host, so bootstrap:pi links them
+    # instead of the table. Same host resolution it uses.
+    host="${PI_SETTINGS_HOST:-}"
+    if [[ -z "$host" && -f "$root/.pi-agent/host" ]]; then
+      host="$(tr -d '[:space:]' < "$root/.pi-agent/host")"
+    fi
+    [[ -n "$host" ]] || host="$(hostname -s | tr '[:upper:]' '[:lower:]')"
+    printf '%s\t%s\n' "$profile/settings.json" "$root/.pi-agent/settings.$host.json"
+    # A host with no models.<host>.json keeps a real models.json of its own.
+    [[ -f "$root/.pi-agent/models.$host.json" ]] &&
+      printf '%s\t%s\n' "$profile/models.json" "$root/.pi-agent/models.$host.json"
+    return
+  fi
+
+  if [[ "$profile" == "$HOME/.pi/assistant" ]]; then
+    for name in auth.json models.json keybindings.json npm git bin; do
+      printf '%s\t%s\n' "$profile/$name" "$HOME/.pi/agent/$name"
+    done
+    printf '%s\t%s\n' "$profile/extensions" "$root/.pi-agent/extensions"
+    for name in settings.json AGENTS.md approval-guardian.json prompts; do
+      printf '%s\t%s\n' "$profile/$name" "-"
+    done
+  fi
+}
+
+for profile in "$@"; do
+  [[ "$check_links" -eq 1 && -d "$profile" ]] || continue
+  [[ "$check_packages" -eq 1 ]] || checked=$((checked + 1))
+  while IFS=$'\t' read -r target source; do
+    [[ -n "$target" ]] || continue
+    # Absent is fine: bootstrap has not run here, or this host does not want it.
+    [[ -e "$target" || -L "$target" ]] || continue
+
+    want="$source"
+    [[ "$want" == "-" ]] && want="a link into the dotfiles repo"
+
+    if [[ ! -L "$target" ]]; then
+      echo "pi-profile-check: $target is a regular file where $want belongs — the next bootstrap renames it to ${target##*/}.bak, and every edit made through it goes with it" >&2
+      status=1
+    elif [[ ! -e "$target" ]]; then
+      echo "pi-profile-check: $target is a dangling link to $(readlink "$target")" >&2
+      status=1
+    elif [[ "$source" != "-" && ! "$target" -ef "$source" ]]; then
+      echo "pi-profile-check: $target points at $(readlink "$target"), not $source — editing the tracked file is not editing what pi reads" >&2
+      status=1
+    fi
+  done < <(expected_links "$profile")
 done
 
 if [[ "$status" -eq 0 && "$checked" -gt 0 ]]; then

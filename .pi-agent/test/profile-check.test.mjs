@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const checker = join(repo, "bin", "pi-profile-check");
 const temporaryDirectories = [];
@@ -60,4 +59,104 @@ test("checks multiple profiles while skipping profiles that do not exist", async
   const result = check(join(tmpdir(), "missing-pi-profile"), clean, conflict);
   assert.equal(result.status, 1);
   assert.match(result.stderr, new RegExp(conflict.replaceAll("/", "\\/")));
+});
+
+// --- managed links -------------------------------------------------------
+// A stand-in dotfiles repo: mise.toml's dotfiles table is the list of managed
+// paths, so the checker reads it rather than carrying its own copy.
+async function linkFixture({ host = "testbox", models = false } = {}) {
+  const home = await mkdtemp(join(tmpdir(), "pi-links-home-"));
+  const dots = await mkdtemp(join(tmpdir(), "pi-links-repo-"));
+  temporaryDirectories.push(home, dots);
+  await mkdir(join(dots, ".pi-agent", "extensions"), { recursive: true });
+  await writeFile(join(dots, "mise.toml"),
+    ['"~/.pi/agent/keybindings.json" = ".pi-agent/keybindings.json"',
+     '"~/.pi/agent/extensions" = ".pi-agent/extensions"', ""].join("\n"));
+  await writeFile(join(dots, ".pi-agent", "keybindings.json"), "{}\n");
+  await writeFile(join(dots, ".pi-agent", `settings.${host}.json`), "{}\n");
+  if (models) await writeFile(join(dots, ".pi-agent", `models.${host}.json`), "{}\n");
+  const agent = join(home, ".pi", "agent");
+  await mkdir(agent, { recursive: true });
+  for (const [name, target] of [
+    ["keybindings.json", join(dots, ".pi-agent", "keybindings.json")],
+    ["extensions", join(dots, ".pi-agent", "extensions")],
+    ["settings.json", join(dots, ".pi-agent", `settings.${host}.json`)],
+  ]) await symlink(target, join(agent, name));
+  return { home, dots, agent, host };
+}
+
+function checkLinks({ home, dots, host }, ...profiles) {
+  return spawnSync(checker, ["--links-only", ...profiles], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, PI_DOTFILES_ROOT: dots, PI_SETTINGS_HOST: host },
+  });
+}
+
+test("passes a profile whose managed paths are all links to the repo", async () => {
+  const fixture = await linkFixture();
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("detects a real file written over a managed link", async () => {
+  const fixture = await linkFixture();
+  await rm(join(fixture.agent, "settings.json"));
+  await writeFile(join(fixture.agent, "settings.json"), '{"packages":[]}\n');
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /settings\.json is a regular file where .*settings\.testbox\.json belongs/);
+  assert.match(result.stderr, /renames it to settings\.json\.bak/);
+});
+
+test("detects a link left pointing at another host's file", async () => {
+  const fixture = await linkFixture();
+  await writeFile(join(fixture.dots, ".pi-agent", "settings.otherbox.json"), "{}\n");
+  await rm(join(fixture.agent, "settings.json"));
+  await symlink(join(fixture.dots, ".pi-agent", "settings.otherbox.json"), join(fixture.agent, "settings.json"));
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /points at .*settings\.otherbox\.json, not .*settings\.testbox\.json/);
+});
+
+test("detects a dangling managed link", async () => {
+  const fixture = await linkFixture();
+  await rm(join(fixture.agent, "keybindings.json"));
+  await symlink(join(fixture.dots, "gone.json"), join(fixture.agent, "keybindings.json"));
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /keybindings\.json is a dangling link/);
+});
+
+test("accepts a real models.json on a host with no tracked models file", async () => {
+  const fixture = await linkFixture();
+  await writeFile(join(fixture.agent, "models.json"), "{}\n");
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("flags that same models.json once the host has a tracked one", async () => {
+  const fixture = await linkFixture({ models: true });
+  await writeFile(join(fixture.agent, "models.json"), "{}\n");
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /models\.json is a regular file/);
+});
+
+test("ignores managed paths that do not exist yet", async () => {
+  const fixture = await linkFixture();
+  await rm(join(fixture.agent, "extensions"));
+  const result = checkLinks(fixture, fixture.agent);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("--packages-only skips the link audit", async () => {
+  const fixture = await linkFixture();
+  await rm(join(fixture.agent, "settings.json"));
+  await writeFile(join(fixture.agent, "settings.json"), '{"packages":[]}\n');
+  await mkdir(join(fixture.agent, "extensions", "x"), { recursive: true }).catch(() => {});
+  const result = spawnSync(checker, ["--packages-only", fixture.agent], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: fixture.home, PI_DOTFILES_ROOT: fixture.dots, PI_SETTINGS_HOST: fixture.host },
+  });
+  assert.equal(result.status, 0, result.stderr);
 });

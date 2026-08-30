@@ -307,6 +307,13 @@ if [ -d "$pi_extensions" ] && [ ! -L "$pi_extensions" ]; then
   mv "$pi_extensions" "$backup"
   echo "dotfiles: kept the previous Pi extensions directory at $backup"
 fi
+
+# Linking is about to rename any real file sitting where a link belongs, which
+# is how an edit written *over* ~/.pi/agent/settings.json instead of through it
+# disappears. Name what is about to move before it moves; never block the run.
+if [ -x ./bin/pi-profile-check ]; then
+  ./bin/pi-profile-check --links-only || true
+fi
 '''
 
 pre-defaults = '''

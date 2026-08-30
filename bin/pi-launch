@@ -27,6 +27,24 @@ if [ -z "${NODE_COMPILE_CACHE:-}" ] && [ -z "${PI_NO_COMPILE_CACHE:-}" ]; then
   export NODE_COMPILE_CACHE
 fi
 
+# Three managed paths in a bootstrapped profile are always symlinks into the
+# dotfiles repo. A regular file there means something wrote *over* the link
+# rather than through it -- a `jq ... > tmp && mv tmp settings.json` is the
+# usual way -- and the edit reads as applied until the next bootstrap renames
+# the file to .bak and relinks, at which point it is silently gone. Say so at
+# the only moment anyone is looking. Three test builtins, no subprocess, and
+# only for the two profiles this repo manages.
+agent_dir=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
+case $agent_dir in
+  "$HOME/.pi/agent"|"$HOME/.pi/assistant")
+    for managed in settings.json keybindings.json extensions; do
+      if [ -e "$agent_dir/$managed" ] && [ ! -L "$agent_dir/$managed" ]; then
+        echo "pi: $agent_dir/$managed is a regular file where a link into dotfiles belongs; run pi-profile-check --links-only" >&2
+      fi
+    done
+    ;;
+esac
+
 # Two install layouts: npm's global prefix (bin/pi next to bin/node, package
 # under ../lib/node_modules) and a plain node_modules tree (bin/pi in
 # node_modules/.bin, package one level up), which is what mise's npm backend
