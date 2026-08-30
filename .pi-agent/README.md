@@ -62,7 +62,8 @@ Three things now say so out loud, because the gap between the mistake and the
 symptom is what made it expensive:
 
 ```sh
-bin/pi-profile-check --links-only   # audit both profiles (~35ms)
+bin/dotfiles-link-check ~/.pi      # or with no argument, the whole tree
+bin/pi-profile-check --links-only  # the same audit, scoped to the profiles
 ```
 
 - `bin/pi-launch` tests three managed paths on every launch — three shell
@@ -98,8 +99,8 @@ Because `extensions/` is shared while package declarations are separate, a
 vendored extension can replace a package in the coding settings but leave the
 assistant settings stale. Replacement extensions mark the old source with an
 `@replaces` comment. `bin/pi-profile-check` detects any marked package still
-loaded beside its replacement — and, with the link audit above, any managed
-path in either profile that is no longer the link bootstrap made. Both Pi
+loaded beside its replacement, and delegates the link audit above to
+`bin/dotfiles-link-check` with the profile directories as its scope. Both Pi
 bootstrap tasks run it. Run it by hand after changing either profile:
 
 ```sh
@@ -110,9 +111,11 @@ bin/pi-profile-check --packages-only
 
 The list of managed paths is read out of `mise.toml`'s dotfiles table rather
 than repeated in the checker, so a link added there is audited without touching
-the script. The two per-host links (`settings.json`, `models.json`) are the
-exception: `bootstrap:pi` makes those itself, and the checker resolves the host
-the same way it does.
+the script — including the `symlink-each` directories, whose contents are the
+links. The links the bootstrap tasks make themselves are the exception and are
+named in `dotfiles-link-check`: the two per-host ones (`settings.json`,
+`models.json`, whose host it resolves the same way `bootstrap:pi` does), the
+assistant profile, and the VA context file.
 
 Do not symlink the complete settings file or blindly copy package and skill
 lists between profiles; that would erase the useful boundary. Put truly shared

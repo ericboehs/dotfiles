@@ -39,7 +39,7 @@ case $agent_dir in
   "$HOME/.pi/agent"|"$HOME/.pi/assistant")
     for managed in settings.json keybindings.json extensions; do
       if [ -e "$agent_dir/$managed" ] && [ ! -L "$agent_dir/$managed" ]; then
-        echo "pi: $agent_dir/$managed is a regular file where a link into dotfiles belongs; run pi-profile-check --links-only" >&2
+        echo "pi: $agent_dir/$managed is a regular file where a link into dotfiles belongs; run dotfiles-link-check" >&2
       fi
     done
     ;;

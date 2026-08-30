@@ -86,6 +86,14 @@ $EDITOR ~/.gitconfig.private
 - Also drives machine setup — packages, `$HOME` symlinks, macOS defaults and
   git checkouts are all declared in [mise.toml](mise.toml) and applied with
   `mise bootstrap`
+- `bin/dotfiles-link-check` verifies the result: every path the `[dotfiles]`
+  table manages, plus the links the bootstrap tasks make themselves, is still
+  a symlink pointing where it should. Writing *over* a link rather than
+  through it (`jq … > tmp && mv tmp ~/.gitconfig`) works until the next
+  bootstrap renames the file to `.bak` and relinks, at which point the change
+  is gone and its cause is days old. The `pre-dotfiles` hook runs the audit
+  before that rename, and it takes a path prefix to scope it:
+  `dotfiles-link-check ~/.pi`
 
 ### Pi coding agent
 
@@ -138,6 +146,7 @@ Collection of utility scripts in `bin/` including:
 - **Tmux utilities**: toggle_notes_pane, monitor_tmux_pane, notes
 - **Development tools**: refresh_safari, colors, true-colors, utcdate
 - **Pi**: pi-bundle (faster startup), pi-launch, pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
+- **Setup integrity**: dotfiles-link-check (every managed path is still the symlink bootstrap made), pi-profile-check (that, plus packages a local extension has replaced)
 - **Throwaway macOS VMs**: `vm` (see below)
 
 ## Throwaway macOS VMs
