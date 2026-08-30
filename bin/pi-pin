@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# pi-pin - move a pinned pi package to a new commit, everywhere it is pinned.
+#
+# Usage:
+#   pi-pin                 list every pinned package, and whether the clone on
+#                          disk is the commit the settings ask for
+#   pi-pin NAME            move NAME to the tip of its remote default branch
+#   pi-pin NAME REF        move NAME to a branch, tag or sha
+#
+# NAME is the repo (agent-notify) or owner/repo, and every settings profile that
+# pins it is rewritten - there are four of them, they drift apart for other
+# reasons, and a bump that lands in three is a bug you find on the fourth
+# machine weeks later.
+#
+# The reason this exists rather than a sed one-liner is the second half. A
+# pinned package is two pieces of state: the sha in settings.<host>.json, and
+# the clone under ~/.pi/agent/git that pi actually loads. Editing the first does
+# not move the second - pi reconciles a clone on `pi update --extensions`, not
+# at startup - so a bumped pin runs the old code, silently, for as long as it
+# takes to notice that a fix you just shipped is not in effect. That cost an
+# evening once: agent-notify learned to stay quiet for a pane being read on the
+# iPad, the pin said so, and every session kept posting because the clone was
+# still at the commit before it.
+#
+# So the bump and the reconcile are one command, and the listing puts the two
+# shas side by side where a stale clone has nowhere to hide.
+
+set -uo pipefail
+
+# Reached through the ~/bin symlink, so the settings live next to the *target*.
+self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+SETTINGS_DIR=$(cd "$(dirname "$self")/../.pi-agent" 2>/dev/null && pwd)
+PI_GIT="$HOME/.pi/agent/git"
+CODE="$HOME/Code"
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+warn() { printf '%s\n' "$*" >&2; }
+
+[ -n "${SETTINGS_DIR:-}" ] || die "pi-pin: no .pi-agent next to $self"
+
+# Every git spec in every profile, deduplicated. Specs are plain strings in a
+# JSON array, and grep is enough to find them: jq would need to know which key
+# holds them, and that key has moved before.
+list_specs() {
+  grep -ho 'git:[^"]*' "$SETTINGS_DIR"/settings*.json 2>/dev/null | sort -u
+}
+
+spec_repo() { local s=${1#git:}; printf '%s' "${s%@*}"; }
+spec_ref()  { local s=$1; case $s in *@*) printf '%s' "${s##*@}" ;; esac; }
+
+clone_head() {
+  git -C "$PI_GIT/$1" rev-parse HEAD 2>/dev/null
+}
+
+short() { printf '%s' "${1:0:7}"; }
+
+# --- listing --------------------------------------------------------------
+if [ $# -eq 0 ]; then
+  printf '%-46s %-9s %-9s %s\n' PACKAGE PINNED CLONE ''
+  stale=0
+  while read -r spec; do
+    [ -n "$spec" ] || continue
+    repo=$(spec_repo "$spec")
+    ref=$(spec_ref "$spec")
+    head=$(clone_head "$repo")
+    if [ -z "$head" ]; then
+      state="not installed"
+    elif [ -z "$ref" ]; then
+      state="unpinned (tracks its branch)"
+    elif [ "$head" = "$ref" ]; then
+      state="ok"
+    else
+      state="STALE - run: pi update --extensions"
+      stale=1
+    fi
+    printf '%-46s %-9s %-9s %s\n' "$repo" "$(short "$ref")" "$(short "$head")" "$state"
+  done <<<"$(list_specs)"
+  exit $stale
+fi
+
+name=$1
+want=${2:-}
+
+# --- which package -------------------------------------------------------
+repo=""
+while read -r spec; do
+  [ -n "$spec" ] || continue
+  candidate=$(spec_repo "$spec")
+  case "$candidate" in
+    "$name" | */"$name")
+      # Two different repos answering to one short name is the one case where
+      # guessing is worse than stopping: the wrong one gets pinned to a sha
+      # from somebody else's history, which resolves to nothing on the box that
+      # tries to install it.
+      [ -n "$repo" ] && [ "$repo" != "$candidate" ] &&
+        die "pi-pin: '$name' matches both $repo and $candidate - name one"
+      repo=$candidate
+      ;;
+  esac
+done <<<"$(list_specs)"
+
+[ -n "$repo" ] || die "pi-pin: no pinned package matching '$name' in $SETTINGS_DIR"
+
+url="https://$repo"
+
+# --- which commit --------------------------------------------------------
+# A full sha is taken at its word: ls-remote lists refs, and a commit that is
+# not the tip of one has no entry to be found in. Anything else is resolved on
+# the remote, because that is the only copy the machine installing it can see.
+if printf '%s' "$want" | grep -qE '^[0-9a-f]{40}$'; then
+  sha=$want
+else
+  sha=$(git ls-remote "$url" "${want:-HEAD}" 2>/dev/null | awk 'NR == 1 { print $1 }')
+  [ -n "$sha" ] || die "pi-pin: ${want:-HEAD} is not a ref on $url"
+fi
+
+# The commit has to exist where every machine can reach it, and the usual way
+# for it not to is the obvious one: it is still sitting in the local checkout.
+if [ -d "$CODE/$repo/.git" ]; then
+  local_head=$(git -C "$CODE/$repo" rev-parse HEAD 2>/dev/null)
+  if [ -n "$local_head" ] && [ "$local_head" != "$sha" ] && [ -z "$want" ]; then
+    warn "pi-pin: note - $CODE/$repo is at $(short "$local_head"), the remote tip is $(short "$sha")"
+    warn "pi-pin: unpushed commits, or a branch that is not the default one?"
+  fi
+fi
+
+# --- rewrite every profile that pins it ----------------------------------
+changed=0
+for f in "$SETTINGS_DIR"/settings*.json; do
+  [ -f "$f" ] || continue
+  old=$(grep -o "git:$repo@[^\"]*" "$f" 2>/dev/null | head -1)
+  [ -n "$old" ] || continue
+  if [ "$old" = "git:$repo@$sha" ]; then
+    printf '%s already at %s\n' "$(basename "$f")" "$(short "$sha")"
+    continue
+  fi
+  tmp=$(mktemp)
+  # Rewritten in place rather than through jq, which would reformat a file that
+  # pi also writes to and turn every bump into a diff nobody can read.
+  sed "s|git:$repo@[^\"]*|git:$repo@$sha|g" "$f" > "$tmp" || die "pi-pin: sed failed on $f"
+  if command -v jq >/dev/null 2>&1 && ! jq -e . "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    die "pi-pin: rewriting $f produced invalid JSON, left alone"
+  fi
+  mv "$tmp" "$f"
+  printf '%s %s -> %s\n' "$(basename "$f")" "$(short "$(spec_ref "$old")")" "$(short "$sha")"
+  changed=1
+done
+
+[ "$changed" = 1 ] || { printf 'nothing to do\n'; exit 0; }
+
+# --- and move the clone pi actually loads --------------------------------
+if command -v pi >/dev/null 2>&1; then
+  pi update --extensions >/dev/null 2>&1 ||
+    warn "pi-pin: pi update --extensions failed; the clone may still be stale"
+else
+  warn "pi-pin: pi is not on PATH; run 'pi update --extensions' where it is"
+fi
+
+head=$(clone_head "$repo")
+if [ "$head" = "$sha" ]; then
+  printf 'clone reconciled: %s at %s\n' "$repo" "$(short "$sha")"
+else
+  warn "pi-pin: clone is at ${head:-nothing}, wanted $sha"
+  exit 1
+fi

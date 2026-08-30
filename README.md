@@ -111,6 +111,13 @@ $EDITOR ~/.gitconfig.private
   `settings.default.json`.
 - `bootstrap:pi` installs and verifies the pinned package set without tracking
   credentials, sessions, caches, or downloaded package contents.
+- `bin/pi-pin` moves a pinned package to a new commit in every profile at once
+  and then reconciles the clone pi actually loads. A pin is two pieces of state
+  — the sha in `settings.<host>.json` and the checkout under `~/.pi/agent/git`
+  — and pi only reconciles the second on `pi update --extensions`, so a bumped
+  pin otherwise keeps running the old code until somebody notices. `pi-pin`
+  with no arguments lists both shas side by side and exits non-zero on a stale
+  clone.
 - `bootstrap:pi` then runs `bin/pi-bundle`, which bundles pi's ~200-module Node
   build into one file and points the `pi` bin at `bin/pi-launch`. Worth ~115ms
   per launch (716ms → 602ms to first frame here, 738ms → 616ms on Linux), plus
@@ -152,7 +159,7 @@ Collection of utility scripts in `bin/` including:
 - **GitHub CLI extensions**: gh-pm, gh-reruns, gh-reviews-by-user, gh-labeler, ghb
 - **Tmux utilities**: toggle_notes_pane, monitor_tmux_pane, notes
 - **Development tools**: refresh_safari, colors, true-colors, utcdate
-- **Pi**: pi-bundle (faster startup), pi-launch, pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
+- **Pi**: pi-bundle (faster startup), pi-launch, pi-pin (bump a pinned package everywhere and reconcile its clone), pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
 - **Setup integrity**: dotfiles-link-check (every managed path is still the symlink bootstrap made), pi-profile-check (that, plus packages a local extension has replaced)
 - **Throwaway macOS VMs**: `vm` (see below)
 
