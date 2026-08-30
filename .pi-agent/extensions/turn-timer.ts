@@ -293,11 +293,12 @@ function toRecord(run: RunState, ms: number): TurnRecord {
   };
 }
 
-function formatSummary(record: TurnRecord): string {
-  const clock =
+export function formatSummary(record: TurnRecord): string {
+  const elapsed =
     record.thinkMs >= 1_000
-      ? `⏱ ${fmt(record.ms)} (${fmt(record.thinkMs)} think)`
-      : `⏱ ${fmt(record.ms)}`;
+      ? `${fmt(record.ms)} (${fmt(record.thinkMs)} think)`
+      : fmt(record.ms);
+  const clock = `⏱ ${formatFinishedTime(record.t)}: ${elapsed}`;
   const parts = [clock];
   if (record.steps > 0) parts.push(`${fmtRate(record.ms / record.steps)}/step`);
   parts.push(`${record.steps} step${record.steps === 1 ? "" : "s"}`);
@@ -533,6 +534,14 @@ function textOf(content: unknown): string {
       return typeof text === "string" ? text : "";
     })
     .join("\n");
+}
+
+export function formatFinishedTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  const hours = date.getHours();
+  const hour = hours % 12 || 12;
+  const minute = date.getMinutes().toString().padStart(2, "0");
+  return `${hour}:${minute}${hours < 12 ? "a" : "p"}`;
 }
 
 function fmt(ms: number): string {
