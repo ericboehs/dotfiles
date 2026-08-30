@@ -172,6 +172,11 @@ REPO_PATH = "ericboehs/dotfiles"
 
 "~/.config/nvim" = ".config/nvim"
 "~/.config/mise/config.toml" = ".config/mise/config.toml"
+# Set up by hand on this machine and tracked here for two years without ever
+# being linked, which dotfiles-link-check noticed: a fresh machine got none of
+# it. Hammerspoon reads no state back into the directory, so link the whole
+# thing.
+"~/.config/hammerspoon" = ".config/hammerspoon"
 # btop rewrites btop.conf on exit, so only the themes directory is managed.
 "~/.config/btop/themes" = { source = ".config/btop/themes", mode = "symlink-each" }
 "~/.config/lsd" = { source = ".config/lsd", mode = "symlink-each" }
@@ -196,6 +201,12 @@ REPO_PATH = "ericboehs/dotfiles"
 # One directory link means a newly pulled extension appears immediately. Using
 # symlink-each here left existing hosts without new files until bootstrap ran.
 "~/.pi/agent/extensions" = ".pi-agent/extensions"
+# The vendored Anthropic design skills behind /artifact. One link, like
+# extensions, so a skill added by a later pull is there without a bootstrap.
+"~/.pi/agent/artifact-skills" = ".pi-agent/artifact-skills"
+# symlink-each because the directory is shared: prompts written for one machine
+# and never tracked (checkin.md) sit beside the tracked ones and should stay.
+"~/.pi/agent/prompts" = { source = ".pi-agent/prompts", mode = "symlink-each" }
 
 # ---------------------------------------------------------------------------
 # macOS defaults

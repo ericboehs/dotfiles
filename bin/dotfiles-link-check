@@ -10,6 +10,11 @@
 #
 # Usage: dotfiles-link-check [PATH_PREFIX ...]
 # With no arguments, checks everything. A prefix limits the audit (~/.pi).
+#
+# The reverse drift is checked too: config tracked here that no [dotfiles]
+# entry links, which works on the machine where it was set up by hand and is
+# simply absent on the next one. .dotfiles-unmanaged lists what is unlinked on
+# purpose.
 
 set -euo pipefail
 
@@ -26,6 +31,10 @@ it still points where it should. Reports three failures:
   - a dangling link
 
 A path prefix limits the audit to part of the tree: dotfiles-link-check ~/.pi
+
+An unscoped run also reports the reverse: files tracked in this repo that no
+[dotfiles] entry links, so they never reach a fresh machine. Paths that are
+unlinked on purpose are listed in .dotfiles-unmanaged.
 EOF
   exit 0
 fi
@@ -33,6 +42,19 @@ fi
 root="${PI_DOTFILES_ROOT:-$(cd -P "$(dirname "$0")" && pwd)}"
 root="${root%/bin}"
 manifest="$root/mise.toml"
+unmanaged="$root/.dotfiles-unmanaged"
+
+work="$(mktemp -d -t dotfiles-link-check.XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+# Patterns for paths that are tracked but deliberately unlinked, stripped of
+# the comments that say why.
+patterns="$work/unmanaged"
+# The list of what is unlinked on purpose is itself unlinked on purpose.
+printf '%s\n' "${unmanaged##*/}" > "$patterns"
+if [[ -f "$unmanaged" ]]; then
+  sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$unmanaged" >> "$patterns"
+fi
 
 if [[ ! -f "$manifest" ]]; then
   echo "dotfiles-link-check: no mise.toml under $root" >&2
@@ -142,6 +164,59 @@ done < <(managed_links)
 
 if [[ "$status" -eq 0 ]]; then
   echo "dotfiles-link-check: $checked managed path(s) intact"
+fi
+
+# The reverse question: not "is this link still a link" but "does this tracked
+# file reach any machine at all". A config set up by hand years ago works here
+# and is missing on the next machine, and nothing about the working machine
+# says so. Only for an unscoped run: a prefix scopes $HOME paths, and these are
+# repo paths.
+if [[ "$#" -eq 0 ]] && command -v git >/dev/null 2>&1 && [[ -d "$root/.git" ]]; then
+  tracked="$work/tracked"
+  covered="$work/covered"
+  found="$work/found"
+  orphans="$work/orphans"
+  git -C "$root" ls-files | sort > "$tracked"
+  managed_links | cut -f2 | sed -n "s|^$root/||p" | sort -u > "$covered"
+
+  : > "$found"
+  while IFS= read -r file; do
+    skip=""
+    while IFS= read -r pattern; do
+      # shellcheck disable=SC2053  # the pattern is meant to glob
+      [[ "$file" == $pattern ]] && { skip=1; break; }
+    done < "$patterns"
+    [[ -n "$skip" ]] && continue
+    while IFS= read -r source; do
+      [[ "$file" == "$source" || "$file" == "$source"/* ]] && { skip=1; break; }
+    done < "$covered"
+    [[ -n "$skip" ]] || printf '%s\n' "$file" >> "$found"
+  done < "$tracked"
+  mv "$found" "$orphans"
+
+  # Report the directory rather than its dozen files, but only when the whole
+  # directory is unlinked -- a covered sibling means the file is the anomaly.
+  groups="$work/groups"
+  : > "$groups"
+  # shellcheck disable=SC2094  # $orphans is complete before this loop reads it
+  while IFS= read -r file; do
+    group="$file"
+    case "$file" in
+      */*/*)
+        prefix="${file%%/*}/$(printf '%s' "${file#*/}" | cut -d/ -f1)"
+        if [[ "$(grep -c "^$prefix/" "$tracked")" == "$(grep -c "^$prefix/" "$orphans")" ]]; then
+          group="$prefix"
+        fi
+        ;;
+    esac
+    printf '%s\n' "$group" >> "$groups"
+  done < "$orphans"
+
+  while IFS= read -r group; do
+    [[ -n "$group" ]] || continue
+    echo "dotfiles-link-check: $group is tracked but no [dotfiles] entry links it — it reaches no machine but this one, where it was set up by hand" >&2
+    status=1
+  done < <(sort -u "$groups")
 fi
 
 exit "$status"

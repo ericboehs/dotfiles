@@ -1,0 +1,34 @@
+# Tracked here, linked nowhere, on purpose. dotfiles-link-check reports every
+# other tracked file that no [dotfiles] entry reaches, on the grounds that a
+# config which only exists on the machine where it was set up by hand is a
+# config the next machine will not have.
+#
+# Glob syntax, one per line; * spans separators, so .github/* covers the tree.
+
+# Describes the repo rather than any machine.
+README.md
+*/README.md
+mise.toml
+package-lock.json
+.gitignore
+.gitmodules
+.rubocop.yml
+.github/*
+channel.xml
+
+# The extension toolchain: pi loads extensions/ through a directory link, and
+# these sit beside it so they are not something pi tries to load.
+.pi-agent/.gitignore
+.pi-agent/package.json
+.pi-agent/tsconfig.json
+.pi-agent/test/*
+
+# Per host by construction: bootstrap:pi links this machine's file and leaves
+# the others alone, which is the point of splitting them.
+.pi-agent/settings.*.json
+.pi-agent/models.*.json
+
+# Templates for a file that holds secrets, copied and edited rather than
+# linked. The links are to the copies, under their real names.
+*.example
+*.example.json

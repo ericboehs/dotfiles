@@ -94,6 +94,13 @@ $EDITOR ~/.gitconfig.private
   is gone and its cause is days old. The `pre-dotfiles` hook runs the audit
   before that rename, and it takes a path prefix to scope it:
   `dotfiles-link-check ~/.pi`
+- It checks the reverse too, which is the quieter failure: config tracked here
+  that no `[dotfiles]` entry links. That works perfectly on the machine where
+  it was set up by hand and is simply absent on the next one, and nothing about
+  the working machine says so — the first run found three, including a
+  Hammerspoon config that had been tracked for two years and linked by hand.
+  `.dotfiles-unmanaged` lists what is unlinked on purpose (the README, the test
+  suite, per-host settings) with the reason.
 
 ### Pi coding agent
 

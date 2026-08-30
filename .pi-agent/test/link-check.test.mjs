@@ -24,6 +24,7 @@ async function fixture({ host = "testbox", models = false } = {}) {
 
   await mkdir(join(dots, ".pi-agent", "extensions"), { recursive: true });
   await mkdir(join(dots, ".config", "lsd"), { recursive: true });
+  await mkdir(join(dots, ".local", "scripts"), { recursive: true });
   await writeFile(join(dots, "mise.toml"), [
     "[dotfiles]",
     '"~/.zshrc" = ".zshrc"',
@@ -31,6 +32,7 @@ async function fixture({ host = "testbox", models = false } = {}) {
     '"~/.config/lsd" = { source = ".config/lsd", mode = "symlink-each" }',
     '"~/.pi/agent/keybindings.json" = ".pi-agent/keybindings.json"',
     '"~/.pi/agent/extensions" = ".pi-agent/extensions"',
+    '"~/.local/scripts/statusline.sh" = ".local/scripts/statusline.sh"',
     "",
     "[tasks.bootstrap]",
     'run = "true"',
@@ -42,6 +44,7 @@ async function fixture({ host = "testbox", models = false } = {}) {
     [".gitignore.global", "*.swp\n"],
     [join(".config", "lsd", "config.yaml"), "{}\n"],
     [join(".pi-agent", "keybindings.json"), "{}\n"],
+    [join(".local", "scripts", "statusline.sh"), "#!/bin/sh\n"],
     [join(".pi-agent", `settings.${host}.json`), "{}\n"],
   ]) await writeFile(join(dots, path), body);
   if (models) await writeFile(join(dots, ".pi-agent", `models.${host}.json`), "{}\n");
@@ -161,4 +164,68 @@ test("pi-profile-check delegates its link audit here, scoped to the profile", as
 
   const skipped = spawnSync(profileChecker, ["--packages-only", f.agent], { encoding: "utf8", env });
   assert.equal(skipped.status, 0, skipped.stderr);
+});
+
+// --- the reverse drift ---------------------------------------------------
+// Config tracked here that no [dotfiles] entry links works on the machine
+// where it was set up by hand and is absent on the next one.
+async function repoWithFile(f, path, body = "x\n") {
+  const full = join(f.dots, path);
+  await mkdir(dirname(full), { recursive: true });
+  await writeFile(full, body);
+  spawnSync("git", ["add", "-A"], { cwd: f.dots });
+  return f;
+}
+
+async function gitFixture(options) {
+  const f = await fixture(options);
+  spawnSync("git", ["init", "-q"], { cwd: f.dots });
+  spawnSync("git", ["add", "-A"], { cwd: f.dots });
+  return f;
+}
+
+test("reports a tracked file that no dotfiles entry links", async () => {
+  const f = await gitFixture();
+  await repoWithFile(f, ".config/hammerspoon/init.lua");
+  const result = check(f);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /\.config\/hammerspoon is tracked but no \[dotfiles\] entry links it/);
+});
+
+test("collapses a wholly unlinked directory but names a lone file", async () => {
+  const f = await gitFixture();
+  await repoWithFile(f, ".config/hammerspoon/init.lua");
+  await repoWithFile(f, ".config/hammerspoon/spoons/x.lua");
+  await repoWithFile(f, ".local/scripts/orphan.sh"); // beside a linked sibling
+  const result = check(f);
+  assert.match(result.stderr, /\.config\/hammerspoon is tracked/);
+  assert.doesNotMatch(result.stderr, /hammerspoon\/init\.lua/);
+  assert.match(result.stderr, /\.local\/scripts\/orphan\.sh is tracked/);
+  assert.doesNotMatch(result.stderr, /\.local\/scripts is tracked/);
+});
+
+test("a new file in a symlink-each directory is already covered", async () => {
+  const f = await gitFixture();
+  await repoWithFile(f, ".config/lsd/colors.yaml");
+  assert.equal(check(f).status, 0);
+});
+
+test("respects .dotfiles-unmanaged", async () => {
+  const f = await gitFixture();
+  await repoWithFile(f, "README.md", "# repo\n");
+  await repoWithFile(f, ".dotfiles-unmanaged", "# why\nREADME.md\n");
+  const result = check(f);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("a tracked file inside a linked directory is covered", async () => {
+  const f = await gitFixture();
+  await repoWithFile(f, ".pi-agent/extensions/footer.ts", "export {}\n");
+  assert.equal(check(f).status, 0);
+});
+
+test("a scoped run audits links only, not orphans", async () => {
+  const f = await gitFixture();
+  await repoWithFile(f, ".config/hammerspoon/init.lua");
+  assert.equal(check(f, [join(f.home, ".pi")]).status, 0);
 });
