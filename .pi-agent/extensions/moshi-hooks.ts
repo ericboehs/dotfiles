@@ -297,7 +297,7 @@ function displayUserPrompt(s: string): string {
   s = s.trim()
   if (!s) return ""
   const m = userQueryRe.exec(s)
-  if (m) return m[1].trim()
+  if (m?.[1]) return m[1].trim()
   s = s.replace(skillInfoRe, "").replace(imageFilesRe, "").replace(systemRemRe, "")
   return s.trim()
 }
@@ -595,7 +595,7 @@ export default function moshiPiHook(pi: ExtensionAPI): void {
   pi.on("agent_end", (event) => {
     const messages = Array.isArray(event.messages) ? event.messages : []
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index] as Record<string, unknown>
+      const message = messages[index] as unknown as Record<string, unknown>
       if (message?.role === "assistant") {
         lastAssistantMessage = textFromMessage(message)
         break
