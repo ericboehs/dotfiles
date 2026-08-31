@@ -71,7 +71,7 @@ $EDITOR ~/.gitconfig.private
 ### Terminal Multiplexer (tmux)
 
 - Prefix: `Ctrl-B` (default)
-- Plugins: vim-tmux-navigator, tmux-yank, tmux-copycat, tmux-floax
+- Plugins: tmux-yank, tmux-copycat
 - Features:
   - Vi-mode copy/paste
   - Mouse support
