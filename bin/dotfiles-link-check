@@ -73,9 +73,8 @@ resolve_host() {
 }
 
 # Every managed link as "target<TAB>source". A source of "-" means this repo
-# cannot know it -- the assistant profile's persona files and the VA context
-# file live in private repos -- which still leaves "is it a link at all", the
-# part that catches an overwrite.
+# cannot know it -- the VA context file lives in a private repo -- which still
+# leaves "is it a link at all", the part that catches an overwrite.
 managed_links() {
   local target source mode entry host
 
@@ -105,18 +104,6 @@ managed_links() {
   # A host with no models.<host>.json keeps a real models.json of its own.
   [[ -f "$root/.pi-agent/models.$host.json" ]] &&
     printf '%s\t%s\n' "$HOME/.pi/agent/models.json" "$root/.pi-agent/models.$host.json"
-
-  # bootstrap:pi-assistant, when that profile exists: shared resources point at
-  # the coding profile, the persona files at a private source.
-  if [[ -d "$HOME/.pi/assistant" ]]; then
-    for entry in auth.json models.json keybindings.json npm git bin; do
-      printf '%s\t%s\n' "$HOME/.pi/assistant/$entry" "$HOME/.pi/agent/$entry"
-    done
-    printf '%s\t%s\n' "$HOME/.pi/assistant/extensions" "$root/.pi-agent/extensions"
-    for entry in settings.json AGENTS.md approval-guardian.json prompts; do
-      printf '%s\t%s\n' "$HOME/.pi/assistant/$entry" "-"
-    done
-  fi
 
   # bootstrap:va-context, on a host that has the work tree.
   [[ -d "$HOME/Code/va.ghe.com" ]] &&

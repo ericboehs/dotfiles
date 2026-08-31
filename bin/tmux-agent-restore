@@ -3,8 +3,8 @@
 #
 # Recreates tmux windows and relaunches each agent against the conversation it
 # was holding: `claude --resume <id>` for Claude Code, `pi --session <file>`
-# for pi, prefixed with PI_CODING_AGENT_DIR when the session belongs to a
-# non-default pi profile such as the `pia` assistant. Windows whose working
+# for pi, prefixed with PI_CODING_AGENT_DIR when the session was recorded
+# against a non-default agent directory. Windows whose working
 # directory or transcript has disappeared are skipped with a warning rather
 # than silently started in the wrong place - a resume that misses its
 # transcript is a brand-new conversation wearing the old window's name, which
@@ -234,9 +234,9 @@ restore_session() {
 
     resolved=$(resolve_session_file "$agent" "$cwd" "$session_id" "$session_file")
 
-    # Build the launch command. A non-default pi profile travels as an
-    # environment assignment rather than the `pia` shell function, so the line
-    # says which profile it means and works in any shell.
+    # Build the launch command. A non-default agent directory travels as an
+    # environment assignment, so the line says which profile it means and
+    # works in any shell.
     cmd="$agent"
     if [ "$agent" = "pi" ] && [ -n "$agent_dir" ]; then
       cmd="PI_CODING_AGENT_DIR=$(printf '%q' "$agent_dir") $cmd"

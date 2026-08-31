@@ -54,9 +54,8 @@ every host rather than one. `pi install` and `pi remove` are safe either way:
 they rewrite in place, so their edits land in the tracked copy.
 
 The same holds for every other file `bootstrap:pi` links — `keybindings.json`,
-`models.json`, the assistant profile's `AGENTS.md`, `approval-guardian.json`
-and `prompts/`. Each one has a bootstrap step that will quietly restore the
-link over whatever replaced it.
+`models.json`, `approval-guardian.json` and `prompts/`. Each one has a
+bootstrap step that will quietly restore the link over whatever replaced it.
 
 Three things now say so out loud, because the gap between the mistake and the
 symptom is what made it expensive:
@@ -74,37 +73,21 @@ bin/pi-profile-check --links-only  # the same audit, scoped to the profiles
 - The audit also catches the quieter variants: a link left pointing at another
   host's `settings.<host>.json` after a rename, and a dangling one.
 
-## Assistant profile (`pia`)
+## Assistant profile (retired)
 
-`pia` is not a second Pi installation. The shell function in
-`.zsh/functions.zsh` runs the same `pi` executable with
-`PI_CODING_AGENT_DIR=~/.pi/assistant`. The second agent directory keeps life
-and work operations out of the coding profile without duplicating resources
-that should behave identically.
+The `pia` profile was a second agent directory at `~/.pi/assistant`, linked by
+`bootstrap:pi-assistant` from a private source and launched by a `pia()` shell
+function that also synced `enabledModels` between the two settings files. It
+was retired in favor of assistant work running in this profile: the
+`/assistant` prompt template (in the private prompts directory) loads the
+assistant skills on demand and carries the confirm-before-send rules.
 
-`bootstrap:pi-assistant` builds the boundary as follows:
-
-| Resource | Relationship | Reason |
-| --- | --- | --- |
-| Pi executable | shared | `pia()` invokes `pi`, so upgrades apply to both |
-| `auth.json`, `models.json`, `keybindings.json` | symlinked from `~/.pi/agent` | same credentials, providers, and controls |
-| `npm/`, `git/`, `bin/` | symlinked from `~/.pi/agent` | one downloaded package/tool cache; package declarations are still separate |
-| `extensions/` | symlinked to this repo's `.pi-agent/extensions` | every tracked local extension loads in both profiles |
-| `enabledModels` | copied by `pia()` at launch and copied back on exit if changed | Pi stores the Ctrl+P scope inside otherwise-separate settings files |
-| `settings.json` other than `enabledModels` | separate | packages, skills, defaults, theme, and profile behavior can differ |
-| `AGENTS.md`, `approval-guardian.json`, `prompts/` | separate, linked from the private assistant source | assistant persona and workflows do not belong in the published coding config |
-| sessions, memory, trust, and other runtime state | separate | preserves the isolation that the second profile exists to provide |
-
-Because `extensions/` is shared while package declarations are separate, a
-vendored extension can replace a package in the coding settings but leave the
-assistant settings stale. Replacement extensions mark the old source with an
-`@replaces` comment. `bin/pi-profile-check` detects any marked package still
-loaded beside its replacement, and delegates the link audit above to
-`bin/dotfiles-link-check` with the profile directories as its scope. Both Pi
-bootstrap tasks run it. Run it by hand after changing either profile:
+`bin/pi-profile-check` audits the profile's packages and links, delegating the
+link audit to `bin/dotfiles-link-check`. Run it by hand after changing the
+profile:
 
 ```sh
-bin/pi-profile-check                # packages and links, both profiles
+bin/pi-profile-check                # packages and links
 bin/pi-profile-check --links-only
 bin/pi-profile-check --packages-only
 ```
@@ -114,13 +97,8 @@ than repeated in the checker, so a link added there is audited without touching
 the script — including the `symlink-each` directories, whose contents are the
 links. The links the bootstrap tasks make themselves are the exception and are
 named in `dotfiles-link-check`: the two per-host ones (`settings.json`,
-`models.json`, whose host it resolves the same way `bootstrap:pi` does), the
-assistant profile, and the VA context file.
-
-Do not symlink the complete settings file or blindly copy package and skill
-lists between profiles; that would erase the useful boundary. Put truly shared
-behavior in the linked resources above, and synchronize individual settings
-explicitly when both profiles need them.
+`models.json`, whose host it resolves the same way `bootstrap:pi` does), and
+the VA context file.
 
 ## Checking the extensions
 

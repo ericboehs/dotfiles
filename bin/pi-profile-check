@@ -10,7 +10,7 @@
 #             (delegated to dotfiles-link-check, scoped to these profiles)
 #
 # Usage: pi-profile-check [--links-only|--packages-only] [PROFILE_DIR ...]
-# With no arguments, checks ~/.pi/agent and ~/.pi/assistant when present.
+# With no arguments, checks ~/.pi/agent.
 
 set -euo pipefail
 
@@ -28,7 +28,7 @@ Check Pi profiles for:
   - managed paths that are no longer the symlink bootstrap made, so that the
     next bootstrap renames them to .bak, taking any edit made through them
 
-Defaults to ~/.pi/agent and ~/.pi/assistant.
+Defaults to ~/.pi/agent.
 See dotfiles-link-check for the same link audit over the whole tree.
 EOF
       exit 0
@@ -47,7 +47,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 if [[ "$#" -eq 0 ]]; then
-  set -- "$HOME/.pi/agent" "$HOME/.pi/assistant"
+  set -- "$HOME/.pi/agent"
 fi
 
 # This script is reached through ~/bin, itself a link to the repo's bin/, so

@@ -24,10 +24,10 @@
 #   map for a freshly started session, and unlike "most recently modified" it
 #   stays right when several panes share one project directory.
 #
-# pi also keeps more than one profile - ~/.pi/agent for coding, ~/.pi/assistant
-# for the `pia` persona - each with its own sessions tree. Which one a process
-# is using cannot be asked either, so a known session id is looked for across
-# all of them and the profile is inferred from wherever it turns up.
+# pi can run against more than one agent directory (PI_CODING_AGENT_DIR), each
+# with its own sessions tree. Which one a process is using cannot be asked
+# either, so a known session id is looked for across all of them and the
+# profile is inferred from wherever it turns up.
 #
 # Heuristics remain as fallbacks for both: an explicit id on the command line,
 # then the newest transcript not already claimed by an earlier pane.
