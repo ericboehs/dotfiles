@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+#
+# pi-bg-log-prune — retention policy for pi's background-job log directory.
+#
+# pi writes one log per backgrounded bash job into /tmp/pi-bg-$UID/ and never
+# removes them, so the directory grows without bound. On this machine it had
+# reached 2033 files / 475MB, 457MB of which was a single runaway log. Three
+# rules keep it bounded:
+#
+#   1. Empty logs older than EMPTY_DAYS are deleted (most jobs produce none).
+#   2. Any log older than MAX_AGE_DAYS is deleted.
+#   3. Logs over MAX_SIZE_MB are truncated to their first KEEP_HEAD_LINES
+#      rather than deleted, so a runaway job still leaves a breadcrumb.
+#
+# Anything modified in the last hour is left alone, so a still-running job
+# never has its log pulled out from under it. Safe to re-run; converges.
+#
+# Install the daily LaunchAgent with --install (4:30am, mirrors hn-watch in
+# that the script owns its plist rather than the repo tracking one).
+#
+#   pi-bg-log-prune              prune now
+#   pi-bg-log-prune --dry-run    show what would go, touch nothing
+#   pi-bg-log-prune --install    load the daily LaunchAgent
+#   pi-bg-log-prune --uninstall  unload it and remove the plist
+#
+# Tunable via PI_BG_LOG_MAX_AGE_DAYS, PI_BG_LOG_EMPTY_DAYS,
+# PI_BG_LOG_MAX_SIZE_MB, PI_BG_LOG_KEEP_HEAD_LINES.
+
+set -euo pipefail
+
+MAX_AGE_DAYS="${PI_BG_LOG_MAX_AGE_DAYS:-3}"
+EMPTY_DAYS="${PI_BG_LOG_EMPTY_DAYS:-1}"
+MAX_SIZE_MB="${PI_BG_LOG_MAX_SIZE_MB:-25}"
+KEEP_HEAD_LINES="${PI_BG_LOG_KEEP_HEAD_LINES:-2000}"
+
+LABEL="com.boehs.pi-bg-log-prune"
+PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+DRY_RUN=0
+LOG_DIR="/tmp/pi-bg-$(id -u)"
+ACTION=prune
+
+usage() { sed -n '3,26p' "$0" | sed 's/^#\{1,\} \{0,1\}//'; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)   DRY_RUN=1; shift ;;
+    --dir)       LOG_DIR="$2"; shift 2 ;;
+    --install)   ACTION=install; shift ;;
+    --uninstall) ACTION=uninstall; shift ;;
+    -h|--help)   usage; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+launch_domain() { echo "gui/$(id -u)"; }
+
+write_plist() {
+  mkdir -p "$(dirname "$PLIST_PATH")"
+  cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-l</string>
+        <string>-c</string>
+        <string>\$HOME/bin/pi-bg-log-prune</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/pi-bg-log-prune.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/pi-bg-log-prune.stderr.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
+PLIST
+}
+
+case "$ACTION" in
+  install)
+    write_plist
+    launchctl bootout "$(launch_domain)/$LABEL" >/dev/null 2>&1 || true
+    if ! launchctl bootstrap "$(launch_domain)" "$PLIST_PATH" >/dev/null 2>&1; then
+      echo "launchctl bootstrap failed for $LABEL" >&2; exit 1
+    fi
+    echo "loaded $LABEL (daily 4:30am)"
+    echo "logs: /tmp/pi-bg-log-prune.stdout.log"
+    exit 0
+    ;;
+  uninstall)
+    launchctl bootout "$(launch_domain)/$LABEL" >/dev/null 2>&1 || true
+    rm -f "$PLIST_PATH"
+    echo "unloaded $LABEL"
+    exit 0
+    ;;
+esac
+
+[[ -d "$LOG_DIR" ]] || { echo "pi-bg-log-prune: no such dir: $LOG_DIR"; exit 0; }
+
+run() {
+  if (( DRY_RUN )); then echo "DRY-RUN: $*"; else "$@"; fi
+}
+
+# BSD find's -mtime reports nothing on this volume, so compare against explicit
+# timestamps with -newermt and negate rather than trusting relative day counts.
+age_cutoff=$(date -v-"${MAX_AGE_DAYS}"d '+%Y-%m-%d %H:%M:%S')
+empty_cutoff=$(date -v-"${EMPTY_DAYS}"d '+%Y-%m-%d %H:%M:%S')
+active_cutoff=$(date -v-1H '+%Y-%m-%d %H:%M:%S')
+
+before=$(du -sk "$LOG_DIR" | cut -f1)
+count_before=$(find "$LOG_DIR" -maxdepth 1 -name '*.log' | wc -l | tr -d ' ')
+deleted=0
+truncated=0
+
+# Rule 1: empty logs past the empty cutoff.
+while IFS= read -r -d '' f; do
+  run rm -f "$f"; deleted=$((deleted + 1))
+done < <(find "$LOG_DIR" -maxdepth 1 -name '*.log' -empty \
+           ! -newermt "$empty_cutoff" -print0)
+
+# Rule 2: anything past the max-age cutoff.
+while IFS= read -r -d '' f; do
+  run rm -f "$f"; deleted=$((deleted + 1))
+done < <(find "$LOG_DIR" -maxdepth 1 -name '*.log' \
+           ! -newermt "$age_cutoff" -print0)
+
+# Rule 3: oversized logs get a head kept, but never ones from active jobs.
+max_bytes=$((MAX_SIZE_MB * 1024 * 1024))
+while IFS= read -r -d '' f; do
+  size=$(stat -f%z "$f")
+  (( size > max_bytes )) || continue
+  if (( DRY_RUN )); then
+    echo "DRY-RUN: truncate $f ($((size / 1024 / 1024))MB)"
+  else
+    tmp=$(mktemp)
+    {
+      head -n "$KEEP_HEAD_LINES" "$f"
+      echo
+      echo "--- [pi-bg-log-prune] truncated $(date '+%Y-%m-%d %H:%M:%S');" \
+           "original was $((size / 1024 / 1024))MB ---"
+    } > "$tmp"
+    mv "$tmp" "$f"
+  fi
+  truncated=$((truncated + 1))
+done < <(find "$LOG_DIR" -maxdepth 1 -name '*.log' \
+           ! -newermt "$active_cutoff" -print0)
+
+after=$(du -sk "$LOG_DIR" | cut -f1)
+count_after=$(find "$LOG_DIR" -maxdepth 1 -name '*.log' | wc -l | tr -d ' ')
+
+printf 'pi-bg-log-prune: %s\n' "$LOG_DIR"
+printf '  files:  %s -> %s (deleted %s, truncated %s)\n' \
+  "$count_before" "$count_after" "$deleted" "$truncated"
+printf '  size:   %sMB -> %sMB\n' "$((before / 1024))" "$((after / 1024))"
+printf '  policy: max-age %sd, empty %sd, max-size %sMB\n' \
+  "$MAX_AGE_DAYS" "$EMPTY_DAYS" "$MAX_SIZE_MB"
