@@ -181,6 +181,13 @@ async function gitFixture(options) {
   const f = await fixture(options);
   spawnSync("git", ["init", "-q"], { cwd: f.dots });
   spawnSync("git", ["add", "-A"], { cwd: f.dots });
+  // The fixture's own mise.toml is tracked-and-unlinked exactly like the real
+  // repo's, which declares it in .dotfiles-unmanaged; the fixture must too.
+  // Without it the checker reports the manifest — but only where the index
+  // actually contains it: a machine whose global gitignore hides mise.toml
+  // from `git add -A` never sees the gap, which is how this reached CI red
+  // while every local run stayed green.
+  await repoWithFile(f, ".dotfiles-unmanaged", "# fixture\nmise.toml\n");
   return f;
 }
 
@@ -213,7 +220,9 @@ test("a new file in a symlink-each directory is already covered", async () => {
 test("respects .dotfiles-unmanaged", async () => {
   const f = await gitFixture();
   await repoWithFile(f, "README.md", "# repo\n");
-  await repoWithFile(f, ".dotfiles-unmanaged", "# why\nREADME.md\n");
+  // Overwrites gitFixture's list, so the manifest it exempted has to stay
+  // declared alongside the file this test actually exercises.
+  await repoWithFile(f, ".dotfiles-unmanaged", "# why\nmise.toml\nREADME.md\n");
   const result = check(f);
   assert.equal(result.status, 0, result.stderr);
 });

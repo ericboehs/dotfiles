@@ -2,8 +2,9 @@
  * Tests for the Artificial Analysis model briefing extension.
  *
  * Runs the real extension against stub pi/ctx objects with a stubbed global
- * fetch, so no network and no real API key is touched (the fnox fallback is
- * only reached when the env var is unset, and these tests always set it).
+ * fetch, so no network and no real key is touched: withAgentDir sets a stub
+ * ARTIFICIAL_ANALYSIS_API_KEY, which keeps the fnox fallback (this shell's
+ * Keychain, absent on a CI runner) out of the picture entirely.
  *
  *   bin/pi-ext-check            # typecheck + these tests
  *   node --test .pi-agent/test  # tests only (needs .pi-agent/node_modules)
@@ -112,12 +113,21 @@ const OPUS_LINE = "Claude Opus 5 — int 62.5 · cod 55 · 151t/s · $10/1M · $
 
 /** Run one test against a throwaway agent directory (the cache lives there). */
 function withAgentDir(fn) {
-  const previous = process.env.PI_CODING_AGENT_DIR;
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  const previousKey = process.env.ARTIFICIAL_ANALYSIS_API_KEY;
   const dir = mkdtempSync(path.join(tmpdir(), "pi-aa-info-"));
   process.env.PI_CODING_AGENT_DIR = dir;
+  // The extension fetches only once a key is in hand, resolved from this env
+  // var and then fnox. A shell that has either passes while a CI runner —
+  // which has neither — silently briefs nothing, and every test fails. The
+  // fetch itself is stubbed, so a fixed stub key touches no real credential
+  // and makes the suite hermetic rather than machine-dependent.
+  process.env.ARTIFICIAL_ANALYSIS_API_KEY = "stub-key-for-tests";
   return Promise.resolve(fn(dir)).finally(() => {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousDir;
+    if (previousKey === undefined) delete process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+    else process.env.ARTIFICIAL_ANALYSIS_API_KEY = previousKey;
   });
 }
 
