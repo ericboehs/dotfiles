@@ -103,7 +103,12 @@ async function fetchJson(
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`usage request failed (${response.status})`);
+      // Include the body so API validation errors (e.g. Baseten's date-range
+      // rules) explain themselves instead of a bare status code.
+      const body = (await response.text().catch(() => "")).trim().slice(0, 200);
+      throw new Error(
+        `usage request failed (${response.status})${body ? `: ${body}` : ""}`,
+      );
     }
     return await response.json();
   } finally {
@@ -895,8 +900,16 @@ function monthStartUtc(now = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
-function isoUtc(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+/** The UTC day after `date`. */
+function dayAfterUtc(date: Date): Date {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
+/** YYYY-MM-DD in UTC. */
+function isoDateUtc(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 function positiveEnvNumber(name: string): number | undefined {
@@ -917,11 +930,14 @@ async function fetchBaseten(ctx: ExtensionContext): Promise<UsageDisplay> {
   const apiKey = process.env.BASETEN_API_KEY;
   if (!apiKey) throw new Error("BASETEN_API_KEY is not set");
 
+  // Dates are normalized to midnight UTC and end must be strictly after
+  // start, so end_date is tomorrow (exclusive). A calendar month spans at
+  // most 31 days, which is the API's max range.
   const now = new Date();
   const url =
     `${USAGE_URL_BASETEN}` +
-    `?start_date=${encodeURIComponent(isoUtc(monthStartUtc(now)))}` +
-    `&end_date=${encodeURIComponent(isoUtc(now))}`;
+    `?start_date=${isoDateUtc(monthStartUtc(now))}` +
+    `&end_date=${isoDateUtc(dayAfterUtc(now))}`;
 
   const usage = (await fetchJson(
     url,
