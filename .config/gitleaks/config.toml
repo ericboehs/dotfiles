@@ -48,6 +48,13 @@ keywords = ["password", "passwd", "secret", "psk"]
 [allowlist]
 description = "Global false positive allowlist"
 regexTarget = "match"
+paths = [
+  # Rails encrypted credentials are ciphertext and are meant to be committed.
+  # They are only readable with RAILS_MASTER_KEY, which is never in the repo.
+  # The base64 blob trips generic-api-key every time its contents change.
+  '''config/credentials\.yml\.enc''',
+  '''config/credentials/.*\.yml\.enc''',
+]
 regexes = [
   # Git commit SHAs in log output (e.g., "vets-api : a1b2c3d4...")
   '''[\w-]+ : [a-f0-9]{40}\.?\\?n?$''',
