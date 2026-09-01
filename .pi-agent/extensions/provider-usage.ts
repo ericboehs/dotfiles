@@ -732,10 +732,12 @@ async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
 /**
  * Ollama has no usage API (ollama/ollama#12532) — the only source is the
  * server-rendered https://ollama.com/settings page, gated by the browser's
- * __Secure-session cookie (inference API keys don't work here). The cookie is
- * resolved from $OLLAMA_SESSION_COOKIE, then `fnox get OLLAMA_SESSION_COOKIE`
- * (Keychain). Browser session cookies live weeks-to-months; when one expires
- * the fetch fails until a fresh cookie is stored.
+ * __Secure-session cookie (inference API keys don't work here). Cookie
+ * candidates are tried freshest-first until one authenticates: an explicit
+ * $OLLAMA_SESSION_COOKIE override, the live Safari cookie store (slides
+ * forward on every ollama.com visit; needs Full Disk Access on the host
+ * terminal and is silently skipped otherwise), then the fnox/Keychain
+ * snapshot.
  *
  * The page (as of 2026-09) renders an "Included usage" monthly dollar meter
  * ("$0.09 of $60 used", per-model segments), an "Extra usage" balance, and a
@@ -744,6 +746,9 @@ async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
  */
 const SETTINGS_URL_OLLAMA = "https://ollama.com/settings";
 const COOKIE_ENV_OLLAMA = "OLLAMA_SESSION_COOKIE";
+/** Safari's per-profile default cookie store; TCC-protected (Full Disk Access). */
+const SAFARI_COOKIES_FILE =
+  "Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies";
 
 const OLLAMA_PLAN_RE = />\s*(pro|free|max|team)\s*</i;
 const OLLAMA_SPENT_RE = /\$([\d.,]+) of \$([\d.,]+) used/;
@@ -820,18 +825,90 @@ function parseOllamaSettings(html: string, nowMs: number): OllamaUsage {
 }
 
 /** Env first, then fnox (Keychain). Silent: no cookie just means no chip. */
-async function ollamaSessionCookie(): Promise<string> {
+/** Safari keeps cookies in a sandboxed binarycookies file; readable only with
+ *  Full Disk Access granted to the host terminal (pi inherits it). The layout
+ *  has drifted across macOS versions, so instead of pinning page/record
+ *  offsets, locate the NUL-delimited run that identifies the cookie —
+ *  "…ollama.com\0__Secure-session\0<path>\0<value>\0" — and validate the
+ *  value's shape. Only this one cookie is read; every other cookie in the
+ *  file is never interpreted or retained. */
+async function safariOllamaSessionCookie(): Promise<string | undefined> {
+  let data: Buffer;
+  try {
+    data = await readFile(join(homedir(), SAFARI_COOKIES_FILE));
+  } catch {
+    return undefined; // no Full Disk Access, no Safari, or no cookie yet
+  }
+
+  const needle = "__Secure-session\0";
+  let pos = data.indexOf(needle);
+  while (pos !== -1) {
+    // The domain string ends right before the name; path and value follow.
+    const pathEnd = data.indexOf(0, pos + needle.length);
+    const valueEnd = pathEnd === -1 ? -1 : data.indexOf(0, pathEnd + 1);
+    if (valueEnd !== -1) {
+      const value = data.toString("latin1", pathEnd + 1, valueEnd);
+      const domainStart = data.lastIndexOf(0, pos - 2) + 1;
+      const domain = data.toString("latin1", domainStart, pos - 1);
+      // The session is an age-encrypted base64url blob (~412 chars).
+      if (
+        domain.endsWith("ollama.com") &&
+        /^[A-Za-z0-9_=\-]{100,2000}$/.test(value)
+      ) {
+        return value;
+      }
+    }
+    pos = data.indexOf(needle, pos + needle.length);
+  }
+  return undefined;
+}
+
+/** Cookie candidates, freshest first: an explicit env override, the live
+ *  Safari store, then the fnox/Keychain snapshot. */
+async function ollamaSessionCookies(): Promise<Array<{ source: string; value: string }>> {
+  const candidates: Array<{ source: string; value: string }> = [];
   const fromEnv = process.env[COOKIE_ENV_OLLAMA]?.trim();
-  if (fromEnv) return fromEnv;
+  if (fromEnv) candidates.push({ source: `$${COOKIE_ENV_OLLAMA}`, value: fromEnv });
+  const fromSafari = await safariOllamaSessionCookie();
+  if (fromSafari) candidates.push({ source: "safari", value: fromSafari });
   const fromFnox = await fnoxGet(COOKIE_ENV_OLLAMA);
-  if (fromFnox) return fromFnox;
-  throw new Error(
-    `no Ollama session cookie (${COOKIE_ENV_OLLAMA} env, or \`fnox set ${COOKIE_ENV_OLLAMA}\`)`,
+  if (fromFnox) candidates.push({ source: "fnox", value: fromFnox });
+  // Dedupe (Safari and fnox usually agree) so one stale round trip is skipped.
+  return candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex((other) => other.value === candidate.value) === index,
   );
 }
 
 async function fetchOllama(_ctx: ExtensionContext): Promise<UsageDisplay> {
-  const cookie = await ollamaSessionCookie();
+  const candidates = await ollamaSessionCookies();
+  if (candidates.length === 0) {
+    throw new Error(
+      `no Ollama session cookie (${COOKIE_ENV_OLLAMA} env, fnox, or readable Safari store)`,
+    );
+  }
+
+  let lastError = new Error("no Ollama session cookie resolved");
+  for (const { source, value } of candidates) {
+    try {
+      return await fetchOllamaWithCookie(value, source);
+    } catch (err) {
+      // Only a rejected/expired cookie justifies trying the next source;
+      // network failures shouldn't be re-attempted against every source.
+      if (err instanceof Error && err.message.includes("invalid or expired")) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
+async function fetchOllamaWithCookie(
+  cookie: string,
+  source: string,
+): Promise<UsageDisplay> {
   const { text, finalUrl } = await fetchText(SETTINGS_URL_OLLAMA, {
     accept: "text/html",
     // aid is ollama.com's device cookie; the scrape wants it present (even
@@ -840,7 +917,7 @@ async function fetchOllama(_ctx: ExtensionContext): Promise<UsageDisplay> {
     "user-agent": "pi-ollama-usage/1.0",
   });
   if (finalUrl.includes("signin")) {
-    throw new Error("Ollama session cookie is invalid or expired");
+    throw new Error(`Ollama session cookie from ${source} is invalid or expired`);
   }
 
   const nowMs = Date.now();
