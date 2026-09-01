@@ -205,6 +205,8 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
   [/^z-ai\/GLM-5\.3-Flash$/i, "oxa"],
   [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
+  // Ollama Cloud ships the same model under a bare, org-less id.
+  [/^GLM-5\.3-Flash$/i, "oxa"],
   [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];

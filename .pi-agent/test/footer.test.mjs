@@ -276,6 +276,7 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["zai-org/GLM-5.3-Flash", "oxa"],
     ["z-ai/glm-5.3-flash", "oxa"],
     ["z-ai/glm-5.3-flash@preset/ox-alpha", "oxa"],
+    ["glm-5.3-flash", "oxa"],
     ["Qwen3.8-27B-4bit", "3.8-27b"],
     ["Qwen3.6-35B-A3B-UD-MLX-4bit", "3.6-35b-a3b"],
     ["Ornith-1.5-35B-A3B-MLX-4bit", "orn"],
@@ -294,6 +295,7 @@ test("provider-specific model aliases", async () => {
   for (const [model, expected] of [
     [{ id: "claude-opus-5", provider: "github-copilot", reasoning: true }, "opus"],
     [{ id: "grok-4.6", provider: "xai", reasoning: true }, "grok"],
+    [{ id: "glm-5.3-flash", provider: "ollama", reasoning: true }, "oxa"],
   ]) {
     const ui = await mount({ model });
     const rest = ui.plain()[0].split(" ").slice(2).join(" ");
