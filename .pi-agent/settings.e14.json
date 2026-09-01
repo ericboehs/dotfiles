@@ -45,13 +45,14 @@
     "anthropicExtraUsage": false
   },
   "enabledModels": [
-    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha:max",
+    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha",
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
     "github-copilot/claude-opus-5",
     "xai/grok-4.6",
     "baseten/zai-org/GLM-5.3-Flash",
-    "omlx/Ornith-1.5-35B-A3B-MLX-4bit"
+    "omlx/Ornith-1.5-35B-A3B-MLX-4bit",
+    "ollama/glm-5.3-flash"
   ],
   "showHardwareCursor": true,
   "editorPaddingX": 1,
