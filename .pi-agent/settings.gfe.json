@@ -22,5 +22,6 @@
   ],
   "extensions": [
     "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts"
-  ]
+  ],
+  "lastChangelogVersion": "0.84.3"
 }
