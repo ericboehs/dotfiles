@@ -1,6 +1,6 @@
 /**
  * All usage/quota chips in one extension: codex, copilot, grok (status-line
- * windows) and baseten, openrouter (cost-slot MTD replacements).
+ * windows) and baseten, openrouter, ollama (cost-slot chips).
  *
  * Each provider is a Driver: a provider gate, a fetch, and a display mode.
  * The display mode decides where the value lands:
@@ -22,6 +22,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -30,10 +31,14 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const SLOW_BILLING_TIMEOUT_MS = 30_000;
 // Providers that update billing data hourly; no point polling faster.
 const HOURLY_CACHE_TTL_MS = 5 * 60 * 1000;
+// HTML scrapes: a full page render per poll, so stay polite.
+const SCRAPE_CACHE_TTL_MS = 60_000;
 const STASH_KEY_BASETEN = "__piBasetenUsage";
 const STASH_KEY_OPENROUTER = "__piOpenRouterUsage";
+const STASH_KEY_OLLAMA = "__piOllamaUsage";
 const EVENT_BASETEN = "baseten-usage:updated";
 const EVENT_OPENROUTER = "openrouter-usage:updated";
+const EVENT_OLLAMA = "ollama-usage:updated";
 const BUDGET_ENV_BASETEN = "BASETEN_MONTHLY_BUDGET";
 const BUDGET_ENV_OPENROUTER = "OPENROUTER_MONTHLY_BUDGET";
 
@@ -118,6 +123,45 @@ async function providerApiKey(
     // No stored auth; caller falls back.
   }
   return undefined;
+}
+
+/** Plain-text GET (fetchJson's HTML sibling). Returns the final URL after
+ *  redirects so callers can detect auth redirects (e.g. → /signin). */
+async function fetchText(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<{ text: string; finalUrl: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`usage request failed (${response.status})`);
+    }
+    return { text: await response.text(), finalUrl: response.url };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Same resolution pattern as aa-info's key: env first, then fnox (Keychain). */
+function fnoxGet(name: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    let out = "";
+    try {
+      const child = spawn("fnox", ["get", name], { stdio: ["ignore", "pipe", "ignore"] });
+      child.stdout.on("data", (chunk) => (out += chunk));
+      child.on("error", () => resolve(undefined));
+      child.on("close", (code) => resolve(code === 0 && out.trim() ? out.trim() : undefined));
+    } catch {
+      resolve(undefined);
+    }
+  });
 }
 
 function toNumber(value: number | string | null | undefined): number {
@@ -678,6 +722,151 @@ async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
   return { value };
 }
 
+// ---------- ollama ----------
+
+/**
+ * Ollama has no usage API (ollama/ollama#12532) — the only source is the
+ * server-rendered https://ollama.com/settings page, gated by the browser's
+ * __Secure-session cookie (inference API keys don't work here). The cookie is
+ * resolved from $OLLAMA_SESSION_COOKIE, then `fnox get OLLAMA_SESSION_COOKIE`
+ * (Keychain). Browser session cookies live weeks-to-months; when one expires
+ * the fetch fails until a fresh cookie is stored.
+ *
+ * The page (as of 2026-09) renders an "Included usage" monthly dollar meter
+ * ("$0.09 of $60 used", per-model segments), an "Extra usage" balance, and a
+ * request-history table whose per-request data-time/cost rows must never be
+ * confused with the meter's numbers.
+ */
+const SETTINGS_URL_OLLAMA = "https://ollama.com/settings";
+const COOKIE_ENV_OLLAMA = "OLLAMA_SESSION_COOKIE";
+
+const OLLAMA_PLAN_RE = />\s*(pro|free|max|team)\s*</i;
+const OLLAMA_SPENT_RE = /\$([\d.,]+) of \$([\d.,]+) used/;
+const OLLAMA_RESET_RE = /data-time="([^"]+)"/g;
+const OLLAMA_BALANCE_RE = /Balance remaining[\s\S]{0,400}?\$([\d.,]+)/;
+const OLLAMA_SEGMENT_RE = /<button[^>]*data-usage-segment[^>]*>[\s\S]*?<\/button>/g;
+const OLLAMA_SEGMENT_WIDTH_RE = /width:\s*([\d.]+)%/;
+const OLLAMA_MODEL_RE = /data-model="([^"]+)"/;
+const OLLAMA_REQUESTS_RE = /data-requests="(\d+)"/;
+
+interface OllamaModelUsage {
+  model: string;
+  requests: number;
+  dollars: number;
+}
+
+interface OllamaUsage {
+  plan: string;
+  spent: number;
+  limit: number;
+  resetMs?: number;
+  extraBalance?: number;
+  models: OllamaModelUsage[];
+}
+
+function parseOllamaSettings(html: string, nowMs: number): OllamaUsage {
+  const spentMatch = OLLAMA_SPENT_RE.exec(html);
+  if (!spentMatch) {
+    throw new Error("settings page had no usage meter (signed out or page changed)");
+  }
+  const spent = toNumber(spentMatch[1]);
+  const limit = toNumber(spentMatch[2]);
+
+  // The plan badge renders before the meter; capitalized CSS handles display.
+  const plan = OLLAMA_PLAN_RE.exec(html)?.[1]?.toLowerCase() ?? "unknown";
+
+  // The meter's reset is the only future-dated data-time on the page — every
+  // request-history row is in the past.
+  let resetMs: number | undefined;
+  for (const match of html.matchAll(OLLAMA_RESET_RE)) {
+    const parsed = Date.parse(match[1] ?? "");
+    if (Number.isFinite(parsed) && parsed > nowMs) {
+      resetMs = parsed;
+      break;
+    }
+  }
+
+  // The extra-usage balance renders after the "Extra usage" heading.
+  const extraIdx = html.indexOf("Extra usage");
+  const extraBalance =
+    extraIdx === -1
+      ? undefined
+      : toNumber(OLLAMA_BALANCE_RE.exec(html.slice(extraIdx))?.[1]);
+
+  // Segment widths are relative to the filled bar, so a model's dollar share
+  // of the meter is spent × width%.
+  const models: OllamaModelUsage[] = [];
+  for (const match of html.matchAll(OLLAMA_SEGMENT_RE)) {
+    const button = match[0];
+    const model = OLLAMA_MODEL_RE.exec(button)?.[1];
+    if (!model) continue;
+    const requests = OLLAMA_REQUESTS_RE.exec(button)?.[1];
+    const width = Number.parseFloat(
+      OLLAMA_SEGMENT_WIDTH_RE.exec(button)?.[1] ?? "0",
+    );
+    models.push({
+      model,
+      requests: requests !== undefined ? Number.parseInt(requests, 10) : 0,
+      dollars: Math.round(spent * width) / 100,
+    });
+  }
+
+  return { plan, spent, limit, resetMs, extraBalance, models };
+}
+
+/** Env first, then fnox (Keychain). Silent: no cookie just means no chip. */
+async function ollamaSessionCookie(): Promise<string> {
+  const fromEnv = process.env[COOKIE_ENV_OLLAMA]?.trim();
+  if (fromEnv) return fromEnv;
+  const fromFnox = await fnoxGet(COOKIE_ENV_OLLAMA);
+  if (fromFnox) return fromFnox;
+  throw new Error(
+    `no Ollama session cookie (${COOKIE_ENV_OLLAMA} env, or \`fnox set ${COOKIE_ENV_OLLAMA}\`)`,
+  );
+}
+
+async function fetchOllama(_ctx: ExtensionContext): Promise<UsageDisplay> {
+  const cookie = await ollamaSessionCookie();
+  const { text, finalUrl } = await fetchText(SETTINGS_URL_OLLAMA, {
+    accept: "text/html",
+    // aid is ollama.com's device cookie; the scrape wants it present (even
+    // empty) alongside the session.
+    cookie: `__Secure-session=${cookie}; aid=`,
+    "user-agent": "pi-ollama-usage/1.0",
+  });
+  if (finalUrl.includes("signin")) {
+    throw new Error("Ollama session cookie is invalid or expired");
+  }
+
+  const nowMs = Date.now();
+  const usage = parseOllamaSettings(text, nowMs);
+  if (usage.limit <= 0) throw new Error("usage meter had no limit");
+
+  const percent = Math.round((usage.spent / usage.limit) * 100);
+  const value = `${formatDollars(usage.spent)} / ${formatDollars(usage.limit)} (${percent}%)`;
+
+  const detail = [
+    `Included (${usage.plan}): ${formatDollars(usage.spent)} of ${formatDollars(usage.limit)}` +
+      (usage.resetMs !== undefined
+        ? ` — resets ${formatResetClock(usage.resetMs, nowMs)}`
+        : ""),
+  ];
+  if (usage.extraBalance !== undefined) {
+    detail.push(`Extra usage balance: ${formatDollars(usage.extraBalance)}`);
+  }
+  const top = [...usage.models]
+    .sort((left, right) => right.dollars - left.dollars)
+    .slice(0, 5);
+  if (top.length > 0) {
+    detail.push("Top models:");
+    for (const entry of top) {
+      detail.push(`  ${entry.model}: ${entry.requests} req (${formatDollars(entry.dollars)})`);
+    }
+  }
+
+  return { value, commandText: detail.join("\n") };
+}
+
 // ---------- baseten ----------
 
 const USAGE_URL_BASETEN = "https://api.baseten.co/v1/billing/usage_summary";
@@ -878,6 +1067,20 @@ const DRIVERS: Driver[] = [
     isActive: (ctx) =>
       ctx.model?.provider === "xai" && ctx.modelRegistry.isUsingOAuth(ctx.model),
     fetch: fetchGrok,
+  },
+  {
+    id: "ollama-usage",
+    provider: "ollama",
+    stashKey: STASH_KEY_OLLAMA,
+    updateEvent: EVENT_OLLAMA,
+    cacheTtlMs: SCRAPE_CACHE_TTL_MS,
+    command: {
+      name: "ollama-usage",
+      description: "Show Ollama monthly included usage",
+      scopeNote: "Ollama usage is only shown for ollama models",
+    },
+    isActive: (ctx) => isProvider(ctx, "ollama"),
+    fetch: fetchOllama,
   },
   {
     id: "baseten-usage",

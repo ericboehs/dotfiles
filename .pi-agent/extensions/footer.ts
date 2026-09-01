@@ -86,7 +86,7 @@ const BOOT_LOG_KEEP = 1_000;
 const BOOT_LOG_MAX_BYTES = 200_000;
 
 /** Providers whose cost is meaningless (subscription-billed or local). */
-const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx"]);
+const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx", "ollama"]);
 
 /**
  * Usage chips written by baseten-usage.ts / openrouter-usage.ts via globalThis
@@ -98,6 +98,7 @@ function usageChip(provider: string | undefined): string | undefined {
   const stashKey =
     provider === "baseten" ? "__piBasetenUsage"
     : provider === "openrouter" ? "__piOpenRouterUsage"
+    : provider === "ollama" ? "__piOllamaUsage"
     : undefined;
   if (!stashKey) return undefined;
   const stash = (globalThis as Record<string, unknown>)[stashKey] as
