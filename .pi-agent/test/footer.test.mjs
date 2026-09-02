@@ -559,11 +559,25 @@ test("a peer name that lands after startup appears without a keystroke", async (
   }
 });
 
-test("long lines are truncated to the width", async () => {
+test("chips wrap whole onto more rows instead of truncating", async () => {
   const ui = await mount({ sessionName: "footer-work" });
-  const [main] = await ui.settled(30);
-  assert.equal(main.length, 30);
-  assert.ok(main.endsWith("…"));
+  const lines = await ui.settled(30);
+  // The session name owns the right end of the first row, so its chips fill
+  // only the space left of it; chips that no longer fit move down whole onto
+  // a full-width row rather than being cut mid-chip.
+  assert.equal(lines[0], "dotfiles gh opus   footer-work");
+  assert.equal(lines[1], "hi master* 41.2k/1m");
+  assert.ok(lines.every((line) => line.length <= 30), "every row fits the width");
+  assert.ok(!lines.join("\n").includes("…"), "nothing is cut");
+});
+
+test("a chip wider than the terminal still truncates", async () => {
+  const ui = await mount();
+  const lines = await ui.settled(6);
+  // A chip that can never fit any row is placed alone and truncated — the
+  // one case where the ellipsis survives the wrap.
+  assert.equal(lines[0], "dotfi…");
+  assert.ok(lines.every((line) => line.length <= 6));
 });
 
 test("/bypass drives the guardian and shows a bright red marker", async () => {

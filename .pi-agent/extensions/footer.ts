@@ -4,6 +4,9 @@
  * Renders a main line:
  *   dir provider model thinking branch* ⇣⇡ ctx/window $cost [inline statuses] ⚡boot   session-name
  * plus an optional dim row of other extension statuses (from ctx.ui.setStatus).
+ * When the terminal is too narrow for the chips, they wrap whole onto another
+ * row instead of being cut. The session/peer name keeps its place right-
+ * aligned on the first row: the chips there fill only the space left of it.
  * A pending-update notice is a separate right-aligned widget above the prompt.
  * The boot timer shows until the first message; while Approval Guardian is
  * bypassed, a bright-red "bypass" marker renders as a second footer line,
@@ -979,13 +982,12 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let updateTimerStarted = false;
   /**
    * Hit-testing state for click-to-cycle, refreshed on every footer render:
-   * the plain text of the painted main line plus the visible-column ranges of
-   * its provider and model chips. Cleared on dispose so a stale line can never
-   * be hit-tested after the footer is gone.
+   * one entry per painted footer line, top to bottom, holding the plain line
+   * text plus the visible-column ranges of its provider and model chips.
+   * Cleared on dispose so a stale line can never be hit-tested after the
+   * footer is gone.
    */
-  let footerClickLine = "";
-  let footerClickProvider: ClickZone | undefined;
-  let footerClickModel: ClickZone | undefined;
+  let footerClickRows: Array<{ text: string; provider?: ClickZone; model?: ClickZone }> = [];
   // Clicks queue behind an in-flight switch, so a rapid double-click advances
   // twice instead of racing two reads of the same current model.
   let cycleQueue: Promise<void> = Promise.resolve();
@@ -1040,7 +1042,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
         dispose: () => {
           unsubscribe();
           removeClickListener();
-          footerClickLine = "";
+          footerClickRows = [];
           repaint = undefined;
         },
         invalidate(): void {},
@@ -1090,22 +1092,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
           ];
 
-          const leftLine = left.filter(Boolean).join(" ");
-          // Record the provider/model chip columns for click-to-cycle. Same
-          // walk that produced leftLine: skipped empties contribute no
-          // separator, non-empty parts join with one space.
-          let cursor = 0;
-          footerClickProvider = undefined;
-          footerClickModel = undefined;
-          for (let index = 0; index < left.length; index += 1) {
-            const part = left[index]!;
-            if (!part) continue;
-            if (cursor > 0) cursor += 1;
-            const partWidth = visibleWidth(part);
-            if (index === 1) footerClickProvider = [cursor, cursor + partWidth];
-            if (index === 2) footerClickModel = [cursor, cursor + partWidth];
-            cursor += partWidth;
-          }
           // Fall back to the name other agents use to reach this session.
           const sessionName = pi.getSessionName();
           const peerName = sessionName ? "" : peer.read(requestRender);
@@ -1118,21 +1104,79 @@ export default function footerExtension(pi: ExtensionAPI): void {
             sessionName ? (tint ? paint(tint, sessionName) : color(CYAN, sessionName))
             : peerName ? theme.fg("dim", peerName)
             : "";
-          const mainLine =
-            sessionName || peerName ?
-              padBetween(leftLine, right, width)
-            : truncateToWidth(leftLine, width, "…");
 
-          // Publish what the footer paints for the click hit test: the plain
-          // line text and the chip zones, clipped to the truncation point.
-          const paintedWidth = visibleWidth(mainLine);
-          footerClickProvider = clipZone(footerClickProvider, paintedWidth);
-          footerClickModel = clipZone(footerClickModel, paintedWidth);
-          footerClickLine = mainLine.replace(ANSI_RE, "");
+          // Wrap, don't truncate: chips fill a row and whole chips move down
+          // to the next row when the terminal is too narrow, so nothing is
+          // ever cut mid-chip. The session/peer name owns the right end of the
+          // first row, so the first row's chips fill only the space left of
+          // it; later rows get the full width. The same walk records the
+          // provider/model chip columns per row for click-to-cycle; skipped
+          // empties contribute no separator, non-empty parts join with one
+          // space.
+          const chipRows: Array<{ line: string; provider?: ClickZone; model?: ClickZone }> = [];
+          const nameWidth = visibleWidth(right);
+          const firstLimit = nameWidth > 0 ? Math.max(0, width - nameWidth - 1) : width;
+          let rowLimit = firstLimit;
+          let current = "";
+          let cursor = 0;
+          let providerZone: ClickZone | undefined;
+          let modelZone: ClickZone | undefined;
+          const flushChipRow = () => {
+            const line = truncateToWidth(current, rowLimit, "…");
+            const paintedWidth = visibleWidth(line);
+            chipRows.push({
+              line,
+              provider: clipZone(providerZone, paintedWidth),
+              model: clipZone(modelZone, paintedWidth),
+            });
+            current = "";
+            cursor = 0;
+            providerZone = undefined;
+            modelZone = undefined;
+            rowLimit = width;
+          };
+          for (let index = 0; index < left.length; index += 1) {
+            const part = left[index]!;
+            if (!part) continue;
+            const partWidth = visibleWidth(part);
+            // A chip moves down whole when it cannot fit its row's budget —
+            // except a chip wider than the terminal itself, which can never
+            // fit and is placed anyway (the flush truncates it). A lone chip
+            // wider than the first row's name-budget also moves down, leaving
+            // that row to the name.
+            const fitsHere =
+              cursor === 0 ? partWidth <= rowLimit || rowLimit >= width : cursor + 1 + partWidth <= rowLimit;
+            if (!fitsHere) flushChipRow();
+            if (cursor > 0) {
+              current += " ";
+              cursor += 1;
+            }
+            if (index === 1) providerZone = [cursor, cursor + partWidth];
+            if (index === 2) modelZone = [cursor, cursor + partWidth];
+            current += part;
+            cursor += partWidth;
+          }
+          if (cursor > 0) flushChipRow();
+
+          // The session/peer name stays right-aligned on the first row. The
+          // chip budget above reserved its space, so the pad never truncates;
+          // only a name at least as wide as the terminal (firstLimit 0) can
+          // miss the fit, and then it replaces the (necessarily empty) first
+          // chip row rather than painting over the chips.
+          if (nameWidth > 0) {
+            const first = chipRows[0];
+            if (!first) {
+              chipRows.push({ line: alignRight(right, width) });
+            } else if (visibleWidth(first.line) + 1 + nameWidth <= width) {
+              chipRows[0] = { ...first, line: padBetween(first.line, right, width) };
+            } else {
+              chipRows[0] = { ...first, line: alignRight(right, width) };
+            }
+          }
 
           // Own line: inline at the end of the main line got truncated away
           // entirely on narrow terminals.
-          const lines = [mainLine];
+          const lines = chipRows.map((row) => row.line);
           if (bypassed) lines.push(color(BRIGHT_RED, "bypass"));
           const extra: string[] = [];
           for (const [key, value] of statuses) {
@@ -1142,6 +1186,18 @@ export default function footerExtension(pi: ExtensionAPI): void {
           if (extra.length > 0) {
             lines.push(truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…"));
           }
+          // Publish what the footer paints for the click hit test: one entry
+          // per painted line with the plain text plus the chip zones, clipped
+          // to the truncation point. Aligned with `lines` so the hit test can
+          // map a screen row to footerClickRows[rows-from-the-bottom].
+          footerClickRows = lines.map((line, index) => {
+            const row = chipRows[index];
+            return {
+              text: line.replace(ANSI_RE, ""),
+              provider: row?.provider,
+              model: row?.model,
+            };
+          });
           return lines;
         },
       };
@@ -1227,18 +1283,25 @@ export default function footerExtension(pi: ExtensionAPI): void {
   }
 
   /**
-   * Hit test for the footer chips: the press has to land on the row the footer
-   * last painted (compared as plain text, so trailing terminal padding is
-   * tolerated and a stale frame fails the match) and within the provider or
-   * model chip's columns. The footer is the bottom-most dock row, so anything
-   * further up is not it, however much a transcript line may resemble it.
+   * Hit test for the footer chips: the press has to land on a row the footer
+   * last painted (matched bottom-up against the footer's own lines, compared
+   * as plain text so trailing terminal padding is tolerated and a stale frame
+   * fails the match) and within the provider or model chip's columns. The
+   * footer is the bottom-most dock row, so anything further up is not it,
+   * however much a transcript line may resemble it.
    */
   function isFooterChipHit(screen: string[] | undefined, col: number, row: number): boolean {
-    if (!footerClickLine || !screen || row < screen.length - 4) return false;
+    const count = footerClickRows.length;
+    if (count === 0 || !screen) return false;
+    const fromBottom = screen.length - 1 - row;
+    const lineIndex = count - 1 - fromBottom;
+    if (lineIndex < 0 || lineIndex >= count) return false;
+    const data = footerClickRows[lineIndex]!;
+    if (!data.provider && !data.model) return false;
     const line = screen[row];
     if (!line) return false;
-    if (!line.replace(ANSI_RE, "").startsWith(footerClickLine)) return false;
-    return zoneHit(footerClickProvider, col) || zoneHit(footerClickModel, col);
+    if (!line.replace(ANSI_RE, "").startsWith(data.text)) return false;
+    return zoneHit(data.provider, col) || zoneHit(data.model, col);
   }
 
   // baseten-usage.ts / openrouter-usage.ts ping these after writing fresh MTD
