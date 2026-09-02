@@ -608,7 +608,9 @@ function shortModel(model: string | undefined, provider?: string): string {
   // claude-bridge: claude-opus-5 → opus (family only; the bridge only exposes Claude models)
   if (provider === "claude-bridge") {
     const m = /^claude-(fable|opus|sonnet|haiku)(?:-[\d-]+)?$/i.exec(base);
-    if (m) return m[1];
+    // noUncheckedIndexedAccess: capture group 1 re-widens per access, so pin it once.
+    const family = m?.[1];
+    if (family) return family;
   }
   if (provider === "github-copilot" && /^claude-opus-5$/i.test(base)) return "opus";
   for (const [pattern, replacement] of MODEL_RULES) {
