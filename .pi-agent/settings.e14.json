@@ -28,11 +28,12 @@
   "prompts": [
     "~/Code/github.com/ericboehs/claude-config/prompts"
   ],
-  "defaultProvider": "openrouter",
-  "defaultModel": "z-ai/glm-5.3-flash@preset/ox-alpha",
+  "defaultProvider": "ollama",
+  "defaultModel": "glm-5.3-flash",
   "defaultThinkingLevel": "xhigh",
   "modelThinkingLevels": {
-    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max"
+    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
+    "ollama/glm-5.3-flash": "max"
   },
   "theme": "light/dark",
   "steeringMode": "all",
