@@ -10,6 +10,10 @@
  * left-aligned under the main line (its own line so narrow terminals can't
  * truncate it off the main line).
  *
+ * Clicking the provider or model chip cycles to the next scoped model — the
+ * same switch as Ctrl+P. Fullscreen only: that is where the terminal reports
+ * mouse clicks to pi at all.
+ *
  * Design notes:
  * - No config UI, no widget registry: the layout is this file.
  * - Git state comes from a single `git status --porcelain=v1` per refresh, cached
@@ -531,6 +535,53 @@ function attachScrollbackClick(tui: TUI): () => void {
   };
 }
 
+/** [start, end) visible-column range of a chip painted on the footer line. */
+type ClickZone = [number, number];
+
+/** Whether a click column falls inside a chip's painted range. */
+function zoneHit(zone: ClickZone | undefined, col: number): boolean {
+  return zone !== undefined && col >= zone[0] && col < zone[1];
+}
+
+/** Drop a chip zone that truncation pushed off the painted line; clip partial ones. */
+function clipZone(zone: ClickZone | undefined, width: number): ClickZone | undefined {
+  if (!zone || zone[0] >= width) return undefined;
+  return [zone[0], Math.min(zone[1], width)];
+}
+
+/**
+ * Click-to-cycle on the footer's provider/model chips. Same stdin story as the
+ * scrollback banner above: TuiAltScreen installs its own input listener at
+ * construction time and that handler consumes every mouse event, so anything
+ * registered later via tui.addInputListener() never sees one. Node delivers
+ * every stdin chunk to each "data" listener, so read the same bytes directly.
+ * A left-press whose cell passes isHit() triggers act() once.
+ */
+function attachFooterChipClick(
+  tui: TUI,
+  isHit: (screen: string[] | undefined, col: number, row: number) => boolean,
+  act: () => void,
+): () => void {
+  const stream = process.stdin;
+  if (!stream || typeof stream.on !== "function") return () => {};
+  const onClick = (chunk: Buffer | string): void => {
+    const alt = tui as TUI & { previousScreen?: string[] };
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    MOUSE_PRESS_RE.lastIndex = 0;
+    // A chunk can carry more than one event; the first footer hit wins.
+    for (let match = MOUSE_PRESS_RE.exec(text); match; match = MOUSE_PRESS_RE.exec(text)) {
+      // SGR coordinates are 1-based; previousScreen is indexed by screen row.
+      if (!isHit(alt.previousScreen, Number(match[1]) - 1, Number(match[2]) - 1)) continue;
+      act();
+      return;
+    }
+  };
+  stream.on("data", onClick);
+  return () => {
+    stream.removeListener("data", onClick);
+  };
+}
+
 function shortProvider(provider: string | undefined): string {
   if (!provider) return "";
   return PROVIDER_NAMES[provider] ?? provider;
@@ -891,6 +942,18 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let bootMs: number | undefined;
   let bootCleared = false;
   let updateTimerStarted = false;
+  /**
+   * Hit-testing state for click-to-cycle, refreshed on every footer render:
+   * the plain text of the painted main line plus the visible-column ranges of
+   * its provider and model chips. Cleared on dispose so a stale line can never
+   * be hit-tested after the footer is gone.
+   */
+  let footerClickLine = "";
+  let footerClickProvider: ClickZone | undefined;
+  let footerClickModel: ClickZone | undefined;
+  // Clicks queue behind an in-flight switch, so a rapid double-click advances
+  // twice instead of racing two reads of the same current model.
+  let cycleQueue: Promise<void> = Promise.resolve();
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!ctx.hasUI) return;
@@ -932,10 +995,17 @@ export default function footerExtension(pi: ExtensionAPI): void {
       const requestRender = () => tui.requestRender();
       const unsubscribe = footerData.onBranchChange(requestRender);
       repaint = requestRender;
+      // Click-to-cycle shares the footer's lifecycle: dispose() detaches it.
+      const removeClickListener =
+        tui.mode === "fullscreen"
+          ? attachFooterChipClick(tui, isFooterChipHit, queueModelCycle)
+          : () => {};
 
       return {
         dispose: () => {
           unsubscribe();
+          removeClickListener();
+          footerClickLine = "";
           repaint = undefined;
         },
         invalidate(): void {},
@@ -986,6 +1056,21 @@ export default function footerExtension(pi: ExtensionAPI): void {
           ];
 
           const leftLine = left.filter(Boolean).join(" ");
+          // Record the provider/model chip columns for click-to-cycle. Same
+          // walk that produced leftLine: skipped empties contribute no
+          // separator, non-empty parts join with one space.
+          let cursor = 0;
+          footerClickProvider = undefined;
+          footerClickModel = undefined;
+          for (let index = 0; index < left.length; index += 1) {
+            const part = left[index]!;
+            if (!part) continue;
+            if (cursor > 0) cursor += 1;
+            const partWidth = visibleWidth(part);
+            if (index === 1) footerClickProvider = [cursor, cursor + partWidth];
+            if (index === 2) footerClickModel = [cursor, cursor + partWidth];
+            cursor += partWidth;
+          }
           // Fall back to the name other agents use to reach this session.
           const sessionName = pi.getSessionName();
           const peerName = sessionName ? "" : peer.read(requestRender);
@@ -1002,6 +1087,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
             sessionName || peerName ?
               padBetween(leftLine, right, width)
             : truncateToWidth(leftLine, width, "…");
+
+          // Publish what the footer paints for the click hit test: the plain
+          // line text and the chip zones, clipped to the truncation point.
+          const paintedWidth = visibleWidth(mainLine);
+          footerClickProvider = clipZone(footerClickProvider, paintedWidth);
+          footerClickModel = clipZone(footerClickModel, paintedWidth);
+          footerClickLine = mainLine.replace(ANSI_RE, "");
 
           // Own line: inline at the end of the main line got truncated away
           // entirely on narrow terminals.
@@ -1041,6 +1133,77 @@ export default function footerExtension(pi: ExtensionAPI): void {
   function suppressGuardianWidget(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!enabled || !ctx.hasUI || !bypassed) return;
     ctx.ui.setWidget(GUARDIAN_WIDGET_KEY, undefined);
+  }
+
+  /**
+   * Cycle forward through the scoped models — the extension-side equivalent of
+   * Ctrl+P (session.cycleModel("forward") with a non-empty scope). pi.setModel
+   * reaches session.setModel, which applies the per-model thinking override,
+   * logs the change and fires model_select; an explicit thinking level on the
+   * scope entry ("provider/model:high") is applied on top, matching the
+   * built-in cycle.
+   */
+  async function cycleScopedModelForward(): Promise<void> {
+    const ctx = runtimeContext;
+    if (!ctx?.hasUI) return;
+    const scoped = ctx.scopedModels;
+    if (scoped.length === 0) {
+      // Scopeless Ctrl+P cycles every available model, but the extension API
+      // exposes no catalogue snapshot to walk — say so instead.
+      ctx.ui.notify("No scoped models — add some with /scoped-models", "info");
+      return;
+    }
+    if (scoped.length === 1) {
+      ctx.ui.notify("Only one model in scope", "info");
+      return;
+    }
+    const current = ctx.model;
+    let index = scoped.findIndex(
+      (scopedModel) =>
+        scopedModel.model.provider === current?.provider &&
+        scopedModel.model.id === current?.id,
+    );
+    if (index === -1) index = 0;
+    // pi.setModel refuses models whose provider has no configured auth
+    // (Ctrl+P pre-filters those out of the cycle), so walk forward until one
+    // takes.
+    for (let step = 0; step < scoped.length; step += 1) {
+      const next = scoped[(index + 1 + step) % scoped.length]!;
+      let switched: boolean;
+      try {
+        switched = await pi.setModel(next.model);
+      } catch {
+        switched = false;
+      }
+      if (!switched) continue;
+      if (next.thinkingLevel) pi.setThinkingLevel(next.thinkingLevel);
+      const thinking =
+        next.model.reasoning && pi.getThinkingLevel() !== "off"
+          ? ` (thinking: ${pi.getThinkingLevel()})`
+          : "";
+      ctx.ui.notify(`Switched to ${next.model.name || next.model.id}${thinking}`, "info");
+      return;
+    }
+    ctx.ui.notify("No scoped model has auth configured", "warning");
+  }
+
+  function queueModelCycle(): void {
+    cycleQueue = cycleQueue.then(cycleScopedModelForward).catch(() => {});
+  }
+
+  /**
+   * Hit test for the footer chips: the press has to land on the row the footer
+   * last painted (compared as plain text, so trailing terminal padding is
+   * tolerated and a stale frame fails the match) and within the provider or
+   * model chip's columns. The footer is the bottom-most dock row, so anything
+   * further up is not it, however much a transcript line may resemble it.
+   */
+  function isFooterChipHit(screen: string[] | undefined, col: number, row: number): boolean {
+    if (!footerClickLine || !screen || row < screen.length - 4) return false;
+    const line = screen[row];
+    if (!line) return false;
+    if (!line.replace(ANSI_RE, "").startsWith(footerClickLine)) return false;
+    return zoneHit(footerClickProvider, col) || zoneHit(footerClickModel, col);
   }
 
   // baseten-usage.ts / openrouter-usage.ts ping these after writing fresh MTD
@@ -1237,8 +1400,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
     repaint?.();
     return undefined;
   });
-
-  pi.on("model_select", async (_event, ctx) => apply(ctx));
 
   pi.on("model_select", async (_event, ctx) => apply(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {
