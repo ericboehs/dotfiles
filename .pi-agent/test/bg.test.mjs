@@ -6,9 +6,12 @@ import test from "node:test";
 
 // bg.ts reads these once at module load. Keep the foreground budget short for
 // the real-process smoke tests and suppress completion turns from adopted jobs.
+// 0.2s assumed ~20ms fork/exec, but observed spawn latency on this box is
+// ~250ms even for /usr/bin/true under load, which flaked the budget, so
+// "short" now means 0.5s.
 process.env.PI_BG_DIR = mkdtempSync(path.join(tmpdir(), "pi-bg-test-"));
 process.env.PI_BG_FG_TIMEOUT = "1";
-process.env.PI_BG_MAX_TIMEOUT = "0.2";
+process.env.PI_BG_MAX_TIMEOUT = "0.5";
 process.env.PI_BG_WAKE = "off";
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(path.join(tmpdir(), "pi-agent-bg-test-"));
 writeFileSync(
@@ -52,10 +55,10 @@ test("documents hard explicit timeouts", () => {
   const { bash } = mount();
   assert.match(bash.description, /commands without a timeout auto-background/);
   assert.match(bash.description, /explicit timeout is killed/);
-  assert.match(bash.description, /maximum 0\.2s/);
+  assert.match(bash.description, /maximum 0\.5s/);
   assert.equal(
     bash.parameters.properties.timeout.description,
-    "Hard deadline in seconds (optional, maximum 0.2)",
+    "Hard deadline in seconds (optional, maximum 0.5)",
   );
 });
 
@@ -82,7 +85,7 @@ test("an explicit timeout is clamped and kills instead of auto-backgrounding", a
       undefined,
       ctx,
     ),
-    /Command timed out after 0\.2 seconds/,
+    /Command timed out after 0\.5 seconds/,
   );
 });
 
