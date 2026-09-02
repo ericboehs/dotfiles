@@ -201,7 +201,8 @@ const THINKING_NAMES: Record<string, string> = {
   low: "lo",
   medium: "med",
   high: "hi",
-  xhigh: "xhi",
+  // xhigh renders as "hi" (Eric runs xhigh by default; plain high shares the label).
+  xhigh: "hi",
 };
 
 /** Ordered rewrite rules for verbose model ids; first match wins. Results are lowercased. */
