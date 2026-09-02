@@ -65,7 +65,7 @@ const AUTO_BUNDLE_LOCK = "pi-bundle.lock";
 const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
-const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window"] as const;
+const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "claude-bridge-window"] as const;
 
 /**
  * The boot timer sits in the footer until the first message goes out, and every
@@ -192,6 +192,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   openai: "o",
   xai: "x",
   baseten: "b10",
+  "claude-bridge": "c",
 };
 
 /** Short names for thinking levels (pi: off|minimal|low|medium|high|xhigh|max). */
@@ -604,6 +605,11 @@ function shortModel(model: string | undefined, provider?: string): string {
   if (!base) return "no-model";
   // xai: grok-4.6 → grok (provider chip already says "x")
   if (provider === "xai" && /^grok-(.+)$/i.test(base)) return "grok";
+  // claude-bridge: claude-opus-5 → opus (family only; the bridge only exposes Claude models)
+  if (provider === "claude-bridge") {
+    const m = /^claude-(fable|opus|sonnet|haiku)(?:-[\d-]+)?$/i.exec(base);
+    if (m) return m[1];
+  }
   if (provider === "github-copilot" && /^claude-opus-5$/i.test(base)) return "opus";
   for (const [pattern, replacement] of MODEL_RULES) {
     // Aliased ids render lowercase; unknown ids pass through with their original casing.

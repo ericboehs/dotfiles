@@ -1,6 +1,6 @@
 /**
- * All usage/quota chips in one extension: codex, copilot, grok (status-line
- * windows) and baseten, openrouter, ollama (cost-slot chips).
+ * All usage/quota chips in one extension: codex, copilot, grok, claude-bridge
+ * (status-line windows) and baseten, openrouter, ollama (cost-slot chips).
  *
  * Each provider is a Driver: a provider gate, a fetch, and a display mode.
  * The display mode decides where the value lands:
@@ -393,6 +393,191 @@ async function fetchCodex(ctx: ExtensionContext): Promise<UsageDisplay> {
     .filter((formatted): formatted is string => formatted !== undefined)
     .join(" ");
   return { value, commandText: `${value}\nResets: ${resetSummary}` };
+}
+
+// ---------- claude-bridge ----------
+
+const USAGE_URL_CLAUDE = "https://api.anthropic.com/api/oauth/usage";
+// The endpoint rate-limits per OAuth token, and a non-claude-code User-Agent
+// lands in an aggressively-429'd bucket; ~180s is the community-established
+// safe cadence, so no point polling faster than that.
+const CLAUDE_USAGE_CACHE_TTL_MS = 180_000;
+const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const CLAUDE_CREDENTIALS_FILE = join(homedir(), ".claude", ".credentials.json");
+const FIVE_HOURS_SECONDS = 5 * 3_600;
+const SEVEN_DAYS_SECONDS = 7 * 86_400;
+
+interface ClaudeUsageWindow {
+  utilization?: number;
+  resets_at?: string | null;
+}
+
+interface ClaudeUsageResponse {
+  five_hour?: ClaudeUsageWindow | null;
+  seven_day?: ClaudeUsageWindow | null;
+  seven_day_opus?: ClaudeUsageWindow | null;
+  seven_day_sonnet?: ClaudeUsageWindow | null;
+  extra_usage?: {
+    is_enabled?: boolean;
+    monthly_limit?: number | null;
+    used_credits?: number | null;
+    utilization?: number | null;
+  } | null;
+}
+
+interface ClaudeOauthBlob {
+  claudeAiOauth?: {
+    accessToken?: string;
+    /** Epoch ms; the CLI refreshes hourly, we never refresh ourselves. */
+    expiresAt?: number;
+  };
+}
+
+/** macOS Keychain generic-password lookup (`security` is darwin-only). */
+function keychainPassword(service: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    let out = "";
+    try {
+      const child = spawn("security", ["find-generic-password", "-s", service, "-w"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      child.stdout.on("data", (chunk) => (out += chunk));
+      child.on("error", () => resolve(undefined));
+      child.on("close", (code) => resolve(code === 0 && out.trim() ? out.trim() : undefined));
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
+
+/** Claude Code's OAuth token, from where the CLI itself keeps it: an env
+ *  override, the macOS Keychain, then ~/.claude/.credentials.json. Access
+ *  tokens expire hourly and only the running CLI refreshes them, so an all-
+ *  expired result is surfaced (the 401 path explains the fix) rather than
+ *  refreshed here. */
+async function claudeOauthToken(): Promise<string | undefined> {
+  const fromEnv = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (fromEnv) return fromEnv;
+
+  const blobs: string[] = [];
+  if (process.platform === "darwin") {
+    const fromKeychain = await keychainPassword(CLAUDE_KEYCHAIN_SERVICE);
+    if (fromKeychain) blobs.push(fromKeychain);
+  }
+  try {
+    blobs.push(await readFile(CLAUDE_CREDENTIALS_FILE, "utf8"));
+  } catch {
+    // No file credential; the Keychain result (if any) stands alone.
+  }
+
+  let unexpired: string | undefined;
+  let expired: string | undefined;
+  for (const blob of blobs) {
+    try {
+      const oauth = (JSON.parse(blob) as ClaudeOauthBlob).claudeAiOauth;
+      const token = oauth?.accessToken;
+      if (!token) continue;
+      // 60s buffer for clock skew; a missing expiresAt is trusted (401 catches liars).
+      if (typeof oauth.expiresAt === "number" && oauth.expiresAt <= Date.now() + 60_000) {
+        expired ??= token;
+      } else {
+        unexpired = token;
+        break;
+      }
+    } catch {
+      // Corrupt blob; try the next source.
+    }
+  }
+  return unexpired ?? expired;
+}
+
+/** Map an /api/oauth/usage window onto the generic UsageWindow shape so the
+ *  codex formatters (pace warnings, ↻-at-limit, elapsed/total labels) apply
+ *  unchanged: both scales are 0–100 with an ISO reset and a fixed span. */
+function claudeWindowToUsageWindow(
+  window: ClaudeUsageWindow | null | undefined,
+  limitSeconds: number,
+): UsageWindow | undefined {
+  if (typeof window?.utilization !== "number" || !window.resets_at) return undefined;
+  const resetMs = Date.parse(window.resets_at);
+  if (!Number.isFinite(resetMs)) return undefined;
+  return {
+    used_percent: window.utilization,
+    reset_at: Math.floor(resetMs / 1000),
+    limit_window_seconds: limitSeconds,
+  };
+}
+
+async function fetchClaudeBridge(_ctx: ExtensionContext): Promise<UsageDisplay> {
+  const token = await claudeOauthToken();
+  if (!token) {
+    throw new Error(
+      "no Claude Code OAuth credential (Keychain, ~/.claude/.credentials.json, or CLAUDE_CODE_OAUTH_TOKEN)",
+    );
+  }
+
+  let usage: ClaudeUsageResponse;
+  try {
+    usage = (await fetchJson(USAGE_URL_CLAUDE, {
+      authorization: `Bearer ${token}`,
+      "anthropic-beta": "oauth-2025-04-20",
+      "content-type": "application/json",
+      // Required: non-claude-code agents get the hostile rate-limit bucket.
+      "user-agent": "claude-code/2.1.257",
+    })) as ClaudeUsageResponse;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("(401)")) {
+      throw new Error(
+        "Claude Code OAuth token expired — run `claude` briefly (it refreshes on use) and retry",
+      );
+    }
+    throw err;
+  }
+
+  // Shortest first: the 5h session cap gates sooner than the weekly quota.
+  const windows = [
+    { raw: usage.five_hour, seconds: FIVE_HOURS_SECONDS },
+    { raw: usage.seven_day, seconds: SEVEN_DAYS_SECONDS },
+  ]
+    .map((entry) => claudeWindowToUsageWindow(entry.raw, entry.seconds))
+    .filter((window): window is UsageWindow => window !== undefined);
+
+  const nowMs = Date.now();
+  const value = windows
+    .map((window) => formatCodexWindow(window, nowMs))
+    .filter((formatted): formatted is string => formatted !== undefined)
+    .join(" ");
+  if (!value) throw new Error("no Claude usage window was returned");
+
+  const detail: string[] = [];
+  const detailRows: Array<[string, ClaudeUsageWindow | null | undefined]> = [
+    ["5h session", usage.five_hour],
+    ["Weekly (all models)", usage.seven_day],
+    ["Weekly Opus", usage.seven_day_opus],
+    ["Weekly Sonnet", usage.seven_day_sonnet],
+  ];
+  for (const [label, window] of detailRows) {
+    if (typeof window?.utilization !== "number") continue;
+    const resetMs = window.resets_at ? Date.parse(window.resets_at) : NaN;
+    detail.push(
+      `${label}: ${formatNumber(window.utilization)}%` +
+        (Number.isFinite(resetMs) ? ` — resets ${formatResetClock(resetMs, nowMs)}` : ""),
+    );
+  }
+  const extra = usage.extra_usage;
+  if (extra?.is_enabled) {
+    detail.push(
+      `Extra usage: ${formatDollars(toNumber(extra.used_credits))} of ` +
+        `${formatDollars(toNumber(extra.monthly_limit))} (${formatNumber(extra.utilization ?? 0)}%)`,
+    );
+  }
+
+  const resetSummary = windows
+    .map((window) => formatReset(window, nowMs))
+    .filter((formatted): formatted is string => formatted !== undefined)
+    .join(" ");
+  const commandText = detail.length > 0 ? detail.join("\n") : value;
+  return { value, commandText: resetSummary ? `${commandText}\nResets: ${resetSummary}` : commandText };
 }
 
 // ---------- copilot ----------
@@ -1134,6 +1319,19 @@ const DRIVERS: Driver[] = [
     },
     isActive: (ctx) => isProvider(ctx, "openai-codex"),
     fetch: fetchCodex,
+  },
+  {
+    id: "claude-bridge-window",
+    provider: "claude-bridge",
+    statusKey: "claude-bridge-window",
+    cacheTtlMs: CLAUDE_USAGE_CACHE_TTL_MS,
+    command: {
+      name: "claude-bridge-window",
+      description: "Refresh the compact Claude subscription usage window",
+      scopeNote: "Claude usage is only shown for claude-bridge models",
+    },
+    isActive: (ctx) => isProvider(ctx, "claude-bridge"),
+    fetch: fetchClaudeBridge,
   },
   {
     id: "copilot-window",
