@@ -62,4 +62,9 @@ terraform = "1.15.8"
 neovim = "0.12.4"
 "npm:@playwright/cli" = "latest"
 # Pi is pinned so its extension API and the bootstrapped package set move together.
+# After an upgrade lands here, run `mise task bootstrap:pi` — that re-bundles
+# dist/bundle.mjs, which pi-launch requires or it degrades every launch to
+# dist/cli.js (~115ms slower). The footer's staleness self-heal re-bundles on
+# its own within one refresh TTL, so forgetting this costs one slow launch,
+# not days.
 "npm:@earendil-works/pi-coding-agent" = "0.84.3"

@@ -25,7 +25,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { appendFile, readFile, realpath, writeFile, access, constants } from "node:fs/promises";
+import { appendFile, readFile, realpath, writeFile, access, stat, constants } from "node:fs/promises";
 import { homedir, loadavg } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -391,7 +391,16 @@ class UpdateCheckCache {
     const changed = this.current !== next;
     this.current = next;
     this.fetchedAt = Date.now();
-    if (changed && next !== this.bootVersion) void rebuildBundle(next).catch(() => {});
+    if (changed && next !== this.bootVersion) {
+      void rebuildBundle(next).catch(() => {});
+    } else if (!changed && next && (await bundleIsStale())) {
+      // Version-change detection alone misses the states that leave every
+      // launch on dist/cli.js: the rebuild that fired mid-npm-install stamped
+      // a bundle older than the finished package.json, and a pi launched after
+      // its own upgrade seeded `current` with the new version so `changed` is
+      // never true. One refresh TTL later this branch re-bundles anyway.
+      void rebuildBundle(next).catch(() => {});
+    }
     if (changed) requestRender();
   }
 }
@@ -736,6 +745,30 @@ async function piBundleScript(): Promise<string | null> {
 }
 
 /**
+ * True when dist/bundle.mjs is older than package.json — the state pi-launch
+ * reads as "fall back to dist/cli.js", ~115ms slower on every launch. Beyond a
+ * simply forgotten re-bundle this catches the npm-upgrade race: an old running
+ * pi fires the auto-rebuild while npm is mid-install, the bundle gets stamped
+ * before package.json's final mtime, and no later launch can ever see a
+ * version transition to retrigger the rebuild (the Aug 31 regression sat like
+ * that for days).
+ */
+async function bundleIsStale(): Promise<boolean> {
+  try {
+    const pkgJson = await piPackageJsonPath();
+    if (!pkgJson) return false;
+    const bundle = join(dirname(pkgJson), "dist", "bundle.mjs");
+    const [pkgStat, bundleStat] = await Promise.all([
+      stat(pkgJson),
+      stat(bundle).catch(() => null),
+    ]);
+    return bundleStat === null || pkgStat.mtimeMs > bundleStat.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A pi update leaves dist/bundle.mjs stale and the bin at stock cli.js, so
  * every launch runs ~115ms slower until someone re-runs pi-bundle. This footer
  * is already the first to know about an update — so let it kick off the
@@ -744,6 +777,8 @@ async function piBundleScript(): Promise<string | null> {
  * Runs once per detected version (globalThis guard survives /reload), honors
  * PI_NO_AUTO_BUNDLE=1, serializes concurrent detections from other pi
  * instances on a lock directory, and appends everything to auto-bundle.log.
+ * The staleness check in UpdateCheckCache.refresh() reuses this for the case
+ * where the version never transitioned but the bundle is already outdated.
  */
 async function rebuildBundle(version: string): Promise<void> {
   const stash = globalThis as { __piFooterAutoBundleFor?: string };
