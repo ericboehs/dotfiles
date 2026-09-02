@@ -67,4 +67,4 @@ neovim = "0.12.4"
 # dist/cli.js (~115ms slower). The footer's staleness self-heal re-bundles on
 # its own within one refresh TTL, so forgetting this costs one slow launch,
 # not days.
-"npm:@earendil-works/pi-coding-agent" = "0.84.3"
+"npm:@earendil-works/pi-coding-agent" = "0.84.4"
