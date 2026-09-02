@@ -918,6 +918,18 @@
           }
         }
       ]
+    },
+    "claude-bridge": {
+      "modelOverrides": {
+        "claude-fable-5":   { "contextWindow": 256000 },
+        "claude-opus-5":    { "contextWindow": 256000 },
+        "claude-opus-4-8":  { "contextWindow": 256000 },
+        "claude-opus-4-7":  { "contextWindow": 256000 },
+        "claude-opus-4-6":  { "contextWindow": 256000 },
+        "claude-sonnet-5":  { "contextWindow": 256000 },
+        "claude-sonnet-4-6": { "contextWindow": 256000 },
+        "claude-haiku-4-5": { "contextWindow": 256000 }
+      }
     }
   }
 }
