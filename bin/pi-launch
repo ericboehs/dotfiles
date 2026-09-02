@@ -27,6 +27,33 @@ if [ -z "${NODE_COMPILE_CACHE:-}" ] && [ -z "${PI_NO_COMPILE_CACHE:-}" ]; then
   export NODE_COMPILE_CACHE
 fi
 
+# Inside tmux, pi resolves hyperlink support with a blocking execSync during
+# boot (`tmux display-message -p '#{client_termfeatures}'` from node: ~10ms
+# warm, up to the 250ms timeout when the server is busy, and the first exec of
+# the day also pays a page-cache miss — 162ms measured). The answer only
+# changes when the outer terminal does, so read the last answer from a cache
+# instead of making node wait for it, and let a detached job refresh the cache
+# off the boot path. pi's own probe stays as the fallback whenever the cache
+# is unreadable, so the worst case is today's behavior. An explicit
+# PI_HYPERLINKS in the environment wins; PI_NO_HYPERLINKS_REFRESH=1 opts out
+# of the refresh job entirely.
+if [ -n "${TMUX:-}" ] && [ -z "${PI_HYPERLINKS:-}" ] && [ -z "${PI_NO_HYPERLINKS_REFRESH:-}" ]; then
+  hyperlinks_cache=${XDG_CACHE_HOME:-$HOME/.cache}/pi/tmux-hyperlinks
+  # 2>/dev/null must precede the failing redirect, or the shell prints its own
+  # complaint about the missing file before read even runs.
+  read -r pi_hyperlinks 2>/dev/null < "$hyperlinks_cache" || true
+  case ${pi_hyperlinks:-} in
+    1|0) export PI_HYPERLINKS=$pi_hyperlinks ;;
+  esac
+  /bin/sh -c '
+    cache=$1 cache_dir=${1%/*}
+    mkdir -p "$cache_dir" 2>/dev/null || exit 0
+    features=$(tmux display-message -p "#{client_termfeatures}" 2>/dev/null) || exit 0
+    case ,${features}, in *,hyperlinks,*) printf 1 ;; *) printf 0 ;; esac > "$cache.tmp" \
+      && mv "$cache.tmp" "$cache" || rm -f "$cache.tmp"
+  ' sh "$hyperlinks_cache" >/dev/null 2>&1 &
+fi
+
 # Three managed paths in a bootstrapped profile are always symlinks into the
 # dotfiles repo. A regular file there means something wrote *over* the link
 # rather than through it -- a `jq ... > tmp && mv tmp settings.json` is the

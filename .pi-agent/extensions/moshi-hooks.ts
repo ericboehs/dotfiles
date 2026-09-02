@@ -10,7 +10,7 @@ import { createConnection } from "node:net"
 import { homedir } from "node:os"
 import { join as pathJoin } from "node:path"
 import { closeSync, openSync, readSync } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 
 // Kept for debugging / manual replay through the CLI adapter above.
 const helperBinary = "/opt/homebrew/bin/moshi-hook"
@@ -74,13 +74,35 @@ interface TerminalContext {
   herdrTab: string
 }
 
-function runForOutput(command: string, args: string[], timeout: number): string {
-  try {
-    const result = spawnSync(command, args, { encoding: "utf8", timeout, windowsHide: true })
-    return typeof result.stdout === "string" ? result.stdout : ""
-  } catch {
-    return ""
-  }
+// Async spawn-and-capture. pi awaits every extension event handler, so the
+// tmux roundtrip (~10ms warm, up to the timeout when the server is busy) must
+// never run synchronously on a boot-path handler — callers await this only
+// after their event handling is otherwise done.
+function runForOutput(command: string, args: string[], timeout: number): Promise<string> {
+  return new Promise((resolve) => {
+    let stdout = ""
+    let settled = false
+    const done = (text: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(text)
+    }
+    let child: ReturnType<typeof spawn>
+    let timer: ReturnType<typeof setTimeout>
+    try {
+      child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true })
+      timer = setTimeout(() => child.kill(), timeout)
+    } catch {
+      resolve("")
+      return
+    }
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8")
+    })
+    child.on("error", () => done(""))
+    child.on("close", () => done(stdout))
+  })
 }
 
 function tmuxSocketFromEnv(value: string | undefined): string {
@@ -89,7 +111,7 @@ function tmuxSocketFromEnv(value: string | undefined): string {
   return idx > 0 ? value.slice(0, idx) : ""
 }
 
-function resolveTerminalContext(): TerminalContext {
+async function resolveTerminalContext(): Promise<TerminalContext> {
   const tmuxPane = process.env.TMUX_PANE ?? ""
   const tmuxSocket = tmuxSocketFromEnv(process.env.TMUX)
   let tmuxSession = ""
@@ -98,7 +120,7 @@ function resolveTerminalContext(): TerminalContext {
     const args = ["display-message", "-p"]
     if (tmuxPane) args.push("-t", tmuxPane)
     args.push("#S\t#I")
-    const text = runForOutput("tmux", args, 200).trim()
+    const text = (await runForOutput("tmux", args, 200)).trim()
     if (text) {
       const parts = text.split("\t", 2)
       tmuxSession = parts[0] ?? ""
@@ -139,6 +161,11 @@ function resolveTerminalContext(): TerminalContext {
   }
 }
 
+// Started at module load but never awaited on the boot path: the tmux
+// display-message roundtrip used to run synchronously here, blocking every
+// launch inside tmux for ~10ms (250ms when the server was slow) before
+// session_start could even fire. The first envelope is what needs the answer,
+// and that fires well after pi's first paint.
 const terminalContext = resolveTerminalContext()
 
 function projectNameFromCwd(cwd: string): string {
@@ -148,8 +175,8 @@ function projectNameFromCwd(cwd: string): string {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
 
-function projectNameForCwd(cwd: string): string {
-  return terminalContext.tmuxSession || terminalContext.herdrSession || terminalContext.zellijSession || projectNameFromCwd(cwd)
+function projectNameForCwd(cwd: string, tc: TerminalContext): string {
+  return tc.tmuxSession || tc.herdrSession || tc.zellijSession || projectNameFromCwd(cwd)
 }
 
 function firstString(...values: unknown[]): string {
@@ -428,27 +455,32 @@ interface HookPayload {
   [key: string]: unknown
 }
 
-function baseEnvelope(payload: HookPayload, sessionId: string, eventName: string): Record<string, unknown> {
+async function baseEnvelope(
+  payload: HookPayload,
+  sessionId: string,
+  eventName: string,
+): Promise<Record<string, unknown>> {
+  const tc = await terminalContext
   const envelope: Record<string, unknown> = {
     type: "session.update",
     source: agentSource,
     sessionId,
     eventName,
     cwd: payload.cwd,
-    projectName: projectNameForCwd(payload.cwd),
-    terminalKind: terminalContext.terminalKind,
-    tmuxSession: terminalContext.tmuxSession,
-    tmuxWindow: terminalContext.tmuxWindow,
-    tmuxPane: terminalContext.tmuxPane,
-    tmuxSocket: terminalContext.tmuxSocket,
-    zellijSession: terminalContext.zellijSession,
-    zellijPane: terminalContext.zellijPane,
-    herdrSession: terminalContext.herdrSession,
-    herdrPane: terminalContext.herdrPane,
-    herdrWorkspaceId: terminalContext.herdrWorkspaceId,
-    herdrWorkspace: terminalContext.herdrWorkspace,
-    herdrTabId: terminalContext.herdrTabId,
-    herdrTab: terminalContext.herdrTab,
+    projectName: projectNameForCwd(payload.cwd, tc),
+    terminalKind: tc.terminalKind,
+    tmuxSession: tc.tmuxSession,
+    tmuxWindow: tc.tmuxWindow,
+    tmuxPane: tc.tmuxPane,
+    tmuxSocket: tc.tmuxSocket,
+    zellijSession: tc.zellijSession,
+    zellijPane: tc.zellijPane,
+    herdrSession: tc.herdrSession,
+    herdrPane: tc.herdrPane,
+    herdrWorkspaceId: tc.herdrWorkspaceId,
+    herdrWorkspace: tc.herdrWorkspace,
+    herdrTabId: tc.herdrTabId,
+    herdrTab: tc.herdrTab,
     modelName: payload.model,
     transcriptPath: payload.transcript_path,
     requestedAt: new Date().toISOString(),
@@ -460,8 +492,10 @@ function baseEnvelope(payload: HookPayload, sessionId: string, eventName: string
 }
 
 // handleEvent is the in-module port of runPiFamilyHook in
-// internal/cli/hook_more_agents.go.
-function handleEvent(payload: HookPayload): void {
+// internal/cli/hook_more_agents.go. Async only because baseEnvelope awaits the
+// terminal-context promise; every state mutation below happens synchronously
+// before that await, so rapid-fire events cannot interleave the bookkeeping.
+async function handleEvent(payload: HookPayload): Promise<void> {
   const sessionId = payload.session_id || newSessionID()
   const state = stateFor(sessionId)
   const isChild = sessionIsChild(state, payload)
@@ -476,12 +510,12 @@ function handleEvent(payload: HookPayload): void {
       // A category-less update is a silent state carrier: the daemon persists
       // the transcript path / model / pane for Chat View without publishing
       // anything — the first prompt announces the session.
-      sendEnvelope(baseEnvelope(payload, sessionId, "SessionStart"))
+      sendEnvelope(await baseEnvelope(payload, sessionId, "SessionStart"))
       return
     }
     case "SessionEnd": {
       if (isChild) return
-      const envelope = baseEnvelope(payload, sessionId, "SessionEnd")
+      const envelope = await baseEnvelope(payload, sessionId, "SessionEnd")
       envelope.type = "session.closed"
       envelope.category = "session_ended"
       envelope.title = agentDisplayName + " session ended"
@@ -496,7 +530,7 @@ function handleEvent(payload: HookPayload): void {
       if (!alreadyPushed) state.firstPromptPushedAt = nowSeconds()
       let title = agentDisplayName + " session started"
       if (alreadyPushed && state.lastEventTitle) title = state.lastEventTitle
-      const envelope = baseEnvelope(payload, sessionId, alreadyPushed ? "UserPromptSubmit" : "SessionStart")
+      const envelope = await baseEnvelope(payload, sessionId, alreadyPushed ? "UserPromptSubmit" : "SessionStart")
       envelope.category = "session_started"
       envelope.title = title
       envelope.message = formatUserPromptDetail(state.lastUserPrompt)
@@ -513,7 +547,7 @@ function handleEvent(payload: HookPayload): void {
       const toolName = firstString(payload.tool_name)
       state.lastToolName = toolName
       const title = agentDisplayName + " needs approval"
-      const envelope = baseEnvelope(payload, sessionId, "PermissionRequest")
+      const envelope = await baseEnvelope(payload, sessionId, "PermissionRequest")
       envelope.actionId = firstString(payload.tool_use_id) || newSessionID()
       envelope.phase = "waitingForApproval"
       envelope.category = "approval_required"
@@ -527,7 +561,7 @@ function handleEvent(payload: HookPayload): void {
     }
     case "PermissionResolved": {
       const title = agentDisplayName + " resumed"
-      const envelope = baseEnvelope(payload, sessionId, "PermissionResolved")
+      const envelope = await baseEnvelope(payload, sessionId, "PermissionResolved")
       envelope.category = "session_started"
       envelope.title = title
       envelope.message = formatUserPromptDetail(state.lastUserPrompt)
@@ -542,7 +576,7 @@ function handleEvent(payload: HookPayload): void {
       const assistant = firstString(payload.last_assistant_message)
       if (!recordTaskCompletion(state, plainTextClip(assistant, 200), nowSeconds())) return
       const title = plainTextClip(assistant, 80) || agentDisplayName + " complete"
-      const envelope = baseEnvelope(payload, sessionId, payload.hook_event_name)
+      const envelope = await baseEnvelope(payload, sessionId, payload.hook_event_name)
       envelope.category = "task_complete"
       envelope.title = title
       envelope.message = formatUserPromptDetail(state.lastUserPrompt)
@@ -551,7 +585,7 @@ function handleEvent(payload: HookPayload): void {
       return
     }
     default:
-      sendEnvelope(baseEnvelope(payload, sessionId, payload.hook_event_name))
+      sendEnvelope(await baseEnvelope(payload, sessionId, payload.hook_event_name))
   }
 }
 
@@ -568,11 +602,11 @@ function send(eventName: string, event: unknown, ctx: unknown, extra: Record<str
     ...extra,
   }
 
-  try {
-    handleEvent(payload)
-  } catch {
+  // Fire-and-forget: pi awaits event handlers, and the daemon write must never
+  // hold an event open. Hooks never interrupt the user's Pi turn anyway.
+  void handleEvent(payload).catch(() => {
     // Hooks should never interrupt the user's Pi turn.
-  }
+  })
 }
 
 export default function moshiPiHook(pi: ExtensionAPI): void {
