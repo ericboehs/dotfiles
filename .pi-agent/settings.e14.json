@@ -54,6 +54,11 @@
     "ollama/glm-5.3-flash",
     "claude-bridge/claude-opus-5"
   ],
+  "retry": {
+    "enabled": true,
+    "maxRetries": 10,
+    "baseDelayMs": 2000
+  },
   "showHardwareCursor": true,
   "editorPaddingX": 1,
   "terminal": {
