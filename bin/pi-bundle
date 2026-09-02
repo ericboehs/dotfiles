@@ -250,6 +250,43 @@ else
 fi
 [ -s "$TMP" ] || die "the bundler produced nothing"
 
+# Make pi-tui's tmux hyperlink probe lazy. Theme creation asks for terminal
+# capabilities during boot, and under tmux that answer is a synchronous
+# `tmux display-message` spawn — ~10ms warm, ~160ms when the tmux binary is
+# cold — paid on every launch. Patch the built bundle to memoize the probe
+# and warm it asynchronously at module load, so the boot-time caller reads a
+# ready answer off the memo instead of blocking; when the warm answer is not
+# back yet the sync path still runs, exactly as before, so this can only
+# claw back time, never add it.
+#
+# Applied to the bundle output rather than a staged file because the probe
+# lives in the pi-tui dependency, which the stage only reaches through a
+# symlink into the untouched node_modules. Anchored on the minified text; a
+# pi or bundler change that shifts it skips the patch with a warning instead
+# of failing the build — this is a nicety, unlike the loader patch above.
+node - "$TMP" <<'TMUXPROBE' || echo "${YELLOW}⚠️  probeTmuxHyperlinks patch skipped — bundle keeps the synchronous probe${NC}" >&2
+const fs = require("node:fs");
+const [, , file] = process.argv;
+let src = fs.readFileSync(file, "utf8");
+
+const probeOld = `function probeTmuxHyperlinks(){try{return execSync("tmux display-message -p '#{client_termfeatures}'",{encoding:"utf8",timeout:250,stdio:["ignore","pipe","ignore"]}).split(",").map((feature)=>feature.trim()).includes("hyperlinks")}catch{return!1}}`;
+const probeNew =
+  "var tmuxHyperlinksProbe=null;" +
+  "function probeTmuxHyperlinks(){" +
+  "if(tmuxHyperlinksProbe!==null)return tmuxHyperlinksProbe;" +
+  "try{tmuxHyperlinksProbe=execSync(\"tmux display-message -p '#{client_termfeatures}'\",{encoding:\"utf8\",timeout:250,stdio:[\"ignore\",\"pipe\",\"ignore\"]}).split(\",\").map((feature)=>feature.trim()).includes(\"hyperlinks\")}" +
+  "catch{tmuxHyperlinksProbe=false}" +
+  "return tmuxHyperlinksProbe}" +
+  "try{if(process.env.TMUX||process.env.TERM?.startsWith(\"tmux\"))" +
+  "if(process.env.PI_HYPERLINKS===undefined)" +
+  "import(\"node:child_process\").then(({exec})=>{" +
+  "exec(\"tmux display-message -p '#{client_termfeatures}'\",{timeout:250},(err,stdout)=>{" +
+  "if(!err&&tmuxHyperlinksProbe===null)tmuxHyperlinksProbe=String(stdout).split(\",\").map((f)=>f.trim()).includes(\"hyperlinks\")" +
+  "})})}catch{}";
+if (!src.includes(probeOld)) { console.error("probeTmuxHyperlinks pattern not found"); process.exit(1); }
+fs.writeFileSync(file, src.split(probeOld).join(probeNew));
+TMUXPROBE
+
 # Smoke test before it becomes the entrypoint: --version proves the graph
 # evaluates, `list` proves settings and the package manager still resolve, and
 # `auth check` has to agree with the stock build for every OAuth provider —
