@@ -46,7 +46,6 @@ shellcheck = "0.11.0"
 # .rubocop.yml keeps it to the Lint and Security departments.
 "gem:rubocop" = "1.89.0"
 watchexec = "latest"
-aube = "latest"
 # Pinned, not "latest": this file is symlinked into ~/.config, so a version mise
 # cannot resolve warns on every shell init — which is enough console output to
 # trip Powerlevel10k's instant-prompt guard. A pin keeps working through a

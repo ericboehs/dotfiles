@@ -9,14 +9,10 @@ path=(~/bin "$path[@]")
 path=(~/.local/bin "$path[@]")
 # Guarded: on a Linux box this put a nonexistent /Applications path on PATH.
 # Kept here rather than in the darwin block below so the ordering relative to
-# ~/.local/bin and AUBE_HOME stays exactly as it was.
+# ~/.local/bin stays exactly as it was.
 if [[ "$OSTYPE" == "darwin"* ]]; then
   path=(/Applications/Postgres.app/Contents/Versions/latest/bin "$path[@]")
 fi
-
-# aube: keep global packages + binaries under aube
-export AUBE_HOME="$HOME/.local/share/aube"
-path=("$AUBE_HOME" "$path[@]")
 
 cdpath=(~ ~/Code)
 

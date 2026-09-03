@@ -11,11 +11,10 @@
 source "$HOME/.zsh/path.zsh"
 
 # Shims go in front of everything path.zsh added, not behind it.
-# ~/.local/share/aube ships its own `pi` and `codex`, and ~/bin a `slk`, so the
-# order here decides which binary those three names resolve to. This is the
-# order an interactive shell has always ended up with — tools.zsh used to do
-# this prepend after .zshrc had sourced path.zsh — and moving it must not
-# quietly hand `pi` over to aube.
+# ~/bin ships a `slk`, so the order here decides which binary those names
+# resolve to. This is the order an interactive shell has always ended up
+# with — tools.zsh used to do this prepend after .zshrc had sourced path.zsh
+# — and moving it must not quietly change what those names resolve to.
 path=("$HOME/.local/share/mise/shims" "$path[@]")
 
 # Machine-local env, the .zshenv counterpart to .zshrc's .zshrc.local. It has to
