@@ -2,7 +2,7 @@
  * Minimal footer/statusline for pi — a lean replacement for the pi-footer package.
  *
  * Renders a main line:
- *   dir provider model thinking branch* ⇣⇡ ctx/window $cost [inline statuses] ⚡boot   session-name
+ *   dir branch* ⇣⇡ provider model thinking ctx/window $cost [inline statuses] ⚡boot   session-name
  * plus an optional dim row of other extension statuses (from ctx.ui.setStatus).
  * When the terminal is too narrow for the chips, they wrap whole onto another
  * row instead of being cut. The session/peer name keeps its place right-
@@ -95,6 +95,9 @@ const BOOT_LOG_MAX_BYTES = 200_000;
 /** Providers whose cost is meaningless (subscription-billed or local). */
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx", "ollama"]);
 
+/** Free-tier model ids on otherwise paid providers (exact ctx.model.id match). */
+const HIDE_COST_MODELS = new Set(["muse-spark-1.3-contributor-free"]);
+
 /**
  * Usage chips written by baseten-usage.ts / openrouter-usage.ts via globalThis
  * stashes (color.ts's contract pattern — an import would be a hard dependency
@@ -161,6 +164,7 @@ function routePrefix(provider: string | undefined, modelId: string | undefined):
 function hideSessionCost(provider: string | undefined, ctx: ExtensionContext): boolean {
   if (!provider) return false;
   if (HIDE_COST_PROVIDERS.has(provider)) return true;
+  if (ctx.model && HIDE_COST_MODELS.has(ctx.model.id)) return true;
   return provider === "xai" && ctx.model != null && ctx.modelRegistry.isUsingOAuth(ctx.model);
 }
 
@@ -190,6 +194,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   "github-copilot": "gh",
   "openai-codex": "o",
   openai: "o",
+  opencode: "oc",
   xai: "x",
   baseten: "b10",
   "claude-bridge": "c",
@@ -211,6 +216,7 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^gpt-[\d.]+-luna$/i, "luna"],
   [/^gpt-[\d.]+-terra$/i, "terra"],
   [/^claude-(.+)$/i, "$1"],
+  [/^muse-spark(?:-[\d.]+)?(?:-contributor)?(?:-free)?$/i, "muse"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
   [/^z-ai\/GLM-5\.3-Flash$/i, "oxa"],
@@ -1072,13 +1078,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
           const left: string[] = [
             color(BLUE, basename(ctx.cwd)),
+            formatGit(branch, gitState),
             color(BRIGHT_YELLOW, shortProvider(provider)),
             color(
               BRIGHT_YELLOW,
               `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id, provider)}`,
             ),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
-            formatGit(branch, gitState),
             // context-length / context-window share one segment (no spaces around "/")
             `${color(
               contextColorCode(usage?.tokens, usage?.contextWindow),
@@ -1160,8 +1166,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
               current += " ";
               cursor += 1;
             }
-            if (index === 1) providerZone = [cursor, cursor + partWidth];
-            if (index === 2) modelZone = [cursor, cursor + partWidth];
+            if (index === 2) providerZone = [cursor, cursor + partWidth];
+            if (index === 3) modelZone = [cursor, cursor + partWidth];
             current += part;
             cursor += partWidth;
           }

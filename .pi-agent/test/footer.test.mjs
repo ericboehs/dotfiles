@@ -184,12 +184,12 @@ function strip(text) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal((await ui.settled())[0], "dotfiles gh opus hi master* 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles master* gh opus hi 41.2k/1m");
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {
   const ui = await mount();
-  assert.equal(ui.plain()[0], "dotfiles gh opus hi master 41.2k/1m");
+  assert.equal(ui.plain()[0], "dotfiles master gh opus hi 41.2k/1m");
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
@@ -223,7 +223,7 @@ test("dirty marker: any change earns a single '*' glued to the branch", async ()
   ];
   for (const [porcelain, expected] of cases) {
     const ui = await mount({ porcelain });
-    const branchSegment = (await ui.settled())[0].split(" ")[4];
+    const branchSegment = (await ui.settled())[0].split(" ")[1];
     assert.equal(branchSegment, expected, JSON.stringify(porcelain));
   }
 });
@@ -239,7 +239,8 @@ test("p10k-style arrows, unnumbered, cyan, dropped when in sync", async () => {
   ];
   for (const [revList, expected] of cases) {
     const ui = await mount({ revList });
-    assert.ok((await ui.settled())[0].includes(`${expected} 41.2k`), `${revList} -> ${expected}`);
+    const line = (await ui.settled())[0];
+    assert.ok(line.includes(expected), `${revList} -> ${expected} in ${line}`);
   }
   // Arrows are cyan (36) while the branch stays magenta (35), as in ~/.p10k.zsh.
   const diverged = await mount({ revList: "3\t2" });
@@ -260,7 +261,7 @@ test("provider aliases", async () => {
   ];
   for (const [provider, expected] of cases) {
     const ui = await mount({ model: { id: "x", provider, reasoning: false } });
-    assert.equal(ui.plain()[0].split(" ")[1], expected, provider);
+    assert.equal(ui.plain()[0].split(" ")[2], expected, provider);
   }
 });
 
@@ -285,8 +286,8 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
   ];
   for (const [id, expected] of cases) {
     const ui = await mount({ model: { id, provider: "omlx", reasoning: false } });
-    // "dir provider model ..." — the alias may contain a space ("ds v4-pro").
-    const rest = ui.plain()[0].split(" ").slice(2).join(" ");
+    // "dir branch provider model ..." — the alias may contain a space ("ds v4-pro").
+    const rest = ui.plain()[0].split(" ").slice(3).join(" ");
     assert.ok(rest.startsWith(`${expected} `), `${id} -> ${rest}`);
   }
 });
@@ -298,7 +299,7 @@ test("provider-specific model aliases", async () => {
     [{ id: "glm-5.3-flash", provider: "ollama", reasoning: true }, "oxa"],
   ]) {
     const ui = await mount({ model });
-    const rest = ui.plain()[0].split(" ").slice(2).join(" ");
+    const rest = ui.plain()[0].split(" ").slice(3).join(" ");
     assert.ok(rest.startsWith(`${expected} `), `${model.provider}/${model.id} -> ${rest}`);
   }
 });
@@ -310,32 +311,32 @@ test("an OpenRouter route prefixes the model chip, for that model only", async (
   try {
     scope.__piOpenRouterRoute = { provider: "Novita", model: "z-ai/glm-5.3-flash", at: Date.now() };
     let ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(1, 3).join(" "), "or novita/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or novita/oxa");
 
     // A preset resolves server-side: the response names the underlying model.
     ui = await mount({
       model: { id: "z-ai/glm-5.3-flash@preset/ox-alpha", provider: "openrouter", reasoning: false },
     });
-    assert.equal(ui.plain()[0].split(" ").slice(1, 3).join(" "), "or novita/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or novita/oxa");
 
     // Unmapped providers still read sensibly; mapped ones get the short name.
     scope.__piOpenRouterRoute = { provider: "Z.AI", model: "z-ai/glm-5.3-flash", at: Date.now() };
     ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(1, 3).join(" "), "or z/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or z/oxa");
 
     scope.__piOpenRouterRoute = { provider: "Parasail", model: "z-ai/glm-5.3-flash", at: Date.now() };
     ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(1, 3).join(" "), "or parasail/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or parasail/oxa");
 
     // A route recorded for a different model, or a non-OpenRouter provider,
     // must not paint a prefix.
     scope.__piOpenRouterRoute = { provider: "Novita", model: "moonshotai/kimi-k3", at: Date.now() };
     ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(1, 3).join(" "), "or oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or oxa");
 
     scope.__piOpenRouterRoute = { provider: "BaseTen", model: "zai-org/GLM-5.3-Flash", at: Date.now() };
     ui = await mount({ model: { id: "zai-org/GLM-5.3-Flash", provider: "baseten", reasoning: false } });
-    assert.equal(ui.plain()[0].split(" ").slice(1, 3).join(" "), "b10 oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "b10 oxa");
   } finally {
     if (previous === undefined) delete scope.__piOpenRouterRoute;
     else scope.__piOpenRouterRoute = previous;
@@ -355,12 +356,12 @@ test("thinking levels are abbreviated, and hidden for non-reasoning models", asy
   ];
   for (const [level, expected] of cases) {
     const ui = await mount({ thinkingLevel: level });
-    assert.equal(ui.plain()[0].split(" ")[3], expected, level);
+    assert.equal(ui.plain()[0].split(" ")[4], expected, level);
   }
   const plain = await mount({
     model: { id: "claude-opus-5", provider: "github-copilot", reasoning: false },
   });
-  assert.equal(plain.plain()[0].split(" ")[3], "master");
+  assert.equal(plain.plain()[0].split(" ")[1], "master");
 });
 
 test("cost formatting and subscription providers", async () => {
@@ -442,7 +443,7 @@ test("update notice shows both versions in a right-aligned widget above the prom
   const widget = widgetFactory({ requestRender: () => {} });
   const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
-  assert.equal(main, "dotfiles gh opus hi master* 41.2k/1m");
+  assert.equal(main, "dotfiles master* gh opus hi 41.2k/1m");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
   assert.match(
     widget.render(80)[0],
@@ -529,7 +530,7 @@ test("no peer registry means no right-hand segment at all", async () => {
   try {
     const ui = await mount({ sessionName: undefined });
     const [main] = await ui.settled(80);
-    assert.equal(main, "dotfiles gh opus hi master* 41.2k/1m", "no padding, no trailing gap");
+    assert.equal(main, "dotfiles master* gh opus hi 41.2k/1m", "no padding, no trailing gap");
   } finally {
     restore();
   }
@@ -566,8 +567,8 @@ test("chips wrap whole onto more rows instead of truncating", async () => {
   // The session name owns the right end of the first row, so its chips fill
   // only the space left of it; chips that no longer fit move down whole onto
   // a full-width row rather than being cut mid-chip.
-  assert.equal(lines[0], "dotfiles gh opus   footer-work");
-  assert.equal(lines[1], "hi master* 41.2k/1m");
+  assert.equal(lines[0], "dotfiles master*   footer-work");
+  assert.equal(lines[1], "gh opus hi 41.2k/1m");
   assert.ok(lines.every((line) => line.length <= 30), "every row fits the width");
   assert.ok(!lines.join("\n").includes("…"), "nothing is cut");
 });
