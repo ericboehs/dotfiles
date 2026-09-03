@@ -421,3 +421,221 @@ test("a failed fetch is silent but retries on the next switch", async () => {
     }
   });
 });
+
+test("peers within ±1.0 int from big labs ride a second line", async () => {
+  await withAgentDir(async () => {
+    const rows = [
+      {
+        id: "cur", name: "Muse Spark 1.2", slug: "muse-spark-1-2",
+        model_creator: { name: "Meta", slug: "meta" },
+        evaluations: { artificial_analysis_intelligence_index: 60 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 120,
+      },
+      {
+        id: "a1", name: "Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)", slug: "claude-opus-5-xhigh",
+        model_creator: { name: "Anthropic", slug: "anthropic" },
+        evaluations: { artificial_analysis_intelligence_index: 60.5 },
+        pricing: { price_1m_blended_3_to_1: 10 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        id: "a2", name: "Claude Opus 5 (Adaptive Reasoning, Low Effort)", slug: "claude-opus-5-low",
+        model_creator: { name: "Anthropic", slug: "anthropic" },
+        evaluations: { artificial_analysis_intelligence_index: 55 },
+        pricing: { price_1m_blended_3_to_1: 10 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        id: "b", name: "GPT-5.6", slug: "gpt-5-6",
+        model_creator: { name: "OpenAI", slug: "openai" },
+        evaluations: { artificial_analysis_intelligence_index: 59.5 },
+        pricing: { price_1m_blended_3_to_1: 4.5 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        id: "c", name: "Gemini 3.8 Flash (high)", slug: "gemini-3-8-flash",
+        model_creator: { name: "Google", slug: "google" },
+        evaluations: { artificial_analysis_intelligence_index: 60.5 },
+        pricing: { price_1m_blended_3_to_1: 1.5 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // Eligible but fourth — the line caps at three.
+        id: "d", name: "GLM-5.3-Flash", slug: "glm-5-3-flash",
+        model_creator: { name: "Z AI", slug: "zai" },
+        evaluations: { artificial_analysis_intelligence_index: 60.6 },
+        pricing: { price_1m_blended_3_to_1: 0.237 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // In range but unlisted lab — never a peer.
+        id: "e", name: "Mistral Large 3", slug: "mistral-large-3",
+        model_creator: { name: "Mistral AI", slug: "mistralai" },
+        evaluations: { artificial_analysis_intelligence_index: 60 },
+        pricing: { price_1m_blended_3_to_1: 1 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // Listed lab but out of range.
+        id: "f", name: "Grok 4.6", slug: "grok-4-6",
+        model_creator: { name: "SpaceXAI", slug: "xai" },
+        evaluations: { artificial_analysis_intelligence_index: 70 },
+        pricing: { price_1m_blended_3_to_1: 1 },
+        median_output_tokens_per_second: 100,
+      },
+    ];
+    const fetcher = withFetch(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? { status: 200, data: [] }
+          : { status: 200, data: rows },
+    }));
+    try {
+      const ui = mount();
+      await ui.select(model("muse-spark-1-2", "opencode"));
+      const [first, second] = ui.notifies[0].message.split("\n");
+      assert.match(first, /^Muse Spark 1\.2 — int 60 /);
+      // Same ±0.5 distance throughout, so lab order decides: Anthropic,
+      // OpenAI, Google. The xhigh Opus row (not low) is what scores.
+      assert.equal(
+        second,
+        "On par with Claude Opus 5 (60.5), GPT-5.6 (59.5), and Gemini 3.8 Flash (60.5)",
+      );
+    } finally {
+      fetcher.restore();
+    }
+  });
+});
+
+test("moonshot models appear as peers", async () => {
+  await withAgentDir(async () => {
+    const rows = [
+      {
+        id: "cur", name: "Muse Spark 1.2", slug: "muse-spark-1-2",
+        model_creator: { name: "Meta", slug: "meta" },
+        evaluations: { artificial_analysis_intelligence_index: 60 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 120,
+      },
+      {
+        id: "k", name: "Kimi K3", slug: "kimi-k3",
+        model_creator: { name: "Moonshot AI", slug: "moonshotai" },
+        evaluations: { artificial_analysis_intelligence_index: 60.2 },
+        pricing: { price_1m_blended_3_to_1: 1 },
+        median_output_tokens_per_second: 100,
+      },
+    ];
+    const fetcher = withFetch(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? { status: 200, data: [] }
+          : { status: 200, data: rows },
+    }));
+    try {
+      const ui = mount();
+      await ui.select(model("muse-spark-1-2", "opencode"));
+      const [, second] = ui.notifies[0].message.split("\n");
+      assert.equal(second, "On par with Kimi K3 (60.2)");
+    } finally {
+      fetcher.restore();
+    }
+  });
+});
+
+test("no peer line when nothing lands in range", async () => {
+  await withAgentDir(async () => {
+    const rows = [
+      {
+        id: "cur", name: "Muse Spark 1.2", slug: "muse-spark-1-2",
+        model_creator: { name: "Meta", slug: "meta" },
+        evaluations: { artificial_analysis_intelligence_index: 60 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 120,
+      },
+      {
+        id: "far", name: "Grok 4.6", slug: "grok-4-6",
+        model_creator: { name: "SpaceXAI", slug: "xai" },
+        evaluations: { artificial_analysis_intelligence_index: 70 },
+        pricing: { price_1m_blended_3_to_1: 1 },
+        median_output_tokens_per_second: 100,
+      },
+    ];
+    const fetcher = withFetch(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? { status: 200, data: [] }
+          : { status: 200, data: rows },
+    }));
+    try {
+      const ui = mount();
+      await ui.select(model("muse-spark-1-2", "opencode"));
+      assert.ok(!ui.notifies[0].message.includes("\n"), "single line only");
+    } finally {
+      fetcher.restore();
+    }
+  });
+});
+
+test("a point release AA hasn't scored yet says so instead of a sibling's numbers", async () => {
+  await withAgentDir(async () => {
+    const spark = [
+      {
+        id: "aaa",
+        name: "Muse Spark 1.2",
+        slug: "muse-spark-1-2",
+        release_date: "2026-08-05",
+        evaluations: { artificial_analysis_intelligence_index: 56.8 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 120,
+      },
+      {
+        id: "bbb",
+        name: "Muse Spark 1.1",
+        slug: "muse-spark-1-1",
+        release_date: "2026-07-09",
+        evaluations: { artificial_analysis_intelligence_index: 53.2 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 110,
+      },
+    ];
+    const fetcher = withFetch(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? {
+              status: 200,
+              data: [
+                {
+                  slug: "muse-spark-1-2",
+                  artificial_analysis_intelligence_index_cost: {
+                    cost_per_task: { total_cost: 0.3992 },
+                  },
+                },
+              ],
+            }
+          : { status: 200, data: spark },
+    }));
+    try {
+      const ui = mount();
+      // Exact row briefs as usual.
+      await ui.select(model("muse-spark-1-2", "opencode"));
+      assert.match(ui.notifies[0].message, /^Muse Spark 1\.2 — /);
+      // 1.3 is unknown to AA: honest pending line, not 1.2's numbers.
+      await ui.select(model("muse-spark-1.3", "opencode"));
+      assert.equal(ui.notifies[1].message, "muse-spark-1.3 — scores not yet on AA (AA)");
+      // Free-tier qualifiers are stripped from the pending line too.
+      await ui.select(model("muse-spark-1.3-contributor-free", "opencode"));
+      assert.equal(ui.notifies[2].message, "muse-spark-1.3 — scores not yet on AA (AA)");
+    } finally {
+      fetcher.restore();
+    }
+  });
+});

@@ -14,7 +14,15 @@
  * $/task is what one Intelligence Index task actually cost AA to run, which
  * folds in how many tokens the model burns thinking. Int/cod/t/s/$1M all use
  * AA's row for pi's current thinking level (or bare/max when it lacks one). A
- * trailing @med marks a task cost measured at a different effort.
+ * trailing @med marks a task cost measured at a different effort. When AA has
+ * the family but not this point release yet (e.g. a 1.3 page with no scores
+ * while 1.2 has them), the briefing says so instead of showing a sibling's
+ * numbers — a stand-in would read as data.
+ *
+ * A second line names up to three peers within ±1.0 int points, limited to
+ * the big labs (Anthropic, OpenAI, xAI, Google, Meta, Z.ai, DeepSeek,
+ * MoonshotAI) and ordered by closeness, then that lab order. One notify carries both lines so
+ * the pair always paints atomically after pi's switch status.
  *
  * Because pi's status line is overwritten in place rather than appended, this
  * briefing takes the place of "Switched to X" instead of adding a line — the
@@ -39,8 +47,9 @@
  *
  * The fetch is fire-and-forget: handlers never await it, so neither startup nor
  * the model switch block on the network, and a failure is silent (the next
- * switch retries). A model the API does not know — local oMLX weights — shows
- * nothing.
+ * switch retries). A model the API does not know at all — local oMLX weights —
+ * shows nothing. A model whose family AA knows but whose point release has no
+ * scores yet says "scores not yet on AA" instead.
  *
  * The key resolves from $ARTIFICIAL_ANALYSIS_API_KEY, then `fnox get` (macOS
  * Keychain), the same chain web-providers/config.ts uses. It is held only in
@@ -67,6 +76,8 @@ interface AaModel {
   id?: string;
   name?: string;
   slug?: string;
+  release_date?: string;
+  model_creator?: { name?: string; slug?: string };
   evaluations?: {
     artificial_analysis_intelligence_index?: number;
     artificial_analysis_coding_index?: number;
@@ -103,6 +114,16 @@ function norm(value: string | undefined): string {
 }
 
 /**
+ * Strip OpenCode's free-tier qualifiers — "muse-spark-1.3-contributor-free" is
+ * the same weights as "muse-spark-1.3". Mirrors footer.ts's MODEL_RULES; both
+ * the raw and stripped ids are tried, so a model really named "*-free" still
+ * hits exact first.
+ */
+function stripFreeTier(id: string): string {
+  return id.replace(/(-contributor)?(-free)?$/i, "");
+}
+
+/**
  * Every id this pi model might be listed under on AA. OpenRouter preset and
  * variant suffixes are stripped first (footer.ts's baseModelId), then both the
  * full id and its last path segment are tried — "moonshotai/Kimi-K3" is listed
@@ -114,7 +135,13 @@ function candidateIds(modelId: string): string[] {
     .replace(/@preset\/[^:]*/i, "")
     .replace(/:[^/]+$/, "");
   const ids = [base, base.split("/").pop() ?? ""];
-  return [...new Set(ids.map(norm).filter(Boolean))];
+  const withStripped = [...ids, ...ids.map(stripFreeTier)];
+  return [...new Set(withStripped.map(norm).filter(Boolean))];
+}
+
+/** Version digits off: "musespark13" → "musespark", the point-release family. */
+function familyOf(n: string): string {
+  return n.replace(/\d+$/, "");
 }
 
 function lookup(aa: AaCache, model: PiModel): AaModel | undefined {
@@ -122,6 +149,30 @@ function lookup(aa: AaCache, model: PiModel): AaModel | undefined {
   return aa.data.find((entry) =>
     wanted.some((w) => [norm(entry.id), norm(entry.slug), norm(entry.name)].includes(w)),
   );
+}
+
+/**
+ * True when AA knows this point-release family but not this exact release —
+ * e.g. pi runs muse-spark-1.3 while AA's newest row is muse-spark-1-2. The
+ * briefing then says scores are pending rather than showing a sibling's
+ * numbers. Slug-only: ids are UUIDs, names carry "(xhigh)" qualifiers.
+ */
+function hasPendingRelease(aa: AaCache, model: PiModel): boolean {
+  const families = new Set(candidateIds(model.id).map(familyOf).filter(Boolean));
+  if (families.size === 0) return false;
+  return aa.data.some((entry) => {
+    const slug = norm(entry.slug);
+    return slug !== "" && families.has(familyOf(slug));
+  });
+}
+
+/** Raw pi id for the pending line, without route or free-tier qualifiers. */
+function displayId(model: PiModel): string {
+  const base = model.id
+    .replace(/^hf:/i, "")
+    .replace(/@preset\/[^:]*/i, "")
+    .replace(/:[^/]+$/, "");
+  return stripFreeTier(base.split("/").pop() ?? base) || model.id;
 }
 
 /**
@@ -188,6 +239,94 @@ function baseSlug(slug: string): string {
   const cut = slug.lastIndexOf("-");
   const suffix = cut === -1 ? "" : slug.slice(cut + 1);
   return EFFORTS.includes(suffix as (typeof EFFORTS)[number]) ? slug.slice(0, cut) : slug;
+}
+
+/**
+ * Lab priority for the peer line. Keys are AA model_creator slugs, with creator
+ * names as fallback (xAI lists as SpaceXAI, Z.AI as "Z AI"). Unlisted labs
+ * never appear as peers.
+ */
+const VENDOR_RANK: Record<string, number> = {
+  anthropic: 0,
+  openai: 1,
+  xai: 2,
+  spacexai: 2,
+  google: 3,
+  meta: 4,
+  zai: 5,
+  "z ai": 5,
+  deepseek: 6,
+  moonshotai: 7,
+  "moonshot ai": 7,
+};
+
+function creatorRank(entry: AaModel): number {
+  const key = (entry.model_creator?.slug ?? entry.model_creator?.name ?? "")
+    .toLowerCase()
+    .trim();
+  return VENDOR_RANK[key] ?? Number.POSITIVE_INFINITY;
+}
+
+/** Oxford join for the peer line: "A", "A and B", "A, B, and C". */
+function oxford(items: string[]): string {
+  if (items.length <= 2) return items.join(" and ");
+  const [head, ...tail] = items;
+  return tail.length === 0 || head === undefined
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+/**
+ * Up to three peers within ±1.0 int points from the big labs, e.g.
+ * "On par with Grok 4.6 (61), Gemini 3.8 Flash (60.9), and Opus 5 (61)".
+ *
+ * One entry per model family, scored at the session's thinking level when the
+ * family has an effort ladder. Sorted by closeness, then lab order. Returns
+ * undefined when the current model has no int score (including the pending
+ * "scores not yet" case) or when nothing lands in range.
+ */
+function peersLine(aa: AaCache, entry: AaModel, thinking: string | undefined): string | undefined {
+  const current = entry.evaluations?.artificial_analysis_intelligence_index;
+  if (typeof current !== "number") return undefined;
+  const currentKey = entry.slug ? `slug:${baseSlug(entry.slug)}` : `name:${norm(entry.name)}`;
+  const groups = new Map<string, AaModel[]>();
+  for (const row of aa.data) {
+    if (typeof row.evaluations?.artificial_analysis_intelligence_index !== "number") continue;
+    if (!Number.isFinite(creatorRank(row))) continue;
+    const key = row.slug ? `slug:${baseSlug(row.slug)}` : `name:${norm(row.name)}`;
+    if (!key || key === currentKey) continue;
+    const list = groups.get(key);
+    if (list) list.push(row);
+    else groups.set(key, [row]);
+  }
+  const peers: { text: string; diff: number; rank: number; released: string }[] = [];
+  for (const rows of groups.values()) {
+    const first = rows[0];
+    if (!first) continue;
+    let rep = first;
+    const base = first.slug ? baseSlug(first.slug) : undefined;
+    if (base && thinking) {
+      rep =
+        rows.find((r) => r.slug === `${base}-${thinking}`) ??
+        rows.find((r) => r.slug === base) ??
+        first;
+    }
+    const score = rep.evaluations?.artificial_analysis_intelligence_index;
+    if (typeof score !== "number") continue;
+    const diff = Math.abs(score - current);
+    if (diff > 1.0 + 1e-9) continue;
+    const label = fmt(score);
+    if (label === undefined) continue;
+    peers.push({
+      text: `${cleanName(rep.name ?? rep.slug ?? rep.id ?? "")} (${label})`,
+      diff,
+      rank: creatorRank(rep),
+      released: rep.release_date ?? "",
+    });
+  }
+  if (peers.length === 0) return undefined;
+  peers.sort((a, b) => a.diff - b.diff || a.rank - b.rank || b.released.localeCompare(a.released));
+  return `On par with ${oxford(peers.slice(0, 3).map((p) => p.text))}`;
 }
 
 interface TaskCost {
@@ -412,14 +551,21 @@ export default function (pi: ExtensionAPI): void {
     const aa = await loadData();
     const matched = aa ? lookup(aa, model) : undefined;
     const entry = aa && matched ? forThinkingLevel(aa, matched, ctx.thinkingLevel) : undefined;
-    const line =
-      aa && entry ? briefing(entry, costPerTask(aa, entry, ctx.thinkingLevel)) : undefined;
+    let line = aa && entry ? briefing(entry, costPerTask(aa, entry, ctx.thinkingLevel)) : undefined;
+    if (!line && aa && !matched && hasPendingRelease(aa, model)) {
+      line = `${displayId(model)} — scores not yet on AA (AA)`;
+    }
     if (!line) return;
+    // Peers only accompany real numbers — never the pending line, which has no
+    // score to compare from. One notify carries both lines so the pair paints
+    // atomically after pi's switch status instead of burying each other.
+    const second = aa && entry ? peersLine(aa, entry, ctx.thinkingLevel) : undefined;
+    const message = second ? `${line}\n${second}` : line;
     await new Promise((resolve) => setTimeout(resolve, 0));
     // Cycling with Ctrl+P fires an event per model passed through; only the
     // model actually landed on gets to speak, whatever order the loads finish.
     if (ctx.model?.id !== model.id || ctx.model?.provider !== model.provider) return;
-    ctx.ui.notify(line, "info");
+    ctx.ui.notify(message, "info");
   };
 
   // Fire-and-forget on purpose: pi awaits event handlers, and a cold fetch must
