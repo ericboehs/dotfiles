@@ -257,6 +257,7 @@ test("provider aliases", async () => {
     ["openai", "o"],
     ["xai", "x"],
     ["baseten", "b10"],
+    ["cerebras", "cb"],
     ["omlx", "omlx"],
   ];
   for (const [provider, expected] of cases) {
@@ -372,7 +373,7 @@ test("cost formatting and subscription providers", async () => {
   const pricey = await mount({ costs: [1.5, 2.25], model: billableModel });
   assert.match(pricey.plain()[0], /\$3\.75$/);
 
-  for (const provider of ["openai-codex", "github-copilot"]) {
+  for (const provider of ["openai-codex", "github-copilot", "cerebras"]) {
     const ui = await mount({ model: { id: "claude-opus-5", provider, reasoning: true } });
     assert.doesNotMatch(ui.plain()[0], /\$/, provider);
   }
@@ -404,7 +405,7 @@ test("usage chips color by pace warnings", async () => {
     const escaped = status.replaceAll(".", "\\.").replaceAll("!", "\\!");
     return new RegExp(`\x1B\\[(\\d+)m${escaped}\x1B\\[39m`).exec(ui.raw()[0])?.[1];
   };
-  for (const key of ["codex-window", "copilot-window", "grok-window"]) {
+  for (const key of ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window"]) {
     assert.equal(await shade(key, "2.1/7D: 18%"), "36", `${key} cyan with no warning`);
     assert.equal(await shade(key, "2.1/7D: 18%!"), "33", `${key} yellow at one !`);
     assert.equal(await shade(key, "2.1/7D: 18%!!"), "31", `${key} red at two !`);

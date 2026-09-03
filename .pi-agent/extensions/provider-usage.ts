@@ -1,6 +1,7 @@
 /**
- * All usage/quota chips in one extension: codex, copilot, grok, claude-bridge
- * (status-line windows) and baseten, openrouter, ollama (cost-slot chips).
+ * All usage/quota chips in one extension: codex, copilot, grok,
+ * claude-bridge, cerebras (status-line windows) and baseten, openrouter,
+ * ollama (cost-slot chips).
  *
  * Each provider is a Driver: a provider gate, a fetch, and a display mode.
  * The display mode decides where the value lands:
@@ -912,6 +913,174 @@ async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
   return { value };
 }
 
+// ---------- cerebras ----------
+
+/**
+ * Cerebras exposes no usage/billing endpoint — rate limits arrive as
+ * x-ratelimit-* response headers on every inference request. The probe is a
+ * minimal non-streaming chat completion (max_tokens: 1, roughly a dozen
+ * tokens total) whose cost is negligible next to a daily quota, parsed for
+ * the daily request/token pairs bin/cerebras-usage already relies on.
+ * Because the probe spends quota, the driver caches for the scrape TTL
+ * instead of refetching on every settle like the free usage endpoints do.
+ *
+ * Daily windows reset at UTC midnight. Finer-grained remainders (minute/hour)
+ * feed only the /command detail: token-bucket replenishment is continuous,
+ * so fixed-window pace math would mislead on the chip.
+ */
+const CHAT_URL_CEREBRAS = "https://api.cerebras.ai/v1/chat/completions";
+const CEREBRAS_PROBE_MODEL_FALLBACK = "qwen-3.8-27b";
+
+function cerebrasHeader(
+  headers: Headers,
+  name: string,
+  allowZero: boolean,
+): number | undefined {
+  const raw = headers.get(name)?.replace(/,/g, "").trim();
+  if (!raw) return undefined;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) return undefined;
+  if (parsed < 0 || (!allowZero && parsed <= 0)) return undefined;
+  return parsed;
+}
+
+/** Start of tomorrow in UTC — the daily quota's reset. */
+function nextUtcMidnightMs(nowMs = Date.now()): number {
+  const now = new Date(nowMs);
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+}
+
+function cerebrasDayWindow(
+  limit: number | undefined,
+  remaining: number | undefined,
+  resetMs: number,
+): UsageWindow | undefined {
+  if (limit === undefined || limit <= 0 || remaining === undefined) return undefined;
+  return {
+    used_percent: Math.max(0, Math.min(100, ((limit - remaining) / limit) * 100)),
+    reset_at: resetMs / 1000,
+    limit_window_seconds: 86_400,
+  };
+}
+
+async function fetchCerebras(ctx: ExtensionContext): Promise<UsageDisplay> {
+  const apiKey =
+    (await providerApiKey(ctx, "cerebras")) ?? process.env.CEREBRAS_API_KEY;
+  if (!apiKey) {
+    throw new Error("no Cerebras credential (pi auth or CEREBRAS_API_KEY)");
+  }
+
+  // Rate limits vary by model, so probe with the active one when it is ours.
+  const probeModel =
+    ctx.model?.provider === "cerebras" && ctx.model.id
+      ? ctx.model.id
+      : CEREBRAS_PROBE_MODEL_FALLBACK;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let headers: Headers;
+  try {
+    const response = await fetch(CHAT_URL_CEREBRAS, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+        "user-agent": "pi-cerebras-window/1.0",
+      },
+      body: JSON.stringify({
+        model: probeModel,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 1,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const body = (await response.text().catch(() => "")).trim().slice(0, 200);
+      const suffix = body ? `: ${body}` : "";
+      if (response.status === 401) {
+        throw new Error(`Cerebras authentication failed (401)${suffix}`);
+      }
+      if (response.status === 429) {
+        throw new Error(`Cerebras rate limit exceeded (429)${suffix}`);
+      }
+      throw new Error(`usage probe failed (${response.status})${suffix}`);
+    }
+    headers = response.headers;
+    // Drain the body so the socket can be reused; the probe's content is useless.
+    await response.text().catch(() => {});
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const nowMs = Date.now();
+  const resetMs = nextUtcMidnightMs(nowMs);
+
+  const pairs: Array<{
+    label: string;
+    limit: number | undefined;
+    remaining: number | undefined;
+  }> = [
+    {
+      label: "requests",
+      limit: cerebrasHeader(headers, "x-ratelimit-limit-requests-day", false),
+      remaining: cerebrasHeader(headers, "x-ratelimit-remaining-requests-day", true),
+    },
+    {
+      label: "tokens",
+      limit: cerebrasHeader(headers, "x-ratelimit-limit-tokens-day", false),
+      remaining: cerebrasHeader(headers, "x-ratelimit-remaining-tokens-day", true),
+    },
+  ];
+
+  const windows = pairs.flatMap((pair) => {
+    const window = cerebrasDayWindow(pair.limit, pair.remaining, resetMs);
+    return window && pair.limit !== undefined && pair.remaining !== undefined
+      ? [{ ...pair, limit: pair.limit, remaining: pair.remaining, window }]
+      : [];
+  });
+  if (windows.length === 0) {
+    throw new Error("probe returned no daily rate-limit headers");
+  }
+
+  const value = windows
+    .map((entry) => formatCodexWindow(entry.window, nowMs))
+    .filter((formatted): formatted is string => formatted !== undefined)
+    .join(" ");
+  if (!value) throw new Error("no Cerebras usage window was returned");
+
+  const fmtInt = (n: number): string => Math.round(n).toLocaleString("en-US");
+  const detail = windows.map((entry) => {
+    const used = entry.limit - entry.remaining;
+    return (
+      `Daily ${entry.label}: ${fmtInt(used)} / ${fmtInt(entry.limit)}` +
+      ` (${formatNumber(entry.window.used_percent ?? 0)}% used)`
+    );
+  });
+
+  const finer: Array<[string, string]> = [
+    ["req/min", headers.get("x-ratelimit-remaining-requests-minute") ?? ""],
+    ["req/hr", headers.get("x-ratelimit-remaining-requests-hour") ?? ""],
+    ["tok/min", headers.get("x-ratelimit-remaining-tokens-minute") ?? ""],
+    ["tok/hr", headers.get("x-ratelimit-remaining-tokens-hour") ?? ""],
+  ];
+  const remainingBits = finer
+    .filter(([, raw]) => raw.trim() !== "")
+    .map(([label, raw]) => `${fmtInt(toNumber(raw.replace(/,/g, "")))} ${label}`);
+  if (remainingBits.length > 0) {
+    detail.push(`Remaining: ${remainingBits.join(", ")}`);
+  }
+
+  const resetSummary = windows
+    .map((entry) => formatReset(entry.window, nowMs))
+    .filter((formatted): formatted is string => formatted !== undefined)
+    .join(" ");
+  return {
+    value,
+    commandText: resetSummary ? `${detail.join("\n")}\nResets: ${resetSummary}` : detail.join("\n"),
+  };
+}
+
 // ---------- ollama ----------
 
 /**
@@ -1358,6 +1527,21 @@ const DRIVERS: Driver[] = [
     isActive: (ctx) =>
       ctx.model?.provider === "xai" && ctx.modelRegistry.isUsingOAuth(ctx.model),
     fetch: fetchGrok,
+  },
+  {
+    id: "cerebras-window",
+    provider: "cerebras",
+    statusKey: "cerebras-window",
+    // The probe spends quota (one minimal completion), so cache it instead of
+    // refetching on every settle like the free usage endpoints.
+    cacheTtlMs: SCRAPE_CACHE_TTL_MS,
+    command: {
+      name: "cerebras-window",
+      description: "Refresh the compact Cerebras daily rate-limit window",
+      scopeNote: "Cerebras usage is only shown for cerebras models",
+    },
+    isActive: (ctx) => isProvider(ctx, "cerebras"),
+    fetch: fetchCerebras,
   },
   {
     id: "ollama-usage",
