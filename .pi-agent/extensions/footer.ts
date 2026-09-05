@@ -38,7 +38,7 @@ import {
   type ExtensionContext,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 const GIT_TTL_MS = 5_000;
 const GIT_TIMEOUT_MS = 1_000;
@@ -461,11 +461,6 @@ function paint(ansi: string, text: string): string {
 /** Widget key, so the footer toggle and shutdown can clear the addition. */
 const UPDATE_WIDGET_KEY = "footer-update";
 
-/** SGR left-button press: \x1b[<0;COL;ROWM (release is the same with trailing m). */
-const MOUSE_PRESS_RE = /\x1b\[<0;(\d+);(\d+)M/g;
-
-const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-
 /** [start, end) visible-column range of a chip painted on the footer line. */
 type ClickZone = [number, number];
 
@@ -478,39 +473,6 @@ function zoneHit(zone: ClickZone | undefined, col: number): boolean {
 function clipZone(zone: ClickZone | undefined, width: number): ClickZone | undefined {
   if (!zone || zone[0] >= width) return undefined;
   return [zone[0], Math.min(zone[1], width)];
-}
-
-/**
- * Click-to-cycle on the footer's provider/model chips. TuiAltScreen installs
- * its own input listener at construction time and that handler consumes every
- * mouse event, so anything registered later via tui.addInputListener() never
- * sees one. Node delivers every stdin chunk to each "data" listener, so read
- * the same bytes directly. A left-press whose cell passes isHit() triggers
- * act() once.
- */
-function attachFooterChipClick(
-  tui: TUI,
-  isHit: (screen: string[] | undefined, col: number, row: number) => boolean,
-  act: () => void,
-): () => void {
-  const stream = process.stdin;
-  if (!stream || typeof stream.on !== "function") return () => {};
-  const onClick = (chunk: Buffer | string): void => {
-    const alt = tui as TUI & { previousScreen?: string[] };
-    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    MOUSE_PRESS_RE.lastIndex = 0;
-    // A chunk can carry more than one event; the first footer hit wins.
-    for (let match = MOUSE_PRESS_RE.exec(text); match; match = MOUSE_PRESS_RE.exec(text)) {
-      // SGR coordinates are 1-based; previousScreen is indexed by screen row.
-      if (!isHit(alt.previousScreen, Number(match[1]) - 1, Number(match[2]) - 1)) continue;
-      act();
-      return;
-    }
-  };
-  stream.on("data", onClick);
-  return () => {
-    stream.removeListener("data", onClick);
-  };
 }
 
 function shortProvider(provider: string | undefined): string {
@@ -902,15 +864,29 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let updateTimerStarted = false;
   /**
    * Hit-testing state for click-to-cycle, refreshed on every footer render:
-   * one entry per painted footer line, top to bottom, holding the plain line
-   * text plus the visible-column ranges of its provider and model chips.
-   * Cleared on dispose so a stale line can never be hit-tested after the
-   * footer is gone.
+   * one entry per painted footer line, top to bottom, holding the
+   * visible-column ranges of its provider and model chips. Local coordinates
+   * from Component.handleMouse index straight into it. Cleared on dispose so
+   * a stale line can never be hit-tested after the footer is gone.
    */
-  let footerClickRows: Array<{ text: string; provider?: ClickZone; model?: ClickZone }> = [];
+  let footerClickRows: Array<{ provider?: ClickZone; model?: ClickZone }> = [];
   // Clicks queue behind an in-flight switch, so a rapid double-click advances
   // twice instead of racing two reads of the same current model.
   let cycleQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * Native click-to-cycle hit test over the footer's own painted rows.
+   *
+   * pi-tui dispatches mouse events to layout components via
+   * Component.handleMouse, so the footer gets local 0-based coordinates
+   * directly — no stdin sniffing, no previousScreen matching. footerClickRows
+   * mirrors the rendered lines, so the local y indexes straight into it.
+   */
+  function footerChipHit(x: number, y: number): boolean {
+    const row = footerClickRows[y];
+    if (!row) return false;
+    return zoneHit(row.provider, x) || zoneHit(row.model, x);
+  }
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
     if (!ctx.hasUI) return;
@@ -936,20 +912,27 @@ export default function footerExtension(pi: ExtensionAPI): void {
       const requestRender = () => tui.requestRender();
       const unsubscribe = footerData.onBranchChange(requestRender);
       repaint = requestRender;
-      // Click-to-cycle shares the footer's lifecycle: dispose() detaches it.
-      const removeClickListener =
-        tui.mode === "fullscreen"
-          ? attachFooterChipClick(tui, isFooterChipHit, queueModelCycle)
-          : () => {};
 
       return {
         dispose: () => {
           unsubscribe();
-          removeClickListener();
           footerClickRows = [];
           repaint = undefined;
         },
         invalidate(): void {},
+        handleMouse(event: TuiMouseEvent) {
+          // Fullscreen only: in regular mode the terminal owns the scrollback
+          // buffer and mouse stays with terminal selection.
+          if (tui.mode !== "fullscreen") return undefined;
+          if (event.button !== "left") return undefined;
+          // Capture the gesture on press (suppresses transcript selection and
+          // routes the synthesized click back here), act on click so a drag
+          // starting on a chip doesn't cycle.
+          if (event.type !== "press" && event.type !== "click") return undefined;
+          if (!footerChipHit(event.x, event.y)) return undefined;
+          if (event.type === "click") queueModelCycle();
+          return { handled: true };
+        },
         render(width: number): string[] {
           if (width <= 0) return [];
 
@@ -1090,14 +1073,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
           if (extra.length > 0) {
             lines.push(truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…"));
           }
-          // Publish what the footer paints for the click hit test: one entry
-          // per painted line with the plain text plus the chip zones, clipped
-          // to the truncation point. Aligned with `lines` so the hit test can
-          // map a screen row to footerClickRows[rows-from-the-bottom].
-          footerClickRows = lines.map((line, index) => {
+          // Publish the chip zones per painted line for the click hit test.
+          // Aligned with `lines` so handleMouse's local event.y indexes
+          // straight into it. Rows past the chip rows (bypass, extra
+          // statuses) carry no zones and never hit.
+          footerClickRows = lines.map((_, index) => {
             const row = chipRows[index];
             return {
-              text: line.replace(ANSI_RE, ""),
               provider: row?.provider,
               model: row?.model,
             };
@@ -1186,35 +1168,15 @@ export default function footerExtension(pi: ExtensionAPI): void {
     cycleQueue = cycleQueue.then(cycleScopedModelForward).catch(() => {});
   }
 
-  /**
-   * Hit test for the footer chips: the press has to land on a row the footer
-   * last painted (matched bottom-up against the footer's own lines, compared
-   * as plain text so trailing terminal padding is tolerated and a stale frame
-   * fails the match) and within the provider or model chip's columns. The
-   * footer is the bottom-most dock row, so anything further up is not it,
-   * however much a transcript line may resemble it.
-   */
-  function isFooterChipHit(screen: string[] | undefined, col: number, row: number): boolean {
-    const count = footerClickRows.length;
-    if (count === 0 || !screen) return false;
-    const fromBottom = screen.length - 1 - row;
-    const lineIndex = count - 1 - fromBottom;
-    if (lineIndex < 0 || lineIndex >= count) return false;
-    const data = footerClickRows[lineIndex]!;
-    if (!data.provider && !data.model) return false;
-    const line = screen[row];
-    if (!line) return false;
-    if (!line.replace(ANSI_RE, "").startsWith(data.text)) return false;
-    return zoneHit(data.provider, col) || zoneHit(data.model, col);
-  }
-
-  // baseten-usage.ts / openrouter-usage.ts ping these after writing fresh MTD
-  // values to their globalThis stashes; without it the chip waits for the next
-  // render event.
+  // provider-usage.ts pings these after writing fresh MTD values to their
+  // globalThis stashes; without it the chip waits for the next render event.
   pi.events.on("baseten-usage:updated", () => {
     repaint?.();
   });
   pi.events.on("openrouter-usage:updated", () => {
+    repaint?.();
+  });
+  pi.events.on("ollama-usage:updated", () => {
     repaint?.();
   });
 
