@@ -70,7 +70,10 @@
  * `Quick select: [1] [2] [3]` — numbers only, since the wording lives in the
  * reply above and in /n's Tab completion. Tapping chips multi-selects like
  * /12: the first tap fills the editor, later taps AND-append, re-tapping a
- * picked step removes it again. Idle chips sit dim while picked ones light
+ * picked step removes it again. Command chips (`[/reload] [/bypass] [/quit]`)
+ * trail the numbers when the steps mention them — prose counts, so
+ * "reloaded" yields [/reload]. They overwrite the editor with `/cmd`
+ * (Enter runs it); re-tapping clears. Idle chips sit dim while picked ones light
  * up bright + underlined, since bright was reading as already-selected.
  * The widget updates on every assistant message message
  * that parses to steps, is restored from branch history on session_start, and
@@ -105,6 +108,41 @@ const HEADING_RE = /^[ \t>*_#]*next steps\b[^\n]*$/gim;
 
 /** " 1. text", "2) text" — up to six columns of indent, since replies indent the block. */
 const ITEM_RE = /^[ \t]{0,6}(\d{1,2})[.)][ \t]+(\S.*)$/;
+
+/** Extra command chips offered after [1] [2] [3]. Scoped to three for now. */
+const COMMAND_CHIP_ORDER = ["reload", "bypass", "quit"] as const;
+export type CommandChip = (typeof COMMAND_CHIP_ORDER)[number];
+/** Max command chips shown after the numeric ones. */
+const MAX_COMMAND_CHIPS = 3;
+
+/** reload: "/reload" or prose ("reload", "reloaded", "reloading"). */
+const RELOAD_RE = /(?:\/reload\b|\breload(?:ed|ing)?\b)/i;
+/**
+ * bypass: "/bypass", "guardian", "blocked", approval talk.
+ * Deliberately broad — the chip only fills the editor, still needs Enter.
+ */
+const BYPASS_RE = /(?:\/bypass\b|\bbypass\b|\bguardian\b|\bblocked\b|\bapprov\w*\b)/i;
+/**
+ * quit: narrow on purpose. Bare "exit" fires on "exit code", so require a
+ * slash or a session-ending phrase. Pi's command is /quit; /exit is matched
+ * too since that is what people type first.
+ */
+const QUIT_RE = /(?:\/quit\b|\/exit\b|\bquit pi\b|\bexit pi\b|\bend(?: the)? session\b)/i;
+
+/**
+ * Slash commands mentioned in the steps, as chip names without the slash.
+ *
+ * Fixed order (reload, bypass, quit) so the row does not jump around.
+ * Matches prose too: "run /reload" or just "reloaded" both yield "reload".
+ */
+export function parseCommandChips(steps: string[]): CommandChip[] {
+  const joined = steps.join("\n");
+  const out: CommandChip[] = [];
+  if (RELOAD_RE.test(joined)) out.push("reload");
+  if (BYPASS_RE.test(joined)) out.push("bypass");
+  if (QUIT_RE.test(joined)) out.push("quit");
+  return out.slice(0, MAX_COMMAND_CHIPS);
+}
 
 export interface NextSteps {
   /** The numbered steps, in order, one string each. */
@@ -289,8 +327,9 @@ export default function nextSteps(pi: ExtensionAPI) {
     // No HStack: its stretch layout spaced chips unevenly and only the first
     // chip reliably received clicks.
     const picks = steps.slice(0, 9);
+    const commands = parseCommandChips(steps);
     ctx.ui.setWidget(CHIP_WIDGET_KEY, (_tui, theme) => {
-      let zones: Array<{ n: number; start: number; end: number }> = [];
+      let zones: Array<{ n?: number; cmd?: CommandChip; start: number; end: number }> = [];
       return {
         invalidate() {},
         render(width: number): string[] {
@@ -319,6 +358,19 @@ export default function nextSteps(pi: ExtensionAPI) {
               : theme.fg("dim", chip);
             cursor += chip.length;
           });
+          commands.forEach((cmd) => {
+            const chip = `[/${cmd}]`;
+            line += "  ";
+            cursor += 2;
+            zones.push({ cmd, start: cursor, end: cursor + chip.length });
+            // Command chips fill the editor with "/cmd" (Enter runs it),
+            // so highlight while the editor holds exactly that command.
+            const active = current.trim() === `/${cmd}`;
+            line += active
+              ? theme.underline(theme.fg("accent", chip))
+              : theme.fg("dim", chip);
+            cursor += chip.length;
+          });
           if (width <= 0) return [];
           return [truncateToWidth(line, width, "…")];
         },
@@ -328,10 +380,18 @@ export default function nextSteps(pi: ExtensionAPI) {
           if (!hit) return undefined;
           const live = liveCtx;
           if (!live?.hasUI) return undefined;
+          if (hit.cmd) {
+            // Command chips overwrite: "/reload AND step 1" runs nothing.
+            // Re-tapping the active command clears it again.
+            const cmdText = `/${hit.cmd}`;
+            const current = live.ui.getEditorText() ?? "";
+            live.ui.setEditorText(current.trim() === cmdText ? "" : cmdText);
+            return { handled: true };
+          }
           // Multi-select like /12: taps AND-append in tap order, re-tapping
           // a picked step removes it again. Custom editor text is preserved:
           // only exact step chunks are dropped, the rest is rejoined as-is.
-          const step = steps[hit.n - 1] ?? "";
+          const step = steps[(hit.n ?? 1) - 1] ?? "";
           const current = live.ui.getEditorText() ?? "";
           if (!current.trim()) live.ui.setEditorText(step);
           else if (!current.includes(step)) live.ui.setEditorText(`${current}${AND}${step}`);

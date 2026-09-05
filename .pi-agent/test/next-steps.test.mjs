@@ -17,6 +17,7 @@ import test from "node:test";
 import nextSteps, {
   buildPrompt,
   completionItems,
+  parseCommandChips,
   parseNextSteps,
   removeStep,
   resolveSelection,
@@ -409,4 +410,43 @@ test("removeStep keeps custom text and leaves no orphaned AND", () => {
     "but ssh",
     "typed text alongside survives",
   );
+});
+
+test("parseCommandChips matches slash and prose, in fixed order", () => {
+  assert.deepEqual(parseCommandChips(["Run /reload to pick it up"]), ["reload"]);
+  assert.deepEqual(parseCommandChips(["I reloaded the config"]), ["reload"]);
+  assert.deepEqual(parseCommandChips(["Guardian blocked that write"]), ["bypass"]);
+  assert.deepEqual(parseCommandChips(["approve this to continue"]), ["bypass"]);
+  assert.deepEqual(parseCommandChips(["/bypass and /reload"]), ["reload", "bypass"]);
+  assert.deepEqual(parseCommandChips(["quit pi and end the session"]), ["quit"]);
+});
+
+test("parseCommandChips stays quiet on everyday words", () => {
+  assert.deepEqual(parseCommandChips(["alpha", "beta"]), []);
+  assert.deepEqual(parseCommandChips(["exit code was 1"]), [], "bare exit is too common");
+  assert.deepEqual(parseCommandChips(["the session timed out"]), [], "needs an ending phrase");
+});
+
+test("command chips render after numbers and fill the editor", async () => {
+  const pi = await mount([]);
+  await pi.finishAssistant("Next steps:\n1. run /reload to pick up the change\n2. keep going");
+  const row = pi.widgetRow();
+  assert.equal(row.render(120).join("\n"), "Quick select: [1]  [2]  [/reload]");
+
+  assert.deepEqual(row.handleMouse({ ...CLICK, x: 26 }), { handled: true });
+  assert.equal(pi.editor.text, "/reload");
+  assert.deepEqual(row.handleMouse({ ...CLICK, x: 26 }), { handled: true });
+  assert.equal(pi.editor.text, "", "re-tapping the active command clears it");
+});
+
+test("command chips overwrite step text instead of AND-appending", async () => {
+  const pi = await mount([]);
+  await pi.finishAssistant("Next steps:\n1. alpha\n2. /bypass to approve the write");
+  const row = pi.widgetRow();
+  assert.equal(row.render(120).join("\n"), "Quick select: [1]  [2]  [/bypass]");
+
+  row.handleMouse({ ...CLICK, x: 14 });
+  assert.equal(pi.editor.text, "alpha");
+  row.handleMouse({ ...CLICK, x: 26 });
+  assert.equal(pi.editor.text, "/bypass", "commands replace, never AND-append");
 });
