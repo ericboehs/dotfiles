@@ -24,7 +24,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -34,6 +34,98 @@ const SLOW_BILLING_TIMEOUT_MS = 30_000;
 const HOURLY_CACHE_TTL_MS = 5 * 60 * 1000;
 // HTML scrapes: a full page render per poll, so stay polite.
 const SCRAPE_CACHE_TTL_MS = 60_000;
+// A failed fetch must not retry on every settle: without backoff a 429 keeps
+// the token in the hostile bucket (and console.error interleaves with the
+// footer TUI, looking "broke"). Minimum quiet period after any failure.
+const FAILURE_COOLDOWN_MS = 30_000;
+// 429s back off to the community-safe cadence even when there is no cached
+// value to serve (the success-path TTL alone doesn't cover that case).
+const RATE_LIMIT_COOLDOWN_MS = 180_000;
+// Mid-run refresh: agent_settled never fires during a long run, so a timer
+// covers the 11-minute-stuck case. TTLs still gate actual API fetches.
+const POLL_INTERVAL_MS = 2 * 60 * 1000;
+// Shared on-disk cache so N concurrent agents do 1 API fetch, not N.
+// File reads are cheap; API fetches (and the cerebras quota-spending probe)
+// are serialized on the lock dir. Inactive sessions adopt the file value.
+const SHARED_CACHE_FILE = "usage-cache.json";
+const SHARED_CACHE_LOCK = "usage-cache.lock";
+/** A lock older than this is a crashed fetcher; steal it. Fetch timeouts top out at 30s. */
+const SHARED_LOCK_STALE_MS = 60_000;
+
+interface CachedEntry {
+  value: string;
+  commandText?: string;
+  fetchedAt: number;
+}
+
+function cacheFilePath(): string {
+  return join(agentDirectory(), SHARED_CACHE_FILE);
+}
+
+function cacheLockPath(): string {
+  return join(agentDirectory(), SHARED_CACHE_LOCK);
+}
+
+/** File TTL: drivers without a memory TTL (window chips) share for one poll interval. */
+function fileTtlFor(driver: Driver): number {
+  return driver.cacheTtlMs ?? POLL_INTERVAL_MS;
+}
+
+async function readSharedCache(): Promise<Record<string, CachedEntry>> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(cacheFilePath(), "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, CachedEntry>;
+  } catch {
+    return {};
+  }
+}
+
+async function writeSharedEntry(driverId: string, display: UsageDisplay, fetchedAt: number): Promise<void> {
+  try {
+    const file = cacheFilePath();
+    const current = await readSharedCache();
+    current[driverId] = {
+      value: display.value,
+      ...(display.commandText !== undefined ? { commandText: display.commandText } : {}),
+      fetchedAt,
+    };
+    // Atomic write: tmp + rename so concurrent readers never see half a JSON doc.
+    const tmp = `${file}.tmp.${process.pid}`;
+    await writeFile(tmp, JSON.stringify(current));
+    await rename(tmp, file);
+  } catch {
+    // Cache is best-effort; the in-memory value already painted.
+  }
+}
+
+/** mkdir-based lock: true when we won the fetch. Stale locks get stolen. */
+async function tryAcquireCacheLock(): Promise<boolean> {
+  const lock = cacheLockPath();
+  try {
+    await mkdir(lock);
+    return true;
+  } catch {
+    // EEXIST: someone else is fetching (or crashed mid-fetch).
+  }
+  try {
+    const info = await stat(lock);
+    if (Date.now() - info.mtimeMs < SHARED_LOCK_STALE_MS) return false;
+    await rm(lock, { recursive: true, force: true });
+    await mkdir(lock);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseCacheLock(): Promise<void> {
+  try {
+    await rm(cacheLockPath(), { recursive: true, force: true });
+  } catch {
+    // Best-effort; staleness handling steals it next time.
+  }
+}
 const STASH_KEY_BASETEN = "__piBasetenUsage";
 const STASH_KEY_OPENROUTER = "__piOpenRouterUsage";
 const STASH_KEY_OLLAMA = "__piOllamaUsage";
@@ -70,6 +162,8 @@ interface DriverState {
   generation: number;
   last: UsageDisplay | undefined;
   lastFetchMs: number;
+  lastFailureMs: number;
+  rateLimited: boolean;
   warned: boolean;
 }
 
@@ -78,7 +172,7 @@ const states = new Map<string, DriverState>();
 function stateFor(driver: Driver): DriverState {
   let state = states.get(driver.id);
   if (!state) {
-    state = { generation: 0, last: undefined, lastFetchMs: 0, warned: false };
+    state = { generation: 0, last: undefined, lastFetchMs: 0, lastFailureMs: 0, rateLimited: false, warned: false };
     states.set(driver.id, state);
   }
   return state;
@@ -88,6 +182,49 @@ function stateFor(driver: Driver): DriverState {
 
 function isProvider(ctx: ExtensionContext, provider: string): boolean {
   return ctx.model?.provider === provider;
+}
+
+/** True for 429 / rate_limit_error bodies, whose raw JSON must never reach
+ *  console.error (it interleaves with the footer TUI). Callers throw a short
+ *  friendly message instead, and refreshDriver backs off. */
+function isRateLimitError(err: Error): boolean {
+  return err.message.includes("(429)") || err.message.includes("rate_limit") || err.message.includes("Rate limited");
+}
+
+/** A captured ctx used after newSession/fork/switchSession/reload throws this.
+ *  Background ticks must treat it as "session gone" and bail, not log it. */
+function isStaleCtxError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("ctx is stale");
+}
+
+/** driver.isActive that bails to undefined instead of throwing on a stale ctx. */
+function safeIsActive(driver: Driver, ctx: ExtensionContext): boolean | undefined {
+  try {
+    return driver.isActive(ctx);
+  } catch (err) {
+    if (isStaleCtxError(err)) return undefined;
+    throw err;
+  }
+}
+
+/** ctx.ui.setStatus that reports false instead of throwing on a stale ctx. */
+function safeSetStatus(ctx: ExtensionContext, key: string, value: string | undefined): boolean {
+  try {
+    ctx.ui.setStatus(key, value);
+    return true;
+  } catch (err) {
+    if (isStaleCtxError(err)) return false;
+    throw err;
+  }
+}
+
+/** pi.events.emit that swallows stale-pi errors after session replacement. */
+function safeEmit(pi: ExtensionAPI, event: string): void {
+  try {
+    pi.events.emit(event, undefined);
+  } catch (err) {
+    if (!isStaleCtxError(err)) throw err;
+  }
 }
 
 async function fetchJson(
@@ -530,6 +667,11 @@ async function fetchClaudeBridge(_ctx: ExtensionContext): Promise<UsageDisplay> 
     if (err instanceof Error && err.message.includes("(401)")) {
       throw new Error(
         "Claude Code OAuth token expired — run `claude` briefly (it refreshes on use) and retry",
+      );
+    }
+    if (err instanceof Error && isRateLimitError(err)) {
+      throw new Error(
+        "Claude usage rate-limited (429) — backing off, will retry automatically",
       );
     }
     throw err;
@@ -1604,38 +1746,145 @@ async function refreshDriver(
   const state = stateFor(driver);
   const generation = ++state.generation;
 
-  if (!driver.isActive(ctx)) {
-    if (driver.statusKey) ctx.ui.setStatus(driver.statusKey, undefined);
+  const active = safeIsActive(driver, ctx);
+  if (active === undefined) return undefined;
+  if (!active) {
+    if (driver.statusKey && !safeSetStatus(ctx, driver.statusKey, undefined)) return undefined;
     return undefined;
   }
 
   const ttl = driver.cacheTtlMs ?? 0;
-  const cached = state.last && ttl > 0 && Date.now() - state.lastFetchMs < ttl;
+  const now = Date.now();
+  const cached = state.last && ttl > 0 && now - state.lastFetchMs < ttl;
   if (cached && !options.force) return state.last;
+
+  // Shared file first: another of the N concurrent agents may have fetched
+  // fresher data. Cheap read, no API cost, keeps inactive sessions current.
+  if (!options.force) {
+    const shared = await readSharedCache();
+    const entry = shared[driver.id];
+    if (entry && typeof entry.value === "string" && Number.isFinite(entry.fetchedAt)) {
+      const fileTtl = fileTtlFor(driver);
+      if (now - entry.fetchedAt < fileTtl) {
+        const alreadyHave =
+          state.last?.value === entry.value && state.lastFetchMs === entry.fetchedAt;
+        if (!alreadyHave) {
+          if (generation !== state.generation) return undefined;
+          const stillActive = safeIsActive(driver, ctx);
+          if (stillActive === undefined) return undefined;
+          if (!stillActive) return undefined;
+          const display: UsageDisplay = {
+            value: entry.value,
+            ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
+          };
+          state.last = display;
+          state.lastFetchMs = entry.fetchedAt;
+          if (driver.stashKey) writeStash(driver, display);
+          if (driver.statusKey && !safeSetStatus(ctx, driver.statusKey, display.value)) return undefined;
+          if (driver.updateEvent) safeEmit(pi, driver.updateEvent);
+        }
+        return state.last;
+      }
+    }
+  }
+
+  // Failure backoff: without a cached value the TTL above doesn't apply, so
+  // every agent_settled would retry immediately and hold a 429'd token in
+  // the hostile bucket. Quiet-period after the last failure instead.
+  if (!options.force && state.lastFailureMs > state.lastFetchMs) {
+    const cooldown = state.rateLimited ? RATE_LIMIT_COOLDOWN_MS : FAILURE_COOLDOWN_MS;
+    if (Date.now() - state.lastFailureMs < cooldown) return state.last;
+  }
+
+  // Serialize API fetches across agents: only the lock winner hits the API
+  // (and spends cerebras quota). Losers keep painting stale until the file lands.
+  // Manual /command refreshes bypass the lock — the user explicitly asked.
+  let locked = false;
+  if (!options.force) {
+    locked = await tryAcquireCacheLock();
+    if (!locked) return state.last;
+    // Lost the race while awaiting the lock: re-check the file once before fetching.
+    const raced = await readSharedCache();
+    const entry = raced[driver.id];
+    if (entry && typeof entry.value === "string" && Number.isFinite(entry.fetchedAt)) {
+      if (Date.now() - entry.fetchedAt < fileTtlFor(driver)) {
+        await releaseCacheLock();
+        locked = false;
+        if (generation !== state.generation) return undefined;
+        const stillActive = safeIsActive(driver, ctx);
+        if (stillActive === undefined || !stillActive) return undefined;
+        const display: UsageDisplay = {
+          value: entry.value,
+          ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
+        };
+        state.last = display;
+        state.lastFetchMs = entry.fetchedAt;
+        if (driver.stashKey) writeStash(driver, display);
+        if (driver.statusKey && !safeSetStatus(ctx, driver.statusKey, display.value)) return undefined;
+        if (driver.updateEvent) safeEmit(pi, driver.updateEvent);
+        return state.last;
+      }
+    }
+    if (generation !== state.generation) {
+      await releaseCacheLock();
+      return undefined;
+    }
+    {
+      const stillActive = safeIsActive(driver, ctx);
+      if (stillActive === undefined || !stillActive) {
+        await releaseCacheLock();
+        return undefined;
+      }
+    }
+  }
 
   // Paint the stale value so a slow round trip doesn't blank the chip.
   if (driver.statusKey && state.last) {
-    ctx.ui.setStatus(driver.statusKey, state.last.value);
+    if (!safeSetStatus(ctx, driver.statusKey, state.last.value)) return undefined;
   }
 
   try {
     const display = await driver.fetch(ctx);
-    if (generation !== state.generation || !driver.isActive(ctx)) return undefined;
+    if (generation !== state.generation) {
+      if (locked) await releaseCacheLock();
+      return undefined;
+    }
+    {
+      const stillActive = safeIsActive(driver, ctx);
+      if (stillActive === undefined || !stillActive) {
+        if (locked) await releaseCacheLock();
+        return undefined;
+      }
+    }
+    const fetchedAt = Date.now();
     state.last = display;
-    state.lastFetchMs = Date.now();
+    state.lastFetchMs = fetchedAt;
+    state.lastFailureMs = 0;
+    state.rateLimited = false;
     if (driver.stashKey) writeStash(driver, display);
-    if (driver.statusKey) ctx.ui.setStatus(driver.statusKey, display.value);
+    if (driver.statusKey && !safeSetStatus(ctx, driver.statusKey, display.value)) {
+      if (locked) await releaseCacheLock();
+      return undefined;
+    }
+    void writeSharedEntry(driver.id, display, fetchedAt).finally(() => {
+      if (locked) void releaseCacheLock();
+    });
     if (state.warned) {
       state.warned = false;
       console.error(`[${driver.id}] usage fetch recovered`);
     }
     // The footer reads stashes during renders; poke it so a new cost-slot chip
     // paints immediately instead of waiting for the next render event.
-    if (driver.updateEvent) pi.events.emit(driver.updateEvent, undefined);
+    if (driver.updateEvent) safeEmit(pi, driver.updateEvent);
     return display;
   } catch (err) {
+    if (locked) await releaseCacheLock();
+    // Session went away mid-fetch (reload/switch): bail silently, no backoff.
+    if (isStaleCtxError(err)) return undefined;
+    state.lastFailureMs = Date.now();
+    state.rateLimited = err instanceof Error && isRateLimitError(err);
     if (driver.statusKey && !state.last) {
-      ctx.ui.setStatus(driver.statusKey, undefined);
+      safeSetStatus(ctx, driver.statusKey, undefined);
     }
     // Log only the first failure of a streak (and the recovery) so a dead
     // token doesn't spam the console on every settle.
@@ -1650,27 +1899,73 @@ async function refreshDriver(
 }
 
 export default function providerUsage(pi: ExtensionAPI): void {
+  let latestCtx: ExtensionContext | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+  function refreshAll(ctx: ExtensionContext): void {
+    latestCtx = ctx;
+    for (const driver of DRIVERS) {
+      void refreshDriver(pi, ctx, driver).catch((err) => {
+        if (!isStaleCtxError(err)) throw err;
+      });
+    }
+  }
+
+  function startPoll(): void {
+    if (pollTimer) return;
+    // Mid-run + inactive-session refresh: agent_settled never fires during an
+    // 11-minute run, and idle sessions would otherwise never re-read the file.
+    // TTLs + the file lock gate actual API fetches, so this is a cheap file
+    // poll for 11 of the 12 agents. The ctx is captured per-tick and goes
+    // stale after reload/switch — refreshDriver bails on stale, and shutdown
+    // clears the timer so the old instance stops entirely.
+    pollTimer = setInterval(() => {
+      const ctx = latestCtx;
+      if (!ctx) return;
+      for (const driver of DRIVERS) {
+        void refreshDriver(pi, ctx, driver).catch((err) => {
+          if (!isStaleCtxError(err)) throw err;
+        });
+      }
+    }, POLL_INTERVAL_MS);
+    pollTimer.unref?.();
+  }
+
+  function stopPoll(): void {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = undefined;
+    latestCtx = undefined;
+  }
+
   pi.on("session_start", (_event, ctx) => {
-    for (const driver of DRIVERS) void refreshDriver(pi, ctx, driver);
+    startPoll();
+    refreshAll(ctx);
   });
 
   pi.on("model_select", (_event, ctx) => {
-    for (const driver of DRIVERS) void refreshDriver(pi, ctx, driver);
+    refreshAll(ctx);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
     // Fire-and-forget, unlike the original extensions: a slow billing API
     // (Baseten has 9s stretches) must never hold the settle open. Stale chips
     // keep painting, and stash writes ping the footer via update events.
-    for (const driver of DRIVERS) void refreshDriver(pi, ctx, driver);
+    refreshAll(ctx);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    // Old instance must stop: its timer's captured ctx is stale after
+    // replacement/reload, and the new instance starts its own timer.
+    stopPoll();
     for (const driver of DRIVERS) {
       const state = stateFor(driver);
       state.generation += 1;
-      if (driver.statusKey && ctx.hasUI) {
-        ctx.ui.setStatus(driver.statusKey, undefined);
+      try {
+        if (driver.statusKey && ctx.hasUI) {
+          ctx.ui.setStatus(driver.statusKey, undefined);
+        }
+      } catch (err) {
+        if (!isStaleCtxError(err)) throw err;
       }
     }
   });
