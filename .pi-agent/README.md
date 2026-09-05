@@ -237,6 +237,113 @@ mostly reports how you happened to be using pi that day — and a benchmark burs
 sitting next to real launches reads as a regression that was never there.
 Compare cohort to cohort.
 
+## Window-mode context management
+
+`extensions/window-mode/` is an experimental, **per-provider/model opt-in**
+replacement for repeated summary compaction. No models are opted in by default.
+It does not use Artificial Analysis scores.
+
+```text
+/reload
+/window-mode on       # opt the current exact provider/model in, persistently
+/window-mode off      # return this model to ordinary Pi compaction
+/window-mode status   # policy and completed rollover/fallback counts this load
+```
+
+An opt-in applies across thinking levels for that exact provider/model, not to
+sibling releases or other providers hosting the same model. Preferences are small
+machine-local files under `~/.pi/agent/window-mode/` (or `PI_CODING_AGENT_DIR`),
+named by a hash of `provider/model` and containing the readable model identity.
+Different models use different files so simultaneous sessions cannot overwrite
+one another's opt-ins. Other running sessions pick up changes on `/reload` or
+model selection. Explicit tool exclusions still win.
+
+### Fast boot, small prompts
+
+Startup reads only the current model's preference. It does **not** traverse
+history, open an index, fetch anything, spawn a process, or load the implementation.
+The implementation and its two tools load on the first enabled request:
+
+- `context_checkpoint`: save replacement working state with Goal, Constraints,
+  Progress (including failed approaches), Decisions, and Next sections.
+- `context_recall`: search/list/read model-visible entries on the active branch,
+  including history omitted by compaction. Literal case-sensitive search; eight
+  snippets per page or 4,000 characters per read, with continuation cursors.
+
+There is no extra prompt context in fresh disabled sessions. Enabled sessions add
+about **260 tokens** of guidance and serialized schemas (`o200k_base`; provider
+wrappers/tokenizers differ). The prompt/tool prefix stays stable during normal
+turns. Sparse reminders are appended near the context limit, not on every call.
+
+The extension-only benchmark on this machine measured ~0.85ms for entry-module
+import, a warm p95 of ~0.16ms for registration plus enabled `session_start`, and
+~2.2ms for first-request lazy loading with Pi's SDK already initialized. These
+are **component timings, not a claim about total TUI boot time**. A synthetic
+10,000-entry resume traversal took ~1.3ms and a worst-case no-match search ~4ms.
+No real session data or credentials are used by the benchmark.
+
+```sh
+node .pi-agent/test/window-mode.bench.mjs
+node .pi-agent/test/window-mode.bench.mjs --schemas  # JSON for tokenizer checks
+```
+
+Compare fresh boots with fresh boots, and large resumes separately. Whole-Pi
+startup remains subject to the warm/cold cohorts described under Footer above.
+
+### Safe rollovers and recovery
+
+Checkpoints are bounded at 6,000 characters and persisted in successful tool
+result `details` in Pi's existing JSONL tree. There is no duplicate transcript,
+notes directory to synchronize, global memory, embedding service, or background
+summarizer. Notes must never contain credentials.
+
+At Pi's normal compaction boundary, a fresh, structurally valid checkpoint can
+replace the summary-generation call. The checkpoint plus **all messages from its
+source assistant onward** become the next context. That includes the checkpoint's
+entire parallel tool batch and everything that happened after the note was written;
+we never move the cut forward just to fit a budget. The retained tail must fit
+within an estimated 4,096 tokens. Note quality still depends on the model: valid
+headings do not prove that every requirement was captured.
+
+Pi's ordinary summarizer remains the fallback when a note is missing, stale,
+malformed, or leaves too large/incomplete a tail. Overflow recovery and
+`/compact <custom instructions>` always use Pi's ordinary path. Cancellation,
+retry, persistence, and continuation remain Pi's responsibility. A fallback is
+one ordinary compaction operation; Pi may use two summary calls for split turns.
+The extension does not recursively call `ctx.compact()` from a running tool.
+
+Reminders use a fixed 24,576-token headroom (capped at half the window on small
+models), with at least 2,048 tokens between nudges/checkpoints. Pi's settings still
+control the actual compaction threshold. Unusually early custom thresholds or
+sudden large outputs may bypass reminders; fallback handles those safely.
+
+Only checkpoints after the latest compaction are reusable. Branch navigation
+cannot read or reuse state from an abandoned branch. Disk resume and forked
+ancestry work through Pi's session tree. After a rollover, switching to a model
+that is not opted in keeps **read-only recall** available, but uses ordinary
+compaction. Thinking, image payloads, private tool metadata and `!!` shell output
+are not exposed by recall; retrieved history is reference data, not new instructions.
+
+`compaction-progress.ts` does not train its summarizer timing estimate on these
+LLM-free rollovers. Its completion line and `/tree` compaction rows both say
+**Rolled over** (no summarizer) vs **Summarized** (with duration). `/window-mode status`
+counts completed operations, not failed or cancelled attempts.
+
+### Verification and limitations
+
+```sh
+node --test .pi-agent/test/window-mode*.test.mjs .pi-agent/test/compaction-progress.test.mjs
+bin/pi-ext-check
+```
+
+Tests cover actual AgentSession tool execution, automatic rollover and continuation,
+ordinary-summary fallback, tool exclusions, disk resume, five successive rollovers,
+branch isolation, complete tool pairs, output bounds, and deferred startup.
+The integration model is scripted: **these are correctness tests, not evidence
+that any real model preserves requirements reliably**. Dogfood one opted-in model
+at a time and compare retained requirements/repeated mistakes against ordinary
+compaction before expanding the opt-in list. Nothing deletes the original history.
+
 ## Model briefings
 
 `extensions/aa-info.ts` prints one dim status line into the chat whenever a
@@ -465,6 +572,7 @@ Intentionally left as machine-local runtime state:
 - trust decisions
 - `boot-times.jsonl`, the launch log behind `/boot stats`
 - `scheduler/`, the durable task registry and run history behind `/schedule`
+- `window-mode/`, per-model opt-in files for checkpoint compaction
 - `auto-bundle.log` and `pi-bundle.lock`, written by the footer's automatic bundle rebuild
 - `~/.cache/pi/v8`, the V8 compile cache `bin/pi-launch` points node at
 - `.pi-agent/node_modules/`, the symlinks `bin/pi-ext-check` creates

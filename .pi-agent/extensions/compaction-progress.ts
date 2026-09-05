@@ -7,7 +7,14 @@
  *   [compaction] Compacted from 101,377 tokens (ctrl+r to expand)
  *     ████████████████░░░░░░░░░░░░  ~42s left · 70.5k tokens
  *     ████████████████████████████  +8s over estimate · 70.5k tokens
- *     ✓ Compacted from 101,377 tokens in 52s · est. 44s
+ *     ✓ Summarized from 101,377 tokens in 52s · est. 44s
+ *     ✓ Rolled over from 101,377 tokens · no summarizer
+ *
+ * /tree still paints every compaction as [compaction: Nk tokens]. On first
+ * paint we swap that substring to [Rolled over: Nk tokens] or
+ * [Summarized: Nk tokens] so the picker matches the completion line. Search
+ * finds those words too. If a future pi drops getEntryDisplayText, rows stay
+ * stock; we do not write session labels.
  *
  * Compaction is a single LLM call, so there is no real percent-complete
  * signal. This estimates a total duration from the context size using a
@@ -28,6 +35,7 @@
  * .pi/extensions/ (project), then run /reload.
  *
  * Events used:
+ *   session_start            -> patch /tree compaction row labels (TUI only)
  *   session_before_compact   -> start animation
  *   after_provider_response  -> detect 429/5xx stalls
  *   session_compact          -> stop, report duration, record rate sample
@@ -42,10 +50,12 @@ import { join } from "node:path";
 const WIDGET_ID = "compaction-progress";
 const BAR_WIDTH = 28;
 const TICK_MS = 100;
-const STATE_FILE = join(
-	process.env.HOME || process.env.USERPROFILE || "~",
-	".pi/agent/compaction-rates.json",
-);
+function stateFile(): string {
+	return join(
+		process.env.HOME || process.env.USERPROFILE || "~",
+		".pi/agent/compaction-rates.json",
+	);
+}
 
 // Cold-start assumption before any samples exist.
 // Compaction time = a large fixed cost + a small per-token cost. Measured
@@ -102,8 +112,9 @@ function clamp(v: number, lo: number, hi: number): number {
  */
 function estimateSec(key: string, tokens: number): number | undefined {
 	try {
-		if (!existsSync(STATE_FILE)) return undefined;
-		const state = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+		const file = stateFile();
+		if (!existsSync(file)) return undefined;
+		const state = JSON.parse(readFileSync(file, "utf8"));
 		const own = ((state[key] ?? []) as RateSample[]).slice(-8);
 		const pool = own.length
 			? own
@@ -155,17 +166,78 @@ function fitModel(samples: RateSample[]): { base: number; rate: number } {
 
 function recordRate(key: string, tokens: number, sec: number): void {
 	try {
-		const state = existsSync(STATE_FILE)
-			? JSON.parse(readFileSync(STATE_FILE, "utf8"))
+		const file = stateFile();
+		const state = existsSync(file)
+			? JSON.parse(readFileSync(file, "utf8"))
 			: {};
 		const list: RateSample[] = state[key] ?? [];
 		list.push({ tokens, sec, at: new Date().toISOString() });
 		state[key] = list.slice(-20);
-		mkdirSync(join(STATE_FILE, ".."), { recursive: true });
-		writeFileSync(STATE_FILE, JSON.stringify(state, null, "\t"));
+		mkdirSync(join(file, ".."), { recursive: true });
+		writeFileSync(file, JSON.stringify(state, null, "\t"));
 	} catch {
 		// Best-effort persistence; never break compaction UX over stats.
 	}
+}
+
+const WINDOW_KIND = "window-mode/v1";
+// Own-property flag so /reload does not wrap TreeSelectorComponent.render twice.
+const TREE_PATCH = "__compactionTreeLabeled";
+
+/** Window-mode checkpoint rollover vs ordinary LLM summary. */
+export function compactionTreeKind(
+	entry: { type?: string; details?: unknown } | undefined,
+): "Rolled over" | "Summarized" | undefined {
+	if (entry?.type !== "compaction") return;
+	const kind = (entry.details as { kind?: string } | undefined)?.kind;
+	return kind === WINDOW_KIND ? "Rolled over" : "Summarized";
+}
+
+/** Swap pi's baked [compaction: Nk tokens] for Rolled over / Summarized. */
+export function relabelCompactionRow(
+	text: string,
+	entry: { type?: string; tokensBefore?: number; details?: unknown } | undefined,
+): string {
+	const kind = compactionTreeKind(entry);
+	if (!kind || typeof entry?.tokensBefore !== "number") return text;
+	const tokens = Math.round(entry.tokensBefore / 1000);
+	const from = `[compaction: ${tokens}k tokens]`;
+	const to = `[${kind}: ${tokens}k tokens]`;
+	return text.includes(from) ? text.replace(from, to) : text;
+}
+
+function labelTreeList(list: any): void {
+	if (!list || list[TREE_PATCH]) return;
+	list[TREE_PATCH] = true;
+	const display = list.getEntryDisplayText;
+	const search = list.getSearchableText;
+	if (typeof display === "function") {
+		list.getEntryDisplayText = function (node: { entry?: unknown }, isSelected: boolean) {
+			return relabelCompactionRow(String(display.call(this, node, isSelected) ?? ""), node?.entry as { type?: string; tokensBefore?: number; details?: unknown });
+		};
+	}
+	if (typeof search === "function") {
+		list.getSearchableText = function (node: { entry?: unknown }) {
+			const text = String(search.call(this, node) ?? "");
+			const kind = compactionTreeKind(node?.entry as { type?: string; details?: unknown });
+			return kind ? `${text} ${kind}` : text;
+		};
+	}
+}
+
+/** Wrap TreeSelectorComponent so /tree rows distinguish rollover vs summary. */
+export function patchTreeSelector(Ctor: { prototype: any }): boolean {
+	const proto = Ctor.prototype;
+	if (!proto) return false;
+	if (proto[TREE_PATCH]) return true;
+	const original = proto.render;
+	if (typeof original !== "function") return false;
+	proto[TREE_PATCH] = true;
+	proto.render = function (this: { treeList?: unknown }, width: number) {
+		labelTreeList(this.treeList);
+		return original.call(this, width);
+	};
+	return true;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -179,6 +251,7 @@ export default function (pi: ExtensionAPI) {
 	let blockedTotalSec = 0; // accumulated time NOT spent actually compacting
 	let retryAfterSec: number | undefined; // from Retry-After header, when present
 	let errorCount = 0; // any provider error disqualifies the timing sample
+	let treePatchAttempted = false;
 
 	/** Wall time minus any time spent blocked on provider errors. */
 	function activeSeconds(): number {
@@ -273,13 +346,15 @@ export default function (pi: ExtensionAPI) {
 		retryAfterSec = undefined;
 		errorCount = 0;
 
-		draw(ctx, ctx.ui.theme);
+		// First paint on the interval, not now. Window-mode rollovers finish in
+		// this same turn and replace the widget with the "Rolled over" line;
+		// drawing immediately would flash a fake summarizer bar.
 		timer = setInterval(() => draw(ctx, ctx.ui.theme), TICK_MS);
 
 		event.signal?.addEventListener("abort", () => stop(ctx), { once: true });
 	}
 
-	function stop(ctx: any, success = false, tokens?: number) {
+	function stop(ctx: any, success = false, tokens?: number, learn = true, rolledOver = false) {
 		if (timer !== undefined) {
 			clearInterval(timer);
 			timer = undefined;
@@ -289,7 +364,7 @@ export default function (pi: ExtensionAPI) {
 
 		// Only learn from clean runs: a sample polluted by rate-limit backoff
 		// would teach the estimator a throughput far slower than reality.
-		if (success && startedAt > 0 && tokensBefore > 0 && errorCount === 0) {
+		if (success && learn && startedAt > 0 && tokensBefore > 0 && errorCount === 0) {
 			recordRate(modelKey((ctx as any)?.model), tokensBefore, activeSeconds());
 		}
 
@@ -304,10 +379,10 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		// pi's own "[compaction] Compacted from N tokens" entry has no timing, so
-		// show the duration here. This stays up until your next turn -- compaction
-		// often finishes while you're looking away, and a timed auto-clear means
-		// you come back to nothing.
+		// pi's own "[compaction] Compacted from N tokens" entry does not say how
+		// the cut happened. This line distinguishes a checkpoint rollover from an
+		// LLM summary, and for summaries includes duration. It stays up until the
+		// next turn -- compaction often finishes while you're looking away.
 		const theme = ctx?.ui?.theme;
 		const stalledNote =
 			stalledSec >= 1 ? ` (${fmtDuration(stalledSec)} rate limited)` : "";
@@ -317,12 +392,25 @@ export default function (pi: ExtensionAPI) {
 			estSec > 0 && Math.abs(wallSec - estSec) >= 2
 				? ` · est. ${fmtDuration(estSec)}`
 				: "";
-		const text = `✓ Compacted from ${reportTokens.toLocaleString()} tokens in ${fmtDuration(wallSec)}${stalledNote}${estNote}`;
+		const text = rolledOver
+			? `✓ Rolled over from ${reportTokens.toLocaleString()} tokens · no summarizer`
+			: `✓ Summarized from ${reportTokens.toLocaleString()} tokens in ${fmtDuration(wallSec)}${stalledNote}${estNote}`;
 		ctx?.ui?.setWidget(WIDGET_ID, [
 			theme ? theme.fg("dim", `  ${text}`) : `  ${text}`,
 		]);
 		reportShown = true;
 	}
+
+	pi.on("session_start", async (_event, ctx) => {
+		if (!ctx.hasUI || treePatchAttempted) return;
+		treePatchAttempted = true;
+		try {
+			const { TreeSelectorComponent } = await import("@earendil-works/pi-coding-agent");
+			patchTreeSelector(TreeSelectorComponent);
+		} catch {
+			// Print mode, tests, or an older pi: keep stock [compaction: Nk tokens] rows.
+		}
+	});
 
 	// Clear the completion line when the next turn begins, not on a timer.
 	pi.on("turn_start", async (_event, eventCtx) => {
@@ -356,7 +444,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_compact", async (event, eventCtx) => {
-		stop(eventCtx, true, event.compactionEntry?.tokensBefore);
+		// Checkpoint rollovers do not call a summarizer. Timing them as model
+		// throughput would corrupt estimates for subsequent ordinary compactions.
+		const checkpointRollover =
+			compactionTreeKind(event.compactionEntry) === "Rolled over";
+		stop(eventCtx, true, event.compactionEntry?.tokensBefore, !checkpointRollover, checkpointRollover);
 	});
 
 	pi.on("session_compact_failed", async (_event, eventCtx) => {
