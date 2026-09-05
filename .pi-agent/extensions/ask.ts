@@ -18,6 +18,7 @@ import {
 	Container,
 	Key,
 	matchesKey,
+	Spacer,
 	Text,
 	type SelectItem,
 	SelectList,
@@ -186,7 +187,7 @@ export default function ask(pi: ExtensionAPI) {
 						const topBorder = new Text("", 0, 0);
 						container.addChild(topBorder);
 						container.addChild(new Text(theme.fg("text", question), 1, 0));
-						container.addChild(new Text("", 0, 0));
+						container.addChild(new Spacer(1));
 
 						const list = new SelectList(items, Math.min(items.length, 10), {
 							selectedPrefix: (t) => theme.fg("accent", t),
@@ -198,7 +199,7 @@ export default function ask(pi: ExtensionAPI) {
 						list.onSelect = (item) => done(item.value);
 						list.onCancel = () => done(undefined);
 						container.addChild(list);
-						container.addChild(new Text("", 0, 0));
+						container.addChild(new Spacer(1));
 						container.addChild(
 							new Text(theme.fg("dim", "↑↓/click select • 1-9 quick pick • enter confirm • esc cancel"), 1, 0),
 						);
