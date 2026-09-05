@@ -140,7 +140,7 @@ export default function (pi: ExtensionAPI) {
 	});
 		// Inject at the first prompt if the query is ready (zero added latency);
 	// otherwise let the query land late via sendMessage below.
-	pi.on("before_agent_start", async () => {
+	pi.on("before_agent_start", async (_event, ctx) => {
 		if (injected || !isEnabled() || !pendingQuery) return undefined;
 		const query = pendingQuery;
 		const results = await Promise.race([
@@ -150,6 +150,7 @@ export default function (pi: ExtensionAPI) {
 		if (injected || !isEnabled()) return undefined;
 		if (results && results.length) {
 			injected = true;
+			ctx?.ui?.notify(`qmd memory: ${results.length} hits injected`, "info");
 			return {
 				message: {
 					customType: "qmd-memory",
@@ -163,18 +164,24 @@ export default function (pi: ExtensionAPI) {
 			.then((res) => {
 				if (injected || !res?.length || !isEnabled()) return;
 				injected = true;
+				void ctx?.ui?.notify(
+					`qmd memory: ${res.length} hits injected (late)`,
+					"info",
+				);
 				return pi.sendMessage({
 					customType: "qmd-memory",
 					display: false,
 					content: formatResults(res, basename(process.cwd())),
 				});
 			})
-			.catch((err) =>
-				console.warn(
-					"[qmd-memory] late injection failed:",
-					err instanceof Error ? err.message : err,
-				),
-			);
+			.catch((err) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				// Benign: -p/automation sessions may tear down before the late
+				// injection lands. Interactive sessions rebind on /new etc.
+				if (!msg.includes("stale")) {
+					console.warn("[qmd-memory] late injection failed:", msg);
+				}
+			});
 		return undefined;
 	});
 
