@@ -30,7 +30,7 @@ import {
   type FetchTierName,
 } from "./fetch-core.ts";
 
-const FREE_HEADLESS: FetchTierName[] = ["plain", "curl", "chrome", "tinyfish"];
+const FREE_HEADLESS: FetchTierName[] = ["plain", "curl", "obscura", "chrome", "tinyfish"];
 const PAID_OR_VISIBLE: FetchTierName[] = ["firecrawl", "safari"];
 
 /**

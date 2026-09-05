@@ -9,6 +9,9 @@
  *  4. minimized private Safari window — an independent browser trust tier
  *  5. Firecrawl — a paid render/extract service; last by default because it
  *     is the only tier that spends credits
+ *  6. TinyFish fetch — hosted Chromium render, free at any wallet balance
+ *  7. Obscura (Rust/V8) via CLI — stateless local render; off by default
+ *     (see config.ts), slot reserved between curl and Chrome
  *
  * The ladder is operator-ordered (see web-providers/config.ts). Names map to
  * fixed tier numbers so result footers stay comparable across orderings.
@@ -51,10 +54,10 @@ function htmlDeps(): Promise<HtmlDeps> {
 	return htmlDepsPromise;
 }
 
-type FetchTier = 1 | 2 | 3 | 4 | 5 | 6;
+type FetchTier = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 /** Stable name → tier number. Reordering never renumbers a tier. */
-export const TIER_NUMBERS = { plain: 1, curl: 2, chrome: 3, safari: 4, firecrawl: 5, tinyfish: 6 } as const;
+export const TIER_NUMBERS = { plain: 1, curl: 2, chrome: 3, safari: 4, firecrawl: 5, tinyfish: 6, obscura: 7 } as const;
 export type FetchTierName = keyof typeof TIER_NUMBERS;
 
 export interface FetchResult {
@@ -364,6 +367,64 @@ async function tier4(url: string, headers?: Record<string, string>): Promise<Raw
 	};
 }
 
+/**
+ * Tier 7 — Obscura headless browser (Rust + V8) via CLI subprocess.
+ *
+ * `obscura fetch URL --dump html` renders JS like tier 3 but stateless:
+ * instant boot, ~30-60MB RSS, no persistent profile to accumulate sensor
+ * trust. Logs go to stderr ("Fetching…" / "Page loaded: <finalUrl>");
+ * rendered HTML goes to stdout. Exit code is 0 even on HTTP error pages,
+ * so status stays undefined and deny/thin detection downstream decides.
+ *
+ * Binary: $OBSCURA_BIN or `obscura` in PATH (v0.2.1+, `render` build).
+ * Use `OBSCURA_BIN=obscura-stealth` to eval the stealth transport
+ * (BoringSSL + fingerprint randomization + tracker blocklist).
+ * SSRF guard stays on: never pass --allow-private-network here.
+ */
+async function tier7(url: string, signal?: AbortSignal): Promise<RawResult> {
+	const bin = process.env.OBSCURA_BIN?.trim() || "obscura";
+	const args = ["fetch", url, "--dump", "html", "--timeout", "30"];
+	const MAX_STDOUT = 8 << 20;
+	const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+		const p = spawn(bin, args, { signal });
+		let out = "";
+		let err = "";
+		let tooBig = false;
+		p.stdout.on("data", (d) => {
+			if (tooBig) return;
+			out += d;
+			if (out.length > MAX_STDOUT) {
+				tooBig = true;
+			p.kill("SIGTERM");
+			}
+		});
+		p.stderr.on("data", (d) => (err += d));
+		p.on("error", (e: NodeJS.ErrnoException) =>
+			reject(
+				e.code === "ENOENT"
+					? new Error(`obscura binary not found (tried "${bin}"; install v0.2.1+ render build to PATH or set OBSCURA_BIN)`)
+					: e,
+			),
+		);
+		p.on("close", (code) => {
+			if (tooBig) {
+				reject(new Error(`obscura response exceeded ${MAX_STDOUT} bytes`));
+				return;
+			}
+			if (code === 0) resolve({ stdout: out, stderr: err });
+			else reject(new Error(`obscura exit ${code}: ${err.trim().slice(0, 200) || out.trim().slice(0, 200)}`));
+		});
+	});
+	const m = stderr.match(/Page loaded:\s*(\S+)/);
+	return {
+		status: undefined,
+		body: stdout,
+		contentType: "text/html",
+		finalUrl: m?.[1] ?? url,
+		note: `obscura ${bin.includes("stealth") ? "stealth" : "render"}: ${stderr.trim().split("\n")[0] ?? ""}`.slice(0, 200),
+	};
+}
+
 function acceptable(r: RawResult): boolean {
 	if (rawLen(r) === 0) return false;
 	if (r.status !== undefined && r.status >= 400) return false;
@@ -512,6 +573,7 @@ function tierDescription(tier: FetchTier): string {
 	if (tier === 4) return ": private Safari";
 	if (tier === 5) return ": Firecrawl";
 	if (tier === 6) return ": TinyFish";
+	if (tier === 7) return ": Obscura";
 	return "";
 }
 
@@ -641,7 +703,7 @@ export interface FetchOptions {
 	onTierError?: (tier: FetchTierName, err: Error) => void;
 }
 
-const DEFAULT_ORDER: FetchTierName[] = ["plain", "curl", "chrome", "tinyfish", "firecrawl", "safari"];
+const DEFAULT_ORDER: FetchTierName[] = ["plain", "curl", "obscura", "chrome", "tinyfish", "firecrawl", "safari"];
 
 /**
  * Fetch `url` through the tier ladder. Returns the first acceptable result,
@@ -675,6 +737,7 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 	const runners: Record<FetchTierName, () => Promise<RawResult>> = {
 		plain: () => tier1(url, opts.signal),
 		curl: () => tier2(url, opts.signal),
+		obscura: () => tier7(url, opts.signal),
 		chrome: () => tier3(url, opts.profileDir, opts.headers),
 		safari: () => tier4(url, opts.headers),
 		firecrawl: () => tier5(url, opts.firecrawlKey, opts.signal),
@@ -694,7 +757,7 @@ export async function resilientFetch(url: string, opts: FetchOptions = {}): Prom
 	for (const [tier, run] of tiers) {
 		try {
 			opts.onAttempt?.(
-				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : tier === 5 ? " (Firecrawl)" : tier === 6 ? " (TinyFish)" : ""}...`,
+				`tier ${tier}${tier === 3 ? " (headless chrome)" : tier === 4 ? " (private Safari)" : tier === 5 ? " (Firecrawl)" : tier === 6 ? " (TinyFish)" : tier === 7 ? " (Obscura)" : ""}...`,
 			);
 			const raw = await run();
 			// Only real browsers earn the "this 4xx is genuine" fallback below;

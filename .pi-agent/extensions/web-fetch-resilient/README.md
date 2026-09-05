@@ -4,7 +4,7 @@ This directory holds the **tiered fetch core** used by `../web.ts`, which owns t
 
 ## Tiers
 
-Default order: `plain → curl → chrome → tinyfish → firecrawl → safari`.
+Default order: `plain → curl → chrome → tinyfish → firecrawl → safari` (`obscura` slot reserved between `curl` and `chrome`, off by default since v0.2.1 measured 0/16 ladder answers — see `eval.ts` and `config.ts`).
 Tier *numbers* are stable identities, not positions — reordering the ladder
 never renumbers a tier, so a `[via tier 6]` footer means the same thing across
 any ordering.
@@ -17,6 +17,7 @@ any ordering.
 | 4 | dedicated minimized private Safari window (macOS) | an independent real-browser trust tier when Chrome's profile is denied/rate-limited |
 | 5 | Firecrawl scrape | a hosted renderer with its own egress IPs — costs a credit per page |
 | 6 | TinyFish fetch | a hosted Chromium render returning markdown — free at any wallet balance |
+| 7 | Obscura `fetch --dump html` (off by default) | stateless local V8 render — instant boot, no profile trust |
 
 ### Why the rescue tiers sit in that order
 

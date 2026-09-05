@@ -425,6 +425,7 @@ const FETCH_TEST_URL = "https://example.com/";
 const FETCH_COST_PER_CALL: Record<FetchTierName, string> = {
   plain: "free",
   curl: "free",
+  obscura: "free (stateless render)",
   chrome: "free (warm profile)",
   tinyfish: "free",
   firecrawl: "1 credit",
@@ -515,7 +516,7 @@ async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
 const WEB_HELP = [
   "/web                                   show chains, keys, cool-offs",
   "/web search order tavily exa brave firecrawl codex",
-  "/web fetch order plain curl chrome tinyfish firecrawl safari",
+  "/web fetch order plain curl obscura chrome tinyfish firecrawl safari",
   "/web search off|on <name>",
   "/web fetch off|on <name>",
   "/web format native|serp|answer",
@@ -767,7 +768,7 @@ export default function web(pi: ExtensionAPI): void {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a URL as readable markdown. Escalates on failure/bot-challenges: plain fetch → curl with browser headers → headless Chrome. YouTube links return the transcript. Result footer reports which tier succeeded.",
+      "Fetch a URL as readable markdown. Escalates on failure/bot-challenges: plain → curl → Obscura (off by default) → headless Chrome → TinyFish → Firecrawl → Safari. YouTube links return the transcript. Result footer reports which tier succeeded.",
     parameters: Type.Object({
       url: Type.String({ description: "http(s) URL" }),
       max_chars: Type.Optional(Type.Number({ description: `Truncation limit (default ${DEFAULT_MAX_CHARS})` })),

@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const SEARCH_BACKENDS = ["brave", "tavily", "exa", "firecrawl", "codex"] as const;
-export const FETCH_TIERS = ["plain", "curl", "chrome", "safari", "firecrawl", "tinyfish"] as const;
+export const FETCH_TIERS = ["plain", "curl", "obscura", "chrome", "safari", "firecrawl", "tinyfish"] as const;
 
 export type SearchBackend = (typeof SEARCH_BACKENDS)[number];
 export type FetchTierName = (typeof FETCH_TIERS)[number];
@@ -51,15 +51,29 @@ export interface WebConfig {
  * A credit is worth more there than as a fourth opinion on a SERP.
  *
  * The fetch ladder runs local-first, then TinyFish, then Firecrawl, then
- * Safari. TinyFish renders in a real Chromium and costs nothing at any wallet
+ * Safari. Obscura sits between curl and Chrome: same local residential egress
+ * as Chrome but stateless and instant-boot, so it gets first refusal on
+ * anything needing JS before paying Chrome's ~14s sensor/profile cost.
+ * TinyFish renders in a real Chromium and costs nothing at any wallet
  * balance, so it takes the first rescue attempt and leaves Firecrawl's credits
  * for the pages it cannot read. Safari is last despite being free: it drives
  * the real GUI app, so it is the one tier a user can *see* running, and that
  * makes it a last resort rather than a mid-ladder default.
+ *
+ * Obscura (Rust/V8, v0.2.1) is off by default. Measured 2026-09-05 on the
+ * 16-URL eval: 6/16 isolated (identical misses for render and stealth
+ * builds) and 0/16 answers inside the ladder — every win came from existing
+ * tiers while each escalation past curl paid ~6s of Obscura failure latency.
+ * Same-egress comparison is damning: Tractor Supply passes via plain fetch
+ * and fails via Obscura, so its fingerprint is currently weaker than header
+ * impersonation on Akamai. The slot is reserved at position 3; enable with
+ * `/web fetch on obscura` and re-run eval.ts when upstream ships newer
+ * macOS binaries (v0.2.2 cut 2026-09-05 with no macOS assets yet).
+ * `OBSCURA_BIN=obscura-stealth` selects the stealth transport for eval.
  */
 export const DEFAULT_CONFIG: WebConfig = {
   search: { order: ["tavily", "exa", "brave", "firecrawl", "codex"], off: [] },
-  fetch: { order: ["plain", "curl", "chrome", "tinyfish", "firecrawl", "safari"], off: [] },
+  fetch: { order: ["plain", "curl", "obscura", "chrome", "tinyfish", "firecrawl", "safari"], off: ["obscura"] },
   format: "native",
   excerpts: "auto",
   skipUntil: {},
