@@ -18,6 +18,7 @@ import nextSteps, {
   buildPrompt,
   completionItems,
   parseNextSteps,
+  removeStep,
   resolveSelection,
 } from "../extensions/next-steps.ts";
 
@@ -44,8 +45,25 @@ async function mount(replies = [REPLY]) {
   url.search = `?t=${Math.random()}`;
   const extension = (await import(url.href)).default;
 
+  // pi.on() accumulates; the Map-of-arrays below mirrors that so every
+  // session_start handler survives.
   const handlers = new Map();
-  extension({ on: (name, handler) => handlers.set(name, handler) });
+  const widgets = new Map();
+  extension({
+    on: (name, handler) => {
+      if (!handlers.has(name)) handlers.set(name, []);
+      handlers.get(name).push(handler);
+    },
+  });
+
+  const emit = async (name, event, ctxArg) => {
+    let result;
+    for (const handler of handlers.get(name) ?? []) {
+      const out = await handler(event, ctxArg ?? ctx);
+      if (out !== undefined) result = out;
+    }
+    return result;
+  };
 
   const notices = [];
   const editor = { text: "" };
@@ -74,19 +92,40 @@ async function mount(replies = [REPLY]) {
       setEditorText: (text) => {
         editor.text = text;
       },
+      getEditorText: () => editor.text,
       addAutocompleteProvider: (factory) => {
         provider = factory(builtIn);
+      },
+      setWidget: (key, value) => {
+        if (value === undefined) widgets.delete(key);
+        else widgets.set(key, value);
       },
     },
     sessionManager: { getBranch: () => branch },
   };
 
-  handlers.get("session_start")({}, ctx);
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({}, ctx);
+  }
+
+  const assistantEvent = (text) => ({
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
 
   return {
     notices,
     editor,
-    submit: (text, source = "interactive") => handlers.get("input")({ text, source }, ctx),
+    widgets,
+    emit,
+    widgetRow: (key = "next-steps-chips") => {
+      const factory = widgets.get(key);
+      assert.ok(factory, "chip widget is set");
+      return factory({}, THEME);
+    },
+    submit: (text, source = "interactive") => emit("input", { text, source }),
+    finishAssistant: (text = REPLY, ctxOverride) =>
+      emit("message_end", assistantEvent(text), ctxOverride ?? ctx),
+    finishMessage: (message, ctxOverride) => emit("message_end", { message }, ctxOverride ?? ctx),
     suggest: (line, options = {}) => provider.getSuggestions([line], 0, line.length, options),
     complete: (line, value) =>
       provider.applyCompletion([line], 0, line.length, { value, label: value }, value),
@@ -257,4 +296,117 @@ test("a line that is not an invocation is left to pi", async () => {
   const pi = await mount();
   assert.deepEqual((await pi.suggest("/mod")).items.map((i) => i.value), ["model"]);
   assert.deepEqual(pi.complete("/1", "model").lines, ["delegated"]);
+});
+
+const CLICK = {
+  type: "click",
+  button: "left",
+  x: 0,
+  y: 0,
+  screenX: 0,
+  screenY: 0,
+  width: 20,
+  height: 1,
+  shift: false,
+  alt: false,
+  ctrl: false,
+};
+const PRESS = { ...CLICK, type: "press" };
+const THEME = { fg: (_color, text) => text };
+
+test("session_start restores the chip widget from branch history", async () => {
+  const pi = await mount();
+  const row = pi.widgetRow();
+  assert.equal(row.render(120).join("\n"), "Quick select: [1]  [2]  [3]");
+});
+
+test("message_end updates the sticky chips, non-steps leave them alone", async () => {
+  const pi = await mount([]);
+  assert.equal(pi.widgets.has("next-steps-chips"), false);
+  await pi.finishAssistant(REPLY);
+  assert.equal(pi.widgetRow().render(120).join("\n"), "Quick select: [1]  [2]  [3]");
+
+  await pi.finishAssistant("Yes, that is the right port.");
+  assert.equal(pi.widgetRow().render(120).join("\n"), "Quick select: [1]  [2]  [3]", "no steps: last chips stay up");
+
+  await pi.finishMessage({ role: "user", content: [{ type: "text", text: REPLY }] });
+  assert.equal(pi.widgetRow().render(120).join("\n"), "Quick select: [1]  [2]  [3]", "user messages never touch chips");
+});
+
+test("the next turn clears the chips", async () => {
+  const pi = await mount([]);
+  await pi.finishAssistant(REPLY);
+  assert.equal(pi.widgets.has("next-steps-chips"), true);
+  await pi.emit("before_agent_start", {});
+  assert.equal(pi.widgets.has("next-steps-chips"), false);
+});
+
+test("every chip fires, gaps and presses do nothing", async () => {
+  const pi = await mount([]);
+  await pi.finishAssistant("Next steps:\n1. alpha\n2. beta\n3. gamma");
+  const row = pi.widgetRow();
+  assert.equal(row.render(80).join("\n"), "Quick select: [1]  [2]  [3]");
+
+  assert.equal(row.handleMouse(PRESS), undefined);
+  assert.equal(row.handleMouse({ ...CLICK, x: 0 }), undefined, "label is dead");
+  assert.equal(row.handleMouse({ ...CLICK, x: 17 }), undefined, "gap between chips is dead");
+  assert.equal(pi.editor.text, "");
+
+  assert.deepEqual(row.handleMouse({ ...CLICK, x: 14 }), { handled: true });
+  assert.equal(pi.editor.text, "alpha");
+
+  pi.editor.text = "";
+  assert.deepEqual(row.handleMouse({ ...CLICK, x: 20 }), { handled: true });
+  assert.equal(pi.editor.text, "beta");
+
+  pi.editor.text = "";
+  assert.deepEqual(row.handleMouse({ ...CLICK, x: 25 }), { handled: true });
+  assert.equal(pi.editor.text, "gamma");
+});
+
+test("tapping more chips AND-appends like /12, re-tapping removes again", async () => {
+  const pi = await mount([]);
+  await pi.finishAssistant("Next steps:\n1. alpha\n2. beta\n3. gamma");
+  const row = pi.widgetRow();
+  assert.equal(row.render(80).join("\n"), "Quick select: [1]  [2]  [3]");
+
+  row.handleMouse({ ...CLICK, x: 14 });
+  assert.equal(pi.editor.text, "alpha");
+  row.handleMouse({ ...CLICK, x: 25 });
+  assert.equal(pi.editor.text, `alpha\n\nAND\n\ngamma`);
+  row.handleMouse({ ...CLICK, x: 14 });
+  assert.equal(pi.editor.text, "gamma", "re-tap removes that step");
+  row.handleMouse({ ...CLICK, x: 25 });
+  assert.equal(pi.editor.text, "", "removing the last step clears the editor");
+});
+
+test("picked chips render underlined", async () => {
+  const pi = await mount([]);
+  await pi.finishAssistant("Next steps:\n1. alpha\n2. beta\n3. gamma");
+  // Marks dim text with parens and underlines with angles.
+  const mark = {
+    fg: (color, text) => (color === "dim" ? `(${text})` : text),
+    underline: (text) => `<${text}>`,
+  };
+  const factory = pi.widgets.get("next-steps-chips");
+  const row = factory({}, mark);
+  assert.equal(row.render(80).join("\n"), "(Quick select:) ([1])  ([2])  ([3])");
+
+  row.handleMouse({ ...CLICK, x: 14 });
+  assert.equal(row.render(80).join("\n"), "(Quick select:) <[1]>  ([2])  ([3])");
+  row.handleMouse({ ...CLICK, x: 25 });
+  assert.equal(row.render(80).join("\n"), "(Quick select:) <[1]>  ([2])  <[3]>");
+  row.handleMouse({ ...CLICK, x: 14 });
+  assert.equal(row.render(80).join("\n"), "(Quick select:) ([1])  ([2])  <[3]>");
+});
+
+test("removeStep keeps custom text and leaves no orphaned AND", () => {
+  assert.equal(removeStep("alpha", "alpha"), "");
+  assert.equal(removeStep(`alpha\n\nAND\n\ngamma`, "alpha"), "gamma");
+  assert.equal(removeStep(`alpha\n\nAND\n\ngamma`, "gamma"), "alpha");
+  assert.equal(
+    removeStep(`but ssh\n\nAND\n\nalpha`, "alpha"),
+    "but ssh",
+    "typed text alongside survives",
+  );
 });

@@ -64,11 +64,26 @@
  * nothing at all: no popup, Enter submits the raw text, and the input handler
  * below explains what went wrong instead of the model receiving "/9".
  *
+ * ## Clickable chips
+ *
+ * A sticky widget row just above the editor shows the latest reply's steps as
+ * `Quick select: [1] [2] [3]` — numbers only, since the wording lives in the
+ * reply above and in /n's Tab completion. Tapping chips multi-selects like
+ * /12: the first tap fills the editor, later taps AND-append, re-tapping a
+ * picked step removes it again. Idle chips sit dim while picked ones light
+ * up bright + underlined, since bright was reading as already-selected.
+ * The widget updates on every assistant message message
+ * that parses to steps, is restored from branch history on session_start, and
+ * is cleared when the next turn starts so stale chips never sit under a fresh
+ * prompt. Fullscreen only, click-only (press is left alone so transcript
+ * drag-select keeps working).
+ *
  * @see .pi-agent/test/next-steps.test.mjs
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 /** Joins two picked steps. Capitalised on purpose: it reads as an instruction. */
 const AND = "\n\nAND\n\n";
@@ -78,6 +93,9 @@ const LOOKBACK = 3;
 
 /** Width of the step preview shown in the autocomplete dropdown. */
 const PREVIEW = 140;
+
+/** Widget key for the sticky chip row above the editor. */
+const CHIP_WIDGET_KEY = "next-steps-chips";
 
 /** `/13`, `/2 with more instructions`. Trailing space is what completion inserts. */
 const INVOCATION_RE = /^\/(\d{1,4})(?:[ \t]+([\s\S]+?))?[ \t]*$/;
@@ -198,6 +216,26 @@ export function buildPrompt(steps: string[], picks: number[], extra = ""): strin
   return trailer ? `${body}\n\n${trailer}` : body;
 }
 
+/**
+ * Editor text with one picked step removed again (chip toggle-off).
+ *
+ * Exact step chunks split on AND go first, so custom text typed alongside
+ * survives verbatim. The substring fallback covers steps embedded in larger
+ * custom text; it re-splits on AND and drops empties so no orphaned "AND"
+ * line is left behind.
+ */
+export function removeStep(current: string, step: string): string {
+  const parts = current.split(AND);
+  const kept = parts.filter((part) => part.trim() !== step.trim());
+  if (kept.length !== parts.length) return kept.join(AND);
+  return current
+    .replace(step, "")
+    .split(AND)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(AND);
+}
+
 function preview(text: string): string {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length > PREVIEW ? `${line.slice(0, PREVIEW - 1)}…` : line;
@@ -238,6 +276,71 @@ export default function nextSteps(pi: ExtensionAPI) {
   // Keyed on the newest assistant entry, because getSuggestions runs on every
   // keystroke inside a slash command and the answer only changes per reply.
   let cache: { id: string; found: NextSteps | undefined } | undefined;
+  // Latest TUI context, for chip clicks. The widget factory closes over the
+  // ctx that showed it, but clicks arriving later use this instead so they
+  // survive session_start rebinding (same pattern as footer.ts).
+  let liveCtx: ExtensionContext | undefined;
+
+  const showChips = (ctx: ExtensionContext, steps: string[]): void => {
+    if (!ctx.hasUI) return;
+    liveCtx = ctx;
+    // Single line, packed left: "[1]  [2]  [3]". Zones are computed in
+    // render (same pattern as footer.ts) so every chip hit-tests exactly.
+    // No HStack: its stretch layout spaced chips unevenly and only the first
+    // chip reliably received clicks.
+    const picks = steps.slice(0, 9);
+    ctx.ui.setWidget(CHIP_WIDGET_KEY, (_tui, theme) => {
+      let zones: Array<{ n: number; start: number; end: number }> = [];
+      return {
+        invalidate() {},
+        render(width: number): string[] {
+          zones = [];
+          const current = liveCtx?.hasUI ? (liveCtx.ui.getEditorText() ?? "") : "";
+          // Dim label up front so the bare numbers read as a menu; the label
+          // itself is dead (not a zone). It also pushes [1] off column 0,
+          // which sat against the terminal edge and was easy to miss.
+          const label = "Quick select:";
+          let line = theme.fg("dim", label);
+          let cursor = label.length;
+          picks.forEach((step, index) => {
+            const n = index + 1;
+            line += index === 0 ? " " : "  ";
+            cursor += index === 0 ? 1 : 2;
+            const chip = `[${n}]`;
+            zones.push({ n, start: cursor, end: cursor + chip.length });
+            // Idle chips sit dim; picked ones light up bright + underlined.
+            // Bright was reading as "already selected", so the polarities
+            // are flipped from the obvious default. Read live each render:
+            // the click below setEditorTexts, and a click defaults to
+            // re-rendering, so the mark follows the taps.
+            const picked = current.includes(step);
+            line += picked
+              ? theme.underline(theme.fg("accent", chip))
+              : theme.fg("dim", chip);
+            cursor += chip.length;
+          });
+          if (width <= 0) return [];
+          return [truncateToWidth(line, width, "…")];
+        },
+        handleMouse(event: { type: string; button: string; x: number }) {
+          if (event.type !== "click" || event.button !== "left") return undefined;
+          const hit = zones.find((z) => event.x >= z.start && event.x < z.end);
+          if (!hit) return undefined;
+          const live = liveCtx;
+          if (!live?.hasUI) return undefined;
+          // Multi-select like /12: taps AND-append in tap order, re-tapping
+          // a picked step removes it again. Custom editor text is preserved:
+          // only exact step chunks are dropped, the rest is rejoined as-is.
+          const step = steps[hit.n - 1] ?? "";
+          const current = live.ui.getEditorText() ?? "";
+          if (!current.trim()) live.ui.setEditorText(step);
+          else if (!current.includes(step)) live.ui.setEditorText(`${current}${AND}${step}`);
+          else live.ui.setEditorText(removeStep(current, step));
+          return { handled: true };
+        },
+      };
+    });
+  };
 
   const findSteps = (ctx: ExtensionContext): NextSteps | undefined => {
     const replies: { id: string; text: string }[] = [];
@@ -270,6 +373,7 @@ export default function nextSteps(pi: ExtensionAPI) {
   };
 
   pi.on("input", async (event, ctx) => {
+    if (ctx.hasUI) liveCtx = ctx;
     // Messages this or another extension injected are not someone typing "/2".
     if (event.source === "extension") return;
     const match = INVOCATION_RE.exec(event.text);
@@ -311,7 +415,14 @@ export default function nextSteps(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    if (ctx.hasUI) liveCtx = ctx;
     if (ctx.mode !== "tui") return;
+    // Restore the sticky row after /reload or a session switch.
+    if (ctx.hasUI) {
+      const found = findSteps(ctx);
+      if (found) showChips(ctx, found.steps);
+      else ctx.ui.setWidget(CHIP_WIDGET_KEY, undefined);
+    }
 
     ctx.ui.addAutocompleteProvider((current) => ({
       async getSuggestions(lines, cursorLine, cursorCol, options) {
@@ -363,5 +474,34 @@ export default function nextSteps(pi: ExtensionAPI) {
         return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
       },
     }));
+  });
+
+  // Sticky chip row above the editor showing the latest reply's steps.
+  // Numbers only: the full wording lives in the reply above and in /n's
+  // Tab completion. Each chip fills the editor with that step (same
+  // buildPrompt path as /n), expanding rather than sending so it can still
+  // be edited or abandoned. Cleared when the next turn starts, so stale chips
+  // never linger under a fresh prompt.
+  // Click-only (no press capture) so drag-selecting the transcript still works.
+  pi.on("message_end", async (event, ctx) => {
+    if (ctx.hasUI) liveCtx = ctx;
+    if (event.message.role !== "assistant") return;
+    if (ctx.mode !== "tui" || !ctx.hasUI) return;
+    const text = event.message.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("\n");
+    if (!text.trim()) return;
+    const steps = parseNextSteps(text);
+    if (steps.length === 0) return;
+    showChips(ctx, steps);
+  });
+
+  // The next turn owns the editor now; stale chips underneath it are just bait.
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (ctx.hasUI) ctx.ui.setWidget(CHIP_WIDGET_KEY, undefined);
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if (ctx.hasUI) ctx.ui.setWidget(CHIP_WIDGET_KEY, undefined);
   });
 }
