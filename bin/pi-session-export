@@ -1,0 +1,119 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# pi-session-export — render pi session JSONL transcripts to markdown for qmd.
+#
+# Pi stores sessions as JSONL under ~/.pi/agent/sessions/--<path>--/<ts>_<uuid>.jsonl
+# (see pi docs/session-format.md). qmd's hybrid search works best on clean
+# markdown, so this renders each session to ~/.pi/session-md/<project>/<file>.md
+# containing just the conversation: user + assistant text. Tool results,
+# thinking blocks, and base64 images are dropped.
+#
+# Incremental: a session is re-exported only when its source mtime is newer
+# than the rendered file, so running this often is cheap.
+#
+# Called by ~/.local/bin/qmd-update-job (every 30 min) and spawned by the
+# qmd-memory pi extension at session start/shutdown.
+
+require "json"
+require "fileutils"
+
+SESSIONS_DIR = ENV.fetch("PI_SESSIONS_DIR", File.expand_path("~/.pi/agent/sessions"))
+OUT_DIR      = ENV.fetch("PI_SESSION_MD_DIR", File.expand_path("~/.pi/session-md"))
+
+exported = 0
+skipped  = 0
+failed   = 0
+
+def text_of(content)
+  if content.is_a?(String)
+    content
+  elsif content.is_a?(Array)
+    content.filter_map { |c| c["text"] if c.is_a?(Hash) && c["type"] == "text" }.join("\n")
+  end
+end
+
+def slugify(str, max = 60)
+  s = str.to_s.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/^-+|-+$/, "")
+  s.empty? ? "session" : s[0, max].gsub(/-+$/, "")
+end
+
+sessions = Dir.glob(File.join(SESSIONS_DIR, "**", "*.jsonl")).sort
+sessions.each do |src|
+  begin
+    project_dir = nil
+    session_ts  = nil
+    session_id  = File.basename(src, ".jsonl")
+    name        = nil
+    first_user  = nil
+    turns       = []
+
+    File.foreach(src) do |line|
+      begin
+        entry = JSON.parse(line)
+      rescue JSON::ParserError
+        next
+      end
+
+      case entry["type"]
+      when "session"
+        project_dir = entry["cwd"]
+        session_ts  = entry["timestamp"]
+      when "session_info"
+        name = entry["name"] if entry["name"].to_s != ""
+      when "compaction"
+        turns << ["Compaction Summary", entry["summary"].to_s] unless entry["summary"].to_s.empty?
+      when "branch_summary"
+        turns << ["Branch Summary", entry["summary"].to_s] unless entry["summary"].to_s.empty?
+      when "message"
+        msg  = entry["message"]
+        next unless msg.is_a?(Hash)
+        text = text_of(msg["content"])
+        next if text.nil? || text.strip.empty?
+
+        case msg["role"]
+        when "user"
+          first_user ||= text.strip.lines.first.to_s.strip
+          turns << ["User", text]
+        when "assistant"
+          turns << ["Assistant", text]
+        end
+      end
+    end
+
+    next if turns.empty? # header-only / abandoned sessions
+
+    project_key = project_dir.to_s.gsub("/", "-").gsub(/^-+/, "")
+    project_key = "unknown" if project_key.empty?
+    dest_dir  = File.join(OUT_DIR, project_key)
+    uuid = session_id.include?("_") ? session_id.split("_").last : session_id
+    dest_name = "#{(session_ts || "unknown-date")[0, 10]}-#{slugify(name || first_user)}-#{uuid[0, 8]}.md"
+    dest      = File.join(dest_dir, dest_name)
+
+    if File.exist?(dest) && File.mtime(src) <= File.mtime(dest)
+      skipped += 1
+      next
+    end
+
+    title = name || first_user || session_id
+    body  = +"# #{title}\n\n"
+    body << "- Session: #{session_id}\n"
+    body << "- Date: #{session_ts}\n" if session_ts
+    body << "- Project: #{project_dir}\n" if project_dir
+    body << "\n---\n\n"
+    turns.each do |role, text|
+      body << "## #{role}\n\n#{text.strip}\n\n"
+    end
+
+    FileUtils.mkdir_p(dest_dir)
+    tmp = "#{dest}.tmp-#{Process.pid}"
+    File.write(tmp, body)
+    File.rename(tmp, dest)
+    exported += 1
+  rescue StandardError => e
+    warn "pi-session-export: #{src}: #{e.class}: #{e.message}"
+    failed += 1
+  end
+end
+
+puts "pi-session-export: #{exported} exported, #{skipped} skipped, #{failed} failed (#{sessions.size} scanned)"

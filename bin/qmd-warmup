@@ -1,0 +1,45 @@
+#!/bin/sh
+# qmd-warmup — warm the qmd HTTP daemon's models after login so the first real
+# query (e.g. from the qmd-memory pi extension) doesn't pay the cold-start cost.
+#
+# One-shot job: installed as ~/Library/LaunchAgents/com.ericboehs.qmd-warmup.plist
+# (RunAtLoad, no KeepAlive — com.qmd.mcp owns the daemon itself).
+#
+# The daemon binds localhost (IPv6 ::1 on this machine), hence the two base URLs.
+
+LOG="$HOME/.cache/qmd/warmup.log"
+
+{
+	echo "=== $(date '+%Y-%m-%dT%H:%M:%S%z') warmup start ==="
+
+	base=""
+	i=0
+	while [ -z "$base" ] && [ $i -lt 30 ]; do
+		for b in "http://localhost:8181" "http://[::1]:8181"; do
+			if curl -sf -m 2 "$b/health" >/dev/null 2>&1; then
+				base="$b"
+				break
+			fi
+		done
+		[ -z "$base" ] && sleep 3
+		i=$((i + 1))
+	done
+
+	if [ -z "$base" ]; then
+		echo "warmup: daemon did not come up within 90s, giving up"
+		exit 0
+	fi
+
+	# lex sub-query warms nothing much, but the vec sub-query loads the embedding
+	# model and rerank:true loads the reranker — the two things that cost 10-30s
+	# on a cold start.
+	if curl -sf -m 120 -X POST "$base/query" \
+		-H 'Content-Type: application/json' \
+		-d '{"searches":[{"type":"lex","query":"the"},{"type":"vec","query":"warm up embedding and rerank models"}],"limit":1,"rerank":true}' >/dev/null 2>&1; then
+		echo "warmup: models warm ($base)"
+	else
+		echo "warmup: query failed (daemon up but models not warmed)"
+	fi
+
+	echo "=== $(date '+%Y-%m-%dT%H:%M:%S%z') warmup done ==="
+} >>"$LOG" 2>&1
