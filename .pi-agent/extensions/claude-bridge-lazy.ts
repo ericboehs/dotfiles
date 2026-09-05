@@ -59,7 +59,7 @@ function withCatalogueFields(
   return models.map(
     (model) =>
       ({
-        ...(model as Record<string, unknown>),
+        ...(model as unknown as Record<string, unknown>),
         ...overrides[(model as { id?: string }).id ?? ""],
         api: BRIDGE_API,
         provider: PROVIDER_ID,
