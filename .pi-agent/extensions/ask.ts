@@ -59,6 +59,11 @@ export function parseMultiPicks(raw: string, count: number): number[] {
 	return picks;
 }
 
+/** RPC select() takes bare strings, so fold the description in. Pure for tests. */
+export function formatRpcLabel(label: string, description?: string): string {
+	return description ? `${label} — ${description}` : label;
+}
+
 /** "User selected: …" plus "User wrote: …" lines. Pure for tests. */
 export function formatAnswerLines(labels: string[], answers: string[], custom: string[]): string[] {
 	const picked = answers.map((a) => `${labels.indexOf(a) + 1}. ${a}`).join(", ");
@@ -228,12 +233,10 @@ export default function ask(pi: ExtensionAPI) {
 					});
 				}
 				// RPC: dialog protocol (custom() is TUI-only and returns undefined).
-				const picked = await ctx.ui.select(
-					question,
-					items.map((i) => i.label),
-				);
+				const display = items.map((i) => formatRpcLabel(i.label, i.description));
+				const picked = await ctx.ui.select(question, display);
 				if (picked === undefined) return undefined;
-				const idx = items.findIndex((i) => i.label === picked);
+				const idx = display.findIndex((d) => d === picked);
 				return idx >= 0 ? items[idx]!.value : undefined;
 			};
 

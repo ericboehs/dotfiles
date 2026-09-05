@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import askExtension, { buildItems, formatAnswerLines, parseMultiPicks } from "../extensions/ask.ts";
+import askExtension, { buildItems, formatAnswerLines, formatRpcLabel, parseMultiPicks } from "../extensions/ask.ts";
 
 test("buildItems numbers labels and appends the custom row", () => {
 	const items = buildItems([
@@ -46,6 +46,39 @@ test("formatAnswerLines numbers picks and appends free text", () => {
 		"User selected: ",
 		"User wrote: moldy cheese",
 	]);
+});
+
+test("formatRpcLabel folds the description in", () => {
+	assert.equal(formatRpcLabel("1. Mushrooms", "Earthy"), "1. Mushrooms — Earthy");
+	assert.equal(formatRpcLabel("1. Pepperoni"), "1. Pepperoni");
+});
+
+test("execute maps an RPC display string back to its value", async () => {
+	const tool = await mountTool();
+	let shown;
+	const rpc = {
+		hasUI: true,
+		mode: "rpc",
+		ui: {
+			select: async (_title, options) => {
+				shown = options;
+				return options[1];
+			},
+			input: async () => {
+				throw new Error("input should not be called");
+			},
+		},
+	};
+	const result = await tool.execute(
+		"t1",
+		{ question: "Which?", options: [{ label: "Pepperoni" }, { label: "Mushrooms", description: "Earthy" }] },
+		undefined,
+		undefined,
+		rpc,
+	);
+	assert.deepEqual(shown, ["1. Pepperoni", "2. Mushrooms — Earthy", "3. Type something."]);
+	assert.equal(result.content[0].text, "User selected: 2. Mushrooms");
+	assert.deepEqual(result.details.answers, ["Mushrooms"]);
 });
 
 test("tool registers as sequential ask", async () => {
