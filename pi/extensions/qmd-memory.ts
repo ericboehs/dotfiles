@@ -20,9 +20,8 @@ import { basename } from "node:path";
 
 const BASES = ["http://localhost:8181", "http://[::1]:8181"];
 const STATE_FILE = `${homedir()}/.cache/pi-qmd-memory`;
-const COLLECTIONS = ["wiki", "sessions"];
 const LIMIT = 3;
-const TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = 10_000;
 const EXPORTER = `${homedir()}/Code/github.com/ericboehs/dotfiles/bin/pi-session-export`;
 
 interface QmdResult {
@@ -73,53 +72,110 @@ function spawnExporter(): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.on("session_start", (_event, ctx) => {
-		spawnExporter(); // catch sessions that ended without a clean shutdown
-		if (!isEnabled()) return;
+	let pendingQuery: Promise<QmdResult[]> | null = null;
+	let injected = false;
 
-		const cwd = ctx?.cwd ?? process.cwd();
+	function startQuery(cwd: string): void {
+		if (pendingQuery) return;
 		const project = basename(cwd);
-
-		void (async () => {
-			try {
-				const data = await qmdQuery({
-					intent: `background context for a work session in ${cwd}`,
+		pendingQuery = (async () => {
+			// Parallel scoped queries. Cross-collection vec search on this index
+			// costs 8-18s (email alone is ~14s), which races the user's first turn
+			// and usually loses. Splitting by collection keeps each query fast:
+			//   vec over `sessions` (~3s) → past work on this project
+			//   lex over `wiki` (~0.1s)   → current-project notes
+			// RRF/rerank skipped for speed; memory hints don't need perfect ranking.
+			const [sess, wiki] = await Promise.all([
+				qmdQuery({
+					intent: `past sessions about ${project} (cwd: ${cwd})`,
 					searches: [
 						{
 							type: "vec",
 							query: `${project} project decisions, status, and lessons learned`,
 						},
-						{ type: "lex", query: project },
 					],
-					collections: COLLECTIONS,
-					limit: LIMIT,
-					rerank: true,
-				});
-				if (!data?.results?.length || !isEnabled()) return;
+					collections: ["sessions"],
+					limit: 2,
+					rerank: false,
+				}),
+				qmdQuery({
+					intent: `wiki notes about ${project}`,
+					searches: [{ type: "lex", query: project }],
+					collections: ["wiki"],
+					limit: 2,
+					rerank: false,
+				}),
+			]);
+			return [...(sess?.results ?? []), ...(wiki?.results ?? [])].slice(
+				0,
+				LIMIT,
+			);
+		})();
+		pendingQuery.catch(() => {}); // avoid unhandled rejection; consumers guard
+	}
 
-				const hits = data.results
-					.map((r, i) => {
-						const snippet = (r.snippet ?? "").replace(/\s+/g, " ").trim();
-						const ctxLine = r.context ? `\n   context: ${r.context}` : "";
-						return `${i + 1}. **${r.title ?? r.file}** — ${r.file} (${Math.round(r.score * 100)}%)${ctxLine}\n   ${snippet.slice(0, 300)}`;
-					})
-					.join("\n\n");
+	function formatResults(results: QmdResult[], project: string): string {
+		const hits = results
+			.map((r, i) => {
+				const snippet = (r.snippet ?? "").replace(/\s+/g, " ").trim();
+				const ctxLine = r.context ? `\n   context: ${r.context}` : "";
+				return `${i + 1}. **${r.title ?? r.file}** — ${r.file} (${Math.round(r.score * 100)}%)${ctxLine}\n   ${snippet.slice(0, 300)}`;
+			})
+			.join("\n\n");
+		return (
+			`## Retrieved context (qmd memory)\n\n` +
+			`Top hits from Eric's wiki and past sessions for "${project}":\n\n${hits}\n\n` +
+			`Search more with: qmd query "..." (all) · qmd search "..." -c wiki · qmd search "..." -c sessions`
+		);
+	}
 
-				await pi.sendMessage({
+	// Kick the query off immediately so it runs while the user types. If it's
+	// done by the first prompt, before_agent_start injects with zero latency.
+	pi.on("session_start", (_event, ctx) => {
+		spawnExporter(); // catch sessions that ended without a clean shutdown
+		if (!isEnabled()) return;
+		injected = false;
+		pendingQuery = null;
+		startQuery(ctx?.cwd ?? process.cwd());
+	});
+		// Inject at the first prompt if the query is ready (zero added latency);
+	// otherwise let the query land late via sendMessage below.
+	pi.on("before_agent_start", async () => {
+		if (injected || !isEnabled() || !pendingQuery) return undefined;
+		const query = pendingQuery;
+		const results = await Promise.race([
+			query,
+			new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+		]);
+		if (injected || !isEnabled()) return undefined;
+		if (results && results.length) {
+			injected = true;
+			return {
+				message: {
 					customType: "qmd-memory",
 					display: false,
-					content:
-						`## Retrieved context (qmd memory)\n\n` +
-						`Top hits from Eric's wiki and past sessions for "${project}":\n\n${hits}\n\n` +
-						`Search more with: qmd query "..." (all) · qmd search "..." -c wiki · qmd search "..." -c sessions`,
+					content: formatResults(results, basename(process.cwd())),
+				},
+			};
+		}
+		// Query still in flight — inject via sendMessage whenever it lands.
+		void query
+			.then((res) => {
+				if (injected || !res?.length || !isEnabled()) return;
+				injected = true;
+				return pi.sendMessage({
+					customType: "qmd-memory",
+					display: false,
+					content: formatResults(res, basename(process.cwd())),
 				});
-			} catch (err) {
+			})
+			.catch((err) =>
 				console.warn(
-					"[qmd-memory] context injection failed:",
+					"[qmd-memory] late injection failed:",
 					err instanceof Error ? err.message : err,
-				);
-			}
-		})();
+				),
+			);
+		return undefined;
 	});
 
 	pi.on("session_shutdown", () => {
