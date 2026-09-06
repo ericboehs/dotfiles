@@ -5,21 +5,24 @@
 //                        after login), spawn the session exporter
 //   before_agent_start → if the query already finished while the user typed,
 //                        inject as a persisted hidden message
-//   context            → else, on the first LLM call where the query has
-//                        landed, append the results to the outgoing messages
-//                        (non-persistent, re-applied every call — survives
-//                        compaction)
+//   context            → else, on every LLM call until it's persisted, append
+//                        the results to the outgoing messages once the query
+//                        lands (non-persistent — survives compaction)
 //   query resolution   → if the turn already ran without context (fast typist,
 //                        single-call turn), persist-inject via sendMessage so
 //                        the next turn has it
 //
-// A single `delivered` flag guards all three delivery paths. The daemon query
-// goes to POST /query (plain JSON, no MCP). Toggle with /memory
-// [on|off|toggle|status|show] — bare /memory flips it; show lists what was
-// injected. State persists in ~/.cache/pi-qmd-memory (default: on).
+// Every delivery also appends a TUI entry: collapsed it's one line ("qmd
+// memory: N hits — ctrl+o expands"); ctrl+o shows the full hit details.
+//
+// A single `persisted` flag guards against double-injection between the
+// message paths. The daemon query goes to POST /query (plain JSON, no MCP).
+// Toggle with /memory [on|off|toggle|status|show] — bare /memory flips it.
+// State persists in ~/.cache/pi-qmd-memory (default: on).
 // QMD_MEMORY_DEBUG=1 traces delivery decisions.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -86,7 +89,8 @@ export default function (pi: ExtensionAPI) {
 	let queryResults: QmdResult[] | null = null; // cached once resolved
 	let project = "";
 	let sessionCtx: unknown = undefined;
-	let delivered = false; // any delivery path has fired
+	let persisted = false; // full block is in the session file
+	let contextNotified = false; // ping only on the first context delivery
 	let lastInjectedTitles = "";
 
 	function debug(msg: string): void {
@@ -110,6 +114,19 @@ export default function (pi: ExtensionAPI) {
 		lastInjectedTitles = results
 			.map((r, i) => `${i + 1}. ${r.title ?? r.file}`)
 			.join("\n");
+	}
+
+	// Visible, ctrl+o-expandable record of what was injected. Lives in the
+	// transcript; the model-facing message stays hidden (display:false).
+	function appendTranscriptEntry(results: QmdResult[]): void {
+		try {
+			pi.appendEntry("qmd-memory", {
+				count: results.length,
+				full: formatResults(results),
+			});
+		} catch {
+			/* non-fatal */
+		}
 	}
 
 	function startQuery(cwd: string): void {
@@ -160,17 +177,16 @@ export default function (pi: ExtensionAPI) {
 
 		queryPromise.then((results) => {
 			queryResults = results;
-			if (!results.length || delivered || !isEnabled()) return;
+			if (!results.length || persisted || !isEnabled()) return;
 			// Turn already ran without context (fast typist / single-call turn).
-			// Persist now so the next turn has it, and ping. If sendMessage is
-			// unavailable (mid-turn guard, stale session), roll back so the
-			// context hook delivers instead on the next LLM call.
-			delivered = true;
+			// Persist now so the next turn has it, and show the entry line.
+			persisted = true;
 			cacheTitles(results);
 			notify(`qmd memory: ${results.length} hits injected`);
+			appendTranscriptEntry(results);
 			const rollback = (msg: string) => {
-				debug(`late persist unavailable: ${msg} — deferring to context hook`);
-				delivered = false;
+				debug(`late persist unavailable: ${msg} — context hook takes over`);
+				persisted = false; // context hook re-applies on every call
 			};
 			try {
 				const p = pi.sendMessage({
@@ -215,7 +231,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		spawnExporter(); // catch sessions that ended without a clean shutdown
 		sessionCtx = ctx;
-		delivered = false;
+		persisted = false;
+		contextNotified = false;
 		queryResults = null;
 		lastInjectedTitles = "";
 		if (isEnabled()) startQuery(ctx?.cwd ?? process.cwd());
@@ -225,10 +242,11 @@ export default function (pi: ExtensionAPI) {
 	// typed. Never awaits — the submitted message renders instantly.
 	pi.on("before_agent_start", (_event, ctx) => {
 		void ctx;
-		if (delivered || !isEnabled() || !queryResults?.length) return undefined;
-		delivered = true;
+		if (persisted || !isEnabled() || !queryResults?.length) return undefined;
+		persisted = true;
 		cacheTitles(queryResults);
 		notify(`qmd memory: ${queryResults.length} hits injected`);
+		appendTranscriptEntry(queryResults);
 		return {
 			message: {
 				customType: "qmd-memory",
@@ -238,12 +256,13 @@ export default function (pi: ExtensionAPI) {
 		};
 	});
 
-	// Fast-typo path: on the first LLM call where the query has landed, append
-	// the results to the outgoing messages (2s race, then cached — instant on
-	// later calls). Non-persistent, re-applied every call: survives compaction.
+	// Fast-typo path: on every LLM call until the context is persisted, append
+	// the results to the outgoing messages (2s race on the first call, then
+	// cached-instant). Non-persistent → re-applied every call → survives
+	// compaction. No transcript entry here (the persisted path records it).
 	pi.on("context", async (event, ctx) => {
-		if (delivered || !isEnabled() || !queryPromise) {
-			debug(`context: skip (delivered=${delivered})`);
+		if (persisted || !isEnabled() || !queryPromise) {
+			debug(`context: skip (persisted=${persisted})`);
 			return undefined;
 		}
 		const results = await Promise.race([
@@ -252,14 +271,16 @@ export default function (pi: ExtensionAPI) {
 				setTimeout(() => resolve(null), CONTEXT_RACE_MS),
 			),
 		]);
-		if (delivered || !results?.length || !isEnabled()) {
+		if (persisted || !results?.length || !isEnabled()) {
 			debug(`context: race lost or empty (${results?.length ?? "null"})`);
 			return undefined;
 		}
-		delivered = true;
-		cacheTitles(results);
-		notify(`qmd memory: ${results.length} hits injected`);
-		debug(`context: appending ${results.length} hits`);
+		if (!contextNotified) {
+			contextNotified = true;
+			cacheTitles(results);
+			notify(`qmd memory: ${results.length} hits injected`);
+			debug(`context: appending ${results.length} hits`);
+		}
 		return {
 			messages: [
 				...event.messages,
@@ -276,6 +297,17 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", () => {
 		spawnExporter();
+	});
+
+	// Collapsed: one-line confirmation. ctrl+o (app.tools.expand): full block.
+	pi.registerEntryRenderer("qmd-memory", (entry, { expanded }) => {
+		const data = entry.data as { count: number; full: string };
+		if (expanded) {
+			return new Text(data.full);
+		}
+		return new Text(
+			`▸ qmd memory: ${data.count} hits injected (ctrl+o expands)`,
+		);
 	});
 
 	pi.registerCommand("memory", {
