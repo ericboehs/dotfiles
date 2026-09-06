@@ -98,9 +98,11 @@ result=ok
 
 # Read-only doc repos: ff-only pull keeps the indexed content fresh.
 # Env guards keep an unattended pull from hanging on prompts or slow
-# transfers (farm connectivity). Dev repos (vets-api, eert,
-# identity-fraud-engine) are deliberately NOT here — they refresh when
-# Eric pulls during normal work; the index follows his checkout.
+# transfers (farm connectivity). eert is included despite being a dev
+# repo (mostly docs/runbooks; ff-only refuses on anything but a clean
+# fast-forward). vets-api and identity-fraud-engine are deliberately
+# NOT here — they refresh when Eric pulls during normal work; the index
+# follows his checkout.
 refresh_doc_repos() {
 	GIT_TERMINAL_PROMPT=0
 	GIT_HTTP_LOW_SPEED_LIMIT=1000
@@ -109,7 +111,8 @@ refresh_doc_repos() {
 	for repo in \
 		"$HOME/Code/github.com/department-of-veterans-affairs/veterans-identification-card-vic-code-wiki" \
 		"$HOME/Code/va.ghe.com/handbook" \
-		"$HOME/Code/va.ghe.com/software/devops"
+		"$HOME/Code/va.ghe.com/software/devops" \
+		"$HOME/Code/va.ghe.com/software/eert"
 	do
 		out=$(git -C "$repo" pull --ff-only 2>&1)
 		if [ $? -ne 0 ]; then
