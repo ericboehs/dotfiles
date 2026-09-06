@@ -6,9 +6,10 @@
  *
  * - `multiSelect: true` allows multiple picks on one question.
  * - `questions: [...]` asks several questions sequentially in one call.
- *   Batch mode shows `Qn/total` progress; `shift+tab`/`←` or clicking the
- *   `← Back` row steps back to the previous question with prior picks
- *   preserved (`esc` still cancels).
+ *   Batch mode shows `Qn/total` progress with wizard navigation: `shift+tab`/`←`
+ *   or the `← Back` row steps back, `→` or the `Forward →` row steps forward
+ *   keeping the stored answer (forward only appears when revisiting an
+ *   answered question). Prior picks pre-fill on revisit (`esc` cancels).
  *
  * Both modes render their own wrapped rows (SelectList truncates long
  * labels/descriptions instead of wrapping) and hit-test clicks zone-style
@@ -32,8 +33,12 @@ const CUSTOM_VALUE = "__custom__";
 /** Returned from batch pickers when the user steps back a question (TUI-only). Exported for tests. */
 export const BACK = Symbol("back");
 
-/** Click zone index for the `← Back` row; option zones use 0..n. */
+/** Returned when the user steps forward keeping the stored answer (TUI-only). Exported for tests. */
+export const FORWARD = Symbol("forward");
+
+/** Click zone indexes for the nav rows; option zones use 0..n. */
 const BACK_ZONE = -1;
+const FORWARD_ZONE = -2;
 
 /** Map a previous answer label back to its item value. Pure for tests. */
 export function initialSingleValue(options: AskOption[], prevAnswers: string[]): string | undefined {
@@ -223,12 +228,12 @@ export default function ask(pi: ExtensionAPI) {
 			const pickSingle = async (
 				question: string,
 				items: SelectItem[],
-				nav?: { canGoBack?: boolean; progress?: string; initialValue?: string },
-			): Promise<string | typeof BACK | undefined> => {
+				nav?: { canGoBack?: boolean; canGoForward?: boolean; progress?: string; initialValue?: string },
+			): Promise<string | typeof BACK | typeof FORWARD | undefined> => {
 				if (ctx.mode === "tui") {
 					// Custom renderer instead of SelectList: SelectList truncates
 					// long labels/descriptions to one line; this wraps them.
-					return ctx.ui.custom<string | typeof BACK | undefined>((tui, theme, _kb, done) => {
+					return ctx.ui.custom<string | typeof BACK | typeof FORWARD | undefined>((tui, theme, _kb, done) => {
 						let cursor = (() => {
 							if (nav?.initialValue === undefined) return 0;
 							const found = items.findIndex((i) => i.value === nav.initialValue);
@@ -246,6 +251,10 @@ export default function ask(pi: ExtensionAPI) {
 						function handleInput(data: string) {
 							if (nav?.canGoBack && (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left))) {
 								done(BACK);
+								return;
+							}
+							if (nav?.canGoForward && matchesKey(data, Key.right)) {
+								done(FORWARD);
 								return;
 							}
 							if (matchesKey(data, Key.up)) {
@@ -294,9 +303,15 @@ export default function ask(pi: ExtensionAPI) {
 								pushWrapped(lines, "  ", theme.fg("dim", "← Back"), w);
 								zones.push({ index: BACK_ZONE, start: backStart, end: lines.length });
 							}
+							if (nav?.canGoForward) {
+								const fwdStart = lines.length;
+								pushWrapped(lines, "  ", theme.fg("dim", "Forward →"), w);
+								zones.push({ index: FORWARD_ZONE, start: fwdStart, end: lines.length });
+							}
 							lines.push("");
 							const backHint = nav?.canGoBack ? " • shift+tab/← back" : "";
-							pushWrapped(lines, " ", theme.fg("dim", `↑↓/click select • 1-9 quick pick • enter confirm • esc cancel${backHint}`), w);
+							const fwdHint = nav?.canGoForward ? " • → forward" : "";
+							pushWrapped(lines, " ", theme.fg("dim", `↑↓/click select • 1-9 quick pick • enter confirm • esc cancel${backHint}${fwdHint}`), w);
 							lines.push(theme.fg("accent", "─".repeat(w)));
 							cached = lines;
 							return lines;
@@ -317,6 +332,10 @@ export default function ask(pi: ExtensionAPI) {
 									done(BACK);
 									return { handled: true };
 								}
+								if (hit.index === FORWARD_ZONE) {
+									done(FORWARD);
+									return { handled: true };
+								}
 								pick(hit.index);
 								return { handled: true };
 							},
@@ -334,10 +353,10 @@ export default function ask(pi: ExtensionAPI) {
 			const pickMulti = async (
 				question: string,
 				items: SelectItem[],
-				nav?: { canGoBack?: boolean; progress?: string; initialValues?: string[] },
-			): Promise<string[] | typeof BACK | null> => {
+				nav?: { canGoBack?: boolean; canGoForward?: boolean; progress?: string; initialValues?: string[] },
+			): Promise<string[] | typeof BACK | typeof FORWARD | null> => {
 				if (ctx.mode === "tui") {
-					const res = await ctx.ui.custom<{ values: string[] } | typeof BACK | null>((tui, theme, _kb, done) => {
+					const res = await ctx.ui.custom<{ values: string[] } | typeof BACK | typeof FORWARD | null>((tui, theme, _kb, done) => {
 						let cursor = (() => {
 							if (!nav?.initialValues?.length) return 0;
 							const found = items.findIndex((i) => i.value === nav.initialValues![0]);
@@ -378,6 +397,10 @@ export default function ask(pi: ExtensionAPI) {
 						function handleInput(data: string) {
 							if (nav?.canGoBack && (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left))) {
 								done(BACK);
+								return;
+							}
+							if (nav?.canGoForward && matchesKey(data, Key.right)) {
+								done(FORWARD);
 								return;
 							}
 							if (matchesKey(data, Key.up)) {
@@ -440,12 +463,18 @@ export default function ask(pi: ExtensionAPI) {
 								pushWrapped(lines, "  ", theme.fg("dim", "← Back"), w);
 								zones.push({ index: BACK_ZONE, start: backStart, end: lines.length });
 							}
+							if (nav?.canGoForward) {
+								const fwdStart = lines.length;
+								pushWrapped(lines, "  ", theme.fg("dim", "Forward →"), w);
+								zones.push({ index: FORWARD_ZONE, start: fwdStart, end: lines.length });
+							}
 							lines.push("");
 							if (hint) pushWrapped(lines, " ", theme.fg("warning", hint), w);
 							else {
 								const sel = checked.size > 0 ? ` • ${checked.size} selected` : "";
 								const backHint = nav?.canGoBack ? " • shift+tab/← back" : "";
-								pushWrapped(lines, " ", theme.fg("dim", `↑↓ move • space/click toggle • a all • enter done${sel} • esc cancel${backHint}`), w);
+								const fwdHint = nav?.canGoForward ? " • → forward" : "";
+								pushWrapped(lines, " ", theme.fg("dim", `↑↓ move • space/click toggle • a all • enter done${sel} • esc cancel${backHint}${fwdHint}`), w);
 							}
 							lines.push(theme.fg("accent", "─".repeat(w)));
 							cached = lines;
@@ -467,12 +496,17 @@ export default function ask(pi: ExtensionAPI) {
 									done(BACK);
 									return { handled: true };
 								}
+								if (hit.index === FORWARD_ZONE) {
+									done(FORWARD);
+									return { handled: true };
+								}
 								toggle(hit.index);
 								return { handled: true };
 							},
 						};
 					});
 					if (res === BACK) return BACK;
+					if (res === FORWARD) return FORWARD;
 					if (res === null || res === undefined) return null;
 					return res.values;
 				}
@@ -507,7 +541,8 @@ export default function ask(pi: ExtensionAPI) {
 			}
 
 			// ---------- batch: several questions, one call ----------
-			// Index loop (not for..of) so shift+tab/← can step back.
+			// Index loop (not for..of) so shift+tab/← steps back and → steps
+			// forward (keeping the stored answer) when revisiting.
 			// Later answers are kept for pre-fill but excluded from cancel
 			// output via slice(0, i); re-answering overwrites by index.
 			// Custom free text can't pre-fill ctx.ui.input, so revisiting a
@@ -529,13 +564,17 @@ export default function ask(pi: ExtensionAPI) {
 				const labels = sub.options.map((o) => o.label);
 				const items = buildItems(sub.options);
 				const prev = answered[i];
-				const nav = { canGoBack: i > 0, progress };
+				const nav = { canGoBack: i > 0, canGoForward: prev !== undefined && i < subs.length - 1, progress };
 				let values: string[];
 				if (sub.multiSelect) {
 					const initialValues = prev ? initialMultiValues(sub.options, prev.answers) : undefined;
 					const picked = await pickMulti(sub.question, items, { ...nav, initialValues });
 					if (picked === BACK) {
 						i--;
+						continue;
+					}
+					if (picked === FORWARD) {
+						i++;
 						continue;
 					}
 					if (picked === null) return cancelBatch(i);
@@ -545,6 +584,10 @@ export default function ask(pi: ExtensionAPI) {
 					const picked = await pickSingle(sub.question, items, { ...nav, initialValue });
 					if (picked === BACK) {
 						i--;
+						continue;
+					}
+					if (picked === FORWARD) {
+						i++;
 						continue;
 					}
 					if (picked === undefined) return cancelBatch(i);

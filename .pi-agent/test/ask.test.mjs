@@ -101,8 +101,12 @@ test("batch back re-asks the previous question and overwrites on re-answer", asy
 		q2lines.some((l) => l.includes("shift+tab/← back")),
 		"hints back",
 	);
+	assert.ok(!q2lines.some((l) => l.includes("Forward")), "no forward on first visit");
 	q2.comp.handleInput("\x1b[Z");
 	assert.equal(q2.done(), mod.BACK);
+	const q2fwd = drive(factories[1]);
+	q2fwd.comp.handleInput("\x1b[C");
+	assert.equal(q2fwd.wasDone(), false);
 
 	// Clicking the ← Back row steps back too (mouse users).
 	const q2click = drive(factories[1]);
@@ -129,11 +133,61 @@ test("batch back re-asks the previous question and overwrites on re-answer", asy
 	q1click.comp.handleMouse({ type: "click", button: "left", y: optY });
 	assert.equal(q1click.done(), "1");
 
-	// Revisit restores the cursor to the prior pick (1. A).
+	// Revisit restores the cursor to the prior pick (1. A) and offers
+	// forward (keeps the stored answer) instead of back at Q1.
 	const revisit = drive(factories[2]);
 	const rlines = revisit.comp.render(60);
 	const aLine = rlines.find((l) => l.includes("1. A"));
 	assert.ok(aLine.startsWith("→ "), `cursor on prior pick, got: ${aLine}`);
+	assert.ok(rlines.some((l) => l.includes("Forward →")), "revisit offers forward");
+	assert.ok(!rlines.some((l) => l.includes("← Back")), "no back at Q1");
+});
+
+test("batch forward keeps the stored answer and advances", async () => {
+	const { mod, tool } = await mountModule();
+	const factories = [];
+	const script = ["0", mod.BACK, mod.FORWARD, "0"];
+	const ctx = {
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: async (fn) => {
+				factories.push(fn);
+				return script.shift();
+			},
+			input: async () => {
+				throw new Error("input should not be called");
+			},
+		},
+	};
+	const params = {
+		questions: [
+			{ question: "Q1?", options: [{ label: "A" }, { label: "B" }] },
+			{ question: "Q2?", options: [{ label: "C" }, { label: "D" }] },
+		],
+	};
+	const result = await tool.execute("t1", params, undefined, undefined, ctx);
+	assert.equal(result.content[0].text, "Q1: Q1?\nUser selected: 1. A\nQ2: Q2?\nUser selected: 1. C");
+	assert.equal(result.details.cancelled, false);
+	assert.deepEqual(
+		result.details.byQuestion.map((q) => q.answers),
+		[["A"], ["C"]],
+	);
+	assert.equal(factories.length, 4);
+
+	// → key steps forward keeping the stored answer.
+	const fwd = drive(factories[2]);
+	assert.ok(fwd.comp.render(60).some((l) => l.includes("→ forward")), "hints forward");
+	fwd.comp.handleInput("\x1b[C");
+	assert.equal(fwd.done(), mod.FORWARD);
+
+	// Clicking the Forward → row does the same.
+	const fwdClick = drive(factories[2]);
+	const fwdLines = fwdClick.comp.render(60);
+	const fwdY = fwdLines.findIndex((l) => l.includes("Forward →"));
+	assert.ok(fwdY >= 0, "forward row rendered");
+	fwdClick.comp.handleMouse({ type: "click", button: "left", y: fwdY });
+	assert.equal(fwdClick.done(), mod.FORWARD);
 });
 
 test("batch cancel after going back keeps only the prefix answers", async () => {
@@ -203,6 +257,7 @@ test("batch multi back preserves checked picks for pre-fill", async () => {
 	assert.ok(qmLines.some((l) => l.includes("shift+tab/← back")), "hints back");
 	const qmBackY = qmLines.findIndex((l) => l.includes("← Back"));
 	assert.ok(qmBackY >= 0, "multi back row rendered");
+	assert.ok(!qmLines.some((l) => l.includes("Forward")), "no forward on first visit");
 
 	// Left arrow steps back in multi mode too.
 	const qmKeys = drive(factories[1]);
@@ -226,6 +281,12 @@ test("batch multi back preserves checked picks for pre-fill", async () => {
 	assert.ok(mcBackY >= 0, "multi back row rendered");
 	multiClick.comp.handleMouse({ type: "click", button: "left", y: mcBackY });
 	assert.equal(multiClick.done(), mod.BACK);
+
+	// Revisited QM also offers forward (stored answer, not last question).
+	assert.ok(mcLines.some((l) => l.includes("Forward →")), "multi revisit offers forward");
+	const multiFwd = drive(factories[3]);
+	multiFwd.comp.handleInput("\x1b[C");
+	assert.equal(multiFwd.done(), mod.FORWARD);
 });
 test("formatRpcLabel folds the description in", () => {
 	assert.equal(formatRpcLabel("1. Mushrooms", "Earthy"), "1. Mushrooms — Earthy");
