@@ -1,16 +1,18 @@
 // qmd-memory — surface relevant context from Eric's qmd index at session start.
 //
-// On session_start it fires an async query against the local qmd HTTP daemon
-// (POST /query — plain JSON, no MCP) scoped to the current project, and injects
-// the top hits as hidden context (display:false, no turn triggered) so they're
-// available to the model without any boot cost. On session_start/shutdown it
-// also spawns the incremental session exporter so transcripts reach the
-// `sessions` collection quickly.
+// Flow (all async, never blocks the TUI — typing latency is untouched):
+//   session_start      → fire the qmd query, spawn the session exporter
+//   before_agent_start → if the query already finished while the user typed,
+//                        inject as a persisted hidden message (zero delay)
+//   context            → otherwise append the results to the outgoing LLM
+//                        messages once they arrive (non-persistent, re-applied
+//                        every call until persisted — survives compaction)
 //
-// Toggle with /memory [on|off|status] — bare /memory flips it. State persists
-// in ~/.cache/pi-qmd-memory (default: on).
+// The daemon query goes to POST /query (plain JSON, no MCP). Toggle with
+// /memory [on|off|status|show] — bare /memory flips it; show prints the last
+// injected block. State persists in ~/.cache/pi-qmd-memory (default: on).
 //
-// Boot cost: handler registration only (<10ms). All qmd work is async.
+// Boot cost: handler registration only (<10ms).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
@@ -72,19 +74,24 @@ function spawnExporter(): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	let pendingQuery: Promise<QmdResult[]> | null = null;
-	let injected = false;
+	// Per-session state. queryResults is set once the session-start query
+	// resolves; consumers never await it past a small race budget.
+	let queryPromise: Promise<QmdResult[]> | null = null;
+	let queryResults: QmdResult[] | null = null;
+	let project = "";
+	let persisted = false; // injected via before_agent_start (in session file)
+	let contextNotified = false;
+	let lastInjected = "";
+	let lastInjectedTitles = "";
 
 	function startQuery(cwd: string): void {
-		if (pendingQuery) return;
-		const project = basename(cwd);
-		pendingQuery = (async () => {
-			// Parallel scoped queries. Cross-collection vec search on this index
-			// costs 8-18s (email alone is ~14s), which races the user's first turn
-			// and usually loses. Splitting by collection keeps each query fast:
-			//   vec over `sessions` (~3s) → past work on this project
-			//   lex over `wiki` (~0.1s)   → current-project notes
-			// RRF/rerank skipped for speed; memory hints don't need perfect ranking.
+		project = basename(cwd);
+		// Parallel scoped queries. Cross-collection vec search on this index
+		// costs 8-18s (email alone is ~14s), so keep each query scoped:
+		//   vec over `sessions` (~3s) → past work on this project
+		//   lex over `wiki` (~0.1s)   → current-project notes
+		// RRF/rerank skipped for speed; memory hints don't need perfect ranking.
+		const query = (async () => {
 			const [sess, wiki] = await Promise.all([
 				qmdQuery({
 					intent: `past sessions about ${project} (cwd: ${cwd})`,
@@ -111,10 +118,18 @@ export default function (pi: ExtensionAPI) {
 				LIMIT,
 			);
 		})();
-		pendingQuery.catch(() => {}); // avoid unhandled rejection; consumers guard
+		queryPromise = query;
+		query.then(
+			(results) => {
+				queryResults = results;
+			},
+			() => {
+				queryResults = [];
+			},
+		);
 	}
 
-	function formatResults(results: QmdResult[], project: string): string {
+	function formatResults(results: QmdResult[]): string {
 		const hits = results
 			.map((r, i) => {
 				const snippet = (r.snippet ?? "").replace(/\s+/g, " ").trim();
@@ -129,46 +144,92 @@ export default function (pi: ExtensionAPI) {
 		);
 	}
 
-	// Kick the query off immediately so it runs while the user types. If it's
-	// done by the first prompt, before_agent_start injects with zero latency.
+	function notifyOnce(ctx: unknown, text: string): void {
+		try {
+			(ctx as { ui?: { notify?: (m: string, l?: string) => void } })?.ui?.notify?.(
+				text,
+				"info",
+			);
+		} catch {
+			// stale ui — skip
+		}
+	}
+
+	// Kick the query off immediately so it runs while the user types.
 	pi.on("session_start", (_event, ctx) => {
 		spawnExporter(); // catch sessions that ended without a clean shutdown
-		if (!isEnabled()) return;
-		injected = false;
-		pendingQuery = null;
-		startQuery(ctx?.cwd ?? process.cwd());
+		queryResults = null;
+		persisted = false;
+		contextNotified = false;
+		lastInjected = "";
+		if (isEnabled()) startQuery(ctx?.cwd ?? process.cwd());
 	});
-	// Inject at the first prompt, deterministically: use the vec results if
-	// they finished while the user typed; otherwise fall back to an instant
-	// lex query (~0.15s) so injection never depends on racing the turn.
-	pi.on("before_agent_start", async (_event, ctx) => {
-		if (injected || !isEnabled() || !pendingQuery) return undefined;
-		const project = basename(ctx?.cwd ?? process.cwd());
-		const vecResults = await Promise.race([
-			pendingQuery,
-			new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
-		]);
-		if (injected || !isEnabled()) return undefined;
-		let results = vecResults && vecResults.length ? vecResults : null;
-		if (!results) {
-			const lex = await qmdQuery({
-				intent: `wiki and session notes about ${project}`,
-				searches: [{ type: "lex", query: project }],
-				collections: ["wiki", "sessions"],
-				limit: LIMIT,
-				rerank: false,
-			});
-			results = lex?.results ?? [];
-		}
-		if (!results.length) return undefined;
-		injected = true;
-		ctx?.ui?.notify(`qmd memory: ${results.length} hits injected`, "info");
+
+	// Non-blocking: inject only if the query already resolved while the user
+	// typed. Never awaits — the submitted message renders instantly.
+	pi.on("before_agent_start", (_event, ctx) => {
+		if (persisted || !isEnabled() || !queryResults?.length) return undefined;
+		persisted = true;
+		lastInjected = formatResults(queryResults);
+		lastInjectedTitles = queryResults
+			.map((r, i) => `${i + 1}. ${r.title ?? r.file}`)
+			.join("\n");
+		notifyOnce(ctx, `qmd memory: ${queryResults.length} hits injected`);
 		return {
 			message: {
 				customType: "qmd-memory",
 				display: false,
-				content: formatResults(results, project),
+				content: lastInjected,
 			},
+		};
+	});
+
+	// Fast-typo path: the query wasn't ready at before_agent_start. Append the
+	// results to the outgoing messages once they land (≤400ms extra inside the
+	// first LLM call, invisible; later calls reuse the cached results). Not
+	// persisted in the session file, so it's re-applied on every call — which
+	// also means it survives compaction.
+	pi.on("context", async (event, ctx) => {
+		const debug = process.env.QMD_MEMORY_DEBUG === "1";
+		if (persisted || !isEnabled() || !queryPromise) {
+			if (debug)
+				console.warn(
+					`[qmd-memory] context: skip (persisted=${persisted}, enabled=${isEnabled()}, hasQuery=${!!queryPromise})`,
+				);
+			return undefined;
+		}
+		const results = await Promise.race([
+			queryPromise,
+			new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+		]);
+		if (debug)
+			console.warn(
+				`[qmd-memory] context: race done, results=${results?.length ?? "null"}`,
+			);
+		if (persisted || !results?.length || !isEnabled()) return undefined;
+		if (!lastInjected) {
+			lastInjected = formatResults(results);
+			lastInjectedTitles = results
+				.map((r, i) => `${i + 1}. ${r.title ?? r.file}`)
+				.join("\n");
+		}
+		if (!contextNotified) {
+			contextNotified = true;
+			notifyOnce(ctx, `qmd memory: ${results.length} hits injected`);
+		}
+		if (debug)
+			console.warn(`[qmd-memory] context: appending ${results.length} hits`);
+		return {
+			messages: [
+				...event.messages,
+				{
+					role: "custom",
+					customType: "qmd-memory",
+					content: lastInjected,
+					display: false,
+					timestamp: Date.now(),
+				},
+			],
 		};
 	});
 
@@ -178,14 +239,24 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("memory", {
 		description:
-			"Toggle qmd session-start context injection (/memory, /memory on|off|status)",
+			"qmd memory injection: /memory on|off|toggle|status|show (bare = toggle)",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim().toLowerCase();
 			if (arg === "on" || arg === "off") {
 				setState(arg === "on");
 			} else if (arg === "" || arg === "toggle") {
 				setState(!isEnabled());
-			} // "status" and anything else just reports
+			}
+
+			if (arg === "show") {
+				ctx.ui.notify(
+					lastInjectedTitles
+						? `qmd memory hits this session:\n${lastInjectedTitles}`
+						: "qmd memory: nothing injected this session",
+					"info",
+				);
+				return;
+			}
 
 			ctx.ui.notify(
 				`qmd memory injection: ${isEnabled() ? "ON" : "OFF"}`,
