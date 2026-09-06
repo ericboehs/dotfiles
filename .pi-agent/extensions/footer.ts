@@ -17,9 +17,10 @@
  * same switch as Ctrl+P. Clicking the thinking chip cycles the thinking level
  * forward, the boot timer shows /boot stats, and the bypass marker turns
  * bypass off. The dir chip toggles basename/full path, the context chip toggles
- * tokens/percent, and the provider-usage chip toggles long/short window forms;
- * git and cost stay glance-only. Fullscreen only: that is where the terminal
- * reports mouse clicks to pi at all.
+ * tokens/percent, and the provider-usage chip toggles long/short window forms.
+ * Clicking the right-aligned session/peer name prefills /name when the editor
+ * is empty; git and cost stay glance-only. Fullscreen only: that is where the
+ * terminal reports mouse clicks to pi at all.
  *
  * Design notes:
  * - No config UI, no widget registry: the layout is this file.
@@ -914,7 +915,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
     | "bypass"
     | "dir"
     | "context"
-    | "providerUsage";
+    | "providerUsage"
+    | "name";
   /** One entry per painted footer line, holding the chip zones on that line. */
   interface FooterClickRow {
     provider?: ClickZone;
@@ -925,6 +927,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     dir?: ClickZone;
     context?: ClickZone;
     providerUsage?: ClickZone;
+    name?: ClickZone;
   }
   /**
    * Hit-testing state for clickable chips, refreshed on every footer render:
@@ -956,7 +959,20 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (zoneHit(row.dir, x)) return "dir";
     if (zoneHit(row.context, x)) return "context";
     if (zoneHit(row.providerUsage, x)) return "providerUsage";
+    if (zoneHit(row.name, x)) return "name";
     return undefined;
+  }
+
+  /** Fill the rename command without destroying a prompt already in progress. */
+  function prefillNameCommand(): void {
+    const ctx = runtimeContext;
+    if (!ctx?.hasUI) return;
+    if (ctx.ui.getEditorText().length > 0) {
+      ctx.ui.notify("Editor is not empty; /name was not inserted", "info");
+      return;
+    }
+    const name = pi.getSessionName();
+    ctx.ui.setEditorText(name ? `/name ${name}` : "/name ");
   }
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
@@ -1017,6 +1033,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
             } else if (action === "providerUsage") {
               compactProviderUsage = !compactProviderUsage;
               repaint?.();
+            } else if (action === "name") {
+              prefillNameCommand();
             }
           }
           return { handled: true };
@@ -1165,13 +1183,21 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // miss the fit, and then it replaces the (necessarily empty) first
           // chip row rather than painting over the chips.
           if (nameWidth > 0) {
+            const fittedNameWidth = visibleWidth(truncateToWidth(right, width, "…"));
+            const nameZone: ClickZone = [width - fittedNameWidth, width];
             const first = chipRows[0];
             if (!first) {
-              chipRows.push({ line: alignRight(right, width) });
+              chipRows.push({ line: alignRight(right, width), name: nameZone });
             } else if (visibleWidth(first.line) + 1 + nameWidth <= width) {
-              chipRows[0] = { ...first, line: padBetween(first.line, right, width) };
+              chipRows[0] = {
+                ...first,
+                line: padBetween(first.line, right, width),
+                name: nameZone,
+              };
             } else {
-              chipRows[0] = { ...first, line: alignRight(right, width) };
+              // The name replaced the whole row, so don't retain invisible
+              // chip zones from the row that was displaced.
+              chipRows[0] = { line: alignRight(right, width), name: nameZone };
             }
           }
 
@@ -1203,6 +1229,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
                 dir: row.dir,
                 context: row.context,
                 providerUsage: row.providerUsage,
+                name: row.name,
               } satisfies FooterClickRow;
             }
             if (bypassed && index === chipRows.length) return { bypass: bypassZone };

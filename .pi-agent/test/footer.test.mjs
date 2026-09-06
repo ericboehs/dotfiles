@@ -55,6 +55,7 @@ async function mount(overrides = {}) {
   // Mutable so click tests can cycle: setThinkingLevel clamps through
   // overrides.supportedThinking exactly like pi-ai does for a real model.
   let thinkingLevel = overrides.thinkingLevel ?? "high";
+  let editorText = overrides.editorText ?? "";
 
   const ctx = {
     hasUI: true,
@@ -71,6 +72,8 @@ async function mount(overrides = {}) {
       setFooter: (f) => { factory = f; },
       setWidget: (key, content) => { widgets.push({ key, content }); },
       notify: (message, level) => { notices.push({ message, level }); },
+      getEditorText: () => editorText,
+      setEditorText: (text) => { editorText = text; },
     },
   };
 
@@ -184,6 +187,7 @@ async function mount(overrides = {}) {
       return component.render(width).map(strip);
     },
     thinking: () => thinkingLevel,
+    editor: () => editorText,
     /** Click a footer cell in fullscreen local coordinates (renders first to publish zones). */
     click: (x, y, width = 120) => {
       component.render(width);
@@ -590,6 +594,19 @@ test("update notice shows both versions in a right-aligned widget above the prom
   );
 });
 
+test("clicking an explicit session name prefills its /name command", async () => {
+  const ui = await mount({ sessionName: "footer-work" });
+  assert.deepEqual(ui.click(79, 0, 80), { handled: true });
+  assert.equal(ui.editor(), "/name footer-work");
+});
+
+test("clicking a name never replaces editor text", async () => {
+  const ui = await mount({ sessionName: "footer-work", editorText: "draft prompt" });
+  assert.deepEqual(ui.click(79, 0, 80), { handled: true });
+  assert.equal(ui.editor(), "draft prompt");
+  assert.match(ui.notices.at(-1).message, /Editor is not empty/);
+});
+
 /**
  * Point HOME at a throwaway dir and register a pi-claude-link peer for this
  * process. Never writes to the real ~/.claude/sessions, which Claude Code reads.
@@ -607,6 +624,19 @@ function withPeerRegistry(name) {
   process.env.HOME = home;
   return () => { process.env.HOME = previous; };
 }
+
+test("clicking a derived peer name prefills a blank /name command", async () => {
+  const restore = withPeerRegistry("pi-dotfiles-5");
+  try {
+    const ui = await mount({ sessionName: undefined });
+    await ui.settled(80);
+    assert.match(ui.plain(80)[0], / pi-dotfiles-5$/);
+    assert.deepEqual(ui.click(79, 0, 80), { handled: true });
+    assert.equal(ui.editor(), "/name ");
+  } finally {
+    restore();
+  }
+});
 
 test("falls back to the pi-claude-link peer name, dimmed", async () => {
   const restore = withPeerRegistry("pi-dotfiles");
