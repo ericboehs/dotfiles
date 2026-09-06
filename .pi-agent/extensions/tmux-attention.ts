@@ -1,6 +1,7 @@
 // Show the existing ⊙ tmux window indicator when pi needs attention in a
-// background window. Focusing any pane in that window clears the indicator via
-// the pane-focus-in hook in ~/.tmux.conf.
+// background window: a settled turn, or a blocking prompt (ask tool, confirm,
+// input) waiting on an answer. Focusing any pane in that window clears the
+// indicator via the pane-focus-in hook in ~/.tmux.conf.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -220,6 +221,14 @@ export default function (pi: ExtensionAPI): void {
     // the terminal-event listener below.
     if (await hasRunningBackgroundTasks(pi)) return;
     await markWindow();
+  });
+
+  // A blocking prompt (ask tool, confirm, input, custom dialog) holds the
+  // turn open waiting on an answer — mark the window the same way a settled
+  // turn does. Answering requires focusing the pane, which clears the dot via
+  // the pane-focus-in hook. Notification-only; pi does not await this.
+  pi.on("ui_prompt_start", () => {
+    void markWindow();
   });
 
   let removeTerminalListener: (() => void) | undefined;

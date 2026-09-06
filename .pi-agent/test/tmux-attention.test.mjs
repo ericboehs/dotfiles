@@ -72,6 +72,7 @@ async function mount({ responder } = {}) {
     execCalls,
     requests,
     settle: () => handlers.get("agent_settled")(),
+    prompt: (event = {}) => handlers.get("ui_prompt_start")(event),
     startSession: () => handlers.get("session_start")({}, ctx),
   };
 }
@@ -162,4 +163,18 @@ test("a reply that lands after the timeout still lifts the silence latch", async
   await new Promise((resolve) => setTimeout(resolve, 300));
   await pi.settle();
   assert.equal(pi.requests.length, 2, "the late reply proves someone is listening");
+});
+
+test("a blocking prompt marks the window without probing background tasks", async () => {
+  const pi = await mount();
+
+  // markWindow awaits two exec round trips; the void handler needs a tick.
+  await pi.prompt({ kind: "custom" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(pi.requests.length, 0, "a prompt needs no background-task probe");
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("@special_activity")),
+    "the ⊙ dot shows while the question waits on an answer",
+  );
 });
