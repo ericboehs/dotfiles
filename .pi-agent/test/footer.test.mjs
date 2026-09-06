@@ -52,6 +52,9 @@ async function mount(overrides = {}) {
   const widgets = [];
   const guardianRequests = [];
   const eventHandlers = new Map();
+  // Mutable so click tests can cycle: setThinkingLevel clamps through
+  // overrides.supportedThinking exactly like pi-ai does for a real model.
+  let thinkingLevel = overrides.thinkingLevel ?? "high";
 
   const ctx = {
     hasUI: true,
@@ -98,7 +101,12 @@ async function mount(overrides = {}) {
       const stdout = args[0] === "rev-list" ? revList : porcelain;
       return { stdout, stderr: "", code: gitCode, killed: false };
     },
-    getThinkingLevel: () => overrides.thinkingLevel ?? "high",
+    getThinkingLevel: () => thinkingLevel,
+    setThinkingLevel: (level) => {
+      thinkingLevel = overrides.supportedThinking
+        ? clampThinking(level, overrides.supportedThinking)
+        : level;
+    },
     getSessionName: () => sessionName,
     getCommands: () => overrides.commands ?? [{ name: "approval-guardian" }],
     sendUserMessage: (text, options) => { sent.push({ text, options }); },
@@ -142,7 +150,7 @@ async function mount(overrides = {}) {
   }
 
   const component = factory(
-    { requestRender: () => { renders += 1; } },
+    { requestRender: () => { renders += 1; }, mode: "fullscreen" },
     { fg: (color, text) => (color === "dim" ? `\x1B[2m${text}\x1B[22m` : text) },
     {
       getGitBranch: () => branch,
@@ -175,11 +183,34 @@ async function mount(overrides = {}) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       return component.render(width).map(strip);
     },
+    thinking: () => thinkingLevel,
+    /** Click a footer cell in fullscreen local coordinates (renders first to publish zones). */
+    click: (x, y, width = 120) => {
+      component.render(width);
+      return component.handleMouse({ button: "left", type: "click", x, y });
+    },
   };
 }
 
 function strip(text) {
   return text.replace(new RegExp(String.raw`\x1B\[[0-9;]*m`, "g"), "");
+}
+
+/** pi-ai's thinking ladder, for emulating setThinkingLevel's clamp in click tests. */
+const THINK_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Mirror pi-ai's clampThinkingLevel: upward from the request, then downward. */
+function clampThinking(requested, supported) {
+  if (supported.includes(requested)) return requested;
+  const at = THINK_ORDER.indexOf(requested);
+  if (at === -1) return supported[0];
+  for (let i = at; i < THINK_ORDER.length; i++) {
+    if (supported.includes(THINK_ORDER[i])) return THINK_ORDER[i];
+  }
+  for (let i = at - 1; i >= 0; i--) {
+    if (supported.includes(THINK_ORDER[i])) return THINK_ORDER[i];
+  }
+  return supported[0];
 }
 
 test("renders the full line once git has settled", async () => {
@@ -363,6 +394,45 @@ test("thinking levels are abbreviated, and hidden for non-reasoning models", asy
     model: { id: "claude-opus-5", provider: "github-copilot", reasoning: false },
   });
   assert.equal(plain.plain()[0].split(" ")[1], "master");
+});
+
+/** Start column of the thinking chip (5th space-separated part) on a one-row footer. */
+function thinkingX(ui, width = 120) {
+  const line = ui.plain(width)[0];
+  return line.split(" ").slice(0, 4).join(" ").length + 1;
+}
+
+const FULL_THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+// Muse-style: the provider maps no xhigh/max levels, so pi clamps those away.
+const MUSE_THINKING = ["off", "minimal", "low", "medium", "high"];
+
+test("clicking the thinking chip steps forward one supported level", async () => {
+  const ui = await mount({ supportedThinking: FULL_THINKING });
+  assert.deepEqual(ui.click(thinkingX(ui), 0), { handled: true });
+  assert.equal(ui.thinking(), "xhigh");
+  assert.match(ui.notices.at(-1).message, /high → xhigh/);
+});
+
+test("clicking empty footer space handles nothing", async () => {
+  const ui = await mount({ supportedThinking: FULL_THINKING });
+  assert.equal(ui.click(100, 0), undefined);
+  assert.equal(ui.thinking(), "high", "no level change");
+});
+
+test("clicking thinking skips levels the model lacks instead of sticking", async () => {
+  // high → xhigh used to clamp straight back to high, sticking forever.
+  // Now the walk continues past xhigh, max and off to minimal.
+  const ui = await mount({ supportedThinking: MUSE_THINKING });
+  ui.click(thinkingX(ui), 0);
+  assert.equal(ui.thinking(), "minimal");
+  assert.match(ui.notices.at(-1).message, /high → minimal/);
+});
+
+test("clicking thinking wraps max to the lowest on-level, never off", async () => {
+  const ui = await mount({ supportedThinking: FULL_THINKING, thinkingLevel: "max" });
+  ui.click(thinkingX(ui), 0);
+  assert.equal(ui.thinking(), "minimal");
+  assert.match(ui.notices.at(-1).message, /max → minimal/);
 });
 
 test("cost formatting and subscription providers", async () => {
@@ -598,6 +668,16 @@ test("/bypass drives the guardian and shows a bright red marker", async () => {
   assert.doesNotMatch(ui.plain().join("\n"), /bypass/);
 });
 
+test("clicking the bypass marker turns bypass off", async () => {
+  const ui = await mount();
+  await ui.run("bypass");
+  assert.deepEqual(ui.guardianRequests, [true]);
+  // The marker lives alone on line 1 with a zone of its own.
+  assert.deepEqual(ui.click(2, 1), { handled: true });
+  assert.deepEqual(ui.guardianRequests, [true, false]);
+  assert.doesNotMatch(ui.plain().join("\n"), /bypass/);
+});
+
 test("/bypass takes explicit on/off and rejects anything else", async () => {
   const ui = await mount();
 
@@ -684,6 +764,19 @@ test("a cold start shows the boot time until the first message is sent", async (
     await ui.input();
     assert.equal(ui.renderCount(), before + 1, "clearing it should repaint");
     assert.doesNotMatch(ui.plain()[0], /⚡/);
+  });
+});
+
+test("clicking the boot timer shows /boot stats", async () => {
+  await withBootLog(async () => {
+    const ui = await mount(COLD_START);
+    ui.plain();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const line = ui.plain()[0];
+    assert.match(line, /⚡/, "boot chip is on the line");
+    assert.deepEqual(ui.click(line.indexOf("⚡"), 0), { handled: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.match(ui.notices.at(-1).message, /1 launches · p50/);
   });
 });
 

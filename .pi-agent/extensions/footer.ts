@@ -14,8 +14,10 @@
  * truncate it off the main line).
  *
  * Clicking the provider or model chip cycles to the next scoped model — the
- * same switch as Ctrl+P. Fullscreen only: that is where the terminal reports
- * mouse clicks to pi at all.
+ * same switch as Ctrl+P. Clicking the thinking chip cycles the thinking level
+ * forward, the boot timer shows /boot stats, and the bypass marker turns
+ * bypass off. Dir, git, context, cost and window chips stay glance-only.
+ * Fullscreen only: that is where the terminal reports mouse clicks to pi at all.
  *
  * Design notes:
  * - No config UI, no widget registry: the layout is this file.
@@ -210,6 +212,9 @@ const THINKING_NAMES: Record<string, string> = {
   // xhigh renders as "hi" (Eric runs xhigh by default; plain high shares the label).
   xhigh: "hi",
 };
+
+/** Forward-cycle order for the thinking chip (matches pi's ladder). */
+const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** Ordered rewrite rules for verbose model ids; first match wins. Results are lowercased. */
 const MODEL_RULES: Array<[RegExp, string]> = [
@@ -862,30 +867,44 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let bootMs: number | undefined;
   let bootCleared = false;
   let updateTimerStarted = false;
+  /** Clickable chip actions. Dir, git, context, cost and window chips stay glance-only. */
+  type FooterClickAction = "model" | "thinking" | "boot" | "bypass";
+  /** One entry per painted footer line, holding the chip zones on that line. */
+  interface FooterClickRow {
+    provider?: ClickZone;
+    model?: ClickZone;
+    thinking?: ClickZone;
+    boot?: ClickZone;
+    bypass?: ClickZone;
+  }
   /**
-   * Hit-testing state for click-to-cycle, refreshed on every footer render:
+   * Hit-testing state for clickable chips, refreshed on every footer render:
    * one entry per painted footer line, top to bottom, holding the
-   * visible-column ranges of its provider and model chips. Local coordinates
+   * visible-column ranges of its clickable chips. Local coordinates
    * from Component.handleMouse index straight into it. Cleared on dispose so
    * a stale line can never be hit-tested after the footer is gone.
    */
-  let footerClickRows: Array<{ provider?: ClickZone; model?: ClickZone }> = [];
+  let footerClickRows: FooterClickRow[] = [];
   // Clicks queue behind an in-flight switch, so a rapid double-click advances
   // twice instead of racing two reads of the same current model.
   let cycleQueue: Promise<void> = Promise.resolve();
 
   /**
-   * Native click-to-cycle hit test over the footer's own painted rows.
+   * Native click-to-act hit test over the footer's own painted rows.
    *
    * pi-tui dispatches mouse events to layout components via
    * Component.handleMouse, so the footer gets local 0-based coordinates
    * directly — no stdin sniffing, no previousScreen matching. footerClickRows
    * mirrors the rendered lines, so the local y indexes straight into it.
    */
-  function footerChipHit(x: number, y: number): boolean {
+  function footerChipAction(x: number, y: number): FooterClickAction | undefined {
     const row = footerClickRows[y];
-    if (!row) return false;
-    return zoneHit(row.provider, x) || zoneHit(row.model, x);
+    if (!row) return undefined;
+    if (zoneHit(row.provider, x) || zoneHit(row.model, x)) return "model";
+    if (zoneHit(row.thinking, x)) return "thinking";
+    if (zoneHit(row.boot, x)) return "boot";
+    if (zoneHit(row.bypass, x)) return "bypass";
+    return undefined;
   }
 
   function apply(ctx: ExtensionContext | ExtensionCommandContext): void {
@@ -927,10 +946,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
           if (event.button !== "left") return undefined;
           // Capture the gesture on press (suppresses transcript selection and
           // routes the synthesized click back here), act on click so a drag
-          // starting on a chip doesn't cycle.
+          // starting on a chip doesn't fire.
           if (event.type !== "press" && event.type !== "click") return undefined;
-          if (!footerChipHit(event.x, event.y)) return undefined;
-          if (event.type === "click") queueModelCycle();
+          const action = footerChipAction(event.x, event.y);
+          if (!action) return undefined;
+          if (event.type === "click") {
+            if (action === "model") queueModelCycle();
+            else if (action === "thinking") cycleThinkingForward();
+            else if (action === "boot") void showBootStats(BOOT_STATS_DEFAULT);
+            else if (action === "bypass") void setBypassActive(false);
+          }
           return { handled: true };
         },
         render(width: number): string[] {
@@ -997,10 +1022,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // ever cut mid-chip. The session/peer name owns the right end of the
           // first row, so the first row's chips fill only the space left of
           // it; later rows get the full width. The same walk records the
-          // provider/model chip columns per row for click-to-cycle; skipped
-          // empties contribute no separator, non-empty parts join with one
-          // space.
-          const chipRows: Array<{ line: string; provider?: ClickZone; model?: ClickZone }> = [];
+          // clickable chip columns per row; skipped empties contribute no
+          // separator, non-empty parts join with one space.
+          const chipRows: Array<FooterClickRow & { line: string }> = [];
+          const bootIndex = left.length - 1;
           const nameWidth = visibleWidth(right);
           const firstLimit = nameWidth > 0 ? Math.max(0, width - nameWidth - 1) : width;
           let rowLimit = firstLimit;
@@ -1008,6 +1033,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
           let cursor = 0;
           let providerZone: ClickZone | undefined;
           let modelZone: ClickZone | undefined;
+          let thinkingZone: ClickZone | undefined;
+          let bootZone: ClickZone | undefined;
           const flushChipRow = () => {
             const line = truncateToWidth(current, rowLimit, "…");
             const paintedWidth = visibleWidth(line);
@@ -1015,11 +1042,15 @@ export default function footerExtension(pi: ExtensionAPI): void {
               line,
               provider: clipZone(providerZone, paintedWidth),
               model: clipZone(modelZone, paintedWidth),
+              thinking: clipZone(thinkingZone, paintedWidth),
+              boot: clipZone(bootZone, paintedWidth),
             });
             current = "";
             cursor = 0;
             providerZone = undefined;
             modelZone = undefined;
+            thinkingZone = undefined;
+            bootZone = undefined;
             rowLimit = width;
           };
           for (let index = 0; index < left.length; index += 1) {
@@ -1040,6 +1071,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
             }
             if (index === 2) providerZone = [cursor, cursor + partWidth];
             if (index === 3) modelZone = [cursor, cursor + partWidth];
+            if (index === 4) thinkingZone = [cursor, cursor + partWidth];
+            if (index === bootIndex && showBoot) bootZone = [cursor, cursor + partWidth];
             current += part;
             cursor += partWidth;
           }
@@ -1075,14 +1108,21 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }
           // Publish the chip zones per painted line for the click hit test.
           // Aligned with `lines` so handleMouse's local event.y indexes
-          // straight into it. Rows past the chip rows (bypass, extra
-          // statuses) carry no zones and never hit.
+          // straight into it. Extra status rows carry no zones and never hit;
+          // the bypass marker lives on its own line with a zone of its own.
+          const bypassZone: ClickZone | undefined = bypassed ? [0, "bypass".length] : undefined;
           footerClickRows = lines.map((_, index) => {
             const row = chipRows[index];
-            return {
-              provider: row?.provider,
-              model: row?.model,
-            };
+            if (row) {
+              return {
+                provider: row.provider,
+                model: row.model,
+                thinking: row.thinking,
+                boot: row.boot,
+              } satisfies FooterClickRow;
+            }
+            if (bypassed && index === chipRows.length) return { bypass: bypassZone };
+            return {};
           });
           return lines;
         },
@@ -1168,6 +1208,111 @@ export default function footerExtension(pi: ExtensionAPI): void {
     cycleQueue = cycleQueue.then(cycleScopedModelForward).catch(() => {});
   }
 
+  /**
+   * Click the thinking chip: step forward through pi's ladder, wrapping past
+   * max to the lowest on-level (never "off" — a click shouldn't silently
+   * disable reasoning).
+   *
+   * pi.setThinkingLevel clamps to what the model supports, so each step is
+   * verified: when the effective level didn't move (e.g. xhigh on a model
+   * without an xhigh mapping clamps back to high) the walk continues past the
+   * unsupported level instead of getting stuck requesting it forever.
+   */
+  function cycleThinkingForward(): void {
+    const ctx = runtimeContext;
+    if (!ctx?.hasUI) return;
+    if (!ctx.model?.reasoning) {
+      ctx.ui.notify("Current model does not use thinking levels", "info");
+      return;
+    }
+    const current = pi.getThinkingLevel();
+    const at = (THINKING_ORDER as readonly string[]).indexOf(current);
+    for (let step = 1; step <= THINKING_ORDER.length; step += 1) {
+      const candidate =
+        THINKING_ORDER[(at + step + THINKING_ORDER.length) % THINKING_ORDER.length]!;
+      if (candidate === "off") continue;
+      pi.setThinkingLevel(candidate);
+      const effective = pi.getThinkingLevel();
+      if (effective !== current) {
+        ctx.ui.notify(`Thinking: ${current} → ${effective}`, "info");
+        return;
+      }
+      // No movement: the model has no such level (clamped back). Keep walking.
+    }
+    ctx.ui.notify(`Thinking stays ${current} (no other level supported)`, "info");
+  }
+
+  /**
+   * Shared by /bypass and a click on the bypass marker. The marker only
+   * renders while bypassed, so a click always means "turn it off".
+   */
+  async function setBypassActive(
+    next: boolean,
+    ctx: ExtensionContext | ExtensionCommandContext | undefined = runtimeContext,
+  ): Promise<void> {
+    if (!ctx?.hasUI) return;
+    if (next === bypassed) {
+      ctx.ui.notify(`Approval Guardian is already ${next ? "bypassed" : "enabled"}`, "info");
+      return;
+    }
+    if (!pi.getCommands().some((command) => command.name === GUARDIAN_COMMAND)) {
+      // Without the guardian loaded this would go to the LLM as a plain message.
+      ctx.ui.notify(`/${GUARDIAN_COMMAND} is not available`, "error");
+      return;
+    }
+    const request = { active: next, handled: false };
+    pi.events.emit(GUARDIAN_BYPASS_CONTROL_EVENT, request);
+    if (!request.handled) {
+      const { pin, settings } = await guardianPin();
+      ctx.ui.notify(
+        `${pin || "The installed Approval Guardian"} does not support immediate bypass control.` +
+          ` Pin ${GUARDIAN_FORK_PACKAGE} in ${tildePath(settings)} and /reload,` +
+          " or use /approval-guardian bypass.",
+        "error",
+      );
+      return;
+    }
+    if (next) suppressGuardianWidget(ctx);
+  }
+
+  /** Shared by /boot stats and a click on the boot timer chip. */
+  async function showBootStats(
+    limit: number,
+    ctx: ExtensionContext | ExtensionCommandContext | undefined = runtimeContext,
+  ): Promise<void> {
+    if (!ctx?.hasUI) return;
+    let boots: BootRecord[] = [];
+    try {
+      boots = await readBoots(limit);
+    } catch {
+      // No log yet.
+    }
+    if (boots.length === 0) {
+      ctx.ui.notify("No boot times recorded yet", "warning");
+      return;
+    }
+    const sorted = boots.map((boot) => boot.ms).sort((a, b) => a - b);
+    // Compare like with like: a burst of relaunches and a one-off launch
+    // differ by more than most changes worth measuring, so an undivided p50
+    // mostly reports how you happened to be using pi that day.
+    const burst = boots.filter((boot) => boot.since !== undefined && boot.since < BOOT_BURST_WINDOW_S);
+    const isolated = boots.filter((boot) => boot.since !== undefined && boot.since >= BOOT_BURST_WINDOW_S);
+    const loads = boots.map((boot) => boot.load).filter((load): load is number => load !== undefined);
+    const cohorts = [
+      burst.length > 0 ? `burst <${BOOT_BURST_WINDOW_S}s (n=${burst.length}) ${cohortSummary(burst.map((b) => b.ms))}` : "",
+      isolated.length > 0 ? `isolated (n=${isolated.length}) ${cohortSummary(isolated.map((b) => b.ms))}` : "",
+      loads.length > 0 ? `load p50 ${percentile([...loads].sort((a, b) => a - b), 50).toFixed(2)}` : "",
+    ].filter(Boolean);
+    ctx.ui.notify(
+      `${boots.length} launches · p50 ${formatMs(percentile(sorted, 50))}` +
+        ` · p95 ${formatMs(percentile(sorted, 95))}` +
+        ` · min ${formatMs(sorted[0] ?? 0)} · max ${formatMs(sorted[sorted.length - 1] ?? 0)}` +
+        (bootMs === undefined ? "" : ` · this one ${formatMs(bootMs)}`) +
+        (cohorts.length > 0 ? `\n${cohorts.join(" · ")}` : ""),
+      "info",
+    );
+  }
+
   // provider-usage.ts pings these after writing fresh MTD values to their
   // globalThis stashes; without it the chip waits for the next render event.
   pi.events.on("baseten-usage:updated", () => {
@@ -1209,29 +1354,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
         ctx.ui.notify("Usage: /bypass [on|off]", "warning");
         return;
       }
-      if (next === bypassed) {
-        ctx.ui.notify(`Approval Guardian is already ${next ? "bypassed" : "enabled"}`, "info");
-        return;
-      }
-      if (!pi.getCommands().some((command) => command.name === GUARDIAN_COMMAND)) {
-        // Without the guardian loaded this would go to the LLM as a plain message.
-        ctx.ui.notify(`/${GUARDIAN_COMMAND} is not available`, "error");
-        return;
-      }
-
-      const request = { active: next, handled: false };
-      pi.events.emit(GUARDIAN_BYPASS_CONTROL_EVENT, request);
-      if (!request.handled) {
-        const { pin, settings } = await guardianPin();
-        ctx.ui.notify(
-          `${pin || "The installed Approval Guardian"} does not support immediate bypass control.` +
-            ` Pin ${GUARDIAN_FORK_PACKAGE} in ${tildePath(settings)} and /reload,` +
-            " or use /approval-guardian bypass.",
-          "error",
-        );
-        return;
-      }
-      if (next) suppressGuardianWidget(ctx);
+      await setBypassActive(next, ctx);
     },
   });
 
@@ -1242,36 +1365,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
       if (/^stats\b/.test(argument)) {
         const requested = Number.parseInt(argument.slice("stats".length).trim(), 10);
         const limit = Number.isFinite(requested) && requested > 0 ? requested : BOOT_STATS_DEFAULT;
-        let boots: BootRecord[] = [];
-        try {
-          boots = await readBoots(limit);
-        } catch {
-          // No log yet.
-        }
-        if (boots.length === 0) {
-          ctx.ui.notify("No boot times recorded yet", "warning");
-          return;
-        }
-        const sorted = boots.map((boot) => boot.ms).sort((a, b) => a - b);
-        // Compare like with like: a burst of relaunches and a one-off launch
-        // differ by more than most changes worth measuring, so an undivided p50
-        // mostly reports how you happened to be using pi that day.
-        const burst = boots.filter((boot) => boot.since !== undefined && boot.since < BOOT_BURST_WINDOW_S);
-        const isolated = boots.filter((boot) => boot.since !== undefined && boot.since >= BOOT_BURST_WINDOW_S);
-        const loads = boots.map((boot) => boot.load).filter((load): load is number => load !== undefined);
-        const cohorts = [
-          burst.length > 0 ? `burst <${BOOT_BURST_WINDOW_S}s (n=${burst.length}) ${cohortSummary(burst.map((b) => b.ms))}` : "",
-          isolated.length > 0 ? `isolated (n=${isolated.length}) ${cohortSummary(isolated.map((b) => b.ms))}` : "",
-          loads.length > 0 ? `load p50 ${percentile([...loads].sort((a, b) => a - b), 50).toFixed(2)}` : "",
-        ].filter(Boolean);
-        ctx.ui.notify(
-          `${boots.length} launches · p50 ${formatMs(percentile(sorted, 50))}` +
-            ` · p95 ${formatMs(percentile(sorted, 95))}` +
-            ` · min ${formatMs(sorted[0] ?? 0)} · max ${formatMs(sorted[sorted.length - 1] ?? 0)}` +
-            (bootMs === undefined ? "" : ` · this one ${formatMs(bootMs)}`) +
-            (cohorts.length > 0 ? `\n${cohorts.join(" · ")}` : ""),
-          "info",
-        );
+        await showBootStats(limit, ctx);
         return;
       }
 
