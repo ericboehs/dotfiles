@@ -16,17 +16,19 @@
  * Clicking the provider or model chip cycles to the next scoped model — the
  * same switch as Ctrl+P. Clicking the thinking chip cycles the thinking level
  * forward, the boot timer shows /boot stats, and the bypass marker turns
- * bypass off. Dir, git, context, cost and window chips stay glance-only.
- * Fullscreen only: that is where the terminal reports mouse clicks to pi at all.
+ * bypass off. The dir chip toggles basename/full path, the context chip toggles
+ * tokens/percent, and the provider-usage chip toggles long/short window forms;
+ * git and cost stay glance-only. Fullscreen only: that is where the terminal
+ * reports mouse clicks to pi at all.
  *
  * Design notes:
  * - No config UI, no widget registry: the layout is this file.
  * - Git state comes from a single `git status --porcelain=v1` per refresh, cached
  *   with a 5s TTL and refreshed asynchronously (stale-while-revalidate), so a slow
  *   repo never blocks a render.
- * - Colors are plain ANSI-16 SGR codes; the theme supplies only the dim
- *   foreground, shared by the boot timer, the peer session name, and the
- *   extension-status row.
+ * - Colors are ANSI SGR codes (mostly ANSI-16; xterm-256 supplies orange);
+ *   the theme supplies only the dim foreground, shared by the boot timer, the
+ *   peer session name, and the extension-status row.
  */
 
 import { spawn } from "node:child_process";
@@ -187,6 +189,9 @@ const CYAN = 36;
 const GREEN = 32;
 const YELLOW = 33;
 const RED = 31;
+/** xterm-256 orange; ANSI-16 has no orange distinct from yellow. */
+const ORANGE = "38;5;208";
+const BRIGHT_BLACK = 90;
 const BRIGHT_YELLOW = 93;
 const BRIGHT_RED = 91;
 
@@ -435,7 +440,7 @@ function formatGit(branch: string | null, state: GitState): string {
   return `${color(MAGENTA, `${branch}${state.dirty ? "*" : ""}`)}${arrows ? ` ${color(CYAN, arrows)}` : ""}`;
 }
 
-function color(code: number, text: string): string {
+function color(code: number | string, text: string): string {
   return text ? `\x1b[${code}m${text}\x1b[39m` : "";
 }
 
@@ -529,6 +534,11 @@ function trimFixed(value: number, digits: number): string {
 
 function formatCost(cost: number): string {
   return `$${cost.toFixed(cost < 1 ? 4 : 2)}`;
+}
+
+/** 4.1 → "4%": the context chip has no room for decimals. */
+function formatPercent(value: number): string {
+  return `${Math.round(value)}%`;
 }
 
 /** 903 → "903ms", 1240 → "1.24s". */
@@ -826,13 +836,14 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
   return CYAN;
 }
 
-/** Pace `!`s from the usage chips: 1 = >5pts ahead, 2 = >10, 3 = >20. `↻` is at-limit. */
-function paceWarningColorCode(value: string): number {
+/** Pace warning ladder: quiet gray, ! yellow, !! orange, !!! red; ↻ is at-limit. */
+function paceWarningColorCode(value: string): number | string {
   if (value.includes("\u21bb")) return RED;
   const bangs = /!+$/.exec(value)?.[0].length ?? 0;
-  if (bangs >= 2) return RED;
+  if (bangs >= 3) return RED;
+  if (bangs === 2) return ORANGE;
   if (bangs === 1) return YELLOW;
-  return CYAN;
+  return BRIGHT_BLACK;
 }
 
 /** A window label like "1.2/5H:" — each such token starts a fresh window group. */
@@ -853,6 +864,27 @@ function windowGroups(value: string): string[] {
   return groups;
 }
 
+/** Parsed long-form window: "3.5/5H: 4%!" → "4%!". */
+function parseWindowValue(group: string): string | undefined {
+  return /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?[HD]:\s+(.+)$/.exec(group)?.[1];
+}
+
+/** Render provider windows long, or percentages-only compact "4%/33%!" form. */
+function renderWindowUsage(value: string, compact: boolean): string {
+  const groups = windowGroups(value);
+  if (!compact) {
+    return groups.map((group) => color(paceWarningColorCode(group), group)).join(" ");
+  }
+  const values = groups.map(parseWindowValue);
+  if (values.some((window) => window === undefined)) {
+    // Unknown producer format: preserve it rather than guessing destructively.
+    return groups.map((group) => color(paceWarningColorCode(group), group)).join(" ");
+  }
+  return (values as string[])
+    .map((window) => color(paceWarningColorCode(window), window))
+    .join(color(BRIGHT_BLACK, "/"));
+}
+
 export default function footerExtension(pi: ExtensionAPI): void {
   const git = new GitStatusCache(pi);
   const peer = new PeerNameCache();
@@ -868,8 +900,21 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let bootMs: number | undefined;
   let bootCleared = false;
   let updateTimerStarted = false;
-  /** Clickable chip actions. Dir, git, context, cost and window chips stay glance-only. */
-  type FooterClickAction = "model" | "thinking" | "boot" | "bypass";
+  /** Dir chip shows the full ~/path instead of the basename when true. */
+  let showFullPath = false;
+  /** Context chip shows percent-used instead of tokens/window when true. */
+  let contextPercent = false;
+  /** Provider usage hides elapsed-window ages in a compact combined form by default. */
+  let compactProviderUsage = true;
+  /** Clickable chip actions. Git and cost stay glance-only. */
+  type FooterClickAction =
+    | "model"
+    | "thinking"
+    | "boot"
+    | "bypass"
+    | "dir"
+    | "context"
+    | "providerUsage";
   /** One entry per painted footer line, holding the chip zones on that line. */
   interface FooterClickRow {
     provider?: ClickZone;
@@ -877,6 +922,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
     thinking?: ClickZone;
     boot?: ClickZone;
     bypass?: ClickZone;
+    dir?: ClickZone;
+    context?: ClickZone;
+    providerUsage?: ClickZone;
   }
   /**
    * Hit-testing state for clickable chips, refreshed on every footer render:
@@ -905,6 +953,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (zoneHit(row.thinking, x)) return "thinking";
     if (zoneHit(row.boot, x)) return "boot";
     if (zoneHit(row.bypass, x)) return "bypass";
+    if (zoneHit(row.dir, x)) return "dir";
+    if (zoneHit(row.context, x)) return "context";
+    if (zoneHit(row.providerUsage, x)) return "providerUsage";
     return undefined;
   }
 
@@ -956,6 +1007,17 @@ export default function footerExtension(pi: ExtensionAPI): void {
             else if (action === "thinking") cycleThinkingForward();
             else if (action === "boot") void showBootStats(BOOT_STATS_DEFAULT);
             else if (action === "bypass") void setBypassActive(false);
+            // Toggles repaint the footer itself, which is the feedback — no notice.
+            else if (action === "dir") {
+              showFullPath = !showFullPath;
+              repaint?.();
+            } else if (action === "context") {
+              contextPercent = !contextPercent;
+              repaint?.();
+            } else if (action === "providerUsage") {
+              compactProviderUsage = !compactProviderUsage;
+              repaint?.();
+            }
           }
           return { handled: true };
         },
@@ -975,7 +1037,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const showBoot = bootMs !== undefined && !bootCleared;
 
           const left: string[] = [
-            color(BLUE, basename(ctx.cwd)),
+            color(BLUE, showFullPath ? tildePath(ctx.cwd) : basename(ctx.cwd)),
             formatGit(branch, gitState),
             color(BRIGHT_YELLOW, shortProvider(provider)),
             color(
@@ -983,11 +1045,17 @@ export default function footerExtension(pi: ExtensionAPI): void {
               `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id, provider)}`,
             ),
             color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
-            // context-length / context-window share one segment (no spaces around "/")
-            `${color(
-              contextColorCode(usage?.tokens, usage?.contextWindow),
-              usage?.tokens == null ? "?" : formatCount(usage.tokens),
-            )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
+            // context-length / context-window share one segment (no spaces around "/"),
+            // or a single percent when the chip is toggled.
+            contextPercent
+              ? color(
+                  contextColorCode(usage?.tokens, usage?.contextWindow),
+                  usage?.percent == null ? "?" : formatPercent(usage.percent),
+                )
+              : `${color(
+                  contextColorCode(usage?.tokens, usage?.contextWindow),
+                  usage?.tokens == null ? "?" : formatCount(usage.tokens),
+                )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
             usageChip(provider)
               ? color(GREEN, usageChip(provider) as string)
               : hideSessionCost(provider, ctx)
@@ -996,11 +1064,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             ...INLINE_STATUS_KEYS.map((key) => {
               const value = statuses.get(key);
               // Per-window coloring: a red 5h shouldn't paint the week red too.
-              return value
-                ? windowGroups(value)
-                    .map((group) => color(paceWarningColorCode(group), group))
-                    .join(" ")
-                : "";
+              return value ? renderWindowUsage(value, compactProviderUsage) : "";
             }),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
           ];
@@ -1036,6 +1100,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
           let modelZone: ClickZone | undefined;
           let thinkingZone: ClickZone | undefined;
           let bootZone: ClickZone | undefined;
+          let dirZone: ClickZone | undefined;
+          let contextZone: ClickZone | undefined;
+          let providerUsageZone: ClickZone | undefined;
           const flushChipRow = () => {
             const line = truncateToWidth(current, rowLimit, "…");
             const paintedWidth = visibleWidth(line);
@@ -1045,6 +1112,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
               model: clipZone(modelZone, paintedWidth),
               thinking: clipZone(thinkingZone, paintedWidth),
               boot: clipZone(bootZone, paintedWidth),
+              dir: clipZone(dirZone, paintedWidth),
+              context: clipZone(contextZone, paintedWidth),
+              providerUsage: clipZone(providerUsageZone, paintedWidth),
             });
             current = "";
             cursor = 0;
@@ -1052,6 +1122,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
             modelZone = undefined;
             thinkingZone = undefined;
             bootZone = undefined;
+            dirZone = undefined;
+            contextZone = undefined;
+            providerUsageZone = undefined;
             rowLimit = width;
           };
           for (let index = 0; index < left.length; index += 1) {
@@ -1070,9 +1143,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
               current += " ";
               cursor += 1;
             }
+            if (index === 0) dirZone = [cursor, cursor + partWidth];
             if (index === 2) providerZone = [cursor, cursor + partWidth];
             if (index === 3) modelZone = [cursor, cursor + partWidth];
             if (index === 4) thinkingZone = [cursor, cursor + partWidth];
+            if (index === 5) contextZone = [cursor, cursor + partWidth];
+            if (index >= 7 && index < bootIndex) {
+              // Only one provider status normally renders. If extensions expose
+              // several, make their contiguous run one shared toggle target.
+              providerUsageZone = [providerUsageZone?.[0] ?? cursor, cursor + partWidth];
+            }
             if (index === bootIndex && showBoot) bootZone = [cursor, cursor + partWidth];
             current += part;
             cursor += partWidth;
@@ -1120,6 +1200,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
                 model: row.model,
                 thinking: row.thinking,
                 boot: row.boot,
+                dir: row.dir,
+                context: row.context,
+                providerUsage: row.providerUsage,
               } satisfies FooterClickRow;
             }
             if (bypassed && index === chipRows.length) return { bypass: bypassZone };
@@ -1392,8 +1475,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (event, ctx) => {
     await updateReady;
     runtimeContext = ctx;
-    // The guardian's bypass resets when the session runtime reloads.
+    // Session-local toggles reset instead of leaking into the next conversation.
     bypassed = false;
+    compactProviderUsage = true;
     coldStart = event.reason === "startup";
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer

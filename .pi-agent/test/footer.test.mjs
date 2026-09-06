@@ -434,6 +434,33 @@ test("clicking thinking wraps max to the lowest on-level, never off", async () =
   assert.match(ui.notices.at(-1).message, /max → minimal/);
 });
 
+test("clicking the dir chip toggles basename and full path", async () => {
+  const ui = await mount();
+  assert.equal(ui.plain()[0].split(" ")[0], "dotfiles");
+  assert.deepEqual(ui.click(2, 0), { handled: true });
+  assert.ok(
+    ui.plain()[0].startsWith("/Users/someone/Code/github.com/someone/dotfiles"),
+    ui.plain()[0],
+  );
+  assert.deepEqual(ui.click(2, 0), { handled: true });
+  assert.equal(ui.plain()[0].split(" ")[0], "dotfiles");
+});
+
+/** Start column of the context chip (6th space-separated part) on a one-row footer. */
+function contextX(ui, width = 120) {
+  const line = ui.plain(width)[0];
+  return line.split(" ").slice(0, 5).join(" ").length + 1;
+}
+
+test("clicking the context chip toggles tokens and percent", async () => {
+  const ui = await mount();
+  assert.match(ui.plain()[0], /41\.2k\/1m/);
+  assert.deepEqual(ui.click(contextX(ui), 0), { handled: true });
+  assert.match(ui.plain()[0], / 4%$/);
+  assert.deepEqual(ui.click(contextX(ui), 0), { handled: true });
+  assert.match(ui.plain()[0], /41\.2k\/1m/);
+});
+
 test("cost formatting and subscription providers", async () => {
   const billableModel = { id: "gpt-5.4", provider: "openai", reasoning: true };
   const cheap = await mount({ costs: [0.0123], model: billableModel });
@@ -468,19 +495,61 @@ test("context colors escalate at 70% and 90%", async () => {
   assert.equal(await shade(95), "31", "red at 90%");
 });
 
-test("usage chips color by pace warnings", async () => {
-  const shade = async (key, status) => {
+test("usage chips color by pace warnings in compact and long forms", async () => {
+  const shade = async (key, status, form) => {
     const ui = await mount({ statuses: new Map([[key, status]]) });
-    const escaped = status.replaceAll(".", "\\.").replaceAll("!", "\\!");
-    return new RegExp(`\x1B\\[(\\d+)m${escaped}\x1B\\[39m`).exec(ui.raw()[0])?.[1];
+    let target = status.slice(status.indexOf(": ") + 2);
+    if (form === "long") {
+      const line = ui.plain()[0];
+      ui.click(line.lastIndexOf(target), 0);
+      target = status;
+    }
+    const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\x1B\\[([0-9;]+)m${escaped}\x1B\\[39m`).exec(ui.raw()[0])?.[1];
   };
   for (const key of ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window"]) {
-    assert.equal(await shade(key, "2.1/7D: 18%"), "36", `${key} cyan with no warning`);
-    assert.equal(await shade(key, "2.1/7D: 18%!"), "33", `${key} yellow at one !`);
-    assert.equal(await shade(key, "2.1/7D: 18%!!"), "31", `${key} red at two !`);
-    assert.equal(await shade(key, "2.1/7D: 18%!!!"), "31", `${key} red at three !`);
-    assert.equal(await shade(key, "4.8/5H: \u21bb3:45p"), "31", `${key} red at limit reset`);
+    for (const form of ["compact", "long"]) {
+      assert.equal(await shade(key, "2.1/7D: 18%", form), "90", `${key} ${form} gray with no warning`);
+      assert.equal(await shade(key, "2.1/7D: 18%!", form), "33", `${key} ${form} yellow at one !`);
+      assert.equal(await shade(key, "2.1/7D: 18%!!", form), "38;5;208", `${key} ${form} orange at two !`);
+      assert.equal(await shade(key, "2.1/7D: 18%!!!", form), "31", `${key} ${form} red at three !`);
+      assert.equal(await shade(key, "4.8/5H: \u21bb3:45p", form), "31", `${key} ${form} red at limit reset`);
+    }
   }
+});
+
+test("provider usage defaults compact and toggles to long and back", async () => {
+  const long = "3.5/5H: 4% 6/7D: 33%!";
+  const ui = await mount({ statuses: new Map([["codex-window", long]]) });
+  let line = ui.plain()[0];
+  assert.match(line, /4%\/33%!$/);
+
+  assert.deepEqual(ui.click(line.indexOf("4%/33%") + 1, 0), { handled: true });
+  line = ui.plain()[0];
+  assert.match(line, /3\.5\/5H: 4% 6\/7D: 33%!$/);
+
+  assert.deepEqual(ui.click(line.indexOf("3.5/5H") + 1, 0), { handled: true });
+  assert.match(ui.plain()[0], /4%\/33%!$/);
+});
+
+test("short provider usage preserves each window's warning color", async () => {
+  const ui = await mount({
+    statuses: new Map([["codex-window", "3.5/5H: 4% 6/7D: 33%!"]]),
+  });
+  assert.match(
+    ui.raw()[0],
+    /\x1B\[90m4%\x1B\[39m\x1B\[90m\/\x1B\[39m\x1B\[33m33%!\x1B\[39m/,
+  );
+});
+
+test("provider usage form resets to compact on session change", async () => {
+  const long = "3.5/5H: 4% 6/7D: 33%!";
+  const ui = await mount({ statuses: new Map([["codex-window", long]]) });
+  let line = ui.plain()[0];
+  ui.click(line.indexOf("4%/33%") + 1, 0);
+  assert.match(ui.plain()[0], /3\.5\/5H: 4% 6\/7D: 33%!$/);
+  await ui.startSession();
+  assert.match(ui.plain()[0], /4%\/33%!$/);
 });
 
 test("unknown context tokens render as ?", async () => {
@@ -499,7 +568,7 @@ test("session name is right-aligned and statuses split inline vs status row", as
     ]),
   });
   const [main, statusRow] = await ui.settled(120);
-  assert.match(main, /codex 12% copilot 40% 2\.1\/7D: 18% +footer-work$/);
+  assert.match(main, /codex 12% copilot 40% 18% +footer-work$/);
   assert.equal(statusRow, "3s");
   assert.equal(main.length, 120);
 });
