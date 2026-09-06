@@ -209,8 +209,9 @@ const THINKING_NAMES: Record<string, string> = {
   low: "lo",
   medium: "med",
   high: "hi",
-  // xhigh renders as "hi" (Eric runs xhigh by default; plain high shares the label).
-  xhigh: "hi",
+  // xhigh keeps its own label so the chip visibly changes on high → xhigh
+  // (aa-info and turn-timer already use "xhi" for it).
+  xhigh: "xhi",
 };
 
 /** Forward-cycle order for the thinking chip (matches pi's ladder). */

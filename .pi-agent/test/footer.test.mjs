@@ -382,8 +382,7 @@ test("thinking levels are abbreviated, and hidden for non-reasoning models", asy
     ["low", "lo"],
     ["medium", "med"],
     ["high", "hi"],
-    // xhigh renders as "hi" too (Eric runs xhigh by default); the two share a label.
-    ["xhigh", "hi"],
+    ["xhigh", "xhi"],
     ["max", "max"],
   ];
   for (const [level, expected] of cases) {
