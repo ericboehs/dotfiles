@@ -96,6 +96,34 @@ heal() {
 healed=no
 result=ok
 
+# Read-only doc repos: ff-only pull keeps the indexed content fresh.
+# Env guards keep an unattended pull from hanging on prompts or slow
+# transfers (farm connectivity). Dev repos (vets-api, eert,
+# identity-fraud-engine) are deliberately NOT here — they refresh when
+# Eric pulls during normal work; the index follows his checkout.
+refresh_doc_repos() {
+	GIT_TERMINAL_PROMPT=0
+	GIT_HTTP_LOW_SPEED_LIMIT=1000
+	GIT_HTTP_LOW_SPEED_TIME=20
+	export GIT_TERMINAL_PROMPT GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME
+	for repo in \
+		"$HOME/Code/github.com/department-of-veterans-affairs/veterans-identification-card-vic-code-wiki" \
+		"$HOME/Code/va.ghe.com/handbook" \
+		"$HOME/Code/va.ghe.com/software/devops"
+	do
+		out=$(git -C "$repo" pull --ff-only 2>&1)
+		if [ $? -ne 0 ]; then
+			echo "--- $(ts) git pull failed for $repo (non-fatal): $(echo "$out" | tail -1) ---"
+			continue
+		fi
+		case "$out" in
+			*"Already up to date"*) : ;;
+			*) echo "--- $(ts) pulled $repo ---" ;;
+		esac
+	done
+	unset GIT_TERMINAL_PROMPT GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME
+}
+
 {
 	echo "=== $(ts) start ==="
 
@@ -109,6 +137,7 @@ result=ok
 	fi
 
 	try_index() {
+		refresh_doc_repos
 		# Export session transcripts to markdown first, so this same pass
 		# indexes them (incremental, mtime-gated — cheap).
 		"$HOME/Code/github.com/ericboehs/dotfiles/bin/pi-session-export" ||
