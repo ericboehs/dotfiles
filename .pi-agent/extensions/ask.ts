@@ -7,21 +7,18 @@
  * - `multiSelect: true` allows multiple picks on one question.
  * - `questions: [...]` asks several questions sequentially in one call.
  *
- * Mouse: single mode uses SelectList (built-in press/click/wheel). Multi
- * mode renders its own checkbox rows and hit-tests clicks zone-style (same
- * idea as next-steps.ts chips). Fullscreen TUI only — regular mode falls
- * back to keyboard, RPC falls back to select/input dialogs.
+ * Both modes render their own wrapped rows (SelectList truncates long
+ * labels/descriptions instead of wrapping) and hit-test clicks zone-style
+ * (same idea as next-steps.ts chips). Fullscreen TUI only — regular mode
+ * falls back to keyboard, RPC falls back to select/input dialogs.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	Container,
 	Key,
 	matchesKey,
-	Spacer,
 	Text,
 	type SelectItem,
-	SelectList,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -58,6 +55,22 @@ export function parseMultiPicks(raw: string, count: number): number[] {
 		if (!picks.includes(n)) picks.push(n);
 	}
 	return picks;
+}
+
+/**
+ * Append `text` to `lines`, word-wrapped to width `w`. The first line gets
+ * `prefix` (may contain ANSI); continuations are indented to its visible
+ * width. Handles the ANSI-unsafe case where the prefix alone fills the line.
+ */
+function pushWrapped(lines: string[], prefix: string, text: string, w: number): void {
+	const pw = visibleWidth(prefix);
+	if (pw >= w) {
+		lines.push(...wrapTextWithAnsi(prefix + text, w));
+		return;
+	}
+	const wrapped = wrapTextWithAnsi(text, w - pw);
+	const cont = " ".repeat(pw);
+	for (let i = 0; i < wrapped.length; i++) lines.push(`${i === 0 ? prefix : cont}${wrapped[i]}`);
 }
 
 /** RPC select() takes bare strings, so fold the description in. Pure for tests. */
@@ -182,54 +195,81 @@ export default function ask(pi: ExtensionAPI) {
 
 			const pickSingle = async (question: string, items: SelectItem[]): Promise<string | undefined> => {
 				if (ctx.mode === "tui") {
+					// Custom renderer instead of SelectList: SelectList truncates
+					// long labels/descriptions to one line; this wraps them.
 					return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
-						const container = new Container();
-						const topBorder = new Text("", 0, 0);
-						container.addChild(topBorder);
-						container.addChild(new Text(theme.fg("text", question), 1, 0));
-						container.addChild(new Spacer(1));
+						let cursor = 0;
+						let cached: string[] | undefined;
+						let zones: Array<{ index: number; start: number; end: number }> = [];
 
-						const list = new SelectList(items, Math.min(items.length, 10), {
-							selectedPrefix: (t) => theme.fg("accent", t),
-							selectedText: (t) => theme.fg("accent", t),
-							description: (t) => theme.fg("muted", t),
-							scrollInfo: (t) => theme.fg("dim", t),
-							noMatch: (t) => theme.fg("warning", t),
-						});
-						list.onSelect = (item) => done(item.value);
-						list.onCancel = () => done(undefined);
-						container.addChild(list);
-						container.addChild(new Spacer(1));
-						container.addChild(
-							new Text(theme.fg("dim", "↑↓/click select • 1-9 quick pick • enter confirm • esc cancel"), 1, 0),
-						);
+						const refresh = () => {
+							cached = undefined;
+							tui.requestRender();
+						};
+						const pick = (i: number) => done(items[i]!.value);
+
+						function handleInput(data: string) {
+							if (matchesKey(data, Key.up)) {
+								cursor = (cursor - 1 + items.length) % items.length;
+								refresh();
+								return;
+							}
+							if (matchesKey(data, Key.down)) {
+								cursor = (cursor + 1) % items.length;
+								refresh();
+								return;
+							}
+							if (matchesKey(data, Key.enter)) {
+								pick(cursor);
+								return;
+							}
+							if (matchesKey(data, Key.escape)) {
+								done(undefined);
+								return;
+							}
+							if (data.length === 1 && data >= "1" && data <= "9") {
+								const idx = Number(data) - 1;
+								if (idx < items.length) pick(idx);
+							}
+						}
+
+						function render(width: number): string[] {
+							if (cached) return cached;
+							const w = Math.max(1, width);
+							zones = [];
+							const lines: string[] = [];
+							lines.push(theme.fg("accent", "─".repeat(w)));
+							pushWrapped(lines, " ", theme.fg("text", question), w);
+							lines.push("");
+							items.forEach((item, i) => {
+								const start = lines.length;
+								const mark = i === cursor ? theme.fg("accent", "→ ") : "  ";
+								const color = i === cursor ? "accent" : "text";
+								pushWrapped(lines, mark, theme.fg(color, item.label), w);
+								if (item.description) pushWrapped(lines, "     ", theme.fg("muted", item.description), w);
+								zones.push({ index: i, start, end: lines.length });
+							});
+							lines.push("");
+							pushWrapped(lines, " ", theme.fg("dim", "↑↓/click select • 1-9 quick pick • enter confirm • esc cancel"), w);
+							lines.push(theme.fg("accent", "─".repeat(w)));
+							cached = lines;
+							return lines;
+						}
 
 						return {
-							render: (w) => {
-								const width = Math.max(1, w);
-								topBorder.setText(theme.fg("accent", "─".repeat(width)));
-								const lines = container.render(width);
-								lines.push(theme.fg("accent", "─".repeat(width)));
-								return lines;
+							render,
+							invalidate: () => {
+								cached = undefined;
 							},
-							invalidate: () => container.invalidate(),
-							handleInput: (data) => {
-								// Single-digit quick pick (SelectList doesn't bind numbers).
-								if (data.length === 1 && data >= "1" && data <= "9") {
-									const idx = Number(data) - 1;
-									const item = items[idx];
-									if (item) {
-										done(item.value);
-										return;
-									}
-								}
-								list.handleInput(data);
-								tui.requestRender();
+							handleInput,
+							// Click selects immediately (matches SelectList's click = select + confirm).
+							handleMouse: (event: any) => {
+								if (event?.type !== "click" || event?.button !== "left") return undefined;
+								const hit = zones.find((z) => event.y >= z.start && event.y < z.end);
+								if (!hit) return undefined;
+								pick(hit.index);
+								return { handled: true };
 							},
-							// Forward clicks/wheel to Container → SelectList.
-							// Click-only would preserve drag-select, but this modal
-							// replaces the editor so press-to-highlight is fine.
-							handleMouse: (event: any) => container.handleMouse(event),
 						};
 					});
 				}
@@ -312,37 +352,23 @@ export default function ask(pi: ExtensionAPI) {
 							const w = Math.max(1, width);
 							zones = [];
 							const lines: string[] = [];
-							const addWrapped = (t: string) => {
-								lines.push(...wrapTextWithAnsi(t, w));
-							};
-							const addPrefixed = (prefix: string, t: string) => {
-								const pw = visibleWidth(prefix);
-								if (pw >= w) {
-									addWrapped(prefix + t);
-									return;
-								}
-								const wrapped = wrapTextWithAnsi(t, w - pw);
-								const cont = " ".repeat(pw);
-								for (let i = 0; i < wrapped.length; i++) lines.push(`${i === 0 ? prefix : cont}${wrapped[i]}`);
-							};
-
 							lines.push(theme.fg("accent", "─".repeat(w)));
-							addPrefixed(" ", theme.fg("text", question));
+							pushWrapped(lines, " ", theme.fg("text", question), w);
 							lines.push("");
 							items.forEach((item, i) => {
 								const start = lines.length;
 								const box = checked.has(i) ? "[x]" : "[ ]";
 								const mark = i === cursor ? theme.fg("accent", "> ") : "  ";
 								const color = i === cursor ? "accent" : "text";
-								addPrefixed(mark, `${theme.fg(color, box)} ${theme.fg(color, item.label)}`);
-								if (item.description) addPrefixed("      ", theme.fg("muted", item.description));
+								pushWrapped(lines, mark, `${theme.fg(color, box)} ${theme.fg(color, item.label)}`, w);
+								if (item.description) pushWrapped(lines, "      ", theme.fg("muted", item.description), w);
 								zones.push({ index: i, start, end: lines.length });
 							});
 							lines.push("");
-							if (hint) addPrefixed(" ", theme.fg("warning", hint));
+							if (hint) pushWrapped(lines, " ", theme.fg("warning", hint), w);
 							else {
 								const sel = checked.size > 0 ? ` • ${checked.size} selected` : "";
-								addPrefixed(" ", theme.fg("dim", `↑↓ move • space/click toggle • a all • enter done${sel} • esc cancel`));
+								pushWrapped(lines, " ", theme.fg("dim", `↑↓ move • space/click toggle • a all • enter done${sel} • esc cancel`), w);
 							}
 							lines.push(theme.fg("accent", "─".repeat(w)));
 							cached = lines;
