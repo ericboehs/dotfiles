@@ -1,0 +1,41 @@
+#!/bin/bash
+# agent-desktop-heal — re-fetch agent-desktop's GitHub-release binary.
+#
+# agent-desktop ships its native binary (agent-desktop-darwin-arm64) and macOS
+# helper via a postinstall script that downloads from GitHub. npm's script
+# gating skips that postinstall on installs and updates, leaving the CLI
+# broken ("Native binary not found for darwin-arm64"). Every `npm i -g
+# agent-desktop` therefore needs this manual fix — so it now runs itself:
+# launchd (com.boehs.agent-desktop-heal) calls this daily and at login.
+#
+# Quiet when healthy; appends to the log only when it acts or fails.
+
+set -u
+
+# bash -l does not source .zshenv, so put the mise shims on PATH ourselves —
+# same ordering rule .zshenv applies: shims in front of everything.
+path=("$HOME/.local/share/mise/shims" "$path[@]")
+
+BIN_DIR="$(npm root -g)/agent-desktop/bin"
+POSTINSTALL="$(npm root -g)/agent-desktop/scripts/postinstall.js"
+LOG="${TMPDIR:-/tmp}/agent-desktop-heal.log"
+
+stamp() { date '+%Y-%m-%d %H:%M:%S'; }
+
+# Healthy when both GitHub-release artifacts are present and executable.
+if [[ -x "$BIN_DIR/agent-desktop-darwin-arm64" &&
+      -x "$BIN_DIR/agent-desktop-macos-helper" ]]; then
+  exit 0
+fi
+
+if [[ ! -f "$POSTINSTALL" ]]; then
+  echo "$(stamp) agent-desktop not installed (no postinstall at $POSTINSTALL)" >> "$LOG"
+  exit 1
+fi
+
+if node "$POSTINSTALL" >> "$LOG" 2>&1; then
+  echo "$(stamp) healed: native binary + helper restored ($(agent-desktop --version 2>&1 | head -1))" >> "$LOG"
+else
+  echo "$(stamp) heal FAILED — see postinstall output above" >> "$LOG"
+  exit 1
+fi
