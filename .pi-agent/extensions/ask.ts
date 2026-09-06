@@ -6,6 +6,9 @@
  *
  * - `multiSelect: true` allows multiple picks on one question.
  * - `questions: [...]` asks several questions sequentially in one call.
+ *   Batch mode shows `Qn/total` progress; `shift+tab`/`←` or clicking the
+ *   `← Back` row steps back to the previous question with prior picks
+ *   preserved (`esc` still cancels).
  *
  * Both modes render their own wrapped rows (SelectList truncates long
  * labels/descriptions instead of wrapping) and hit-test clicks zone-style
@@ -25,6 +28,30 @@ import {
 import { Type } from "typebox";
 
 const CUSTOM_VALUE = "__custom__";
+
+/** Returned from batch pickers when the user steps back a question (TUI-only). Exported for tests. */
+export const BACK = Symbol("back");
+
+/** Click zone index for the `← Back` row; option zones use 0..n. */
+const BACK_ZONE = -1;
+
+/** Map a previous answer label back to its item value. Pure for tests. */
+export function initialSingleValue(options: AskOption[], prevAnswers: string[]): string | undefined {
+	const first = prevAnswers[0];
+	if (!first) return undefined;
+	const idx = options.findIndex((o) => o.label === first);
+	return idx >= 0 ? String(idx) : undefined;
+}
+
+/** Map previous answer labels back to item values, skipping stale labels. Pure for tests. */
+export function initialMultiValues(options: AskOption[], prevAnswers: string[]): string[] {
+	const values: string[] = [];
+	for (const a of prevAnswers) {
+		const idx = options.findIndex((o) => o.label === a);
+		if (idx >= 0) values.push(String(idx));
+	}
+	return values;
+}
 
 export interface AskOption {
 	label: string;
@@ -193,12 +220,20 @@ export default function ask(pi: ExtensionAPI) {
 				return { answers, custom };
 			};
 
-			const pickSingle = async (question: string, items: SelectItem[]): Promise<string | undefined> => {
+			const pickSingle = async (
+				question: string,
+				items: SelectItem[],
+				nav?: { canGoBack?: boolean; progress?: string; initialValue?: string },
+			): Promise<string | typeof BACK | undefined> => {
 				if (ctx.mode === "tui") {
 					// Custom renderer instead of SelectList: SelectList truncates
 					// long labels/descriptions to one line; this wraps them.
-					return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
-						let cursor = 0;
+					return ctx.ui.custom<string | typeof BACK | undefined>((tui, theme, _kb, done) => {
+						let cursor = (() => {
+							if (nav?.initialValue === undefined) return 0;
+							const found = items.findIndex((i) => i.value === nav.initialValue);
+							return found >= 0 ? found : 0;
+						})();
 						let cached: string[] | undefined;
 						let zones: Array<{ index: number; start: number; end: number }> = [];
 
@@ -209,6 +244,10 @@ export default function ask(pi: ExtensionAPI) {
 						const pick = (i: number) => done(items[i]!.value);
 
 						function handleInput(data: string) {
+							if (nav?.canGoBack && (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left))) {
+								done(BACK);
+								return;
+							}
 							if (matchesKey(data, Key.up)) {
 								cursor = (cursor - 1 + items.length) % items.length;
 								refresh();
@@ -239,6 +278,7 @@ export default function ask(pi: ExtensionAPI) {
 							zones = [];
 							const lines: string[] = [];
 							lines.push(theme.fg("accent", "─".repeat(w)));
+							if (nav?.progress) pushWrapped(lines, " ", theme.fg("dim", nav.progress), w);
 							pushWrapped(lines, " ", theme.fg("text", question), w);
 							lines.push("");
 							items.forEach((item, i) => {
@@ -249,8 +289,14 @@ export default function ask(pi: ExtensionAPI) {
 								if (item.description) pushWrapped(lines, "     ", theme.fg("muted", item.description), w);
 								zones.push({ index: i, start, end: lines.length });
 							});
+							if (nav?.canGoBack) {
+								const backStart = lines.length;
+								pushWrapped(lines, "  ", theme.fg("dim", "← Back"), w);
+								zones.push({ index: BACK_ZONE, start: backStart, end: lines.length });
+							}
 							lines.push("");
-							pushWrapped(lines, " ", theme.fg("dim", "↑↓/click select • 1-9 quick pick • enter confirm • esc cancel"), w);
+							const backHint = nav?.canGoBack ? " • shift+tab/← back" : "";
+							pushWrapped(lines, " ", theme.fg("dim", `↑↓/click select • 1-9 quick pick • enter confirm • esc cancel${backHint}`), w);
 							lines.push(theme.fg("accent", "─".repeat(w)));
 							cached = lines;
 							return lines;
@@ -267,6 +313,10 @@ export default function ask(pi: ExtensionAPI) {
 								if (event?.type !== "click" || event?.button !== "left") return undefined;
 								const hit = zones.find((z) => event.y >= z.start && event.y < z.end);
 								if (!hit) return undefined;
+								if (hit.index === BACK_ZONE) {
+									done(BACK);
+									return { handled: true };
+								}
 								pick(hit.index);
 								return { handled: true };
 							},
@@ -281,11 +331,27 @@ export default function ask(pi: ExtensionAPI) {
 				return idx >= 0 ? items[idx]!.value : undefined;
 			};
 
-			const pickMulti = async (question: string, items: SelectItem[]): Promise<string[] | null> => {
+			const pickMulti = async (
+				question: string,
+				items: SelectItem[],
+				nav?: { canGoBack?: boolean; progress?: string; initialValues?: string[] },
+			): Promise<string[] | typeof BACK | null> => {
 				if (ctx.mode === "tui") {
-					const res = await ctx.ui.custom<{ values: string[] } | null>((tui, theme, _kb, done) => {
-						let cursor = 0;
-						const checked = new Set<number>();
+					const res = await ctx.ui.custom<{ values: string[] } | typeof BACK | null>((tui, theme, _kb, done) => {
+						let cursor = (() => {
+							if (!nav?.initialValues?.length) return 0;
+							const found = items.findIndex((i) => i.value === nav.initialValues![0]);
+							return found >= 0 ? found : 0;
+						})();
+						const checked = new Set<number>((() => {
+							if (!nav?.initialValues) return [];
+							const idxs: number[] = [];
+							for (const v of nav.initialValues) {
+								const found = items.findIndex((i) => i.value === v);
+								if (found >= 0) idxs.push(found);
+							}
+							return idxs;
+						})());
 						let hint: string | null = null;
 						let cached: string[] | undefined;
 						let zones: Array<{ index: number; start: number; end: number }> = [];
@@ -310,6 +376,10 @@ export default function ask(pi: ExtensionAPI) {
 						};
 
 						function handleInput(data: string) {
+							if (nav?.canGoBack && (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left))) {
+								done(BACK);
+								return;
+							}
 							if (matchesKey(data, Key.up)) {
 								cursor = (cursor - 1 + items.length) % items.length;
 								hint = null;
@@ -353,6 +423,7 @@ export default function ask(pi: ExtensionAPI) {
 							zones = [];
 							const lines: string[] = [];
 							lines.push(theme.fg("accent", "─".repeat(w)));
+							if (nav?.progress) pushWrapped(lines, " ", theme.fg("dim", nav.progress), w);
 							pushWrapped(lines, " ", theme.fg("text", question), w);
 							lines.push("");
 							items.forEach((item, i) => {
@@ -364,11 +435,17 @@ export default function ask(pi: ExtensionAPI) {
 								if (item.description) pushWrapped(lines, "      ", theme.fg("muted", item.description), w);
 								zones.push({ index: i, start, end: lines.length });
 							});
+							if (nav?.canGoBack) {
+								const backStart = lines.length;
+								pushWrapped(lines, "  ", theme.fg("dim", "← Back"), w);
+								zones.push({ index: BACK_ZONE, start: backStart, end: lines.length });
+							}
 							lines.push("");
 							if (hint) pushWrapped(lines, " ", theme.fg("warning", hint), w);
 							else {
 								const sel = checked.size > 0 ? ` • ${checked.size} selected` : "";
-								pushWrapped(lines, " ", theme.fg("dim", `↑↓ move • space/click toggle • a all • enter done${sel} • esc cancel`), w);
+								const backHint = nav?.canGoBack ? " • shift+tab/← back" : "";
+								pushWrapped(lines, " ", theme.fg("dim", `↑↓ move • space/click toggle • a all • enter done${sel} • esc cancel${backHint}`), w);
 							}
 							lines.push(theme.fg("accent", "─".repeat(w)));
 							cached = lines;
@@ -386,11 +463,16 @@ export default function ask(pi: ExtensionAPI) {
 								if (event?.type !== "click" || event?.button !== "left") return undefined;
 								const hit = zones.find((z) => event.y >= z.start && event.y < z.end);
 								if (!hit) return undefined;
+								if (hit.index === BACK_ZONE) {
+									done(BACK);
+									return { handled: true };
+								}
 								toggle(hit.index);
 								return { handled: true };
 							},
 						};
 					});
+					if (res === BACK) return BACK;
 					if (res === null || res === undefined) return null;
 					return res.values;
 				}
@@ -425,26 +507,55 @@ export default function ask(pi: ExtensionAPI) {
 			}
 
 			// ---------- batch: several questions, one call ----------
-			const byQuestion: QuestionResult[] = [];
-			for (const sub of subs) {
+			// Index loop (not for..of) so shift+tab/← can step back.
+			// Later answers are kept for pre-fill but excluded from cancel
+			// output via slice(0, i); re-answering overwrites by index.
+			// Custom free text can't pre-fill ctx.ui.input, so revisiting a
+			// question with a previous custom answer re-prompts for it.
+			const answered: (QuestionResult | undefined)[] = new Array(subs.length);
+			const answeredPrefix = (end: number): QuestionResult[] =>
+				answered.slice(0, end).filter((q): q is QuestionResult => q !== undefined);
+			const cancelBatch = (end: number) => {
+				const prefix = answeredPrefix(end);
+				return {
+					content: [{ type: "text", text: [...prefix.flatMap((q, i) => [`Q${i + 1}: ${q.question}`, ...formatAnswerLines(q.options, q.answers, q.custom)]), "User cancelled (remaining questions skipped)"].join("\n") }],
+					details: { question: `${subs.length} questions`, options: [], answers: [], custom: [], cancelled: true, byQuestion: prefix } as AskDetails,
+				};
+			};
+			let i = 0;
+			while (i < subs.length) {
+				const sub = subs[i]!;
+				const progress = `Q${i + 1}/${subs.length}`;
 				const labels = sub.options.map((o) => o.label);
 				const items = buildItems(sub.options);
-				const values = sub.multiSelect ? await pickMulti(sub.question, items) : [await pickSingle(sub.question, items)];
-				if (values === null || values[0] === undefined) {
-					return {
-						content: [{ type: "text", text: [...byQuestion.flatMap((q, i) => [`Q${i + 1}: ${q.question}`, ...formatAnswerLines(q.options, q.answers, q.custom)]), "User cancelled (remaining questions skipped)"].join("\n") }],
-						details: { question: `${subs.length} questions`, options: [], answers: [], custom: [], cancelled: true, byQuestion } as AskDetails,
-					};
+				const prev = answered[i];
+				const nav = { canGoBack: i > 0, progress };
+				let values: string[];
+				if (sub.multiSelect) {
+					const initialValues = prev ? initialMultiValues(sub.options, prev.answers) : undefined;
+					const picked = await pickMulti(sub.question, items, { ...nav, initialValues });
+					if (picked === BACK) {
+						i--;
+						continue;
+					}
+					if (picked === null) return cancelBatch(i);
+					values = picked;
+				} else {
+					const initialValue = prev ? initialSingleValue(sub.options, prev.answers) : undefined;
+					const picked = await pickSingle(sub.question, items, { ...nav, initialValue });
+					if (picked === BACK) {
+						i--;
+						continue;
+					}
+					if (picked === undefined) return cancelBatch(i);
+					values = [picked];
 				}
-				const resolved = await resolveCustom(sub.options, values as string[]);
-				if (resolved === null) {
-					return {
-						content: [{ type: "text", text: [...byQuestion.flatMap((q, i) => [`Q${i + 1}: ${q.question}`, ...formatAnswerLines(q.options, q.answers, q.custom)]), "User cancelled (remaining questions skipped)"].join("\n") }],
-						details: { question: `${subs.length} questions`, options: [], answers: [], custom: [], cancelled: true, byQuestion } as AskDetails,
-					};
-				}
-				byQuestion.push({ question: sub.question, options: labels, answers: resolved.answers, custom: resolved.custom });
+				const resolved = await resolveCustom(sub.options, values);
+				if (resolved === null) return cancelBatch(i);
+				answered[i] = { question: sub.question, options: labels, answers: resolved.answers, custom: resolved.custom };
+				i++;
 			}
+			const byQuestion = answered as QuestionResult[];
 			return {
 				content: [{ type: "text", text: byQuestion.flatMap((q, i) => [`Q${i + 1}: ${q.question}`, ...formatAnswerLines(q.options, q.answers, q.custom)]).join("\n") }],
 				details: {
