@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Reap stale mosh-server processes.
+#
+# mosh-server has no server-side timeout: it exists to outlive client
+# disappearances, so a device that slept or switched networks can roam back.
+# The cost is that abandoned servers linger forever, and while one stays
+# attached as a tmux client it receives every status redraw, so mosh keeps
+# encoding screen diffs for a device that is never coming back. A day of
+# moshi use leaves a dozen of these burning hours of background CPU.
+#
+# Policy:
+#   * a mosh-server whose tmux client has been idle longer than
+#     MOSH_REAPER_IDLE seconds (default 2h) is detached and killed
+#   * a mosh-server with no tmux client on its tty at all — a leftover from a
+#     manual detach, or a shell that died mid-session — is killed once older
+#     than MOSH_REAPER_ORPHAN_MIN seconds (default 10m), so a connection that
+#     is still negotiating its first attach is never reaped
+#
+# tmux itself is never touched: sessions live in the tmux server, so the only
+# thing a reaped client loses is the transport. Running `mosh <host>` again
+# reattaches to the same session with everything intact.
+#
+# Detaching alone is not enough: the server outlives its tmux client by a
+# while, so the kill is explicit.
+#
+# Install (matches the qmd-warmup convention):
+#   cp launchd/com.ericboehs.mosh-reaper.plist ~/Library/LaunchAgents/
+#   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ericboehs.mosh-reaper.plist
+#
+# Run by launchd every 30 minutes; also safe to run by hand any time.
+
+set -u
+
+idle_limit=${MOSH_REAPER_IDLE:-7200}
+orphan_min=${MOSH_REAPER_ORPHAN_MIN:-600}
+now=$(date +%s)
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*"; }
+
+# macOS ps has no etimes keyword, and etime prints MM:SS, HH:MM:SS, or
+# dd-HH:MM:SS depending on age; normalize all three to seconds.
+elapsed_secs() {
+  local e days=0 h=0 m=0 s=0
+  e=$(ps -o etime= -p "$1" 2>/dev/null) || return 1
+  e=${e//[[:space:]]/}
+  if [[ $e == *-* ]]; then days=$((10#${e%%-*})); e=${e#*-}; fi
+  case $e in
+    *:*:*) IFS=: read -r h m s <<<"$e" ;;
+    *)     IFS=: read -r m s <<<"$e" ;;
+  esac
+  echo $(( days * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))
+}
+
+# tty -> epoch of last tmux client activity, as space-separated ttysNNN:epoch
+# tokens (kept bash-3.2-safe: no associative arrays).
+client_map=$(tmux list-clients -F '#{client_name}|#{client_activity}' 2>/dev/null |
+  awk -F'|' '/^\/dev\// { sub(/^\/dev\//, "", $1); print $1 ":" $2 }')
+
+client_idle() {
+  local token
+  for token in $client_map; do
+    if [[ ${token%%:*} == "$1" ]]; then
+      printf '%s' "${token#*:}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+reaped=0
+for mp in $(pgrep -u "$(id -u)" -x mosh-server); do
+  # mosh-server's direct child is the login shell holding the pty; the tmux
+  # client on the far end of that tty is what carries the activity timestamp.
+  child=$(pgrep -P "$mp" 2>/dev/null | head -1)
+  tty=$(ps -o tty= -p "${child:-0}" 2>/dev/null | tr -d ' ')
+  age=$(elapsed_secs "$mp") || continue
+
+  if [[ -n $tty && $tty != "??" ]] && act=$(client_idle "$tty"); then
+    idle=$(( now - act ))
+    (( idle > idle_limit )) || continue
+    tmux detach-client -t "/dev/$tty" 2>/dev/null
+    if kill "$mp" 2>/dev/null; then
+      log "reaped mosh-server $mp: tty $tty idle ${idle}s (limit ${idle_limit}s)"
+      reaped=$(( reaped + 1 ))
+    fi
+  else
+    (( age > orphan_min )) || continue
+    if kill "$mp" 2>/dev/null; then
+      log "reaped orphan mosh-server $mp: no tmux client, age ${age}s"
+      reaped=$(( reaped + 1 ))
+    fi
+  fi
+done
+
+(( reaped > 0 )) && log "done: reaped $reaped"
+exit 0
