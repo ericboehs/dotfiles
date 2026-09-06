@@ -138,51 +138,38 @@ export default function (pi: ExtensionAPI) {
 		pendingQuery = null;
 		startQuery(ctx?.cwd ?? process.cwd());
 	});
-		// Inject at the first prompt if the query is ready (zero added latency);
-	// otherwise let the query land late via sendMessage below.
+	// Inject at the first prompt, deterministically: use the vec results if
+	// they finished while the user typed; otherwise fall back to an instant
+	// lex query (~0.15s) so injection never depends on racing the turn.
 	pi.on("before_agent_start", async (_event, ctx) => {
 		if (injected || !isEnabled() || !pendingQuery) return undefined;
-		const query = pendingQuery;
-		const results = await Promise.race([
-			query,
-			new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+		const project = basename(ctx?.cwd ?? process.cwd());
+		const vecResults = await Promise.race([
+			pendingQuery,
+			new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
 		]);
 		if (injected || !isEnabled()) return undefined;
-		if (results && results.length) {
-			injected = true;
-			ctx?.ui?.notify(`qmd memory: ${results.length} hits injected`, "info");
-			return {
-				message: {
-					customType: "qmd-memory",
-					display: false,
-					content: formatResults(results, basename(process.cwd())),
-				},
-			};
-		}
-		// Query still in flight — inject via sendMessage whenever it lands.
-		void query
-			.then((res) => {
-				if (injected || !res?.length || !isEnabled()) return;
-				injected = true;
-				void ctx?.ui?.notify(
-					`qmd memory: ${res.length} hits injected (late)`,
-					"info",
-				);
-				return pi.sendMessage({
-					customType: "qmd-memory",
-					display: false,
-					content: formatResults(res, basename(process.cwd())),
-				});
-			})
-			.catch((err) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				// Benign: -p/automation sessions may tear down before the late
-				// injection lands. Interactive sessions rebind on /new etc.
-				if (!msg.includes("stale")) {
-					console.warn("[qmd-memory] late injection failed:", msg);
-				}
+		let results = vecResults && vecResults.length ? vecResults : null;
+		if (!results) {
+			const lex = await qmdQuery({
+				intent: `wiki and session notes about ${project}`,
+				searches: [{ type: "lex", query: project }],
+				collections: ["wiki", "sessions"],
+				limit: LIMIT,
+				rerank: false,
 			});
-		return undefined;
+			results = lex?.results ?? [];
+		}
+		if (!results.length) return undefined;
+		injected = true;
+		ctx?.ui?.notify(`qmd memory: ${results.length} hits injected`, "info");
+		return {
+			message: {
+				customType: "qmd-memory",
+				display: false,
+				content: formatResults(results, project),
+			},
+		};
 	});
 
 	pi.on("session_shutdown", () => {
