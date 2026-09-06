@@ -1,0 +1,164 @@
+#!/bin/sh
+# Periodic qmd index refresh. Run by ~/Library/LaunchAgents/com.qmd.update.plist
+# every 1800s.
+#
+# Three hazards this guards against, all diagnosed 2026-08-20:
+#
+#  1. Failure detection. The previous version wrapped the work in
+#     `{ ...; } || { echo FAILED; }`. POSIX ignores `set -e` inside the left
+#     operand of `||`, so a crashing `qmd update` did NOT abort the group -- it
+#     fell through to `echo done`, and that 0 status became the group's status,
+#     so the `||` arm could never run. 116 consecutive crashes over 2.4 days
+#     were each logged as a success. Hence the explicit if/else below.
+#
+#  2. Self-healing. ~/.npmrc sets ignore-scripts=true (deliberate supply-chain
+#     hardening), so better-sqlite3's native binding never gets built. Because
+#     node_modules lives under .../installs/node/<version>/, every mise Node
+#     upgrade lands a fresh unbuilt copy and qmd dies with "Could not locate the
+#     bindings file". Rebuild it in place rather than failing silently for days.
+#     NOTE 2026-08-28: qmd >= 2.8 ships prebuilt bindings under
+#     better-sqlite3/prebuilds/darwin-arm64.node, so a missing
+#     build/Release/better_sqlite3.node is no longer unhealthy by itself.
+#
+#  3. Notification on state *change* only. Pinging Slack every 30 minutes for
+#     two days would be its own kind of silence.
+#
+#  4. Retry before paging. The MCP server (com.qmd.mcp) shares the same SQLite
+#     index; a concurrent write during reindex can fail with
+#     SQLITE_CONSTRAINT_PRIMARYKEY (seen 2026-08-28T18:10). One transient
+#     collision should not page Slack, so retry once after 60s before declaring
+#     failure.
+#
+# Deliberately no `set -e`: every failure path here is handled explicitly, and
+# -e would reintroduce exactly the surprise described in (1).
+
+set -u
+
+PATH="$HOME/bin:$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
+NO_COLOR=1
+export NO_COLOR
+
+LOG="$HOME/.cache/qmd/update.log"
+STATE="$HOME/.cache/qmd/update.state"
+mkdir -p "$HOME/.cache/qmd"
+
+ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+
+# Read the webhook from the login keychain at call time. It is never written to
+# disk, never echoed, and leaves the environment as soon as slack-noti returns.
+notify() {
+	hook=$(security find-generic-password -s fnox -a BOEHS_SLACK_NOTI_HOOK -w 2>/dev/null) || {
+		echo "notify: could not read BOEHS_SLACK_NOTI_HOOK from keychain"
+		return 0
+	}
+	BOEHS_SLACK_NOTI_HOOK="$hook" slack-noti "$1" >/dev/null 2>&1 ||
+		echo "notify: slack-noti failed"
+	unset hook
+}
+
+# True only when the ok/fail state actually flips, so a persistent outage sends
+# one message rather than one every half hour.
+transition() {
+	new="$1"
+	old=$(cat "$STATE" 2>/dev/null) || old=ok
+	printf '%s\n' "$new" >"$STATE"
+	[ "$new" != "$old" ]
+}
+
+# Resolve the globally-installed qmd against whichever Node is active, so this
+# keeps working across mise upgrades instead of pinning a version path.
+QMD_PKG=""
+QMD_BINDING=""
+QMD_PREBUILD=""
+resolve_paths() {
+	root=$(npm root -g 2>/dev/null) || return 1
+	[ -n "$root" ] || return 1
+	QMD_PKG="$root/@tobilu/qmd"
+	QMD_BINDING="$QMD_PKG/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+	QMD_PREBUILD="$QMD_PKG/node_modules/better-sqlite3/prebuilds/darwin-arm64.node"
+	[ -d "$QMD_PKG" ]
+}
+
+# --ignore-scripts=false is scoped to this one rebuild; the global default-deny
+# in ~/.npmrc stays intact.
+heal() {
+	echo "--- $(ts) better-sqlite3 binding missing, rebuilding ---"
+	(cd "$QMD_PKG" && npm rebuild better-sqlite3 --ignore-scripts=false --foreground-scripts)
+	if [ -f "$QMD_BINDING" ] || [ -f "$QMD_PREBUILD" ]; then
+		echo "--- $(ts) rebuild OK ---"
+		return 0
+	fi
+	echo "--- $(ts) rebuild FAILED ---"
+	return 1
+}
+
+healed=no
+result=ok
+
+{
+	echo "=== $(ts) start ==="
+
+	if resolve_paths; then
+		if [ ! -f "$QMD_BINDING" ] && [ ! -f "$QMD_PREBUILD" ]; then
+			healed=yes
+			heal || healed=failed
+		fi
+	else
+		echo "warn: could not resolve the global qmd package path"
+	fi
+
+	try_index() {
+		# Export session transcripts to markdown first, so this same pass
+		# indexes them (incremental, mtime-gated — cheap).
+		"$HOME/Code/github.com/ericboehs/dotfiles/bin/pi-session-export" ||
+			echo "--- $(ts) session export failed (non-fatal) ---"
+		qmd update && qmd embed
+	}
+
+	if try_index; then
+		echo "=== $(ts) done ==="
+		result=ok
+	else
+		echo "--- $(ts) first attempt failed, retrying after 60s ---"
+		sleep 60
+		if try_index; then
+			echo "=== $(ts) done (after retry) ==="
+			result=ok
+		else
+			echo "=== $(ts) FAILED ==="
+			result=fail
+		fi
+	fi
+
+	# Daily maintenance: orphaned-chunk cleanup, gated to once per 24h so the
+	# 30-min cadence doesn't vacuum the DB constantly.
+	CLEANUP_STATE="$HOME/.cache/qmd/last-cleanup"
+	if [ ! -f "$CLEANUP_STATE" ] || [ -n "$(find "$CLEANUP_STATE" -mtime +1 2>/dev/null)" ]; then
+		if qmd cleanup >>"$LOG" 2>&1; then
+			date >"$CLEANUP_STATE"
+		fi
+	fi
+
+	if [ "$result" = fail ]; then
+		transition fail &&
+			notify ":rotating_light: qmd index update is failing. See ~/.cache/qmd/update.log"
+	else
+		transition ok &&
+			notify ":white_check_mark: qmd index update recovered"
+		[ "$healed" = yes ] &&
+			notify ":wrench: qmd: rebuilt better-sqlite3 after a Node upgrade"
+	fi
+} >>"$LOG" 2>&1
+
+# Keep last ~2MB if log grows past 5MB
+if [ -f "$LOG" ]; then
+	sz=$(wc -c <"$LOG" | tr -d ' ')
+	if [ "$sz" -gt 5242880 ]; then
+		tail -c 2097152 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+	fi
+fi
+
+# Surface the real result to launchd too, so `launchctl list` is a second,
+# independent signal instead of a permanent 0.
+[ "$result" = ok ]
