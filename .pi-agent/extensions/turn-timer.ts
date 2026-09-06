@@ -24,6 +24,11 @@
  * events give wall time; hidden-reasoning models that never emit those blocks
  * still show tokens when the provider reports them, not a fake TTFT "think".
  *
+ * While the ask tool's question prompt is up, the run clock is a lie: the
+ * model is idle and the only thing ticking is the user's reply. The spinner
+ * line swaps to "30s Waiting on user..." — timed from when the prompt opened,
+ * not from run start — and flips back to the run clock on the tool result.
+ *
  * Each settled run is appended to turn-stats.jsonl. `/turn stats` is `/boot
  * stats` for models: 14-day p50 steps/time per model+thinking, median not mean.
  */
@@ -104,6 +109,8 @@ interface RunState {
   thinkEst: boolean;
   thinkOpenAt: number | null;
   thinkMsTurn: number;
+  /** When the ask tool's question prompt opened, or null while it is closed. */
+  waitOpenAt: number | null;
   models: Map<string, ModelSlice>;
   closed: boolean;
 }
@@ -143,10 +150,30 @@ export default function (pi: ExtensionAPI) {
       thinkEst: false,
       thinkOpenAt: null,
       thinkMsTurn: 0,
+      waitOpenAt: null,
       models: new Map(),
       closed: false,
     };
     startTicker(ctx);
+  });
+
+  // The ask tool's dialog is the one place a run sits idle on purpose: the
+  // model has nothing to do until the user answers. tool_call opens the wait
+  // (before the dialog paints), tool_result closes it; the one-second ticker
+  // renders whichever line is true. A batch of questions is one call, so the
+  // wait spans all of them — the between-question gaps are sub-second.
+  pi.on("tool_call", async (event, ctx) => {
+    if (!run || run.closed) return;
+    if (event.toolName !== "ask") return;
+    if (run.waitOpenAt == null) run.waitOpenAt = Date.now();
+    if (ctx.hasUI) ctx.ui.setWorkingMessage(workingMessage(run));
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName !== "ask") return;
+    if (!run || run.closed || run.waitOpenAt == null) return;
+    run.waitOpenAt = null;
+    if (ctx.hasUI) ctx.ui.setWorkingMessage(workingMessage(run));
   });
 
   pi.on("turn_start", async () => {
@@ -251,14 +278,27 @@ export default function (pi: ExtensionAPI) {
   }
 }
 
-function workingMessage(run: RunState): string {
-  const elapsed = fmt(Date.now() - run.startedAt);
-  const parts = [`Working for ${elapsed}`];
-  if (run.steps > 0) {
-    parts.push(`${run.steps} step${run.steps === 1 ? "" : "s"}`);
+/**
+ * The spinner line. With a question prompt open it times the wait — "30s
+ * Waiting on user..." — because "Working for 5m 48s" over a dialog that is
+ * blocking on a human claims the model is busy when it is starving. Steps and
+ * think time drop out too: they describe model work that is paused. The
+ * Guardian's blocked count rides along under either line. `now` is injectable
+ * so the tests can pin the clock.
+ */
+export function workingMessage(run: RunState, now: number = Date.now()): string {
+  const waitOpenAt = run.waitOpenAt;
+  const parts: string[] = [];
+  if (waitOpenAt != null) {
+    parts.push(`${fmt(now - waitOpenAt)} Waiting on user`);
+  } else {
+    parts.push(`Working for ${fmt(now - run.startedAt)}`);
+    if (run.steps > 0) {
+      parts.push(`${run.steps} step${run.steps === 1 ? "" : "s"}`);
+    }
+    const thinkMs = liveThinkMs(run, now);
+    if (thinkMs >= 1_000) parts.push(`${fmt(thinkMs)} think`);
   }
-  const thinkMs = liveThinkMs(run);
-  if (thinkMs >= 1_000) parts.push(`${fmt(thinkMs)} think`);
   const line = `${parts.join(" · ")}...`;
   if (run.blocked === 0) return line;
   const noun = run.blocked === 1 ? "tool call" : "tool calls";
@@ -266,8 +306,8 @@ function workingMessage(run: RunState): string {
   return `${line}\n  ${run.blocked} ${noun} blocked`;
 }
 
-function liveThinkMs(run: RunState): number {
-  const open = run.thinkOpenAt == null ? 0 : Date.now() - run.thinkOpenAt;
+function liveThinkMs(run: RunState, now: number): number {
+  const open = run.thinkOpenAt == null ? 0 : now - run.thinkOpenAt;
   return run.thinkMs + run.thinkMsTurn + open;
 }
 
