@@ -1,15 +1,15 @@
 {
-  "lastChangelogVersion": "0.84.4",
+  "lastChangelogVersion": "0.85.1",
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@bde157396387766d570a93eecc0f0489f41f0935",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
     "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
     "git:github.com/ericboehs/pi-agent-link@f35e9455ee049b3fd529a2db3597799878b14594",
-    "git:github.com/ericboehs/agent-notify@b57ffa4fff94425daff9bca0b7b037c97271f366",
-    "npm:pi-claude-bridge"
+    "git:github.com/ericboehs/agent-notify@1e156666dd37745a880c713941c32cd1e4834de2"
   ],
   "extensions": [
-    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts"
+    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
+    "~/Code/github.com/ericboehs/dotfiles/pi/extensions/qmd-memory.ts"
   ],
   "skills": [
     "~/.claude/skills/credentials",
@@ -50,9 +50,10 @@
     "openai-codex/gpt-5.6-sol",
     "github-copilot/claude-opus-5",
     "xai/grok-4.6",
-    "omlx/Ornith-1.5-35B-A3B-MLX-4bit",
     "ollama/glm-5.3-flash",
-    "claude-bridge/claude-opus-5"
+    "opencode/muse-spark-1.3-contributor-free",
+    "cerebras/qwen-3.8-27b",
+    "openai-codex/gpt-6-astra"
   ],
   "retry": {
     "enabled": true,
@@ -68,5 +69,5 @@
   "fullscreenScrollbar": "auto",
   "fullscreenExitOutput": "resume-hint",
   "enableInstallTelemetry": false,
-  "hideThinkingBlock": false
+  "hideThinkingBlock": true
 }

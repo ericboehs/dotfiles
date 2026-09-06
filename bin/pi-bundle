@@ -226,7 +226,11 @@ if [ -n "${PI_BUNDLE_NO_BEDROCK:-}" ] && [ "$ENTRY" = "$STAGE/dist/bun/cli.js" ]
   if [ -f "$auth_file" ] && grep -q '"bedrock"' "$auth_file"; then
     echo "${YELLOW}PI_BUNDLE_NO_BEDROCK is set but $auth_file has bedrock credentials — keeping bedrock${NC}" >&2
   else
-  node - "$ENTRY" <<'BEDROCK' || die "could not remove the bedrock registration from dist/bun/cli.js"
+  # 0.85.1 restructured dist/bun/cli.js into plain setup imports with no
+  # register-bedrock line, so there is nothing to strip. Warn and continue
+  # with bedrock as shipped: failing closed here would trade the whole
+  # ~115ms bundle win to save ~32ms of AWS SDK evaluation.
+  node - "$ENTRY" <<'BEDROCK' && no_bedrock=1 || echo "${YELLOW}no register-bedrock import in this pi — bundling with bedrock as shipped${NC}" >&2
 const fs = require("node:fs");
 const file = process.argv[2];
 const src = fs.readFileSync(file, "utf8");
@@ -234,7 +238,6 @@ const line = 'await import("./register-bedrock.js");\n';
 if (!src.includes(line)) { console.error("register-bedrock import not found"); process.exit(1); }
 fs.writeFileSync(file, src.replace(line, ""));
 BEDROCK
-    no_bedrock=1
   fi
 fi
 if command -v bun >/dev/null; then

@@ -182,6 +182,43 @@
         }
       ]
     },
+    "cerebras": {
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$CEREBRAS_API_KEY",
+      "compat": {
+        "supportsReasoningEffort": true,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "qwen-3.8-27b",
+          "name": "Qwen3.8 27B (Cerebras)",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 131072,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "maxTokens": 16384,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          }
+        }
+      ]
+    },
     "omlx": {
       "baseUrl": "http://localhost:8000/v1",
       "api": "openai-completions",
