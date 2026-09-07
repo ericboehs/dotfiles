@@ -19,7 +19,8 @@
  * bypass off. The dir chip toggles basename/full path, the context chip toggles
  * tokens/percent, the provider-usage chip toggles long/short window forms, and
  * the budget-usage cost chip (ollama/baseten/openrouter) toggles the dollar
- * total against its percent-only compact form.
+ * total against its percent-only compact form; the whole chip colors by
+ * budget pace (used% vs elapsed billing month) off the meter's reset timestamp.
  * Clicking the right-aligned session/peer name prefills /name when the editor
  * is empty. The git chip's segments prefill shell commands (⇧-click picks the
  * harder variant): branch → `! git status -s`, ⇣ → `! git pull --ff-only`
@@ -131,6 +132,73 @@ function usageChip(provider: string | undefined): string | undefined {
 /** Trailing "(11%)" of a budget-metered usage chip → "11%", else undefined. */
 function costPercentTail(value: string): string | undefined {
   return /\((\d+(?:\.\d+)?%)\)$/.exec(value)?.[1];
+}
+
+/** Stash reader for the budget-usage cost slot: value plus, when the provider
+ *  exposes it (ollama), the meter's reset timestamp for pace coloring. */
+function budgetStash(provider: string | undefined):
+  | { value?: unknown; resetMs?: unknown }
+  | undefined {
+  const stashKey =
+    provider === "baseten" ? "__piBasetenUsage"
+    : provider === "openrouter" ? "__piOpenRouterUsage"
+    : provider === "ollama" ? "__piOllamaUsage"
+    : undefined;
+  if (!stashKey) return undefined;
+  return (globalThis as Record<string, unknown>)[stashKey] as
+    | { value?: unknown; resetMs?: unknown }
+    | undefined;
+}
+
+/** The ollama meter carries its reset time; the others don't. */
+function budgetResetMs(provider: string | undefined): number | undefined {
+  const resetMs = budgetStash(provider)?.resetMs;
+  return typeof resetMs === "number" && Number.isFinite(resetMs) ? resetMs : undefined;
+}
+
+/** Cycle start of a budget whose meter resets at `resetMs`: one calendar month
+ *  back, day capped to the target month's length. Correct for both
+ *  calendar-aligned (1st) and anniversary (subscription-day) cycles. */
+function cycleStartBefore(resetMs: number): number {
+  const reset = new Date(resetMs);
+  const start = new Date(Date.UTC(reset.getUTCFullYear(), reset.getUTCMonth() - 1, 1));
+  const monthDays = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  start.setUTCDate(Math.min(reset.getUTCDate(), monthDays));
+  return start.getTime();
+}
+
+/** Fraction of the billing month already elapsed: from the meter's reset when
+ *  known (ollama), else the calendar month (baseten/openrouter). */
+function budgetElapsedFraction(resetMs: number | undefined, nowMs: number): number {
+  if (resetMs !== undefined && resetMs > nowMs) {
+    const start = cycleStartBefore(resetMs);
+    return Math.min(1, Math.max(0, (nowMs - start) / (resetMs - start)));
+  }
+  const now = new Date(nowMs);
+  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  return Math.min(1, Math.max(0, (nowMs - start) / (end - start)));
+}
+
+/** Budget cost chip: the whole chip — dollars and "(11%)" — colors by budget
+ *  pace, used% minus the elapsed share of the billing month, on the same
+ *  ladder as the window chips. A chip without a percent tail (no budget
+ *  configured) keeps the flat green look. */
+function renderBudgetUsage(
+  value: string,
+  resetMs: number | undefined,
+  compact: boolean,
+): string {
+  const tail = costPercentTail(value);
+  if (tail === undefined) return color(GREEN, value);
+  const percent = Number.parseFloat(tail);
+  const pace = Number.isFinite(percent)
+    ? percent - budgetElapsedFraction(resetMs, Date.now()) * 100
+    : undefined;
+  const code = pace === undefined ? GREEN : paceColor(pace);
+  return color(code, compact ? tail : value);
 }
 
 /**
@@ -873,15 +941,17 @@ function contextColorCode(tokens: number | null | undefined, window: number | un
 }
 
 /** Pace ladder from burn rate: quiet gray, yellow, orange, red; ↻ is at-limit. */
+function paceColor(pace: number): number | string {
+  if (pace > 20) return RED;
+  if (pace > 10) return ORANGE;
+  if (pace > 5) return YELLOW;
+  return BRIGHT_BLACK;
+}
+
 function paceWarningColorCode(value: string): number | string {
   if (value.includes("\u21bb")) return RED;
   const pace = parseWindowPace(value);
-  if (pace !== undefined) {
-    if (pace > 20) return RED;
-    if (pace > 10) return ORANGE;
-    if (pace > 5) return YELLOW;
-    return BRIGHT_BLACK;
-  }
+  if (pace !== undefined) return paceColor(pace);
   // Legacy fallback: stale cache entries still carry trailing !s.
   const bangs = /!+$/.exec(value)?.[0].length ?? 0;
   if (bangs >= 3) return RED;
@@ -1180,10 +1250,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
                   usage?.tokens == null ? "?" : formatCount(usage.tokens),
                 )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
             usageValue
-              ? color(
-                  GREEN,
-                  compactCostUsage ? (costPercentTail(usageValue) ?? usageValue) : usageValue,
-                )
+              ? renderBudgetUsage(usageValue, budgetResetMs(provider), compactCostUsage)
               : hideSessionCost(provider, ctx)
                 ? ""
                 : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),

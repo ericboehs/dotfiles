@@ -55,6 +55,7 @@ const SHARED_LOCK_STALE_MS = 60_000;
 interface CachedEntry {
   value: string;
   commandText?: string;
+  resetMs?: number;
   fetchedAt: number;
 }
 
@@ -88,6 +89,7 @@ async function writeSharedEntry(driverId: string, display: UsageDisplay, fetched
     current[driverId] = {
       value: display.value,
       ...(display.commandText !== undefined ? { commandText: display.commandText } : {}),
+      ...(display.resetMs !== undefined ? { resetMs: display.resetMs } : {}),
       fetchedAt,
     };
     // Atomic write: tmp + rename so concurrent readers never see half a JSON doc.
@@ -139,6 +141,9 @@ interface UsageDisplay {
   value: string;
   /** Multi-line body for the /command notification; defaults to `value`. */
   commandText?: string;
+  /** Meter reset (ms epoch); lets the footer pace-color budget chips against
+   *  the real billing cycle instead of assuming a calendar month. */
+  resetMs?: number;
 }
 
 interface Driver {
@@ -1432,7 +1437,11 @@ async function fetchOllamaWithCookie(
     }
   }
 
-  return { value, commandText: detail.join("\n") };
+  return {
+    value,
+    commandText: detail.join("\n"),
+    ...(usage.resetMs !== undefined ? { resetMs: usage.resetMs } : {}),
+  };
 }
 
 // ---------- baseten ----------
@@ -1723,6 +1732,7 @@ const DRIVERS: Driver[] = [
 function writeStash(driver: Driver, display: UsageDisplay): void {
   (globalThis as Record<string, unknown>)[driver.stashKey as string] = {
     value: display.value,
+    ...(display.resetMs !== undefined ? { resetMs: display.resetMs } : {}),
     fetchedAt: Date.now(),
   };
 }
@@ -1766,6 +1776,7 @@ async function refreshDriver(
           const display: UsageDisplay = {
             value: entry.value,
             ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
+            ...(entry.resetMs !== undefined ? { resetMs: entry.resetMs } : {}),
           };
           state.last = display;
           state.lastFetchMs = entry.fetchedAt;
@@ -1806,6 +1817,7 @@ async function refreshDriver(
         const display: UsageDisplay = {
           value: entry.value,
           ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
+          ...(entry.resetMs !== undefined ? { resetMs: entry.resetMs } : {}),
         };
         state.last = display;
         state.lastFetchMs = entry.fetchedAt;

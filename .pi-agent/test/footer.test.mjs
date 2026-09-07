@@ -568,8 +568,12 @@ test("provider usage form resets to compact on session change", async () => {
 /* -------------------------------------------------- budget usage cost chip */
 
 /** Set a usage-chip stash (provider-usage.ts's globalThis contract), cleared after. */
-function withUsageChip(key, value) {
-  globalThis[key] = { value, fetchedAt: Date.now() };
+function withUsageChip(key, value, resetMs) {
+  globalThis[key] = {
+    value,
+    fetchedAt: Date.now(),
+    ...(resetMs !== undefined ? { resetMs } : {}),
+  };
   return () => { delete globalThis[key]; };
 }
 
@@ -578,13 +582,42 @@ const OLLAMA_MODEL = { id: "glm-5.3-flash", provider: "ollama", reasoning: true 
 const OLLAMA_TOTAL = "$6.75 / $60.00 (11%)";
 
 test("the ollama usage chip defaults to its percent-only form", async () => {
-  const restore = withUsageChip("__piOllamaUsage", OLLAMA_TOTAL);
+  // Reset in an hour → ~all of the billing month elapsed, so 11% used is behind pace.
+  const restore = withUsageChip("__piOllamaUsage", OLLAMA_TOTAL, Date.now() + 60 * 60 * 1000);
   try {
     const ui = await mount({ model: OLLAMA_MODEL });
     assert.match(ui.plain()[0], / 11%$/);
-    assert.match(ui.raw()[0], /\x1B\[32m11%\x1B\[39m$/, "painted green like the cost slot");
+    assert.match(ui.raw()[0], /\x1B\[90m11%\x1B\[39m$/, "pace-colored like the window chips");
   } finally {
     restore();
+  }
+});
+
+test("the ollama usage chip colors by budget pace", async () => {
+  // Reset 40 days out → cycle start is after now, elapsed clamps to 0, so pace = used%.
+  const justStarted = Date.now() + 40 * 86_400_000;
+  const shade = async (value, form) => {
+    const restore = withUsageChip("__piOllamaUsage", value, justStarted);
+    try {
+      const ui = await mount({ model: OLLAMA_MODEL });
+      const tail = /\((\d+(?:\.\d+)?%)\)$/.exec(value)?.[1];
+      let target = tail;
+      if (form === "long") {
+        const line = ui.plain()[0];
+        ui.click(line.indexOf(tail) + 1, 0);
+        target = value;
+      }
+      const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`\x1B\\[([0-9;]+)m${escaped}\x1B\\[39m`).exec(ui.raw()[0])?.[1];
+    } finally {
+      restore();
+    }
+  };
+  for (const form of ["compact", "long"]) {
+    assert.equal(await shade("$2.40 / $60.00 (4%)", form), "90", `${form} gray when behind pace`);
+    assert.equal(await shade("$4.80 / $60.00 (8%)", form), "33", `${form} yellow when >5 ahead`);
+    assert.equal(await shade("$9.00 / $60.00 (15%)", form), "38;5;208", `${form} orange when >10 ahead`);
+    assert.equal(await shade("$15.00 / $60.00 (25%)", form), "31", `${form} red when >20 ahead`);
   }
 });
 
