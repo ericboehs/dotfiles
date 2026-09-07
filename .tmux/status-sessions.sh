@@ -40,7 +40,7 @@ fi
 # right-side hit area and the following space the next window's left-side area.
 row="\
 #[range=session|#{session_id}]\
-#{?#{==:#{session_name},#{client_session}},#[fg=#{E:@active_fg}],#[fg=#{E:@time_fg}]} #S\
+#{?#{==:#{session_name},#{client_session}},#[fg=#{E:@active_fg}],#[fg=#{E:@time_fg}]}#S\
 #[fg=default]#[norange]\
 #{W:\
 #{?window_start_flag,#[range=user|#{session_id}:#{window_index}]  , }\
