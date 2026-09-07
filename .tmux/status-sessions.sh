@@ -29,11 +29,11 @@ row="\
 #{W:\
 #{?window_start_flag,#[range=user|#{session_id}:#{window_index}]  , }\
 #{?window_zoomed_flag,󰊓 ,}\
-#{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},#[fg=#{E:@active_fg}],#{?#{@agent_count},#[fg=#{E:@dim_fg}],}}\
+#{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},#[fg=#{E:@active_fg}],#{?#{@agent_count},#[fg=#{E:@dim_fg}],#{?#{||:#{@special_activity},#{@job_done}},#[fg=#{E:@attention_fg} bold],}}}\
 #I\
-#{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},,#[fg=default]}\
+#{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},,#[fg=default nobold]}\
 #{?window_end_flag,#{?#{==:#{session_name},#{client_session}},#[range=user|new-window],#[norange]},#[range=user|#{session_id}:#{next_window_index}]}\
-#{?#{@special_activity},⊙,#{?#{@job_done},·,#{?#{window_bell_flag},•, }}}\
+#{?#{window_bell_flag},•, }\
 #{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},#[fg=default],}\
 }\
 #{?#{==:#{session_name},#{client_session}},#[fg=default] + #[norange],}"

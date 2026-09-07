@@ -107,7 +107,7 @@ fi
 # Roll up per-window counts. bash 3.2 has no associative arrays, so track
 # windows/counts/previous-values in parallel arrays (a handful of entries).
 # A pane that was busy last sweep but isn't now just finished a job: its
-# window gets @job_done (rendered as a plain ·) until the user focuses it.
+# window gets @job_done (rendered as a bright index) until the user focuses it.
 # Last sweep's busy panes persist in a small state file, since every run is
 # a fresh process.
 wins=(); counts=(); prevs=()

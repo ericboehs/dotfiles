@@ -45,7 +45,7 @@ async function mount({ responder } = {}) {
     exec: async (command, args) => {
       execCalls.push(args.join(" "));
       // Report the pane as being in a background window, so markWindow()
-      // proceeds to set the indicator.
+      // proceeds to set the attention state.
       return { stdout: args[0] === "display-message" ? "0" : "", stderr: "", code: 0 };
     },
     events: {
@@ -175,6 +175,6 @@ test("a blocking prompt marks the window without probing background tasks", asyn
   assert.equal(pi.requests.length, 0, "a prompt needs no background-task probe");
   assert.ok(
     pi.execCalls.some((call) => call.includes("@special_activity")),
-    "the ⊙ dot shows while the question waits on an answer",
+    "the bright index shows while the question waits on an answer",
   );
 });
