@@ -62,7 +62,7 @@ else
   border="#ccd0da"
   clock="#6c6f85"
   dim="#9ca0b0"       # overlay0: window index while an agent is working there
-  attention="#11111b" # high contrast equivalent of bright white on a light background
+  attention="#000000" # high contrast equivalent of #ffffff on a light background
   warn="#df8e1d"; crit="#d20f39"; peach="#fe640b"
   mark="#8839ef"; mark_fg="#eff1f5"
 fi

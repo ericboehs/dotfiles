@@ -31,7 +31,7 @@ async function loadExtension() {
 }
 
 /** Build a stub pi with a real-enough event bus, and mount the extension. */
-async function mount({ responder } = {}) {
+async function mount({ responder, windowActive = "0" } = {}) {
   process.env.TMUX_PANE = "%9";
   const extension = await loadExtension();
 
@@ -44,9 +44,9 @@ async function mount({ responder } = {}) {
     on: (name, handler) => handlers.set(name, handler),
     exec: async (command, args) => {
       execCalls.push(args.join(" "));
-      // Report the pane as being in a background window, so markWindow()
-      // proceeds to set the attention state.
-      return { stdout: args[0] === "display-message" ? "0" : "", stderr: "", code: 0 };
+      // Report window_active for markWindow(); other display-message callers
+      // (window_id) get the same stub, which is enough for these smoke tests.
+      return { stdout: args[0] === "display-message" ? windowActive : "", stderr: "", code: 0 };
     },
     events: {
       on: (channel, handler) => {
@@ -73,6 +73,7 @@ async function mount({ responder } = {}) {
     requests,
     settle: () => handlers.get("agent_settled")(),
     prompt: (event = {}) => handlers.get("ui_prompt_start")(event),
+    promptEnd: (event = {}) => handlers.get("ui_prompt_end")(event),
     startSession: () => handlers.get("session_start")({}, ctx),
   };
 }
@@ -168,13 +169,37 @@ test("a reply that lands after the timeout still lifts the silence latch", async
 test("a blocking prompt marks the window without probing background tasks", async () => {
   const pi = await mount();
 
-  // markWindow awaits two exec round trips; the void handler needs a tick.
   await pi.prompt({ kind: "custom" });
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.equal(pi.requests.length, 0, "a prompt needs no background-task probe");
   assert.ok(
-    pi.execCalls.some((call) => call.includes("@special_activity")),
+    pi.execCalls.some((call) => call.includes("@special_activity") && !call.includes("-u")),
     "the bright index shows while the question waits on an answer",
+  );
+});
+
+test("a blocking prompt marks even the focused window", async () => {
+  const pi = await mount({ windowActive: "1" });
+
+  await pi.prompt({ kind: "custom" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("@special_activity") && !call.includes("-u")),
+    "switching away after the question appears still shows attention",
+  );
+});
+
+test("answering a prompt clears attention", async () => {
+  const pi = await mount({ windowActive: "1" });
+
+  await pi.prompt({ kind: "custom" });
+  await pi.promptEnd();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("-u") && call.includes("@special_activity")),
+    "answering while focused must not leave a stale attention flag",
   );
 });

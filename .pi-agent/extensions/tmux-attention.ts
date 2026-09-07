@@ -126,25 +126,36 @@ export default function (pi: ExtensionAPI): void {
       // Cosmetic only; agent-sync's tty check covers unmarked sessions.
     });
 
+  const setAttention = async (on: boolean): Promise<void> => {
+    try {
+      await pi.exec(
+        "tmux",
+        on
+          ? ["set-window-option", "-t", TMUX_PANE, "@special_activity", "on"]
+          : ["set-window-option", "-u", "-t", TMUX_PANE, "@special_activity"],
+        { timeout: 1000 },
+      );
+    } catch {
+      // tmux may have exited or the pane may have moved between checks. This is
+      // a best-effort status hint, so never surface failures inside pi.
+    }
+  };
+
   const markWindow = async () => {
     try {
-      // Match the Claude hook: a turn only needs announcing when its window is
-      // not the active window. Split panes in the active window remain visible.
+      // A settled turn only needs announcing when its window is not the active
+      // window. Split panes in the active window remain visible. Blocking
+      // prompts skip this check: the question may appear while focused, and the
+      // flag must already be set so switching away still shows attention.
       const visible = await pi.exec(
         "tmux",
         ["display-message", "-p", "-t", TMUX_PANE, "#{window_active}"],
         { timeout: 1000 },
       );
       if (visible.code !== 0 || visible.stdout.trim() === "1") return;
-
-      await pi.exec(
-        "tmux",
-        ["set-window-option", "-t", TMUX_PANE, "@special_activity", "on"],
-        { timeout: 1000 },
-      );
+      await setAttention(true);
     } catch {
-      // tmux may have exited or the pane may have moved between checks. This is
-      // a best-effort status hint, so never surface failures inside pi.
+      // Same best-effort contract as setAttention above.
     }
   };
 
@@ -223,12 +234,16 @@ export default function (pi: ExtensionAPI): void {
     await markWindow();
   });
 
-  // A blocking prompt (ask tool, confirm, input, custom dialog) holds the
-  // turn open waiting on an answer — mark the window the same way a settled
-  // turn does. Answering requires focusing the pane, which clears attention via
-  // the pane-focus-in hook. Notification-only; pi does not await this.
+  // A blocking prompt (ask tool, confirm, input, custom dialog) means the user
+  // is needed, even if this window is currently focused — the status format
+  // keeps the active window blue, and switching away then shows attention.
+  // ui_prompt_end clears so answering while focused does not leave a stale flag.
+  // Notification-only; pi does not await this.
   pi.on("ui_prompt_start", () => {
-    void markWindow();
+    void setAttention(true);
+  });
+  pi.on("ui_prompt_end", () => {
+    void setAttention(false);
   });
 
   let removeTerminalListener: (() => void) | undefined;
