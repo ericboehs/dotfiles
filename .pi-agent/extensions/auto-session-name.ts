@@ -14,6 +14,8 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const NAME_MODEL = process.env.PI_AUTO_NAME_MODEL || "ollama/glm-5.3-flash";
+/** Session titles stay this short so they fit tabs, footers, and pickers. */
+const MAX_NAME_CHARS = 20;
 
 /** True when the name is one the user (or a previous auto-name) chose. */
 export function isUserGivenName(name?: string | null): boolean {
@@ -24,7 +26,7 @@ export function isUserGivenName(name?: string | null): boolean {
 }
 
 export function sanitizeName(raw: string): string {
-  return raw
+  const words = raw
     .trim()
     .replace(/^["'`]+/, "")
     .replace(/["'`]+$/, "")
@@ -33,13 +35,22 @@ export function sanitizeName(raw: string): string {
     .replace(/^-+|-+$/g, "")
     .split("-")
     .filter(Boolean)
-    .slice(0, 6)
-    .join("-")
-    .slice(0, 60);
+    .slice(0, 6);
+  // Whole words only: stop before the word that would exceed the cap, so a
+  // tab never shows a clipped fragment. A single over-long first word still
+  // hard-truncates rather than leaving the session unnamed.
+  let name = "";
+  for (const word of words) {
+    const next = name ? `${name}-${word}` : word;
+    if (next.length > MAX_NAME_CHARS) break;
+    name = next;
+  }
+  if (!name && words.length > 0) name = words[0]!.slice(0, MAX_NAME_CHARS);
+  return name;
 }
 
 const INSTRUCTION_ECHO =
-  /at-?most-?6-?words|session-?picker|short-?title|coding-?agent-?sessions|the-?user-?wants|plain-?text-?only/i;
+  /at-?most-?\d+-?(short-?)?words|session-?picker|short-?title|coding-?agent-?sessions|the-?user-?wants|plain-?text-?only/i;
 
 /** Keep final answer text only — drop thinking blocks and instruction echo. */
 export function titleFromContent(
@@ -124,7 +135,7 @@ async function generateTitle(ctx: ExtensionContext, source: string): Promise<str
     model,
     {
       systemPrompt:
-        "Reply with only a kebab-case session title: lowercase words joined by hyphens. At most 6 words. No quotes, no period, no markdown. Name the conversation as it is now, not the first message alone.",
+        "Reply with only a kebab-case session title: lowercase words joined by hyphens. At most 3 short words, under 20 characters total. No quotes, no period, no markdown. Name the conversation as it is now, not the first message alone.",
       messages: [{ role: "user", content: source.slice(0, 2000) }],
     },
     {

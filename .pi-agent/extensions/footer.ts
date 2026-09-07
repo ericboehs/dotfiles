@@ -21,8 +21,8 @@
  * the budget-usage cost chip (ollama/baseten/openrouter) toggles the dollar
  * total against its percent-only compact form; the whole chip colors by
  * budget pace (used% vs elapsed billing month) off the meter's reset timestamp.
- * Clicking the right-aligned session/peer name prefills /name when the editor
- * is empty. The git chip's segments prefill shell commands (⇧-click picks the
+ * Clicking the right-aligned session/peer name prefills /auto-name when the
+ * editor is empty. The git chip's segments prefill shell commands (⇧-click picks the
  * harder variant): branch → `! git status -s`, ⇣ → `! git pull --ff-only`
  * (⇧: `! git pull --rebase --autostash`), ⇡ → `! git push` (⇧:
  * `! git push --force-with-lease`); the session-cost chip stays glance-only.
@@ -1115,16 +1115,15 @@ export default function footerExtension(pi: ExtensionAPI): void {
     return undefined;
   }
 
-  /** Fill the rename command without destroying a prompt already in progress. */
-  function prefillNameCommand(): void {
+  /** Fill the auto-name command without destroying a prompt already in progress. */
+  function prefillAutoNameCommand(): void {
     const ctx = runtimeContext;
     if (!ctx?.hasUI) return;
     if (ctx.ui.getEditorText().length > 0) {
-      ctx.ui.notify("Editor is not empty; /name was not inserted", "info");
+      ctx.ui.notify("Editor is not empty; /auto-name was not inserted", "info");
       return;
     }
-    const name = pi.getSessionName();
-    ctx.ui.setEditorText(name ? `/name ${name}` : "/name ");
+    ctx.ui.setEditorText("/auto-name");
   }
 
   /** Fill a `!`-prefixed shell command without destroying a prompt already in progress. */
@@ -1200,7 +1199,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
               compactCostUsage = !compactCostUsage;
               repaint?.();
             } else if (action === "name") {
-              prefillNameCommand();
+              prefillAutoNameCommand();
             } else if (action === "gitStatus") {
               prefillBashCommand("git status -s");
             } else if (action === "gitPush") {
