@@ -8,8 +8,7 @@
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
   "extensions": [
-    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
-    "~/Code/github.com/ericboehs/dotfiles/pi/extensions/qmd-memory.ts"
+    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts"
   ],
   "skills": [
     "~/.claude/skills/credentials",
