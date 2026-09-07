@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Build one tmux status row per session, ordered by creation time. tmux limits
+# Build tmux status rows for sessions, ordered by creation time. tmux limits
 # the status area to five rows; if there are more than five sessions, the first
 # four keep their own rows and the remainder share the fifth.
 #
-# Called once while sourcing tmux.conf and again from session lifecycle hooks.
+# @status_all_sessions (default 1) shows every session. Set it to 0 to collapse
+# to a single row that follows the client's current session. Prefix+S toggles.
+#
+# Called once while sourcing tmux.conf, from session lifecycle hooks, and from
+# the toggle binding. `toggle` flips the option, rebuilds, and announces.
 
 sessions=()
 while IFS='|' read -r _created session_id; do
@@ -15,6 +19,18 @@ done < <(
 
 count=${#sessions[@]}
 [ "$count" -gt 0 ] || exit 0
+
+show_all=$(tmux show-options -gqv @status_all_sessions 2>/dev/null)
+[ -n "$show_all" ] || show_all=1
+
+if [ "${1:-}" = toggle ]; then
+  if [ "$show_all" = 0 ]; then
+    show_all=1
+  else
+    show_all=0
+  fi
+  tmux set-option -gq @status_all_sessions "$show_all"
+fi
 
 # Evaluated inside #{S:...}, so the window loop gets the matching session's
 # context rather than whichever session the client is currently viewing.
@@ -53,7 +69,11 @@ right="\
 separator='#[fg=#{E:@dim_fg}]│#[fg=default] '
 
 formats=('' '' '' '' '')
-if [ "$count" -le 5 ]; then
+if [ "$show_all" = 0 ]; then
+  # One format, evaluated per client: only the attached session's row shows.
+  height=1
+  formats[0]="#{S:#{?#{==:#{session_name},#{client_session}},${row},}}"
+elif [ "$count" -le 5 ]; then
   height=$count
   i=0
   while [ "$i" -lt "$count" ]; do
@@ -100,4 +120,12 @@ else
 fi
 if [ "$(tmux show-options -gqv status 2>/dev/null)" != "$wanted_status" ]; then
   tmux set-option -gq status "$wanted_status"
+fi
+
+if [ "${1:-}" = toggle ]; then
+  if [ "$show_all" = 0 ]; then
+    tmux display-message 'status sessions: current'
+  else
+    tmux display-message 'status sessions: all'
+  fi
 fi
