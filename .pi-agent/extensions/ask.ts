@@ -17,7 +17,7 @@
  * falls back to keyboard, RPC falls back to select/input dialogs.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	Key,
 	matchesKey,
@@ -174,7 +174,7 @@ export default function ask(pi: ExtensionAPI) {
 		parameters: AskParams,
 		executionMode: "sequential",
 
-		async execute(_id, params, _signal, _onUpdate, ctx) {
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<AskDetails>> {
 			let subs: SubQuestion[];
 			if (params.questions && params.questions.length > 0) {
 				subs = params.questions;
@@ -525,7 +525,9 @@ export default function ask(pi: ExtensionAPI) {
 				const labels = sub.options.map((o) => o.label);
 				const items = buildItems(sub.options);
 				const values = sub.multiSelect ? await pickMulti(sub.question, items) : [await pickSingle(sub.question, items)];
-				if (values === null || values[0] === undefined) return cancelled(sub.question, labels);
+				// No nav is passed in the single-question flow, so BACK/FORWARD
+				// cannot occur; the symbol guard just satisfies the pickers' type.
+				if (values === null || typeof values === "symbol" || values[0] === undefined) return cancelled(sub.question, labels);
 				const resolved = await resolveCustom(sub.options, values as string[]);
 				if (resolved === null) return cancelled(sub.question, labels);
 				if (!sub.multiSelect && resolved.custom.length > 0) {
@@ -550,7 +552,7 @@ export default function ask(pi: ExtensionAPI) {
 			const answered: (QuestionResult | undefined)[] = new Array(subs.length);
 			const answeredPrefix = (end: number): QuestionResult[] =>
 				answered.slice(0, end).filter((q): q is QuestionResult => q !== undefined);
-			const cancelBatch = (end: number) => {
+			const cancelBatch = (end: number): { content: { type: "text"; text: string }[]; details: AskDetails } => {
 				const prefix = answeredPrefix(end);
 				return {
 					content: [{ type: "text", text: [...prefix.flatMap((q, i) => [`Q${i + 1}: ${q.question}`, ...formatAnswerLines(q.options, q.answers, q.custom)]), "User cancelled (remaining questions skipped)"].join("\n") }],
