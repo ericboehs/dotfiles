@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Today's agenda, for the status-bar clock click.
+# Today's agenda + daily note, for the status-bar clock click.
 #
 # ical's own table/plain output is too wide for a tmux window (the table is a
 # fixed ~130 columns, and plain dumps the full Teams location list), so format
@@ -10,6 +10,37 @@
 #     Eric.Boehs@va.gov CalDAV calendar, so it is excluded outright.
 #   - Meetings invited to both work calendars (oddball.io and va.gov) are
 #     deduped on title + start time.
+
+# Daily note in nvim, same pane, after the agenda above. Creates today's note
+# from the same template as ~/bin/daily-note when missing. Quitting nvim
+# falls through to the interactive shell below so the window stays usable.
+open_daily_note() {
+  local daily_dir="$HOME/Documents/Wiki/daily"
+  local today
+  today=$(date +%F)
+  local note="$daily_dir/$today.md"
+  if [ ! -f "$note" ]; then
+    mkdir -p "$daily_dir"
+    cat > "$note" <<EOF
+# $today ($(date +%A))
+
+> Week: [[$(date +%G-W%V)]].
+
+## TODO
+
+### Work
+
+### Personal / Tinkering
+
+### Solar Shop
+
+### Personal / Farm
+
+## Notes
+EOF
+  fi
+  nvim "$note"
+}
 
 printf '\n  \033[1m%s\033[0m\n\n' "$(date '+%A, %B %-d')"
 
@@ -29,6 +60,7 @@ fi
 if ! command -v ical >/dev/null 2>&1; then
   echo "  No calendar here — ical is macOS-only."
   echo
+  open_daily_note
   exec "${SHELL:-/bin/zsh}" -i
 fi
 
@@ -47,6 +79,8 @@ ical today -o json --exclude-calendar "VA (outlook-cli)" 2>/dev/null | jq -r '
 
 echo
 
-# ical exits immediately, so drop into an interactive shell to keep the window
+open_daily_note
+
+# nvim exits back here, so drop into an interactive shell to keep the window
 # usable (same pattern as the `bind C` / `bind F` windows).
 exec "${SHELL:-/bin/zsh}" -i
