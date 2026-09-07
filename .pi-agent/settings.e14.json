@@ -5,7 +5,7 @@
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
     "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
     "git:github.com/ericboehs/pi-agent-link@f35e9455ee049b3fd529a2db3597799878b14594",
-    "git:github.com/ericboehs/agent-notify@1e156666dd37745a880c713941c32cd1e4834de2"
+    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
   "extensions": [
     "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts",
