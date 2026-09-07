@@ -470,15 +470,11 @@ function formatCodexWindow(window: UsageWindow, nowMs = Date.now()): string | un
     Math.min(totalSeconds, totalSeconds - remainingSeconds),
   );
   const percent = Math.max(0, Math.min(100, usedPercent));
-  const expectedPercent = (elapsedSeconds / totalSeconds) * 100;
-  const pointsAhead = percent - expectedPercent;
-  const warningCount = pointsAhead > 20 ? 3 : pointsAhead > 10 ? 2 : pointsAhead > 5 ? 1 : 0;
-  const warning = "!".repeat(warningCount);
   // 100% is not actionable; the reset is. Footer colors ↻ red.
   const usage =
     formatNumber(percent) === "100"
       ? `↻${formatResetClock(reset, nowMs)}`
-      : `${formatNumber(percent)}%${warning}`;
+      : `${formatNumber(percent)}%`;
 
   if (totalSeconds >= 86_400) {
     const elapsedDays = elapsedSeconds / 86_400;
@@ -852,16 +848,14 @@ function formatCopilotQuota(
   if (totalMs <= 0) return undefined;
 
   const elapsedMs = Math.max(0, Math.min(totalMs, nowMs - start.getTime()));
-  const expectedPercent = (elapsedMs / totalMs) * 100;
-  const pointsAhead = percent - expectedPercent;
-  const warningCount = pointsAhead > 20 ? 3 : pointsAhead > 10 ? 2 : pointsAhead > 5 ? 1 : 0;
-  const warning = "!".repeat(warningCount);
+  const elapsedDays = elapsedMs / 86_400_000;
+  const totalDays = totalMs / 86_400_000;
   // 100% is not actionable; the reset is. Footer colors ↻ red.
-  if (formatNumber(percent) === "100") {
-    return `↻${formatResetClock(reset.getTime(), nowMs)}`;
-  }
-
-  return `${formatNumber(percent)}%${warning}`;
+  const usage =
+    formatNumber(percent) === "100"
+      ? `↻${formatResetClock(reset.getTime(), nowMs)}`
+      : `${formatNumber(percent)}%`;
+  return `${formatNumber(elapsedDays)}/${formatNumber(totalDays)}D: ${usage}`;
 }
 
 async function fetchCopilot(ctx: ExtensionContext): Promise<UsageDisplay> {
@@ -999,15 +993,11 @@ function formatGrokWindow(window: GrokUsageWindow, nowMs = Date.now()): string |
   const remainingSeconds = window.reset_at - nowMs / 1000;
   const elapsedSeconds = Math.max(0, Math.min(totalSeconds, totalSeconds - remainingSeconds));
   const percent = Math.max(0, Math.min(100, window.used_percent));
-  const expectedPercent = (elapsedSeconds / totalSeconds) * 100;
-  const pointsAhead = percent - expectedPercent;
-  const warningCount = pointsAhead > 20 ? 3 : pointsAhead > 10 ? 2 : pointsAhead > 5 ? 1 : 0;
-  const warning = "!".repeat(warningCount);
   // 100% is not actionable; the reset is. Footer colors ↻ red.
   const usage =
     formatNumber(percent) === "100"
       ? `↻${formatResetClock(window.reset_at * 1000, nowMs)}`
-      : `${formatNumber(percent)}%${warning}`;
+      : `${formatNumber(percent)}%`;
 
   if (totalSeconds >= 86_400) {
     const elapsedDays = elapsedSeconds / 86_400;
