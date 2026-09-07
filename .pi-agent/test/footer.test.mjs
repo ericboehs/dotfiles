@@ -189,9 +189,9 @@ async function mount(overrides = {}) {
     thinking: () => thinkingLevel,
     editor: () => editorText,
     /** Click a footer cell in fullscreen local coordinates (renders first to publish zones). */
-    click: (x, y, width = 120) => {
+    click: (x, y, width = 120, mods = {}) => {
       component.render(width);
-      return component.handleMouse({ button: "left", type: "click", x, y });
+      return component.handleMouse({ button: "left", type: "click", x, y, ...mods });
     },
   };
 }
@@ -499,7 +499,7 @@ test("context colors escalate at 70% and 90%", async () => {
   assert.equal(await shade(95), "31", "red at 90%");
 });
 
-test("usage chips color by pace warnings in compact and long forms", async () => {
+test("usage chips color by pace in compact and long forms", async () => {
   const shade = async (key, status, form) => {
     const ui = await mount({ statuses: new Map([[key, status]]) });
     let target = status.slice(status.indexOf(": ") + 2);
@@ -513,47 +513,134 @@ test("usage chips color by pace warnings in compact and long forms", async () =>
   };
   for (const key of ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window"]) {
     for (const form of ["compact", "long"]) {
-      assert.equal(await shade(key, "2.1/7D: 18%", form), "90", `${key} ${form} gray with no warning`);
-      assert.equal(await shade(key, "2.1/7D: 18%!", form), "33", `${key} ${form} yellow at one !`);
-      assert.equal(await shade(key, "2.1/7D: 18%!!", form), "38;5;208", `${key} ${form} orange at two !`);
-      assert.equal(await shade(key, "2.1/7D: 18%!!!", form), "31", `${key} ${form} red at three !`);
+      // 2.1/7D is 30% elapsed: color follows points ahead of pace.
+      assert.equal(await shade(key, "2.1/7D: 18%", form), "90", `${key} ${form} gray when behind pace`);
+      assert.equal(await shade(key, "2.1/7D: 38%", form), "33", `${key} ${form} yellow when >5 ahead`);
+      assert.equal(await shade(key, "2.1/7D: 45%", form), "38;5;208", `${key} ${form} orange when >10 ahead`);
+      assert.equal(await shade(key, "2.1/7D: 55%", form), "31", `${key} ${form} red when >20 ahead`);
       assert.equal(await shade(key, "4.8/5H: \u21bb3:45p", form), "31", `${key} ${form} red at limit reset`);
     }
   }
 });
 
-test("provider usage defaults compact and toggles to long and back", async () => {
-  const long = "3.5/5H: 4% 6/7D: 33%!";
-  const ui = await mount({ statuses: new Map([["codex-window", long]]) });
-  let line = ui.plain()[0];
-  assert.match(line, /4%\/33%!$/);
-
-  assert.deepEqual(ui.click(line.indexOf("4%/33%") + 1, 0), { handled: true });
-  line = ui.plain()[0];
-  assert.match(line, /3\.5\/5H: 4% 6\/7D: 33%!$/);
-
-  assert.deepEqual(ui.click(line.indexOf("3.5/5H") + 1, 0), { handled: true });
-  assert.match(ui.plain()[0], /4%\/33%!$/);
+test("legacy trailing !s are stripped and still color by pace", async () => {
+  const ui = await mount({ statuses: new Map([["codex-window", "2.1/7D: 55%!!!"]]) });
+  // Compact by default: just the percent, no bangs, still red (>20 ahead).
+  assert.match(ui.plain()[0], /55%(?!\!)/);
+  assert.doesNotMatch(ui.plain()[0], /!/);
+  assert.match(ui.raw()[0], /\x1B\[31m55%\x1B\[39m/);
 });
 
-test("short provider usage preserves each window's warning color", async () => {
+test("provider usage defaults compact and toggles to long and back", async () => {
+  const long = "3.5/5H: 4% 1/7D: 22%";
+  const ui = await mount({ statuses: new Map([["codex-window", long]]) });
+  let line = ui.plain()[0];
+  assert.match(line, /4%\/22%$/);
+
+  assert.deepEqual(ui.click(line.indexOf("4%/22%") + 1, 0), { handled: true });
+  line = ui.plain()[0];
+  assert.match(line, /3\.5\/5H: 4% 1\/7D: 22%$/);
+
+  assert.deepEqual(ui.click(line.indexOf("3.5/5H") + 1, 0), { handled: true });
+  assert.match(ui.plain()[0], /4%\/22%$/);
+});
+
+test("short provider usage preserves each window's pace color", async () => {
   const ui = await mount({
-    statuses: new Map([["codex-window", "3.5/5H: 4% 6/7D: 33%!"]]),
+    statuses: new Map([["codex-window", "3.5/5H: 4% 1/7D: 22%"]]),
   });
   assert.match(
     ui.raw()[0],
-    /\x1B\[90m4%\x1B\[39m\x1B\[90m\/\x1B\[39m\x1B\[33m33%!\x1B\[39m/,
+    /\x1B\[90m4%\x1B\[39m\x1B\[90m\/\x1B\[39m\x1B\[33m22%\x1B\[39m/,
   );
 });
 
 test("provider usage form resets to compact on session change", async () => {
-  const long = "3.5/5H: 4% 6/7D: 33%!";
+  const long = "3.5/5H: 4% 1/7D: 22%";
   const ui = await mount({ statuses: new Map([["codex-window", long]]) });
   let line = ui.plain()[0];
-  ui.click(line.indexOf("4%/33%") + 1, 0);
-  assert.match(ui.plain()[0], /3\.5\/5H: 4% 6\/7D: 33%!$/);
+  ui.click(line.indexOf("4%/22%") + 1, 0);
+  assert.match(ui.plain()[0], /3\.5\/5H: 4% 1\/7D: 22%$/);
   await ui.startSession();
-  assert.match(ui.plain()[0], /4%\/33%!$/);
+  assert.match(ui.plain()[0], /4%\/22%$/);
+});
+
+/* -------------------------------------------------- budget usage cost chip */
+
+/** Set a usage-chip stash (provider-usage.ts's globalThis contract), cleared after. */
+function withUsageChip(key, value) {
+  globalThis[key] = { value, fetchedAt: Date.now() };
+  return () => { delete globalThis[key]; };
+}
+
+const OLLAMA_MODEL = { id: "glm-5.3-flash", provider: "ollama", reasoning: true };
+
+const OLLAMA_TOTAL = "$6.75 / $60.00 (11%)";
+
+test("the ollama usage chip defaults to its percent-only form", async () => {
+  const restore = withUsageChip("__piOllamaUsage", OLLAMA_TOTAL);
+  try {
+    const ui = await mount({ model: OLLAMA_MODEL });
+    assert.match(ui.plain()[0], / 11%$/);
+    assert.match(ui.raw()[0], /\x1B\[32m11%\x1B\[39m$/, "painted green like the cost slot");
+  } finally {
+    restore();
+  }
+});
+
+test("clicking the ollama usage chip toggles to the dollar total and back", async () => {
+  const restore = withUsageChip("__piOllamaUsage", OLLAMA_TOTAL);
+  try {
+    const ui = await mount({ model: OLLAMA_MODEL });
+    assert.match(ui.plain()[0], /11%$/);
+
+    let line = ui.plain()[0];
+    assert.deepEqual(ui.click(line.indexOf("11%") + 1, 0), { handled: true });
+    line = ui.plain()[0];
+    assert.match(line, /\$6\.75 \/ \$60\.00 \(11%\)$/);
+
+    assert.deepEqual(ui.click(line.indexOf("$6.75") + 1, 0), { handled: true });
+    assert.match(ui.plain()[0], /11%$/);
+  } finally {
+    restore();
+  }
+});
+
+test("the cost-chip form resets to percent-only on session change", async () => {
+  const restore = withUsageChip("__piOllamaUsage", OLLAMA_TOTAL);
+  try {
+    const ui = await mount({ model: OLLAMA_MODEL });
+    const line = ui.plain()[0];
+    ui.click(line.indexOf("11%") + 1, 0);
+    assert.match(ui.plain()[0], /\$6\.75 \/ \$60\.00 \(11%\)$/);
+    await ui.startSession();
+    assert.match(ui.plain()[0], /11%$/);
+  } finally {
+    restore();
+  }
+});
+
+test("a usage chip without a percent tail keeps its full form when toggled", async () => {
+  const restore = withUsageChip("__piBasetenUsage", "$12.34");
+  try {
+    const ui = await mount({ model: { id: "x", provider: "baseten", reasoning: false } });
+    assert.match(ui.plain()[0], /\$12\.34$/);
+    const line = ui.plain()[0];
+    ui.click(line.indexOf("$12.34") + 1, 0);
+    assert.match(ui.plain()[0], /\$12\.34$/, "no percent to compact to");
+  } finally {
+    restore();
+  }
+});
+
+test("the session-cost chip stays glance-only", async () => {
+  const ui = await mount({
+    model: { id: "gpt-5.4", provider: "openai", reasoning: true },
+    costs: [3.75],
+  });
+  const line = ui.plain()[0];
+  assert.match(line, /\$3\.75$/);
+  assert.equal(ui.click(line.indexOf("$3.75") + 1, 0), undefined);
 });
 
 test("unknown context tokens render as ?", async () => {
@@ -603,6 +690,67 @@ test("clicking an explicit session name prefills its /name command", async () =>
 test("clicking a name never replaces editor text", async () => {
   const ui = await mount({ sessionName: "footer-work", editorText: "draft prompt" });
   assert.deepEqual(ui.click(79, 0, 80), { handled: true });
+  assert.equal(ui.editor(), "draft prompt");
+  assert.match(ui.notices.at(-1).message, /Editor is not empty/);
+});
+
+test("clicking the git branch prefills a status command", async () => {
+  const ui = await mount({ revList: "3\t2" });
+  const line = (await ui.settled())[0];
+  assert.deepEqual(ui.click(line.indexOf("master"), 0), { handled: true });
+  assert.equal(ui.editor(), "! git status -s");
+});
+
+test("clicking ⇣ prefills a safe pull, ⇧-click adds autostash rebase", async () => {
+  const ui = await mount({ revList: "3\t0" });
+  const line = (await ui.settled())[0];
+  assert.deepEqual(ui.click(line.indexOf("⇣"), 0), { handled: true });
+  assert.equal(ui.editor(), "! git pull --ff-only");
+
+  const shift = await mount({ revList: "3\t0" });
+  const shiftLine = (await shift.settled())[0];
+  assert.deepEqual(shift.click(shiftLine.indexOf("⇣"), 0, 120, { shift: true }), { handled: true });
+  assert.equal(shift.editor(), "! git pull --rebase --autostash");
+});
+
+test("clicking ⇡ prefills a push, ⇧-click adds --force-with-lease", async () => {
+  const ui = await mount({ revList: "0\t2" });
+  const line = (await ui.settled())[0];
+  assert.deepEqual(ui.click(line.indexOf("⇡"), 0), { handled: true });
+  assert.equal(ui.editor(), "! git push");
+
+  const shift = await mount({ revList: "0\t2" });
+  const shiftLine = (await shift.settled())[0];
+  assert.deepEqual(shift.click(shiftLine.indexOf("⇡"), 0, 120, { shift: true }), { handled: true });
+  assert.equal(shift.editor(), "! git push --force-with-lease");
+});
+
+test("diverged: ⇣ and ⇡ are separate click targets", async () => {
+  const pull = await mount({ revList: "3\t2" });
+  const line = (await pull.settled())[0];
+  assert.deepEqual(pull.click(line.indexOf("⇣"), 0), { handled: true });
+  assert.equal(pull.editor(), "! git pull --ff-only");
+
+  const push = await mount({ revList: "3\t2" });
+  const pushLine = (await push.settled())[0];
+  assert.deepEqual(push.click(pushLine.indexOf("⇡"), 0), { handled: true });
+  assert.equal(push.editor(), "! git push");
+});
+
+test("in sync there are no arrow zones — the gap after the branch handles nothing", async () => {
+  const ui = await mount({ revList: "0\t0" });
+  const line = (await ui.settled())[0];
+  assert.equal(line.indexOf("⇣"), -1);
+  assert.equal(line.indexOf("⇡"), -1);
+  // The column where an arrow would render is the inter-chip space; no zone covers it.
+  const gapCol = line.indexOf("master*") + "master*".length;
+  assert.equal(ui.click(gapCol, 0), undefined);
+});
+
+test("a git chip click never replaces editor text", async () => {
+  const ui = await mount({ revList: "3\t2", editorText: "draft prompt" });
+  const line = (await ui.settled())[0];
+  assert.deepEqual(ui.click(line.indexOf("master"), 0), { handled: true });
   assert.equal(ui.editor(), "draft prompt");
   assert.match(ui.notices.at(-1).message, /Editor is not empty/);
 });
@@ -757,9 +905,10 @@ test("/bypass drives the guardian and shows a bright red marker", async () => {
 
   await ui.run("bypass");
   assert.deepEqual(ui.guardianRequests, [true]);
-  // Its own second line, left-aligned, so narrow terminals can't truncate it.
-  assert.match(ui.plain()[1], /^bypass$/);
-  assert.match(ui.raw()[1], /\x1B\[91mbypass\x1B\[39m/, "bright red");
+  // Inline right after the thinking chip on the main line, bright red.
+  assert.match(ui.plain()[0], /hi bypass /);
+  assert.match(ui.raw()[0], /\x1B\[91mbypass\x1B\[39m/, "bright red");
+  assert.equal(ui.plain().length, 1, "no extra marker line");
 
   await ui.run("bypass");
   assert.deepEqual(ui.guardianRequests, [true, false]);
@@ -770,10 +919,23 @@ test("clicking the bypass marker turns bypass off", async () => {
   const ui = await mount();
   await ui.run("bypass");
   assert.deepEqual(ui.guardianRequests, [true]);
-  // The marker lives alone on line 1 with a zone of its own.
-  assert.deepEqual(ui.click(2, 1), { handled: true });
+  // The marker sits inline on the main line with a zone of its own.
+  const column = ui.plain()[0].indexOf("bypass");
+  assert.ok(column > 0, "bypass chip is on the main line");
+  assert.deepEqual(ui.click(column, 0), { handled: true });
   assert.deepEqual(ui.guardianRequests, [true, false]);
   assert.doesNotMatch(ui.plain().join("\n"), /bypass/);
+});
+
+test("bypass wraps with the chips on a narrow terminal", async () => {
+  const ui = await mount();
+  await ui.run("bypass");
+  const lines = await ui.settled(30);
+  // No dedicated second line: the chip either stays on the main line or wraps
+  // whole by the same width rules as every other chip.
+  assert.ok(lines.some((line) => line.includes("bypass")), "marker survives narrow width");
+  assert.ok(lines.every((line) => line.length <= 30), "every row fits the width");
+  assert.ok(!lines.includes("bypass"), "not left-aligned on a row of its own");
 });
 
 test("/bypass takes explicit on/off and rejects anything else", async () => {
