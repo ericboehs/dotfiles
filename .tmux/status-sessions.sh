@@ -52,7 +52,7 @@ row="\
 #{?#{window_bell_flag},•, }\
 #{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},#[fg=default],}\
 }\
-#{?#{==:#{session_name},#{client_session}},#[fg=default] + #[norange],}"
+#{?#{==:#{session_name},#{client_session}},#[fg=#{E:@time_fg}] + #[norange],}"
 
 session_format() {
   local session_id=$1

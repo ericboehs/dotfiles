@@ -3,23 +3,22 @@
 # percentage rides the same three-band scale as loadavg.sh, so the numbers next
 # to each other mean the same thing:
 #
-#   < 60%   quiet, same grey as the rest of the status bar
+#   < 60%   quiet — and hidden: only yellow or red ever earns the space
 #   >= 60%  yellow, the GPU is working
 #   >= 90%  red, the GPU is the bottleneck
 #
 # Memory stays grey: on unified memory it is a size, not a pressure reading.
 #
-# An idle GPU is not worth any space at all, so both numbers hide below
-# GPU_FLOOR. They linger GPU_LINGER seconds past the last busy sample, though:
-# a workload that dips to 0% for one sample would otherwise blink the pair in
-# and out and shove the load average sideways every few seconds.
+# The pair lingers GPU_LINGER seconds past the last yellow sample — a workload
+# that dips below the line for one sample would otherwise blink the numbers in
+# and out and shove the load average sideways every few seconds — and during a
+# linger dip it renders in the bar's grey, like the load average next to it.
 #
 # Prints nothing at all when no GPU can be read, so a box without one — or a
 # Linux VM — just gets the load average where this would be.
 
 warn_at=${GPU_WARN:-60}
 crit_at=${GPU_CRIT:-90}
-floor=${GPU_FLOOR:-5}
 linger=${GPU_LINGER:-30}
 
 # tmux re-runs a status #() as often as once a second, on any redraw: a
@@ -106,7 +105,7 @@ if [[ ! $stamp =~ ^[0-9]+$ ]] || ((now - stamp >= ttl)); then
     # sees a fresh reading, and it carries the old timestamp forward untouched
     # while the GPU is quiet.
     fresh_busy=$busy
-    [[ $fresh =~ ^[0-9]+$ ]] && ((fresh >= floor)) && fresh_busy=$now
+    [[ $fresh =~ ^[0-9]+$ ]] && ((fresh >= warn_at)) && fresh_busy=$now
     # Write via a temp file so a reader can never catch a half-written line.
     printf '%s %s %s %s\n' "$now" "$fresh" "$fresh_mem" "$fresh_busy" >"$cache.$$" &&
       mv -f "$cache.$$" "$cache"
@@ -119,8 +118,9 @@ fi
 
 [[ $gpu =~ ^[0-9]+$ ]] || exit 0
 
-# Quiet, and quiet for long enough: give the bar back to the load average.
-if ((gpu < floor)); then
+# Below the yellow line, and quiet for long enough: give the bar back to the
+# load average.
+if ((gpu < warn_at)); then
   [[ $busy =~ ^[0-9]+$ ]] || exit 0
   ((now - busy < linger)) || exit 0
 fi
