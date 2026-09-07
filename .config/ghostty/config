@@ -2,7 +2,7 @@
 theme = light:Catppuccin Latte,dark:Catppuccin Mocha
 
 # Font
-font-family = SauceCodeProNerdFontMono
+font-family = JetBrainsMono Nerd Font
 font-style = Regular
 font-style-italic = Italic
 font-style-bold-italic = Bold Italic
