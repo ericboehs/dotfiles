@@ -811,22 +811,40 @@ for tool in fd rg; do
   fi
 done
 
-# pi's Node build loads 177 ES modules before it paints the first frame.
-# bin/pi-bundle collapses them into one file and repoints the `pi` bin at
-# bin/pi-launch, which is worth ~115ms per launch. Strictly an optimization:
-# the launcher falls back to dist/cli.js whenever the bundle is missing or
+# Two boot paths for the pi entrypoint. macOS runs the official native
+# release binary: bin/pi-native downloads it, verifies it against the
+# release SHA256SUMS, and normalizes every pi bin mise exposes (node bin
+# symlinks plus the npm backend's generated shims, which get an early exec
+# guard and keep their stock fallback). Linux keeps the node/bundle path:
+# pi's Node build loads 177 ES modules before it paints the first frame, and
+# bin/pi-bundle collapses them into one file worth ~115ms per launch. The
+# launchers fall back to dist/cli.js whenever their artifact is missing or
 # older than the package, so a failure here costs speed and nothing else.
-pi_bundle="${MISE_PROJECT_ROOT:-.}/bin/pi-bundle"
-[ -x "$pi_bundle" ] || pi_bundle="$HOME/bin/pi-bundle"
-if [ -x "$pi_bundle" ]; then
-  printf 'bootstrap:pi: '
-  # Neither machine authenticates bedrock, and registering it costs 32ms of AWS
-  # SDK evaluation on every launch. pi-bundle ignores this and keeps bedrock if
-  # it finds bedrock credentials, so adding the provider later still works.
-  PI_BUNDLE_NO_BEDROCK=1 "$pi_bundle" || echo "bootstrap:pi: bundling failed, staying on the stock entrypoint" >&2
-else
-  echo "bootstrap:pi: bin/pi-bundle not found, staying on the stock entrypoint" >&2
-fi
+case "$(uname)" in
+  Darwin)
+    # Stock npm entrypoint is the default on macOS: since pi 0.85 upstream
+    # ships its own pre-bundled build (dist/bundle/cli.js, ~150ms boot here),
+    # which beats both bin/pi-bundle's single-file output (~213ms) and the
+    # official native binary (~230ms). bin/pi-native stays available as a
+    # manual opt-in (`pi-native` to install, `pi-native --off` to revert),
+    # so bootstrap normalizes nothing here — mise recreates the stock bins
+    # on every upgrade by itself.
+    ;;
+  *)
+    pi_bundle="${MISE_PROJECT_ROOT:-.}/bin/pi-bundle"
+    [ -x "$pi_bundle" ] || pi_bundle="$HOME/bin/pi-bundle"
+    if [ -x "$pi_bundle" ]; then
+      printf 'bootstrap:pi: '
+      # Neither machine authenticates bedrock, and registering it costs 32ms of
+      # AWS SDK evaluation on every launch. pi-bundle ignores this and keeps
+      # bedrock if it finds bedrock credentials, so adding the provider later
+      # still works.
+      PI_BUNDLE_NO_BEDROCK=1 "$pi_bundle" || echo "bootstrap:pi: bundling failed, staying on the stock entrypoint" >&2
+    else
+      echo "bootstrap:pi: bin/pi-bundle not found, staying on the stock entrypoint" >&2
+    fi
+    ;;
+esac
 '''
 
 [tasks."bootstrap:va-context"]

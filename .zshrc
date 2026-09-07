@@ -74,3 +74,35 @@ elif [[ -n $TMUX_PANE ]]; then
   export LC_AGENT_NOTIFY_PANE=$TMUX_PANE
   export LC_CLAUDE_PANE=$TMUX_PANE
 fi
+
+# pi's native binary probes tmux hyperlink support synchronously during boot -
+# `tmux display-message` from node, ~10ms warm but up to its 250ms timeout when
+# the server is busy, which read as random +300ms boots under load. The answer
+# only changes when the outer terminal does, so export the cached answer (pi
+# honours PI_HYPERLINKS over its own probe) and let a detached job refresh the
+# cache for the next shell. An existing PI_HYPERLINKS wins; the refresh honours
+# the PI_NO_HYPERLINKS_REFRESH=1 opt-out, like bin/pi-launch did before macOS
+# moved to the native release binary.
+if [[ -n $TMUX && -z $PI_HYPERLINKS && -z $PI_NO_HYPERLINKS_REFRESH ]]; then
+  pi_hyperlinks_cache=${XDG_CACHE_HOME:-$HOME/.cache}/pi/tmux-hyperlinks
+  if [[ -e $pi_hyperlinks_cache ]]; then
+    read -r v < "$pi_hyperlinks_cache"
+    [[ $v == 0 || $v == 1 ]] && export PI_HYPERLINKS=$v
+  fi
+  (
+    features=$(tmux display-message -p '#{client_termfeatures}' 2>/dev/null) || exit 0
+    case ,${features}, in
+      *,hyperlinks,*) printf 1 ;;
+      *) printf 0 ;;
+    esac > "$pi_hyperlinks_cache.tmp" && mv "$pi_hyperlinks_cache.tmp" "$pi_hyperlinks_cache"
+  ) &!
+  unset pi_hyperlinks_cache v
+fi
+
+# V8 caches the compiled form of every module node loads under here — measured
+# ~44ms off pi's stock bundle on Linux (no effect on macOS, where the boot is
+# dominated by other costs). Harmless for every other node CLI, so export it
+# for all interactive shells rather than per-launcher.
+if [[ -z $NODE_COMPILE_CACHE && -z $PI_NO_COMPILE_CACHE ]]; then
+  export NODE_COMPILE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/pi/v8"
+fi

@@ -3,6 +3,12 @@
 # Bundle the installed pi into a single file and point the `pi` bin at it.
 # Usage: pi-bundle [-h|--help] [--status|--off]
 #
+# NOTE: since pi 0.85 upstream ships its own pre-bundled entry
+# (dist/bundle/cli.js, code-split with lazy chunks), and it boots faster
+# than this script's single-file output on every machine measured, the build
+# below is skipped whenever that entry exists — --status and --off keep
+# working, and the mise-shim/aube-shim handling stays for older pi.
+#
 # pi ships its Node build as ~200 ES modules, and 177 of them load before the
 # first frame. Collapsing them into one file takes ~115ms off every launch.
 #
@@ -78,6 +84,13 @@ command -v node >/dev/null || die "node is not on PATH"
 # not on PATH (a remote box driven over ssh, say).
 PI_BIN="${PI_BIN:-$(command -v pi || true)}"
 [ -n "$PI_BIN" ] || die "pi is not on PATH (set PI_BIN to its path)"
+if [ -L "$PI_BIN" ] && [ "$(basename "$(readlink "$PI_BIN")")" = "mise" ] && command -v mise >/dev/null; then
+  # A mise-managed shim is a symlink to the mise binary itself, and the npm
+  # install lives nowhere near it. Ask mise where the shim dispatches to (the
+  # backend's real bin) and work on that instead.
+  PI_BIN="$(mise which pi 2>/dev/null || true)"
+  [ -n "$PI_BIN" ] || die "mise does not resolve a pi to work on (set PI_BIN to its path)"
+fi
 BIN_DIR="$(cd "$(dirname "$PI_BIN")" && pwd)"
 PKG=""
 for rel in ../lib/node_modules/@earendil-works/pi-coding-agent ../@earendil-works/pi-coding-agent; do
@@ -96,37 +109,39 @@ COMPILE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/pi/v8"
 # mise's npm backend writes a generated shim script at the bin path instead of
 # a symlink, so there is nothing to repoint. Rewrite the shim's own entrypoint
 # selection instead, keeping the stock file as the fallback.
-is_shim() { [ -f "$PI_BIN_LINK" ] && [ ! -L "$PI_BIN_LINK" ] && grep -q 'dist/cli\.js' "$PI_BIN_LINK"; }
+is_shim() { [ -f "$PI_BIN_LINK" ] && [ ! -L "$PI_BIN_LINK" ] && grep -Eq 'dist/(bundle/)?cli\.js' "$PI_BIN_LINK"; }
 
 patch_shim() {
   [ -f "$SHIM_BACKUP" ] || cp -p "$PI_BIN_LINK" "$SHIM_BACKUP"
-  node - "$SHIM_BACKUP" "$PI_BIN_LINK" <<'SHIM' || die "could not patch $PI_BIN_LINK (restore it from $SHIM_BACKUP)"
+  # Always patch from the pristine backup, so re-running stays idempotent.
+  node - "$SHIM_BACKUP" "$PI_BIN_LINK" "$BUNDLE" "$PKG/package.json" <<'SHIM' || die "could not patch $PI_BIN_LINK (restore it from $SHIM_BACKUP)"
 const fs = require("node:fs");
-const [, , from, to] = process.argv;
+const [, , from, to, bundle, pkgJson] = process.argv;
 const src = fs.readFileSync(from, "utf8");
 
-// Every exec line points at the same "$basedir/<rel>/dist/cli.js".
-const m = src.match(/exec (?:"\$basedir\/node"|node) "\$basedir\/(\S+)\/dist\/cli\.js"/);
-if (!m) { console.error("no exec line naming dist/cli.js"); process.exit(1); }
-const rel = m[1];
-
+// Run the single-file bundle while it is present and no older than the
+// package, then fall through to the shim's own entrypoint selection. Keep
+// the shim's $basedir/node preference so the bundle runs on the same node
+// the stock entrypoint would. Anchored on the basedir assignment both the old
+// npm shims and mise's aube shims share, rather than on their exec lines,
+// which differ.
 const guard = [
   "",
   "# pi-bundle: prefer the single-file bundle, but only while it is present and",
   "# no older than the package, so an upgrade degrades to stock speed.",
-  `pi_entry="$basedir/${rel}/dist/bundle.mjs"`,
-  `{ [ -z "$PI_NO_BUNDLE" ] && [ -f "$pi_entry" ] && [ ! "$basedir/${rel}/package.json" -nt "$pi_entry" ]; } \\`,
-  `  || pi_entry="$basedir/${rel}/dist/cli.js"`,
+  `if [ -z "\${PI_NO_BUNDLE:-}" ] && [ -f "${bundle}" ] && [ ! "${pkgJson}" -nt "${bundle}" ]; then`,
+  `  if [ -x "$basedir/node" ]; then`,
+  `    exec "$basedir/node" "${bundle}" "$@"`,
+  `  else`,
+  `    exec node "${bundle}" "$@"`,
+  `  fi`,
+  `fi`,
   "",
 ].join("\n");
 
 const anchor = 'basedir=$(dirname "$link")\n';
 if (!src.includes(anchor)) { console.error("no basedir assignment to anchor on"); process.exit(1); }
-
-const out = src
-  .split(`"$basedir/${rel}/dist/cli.js"`).join('"$pi_entry"')
-  .replace(anchor, anchor + guard);
-fs.writeFileSync(to, out);
+fs.writeFileSync(to, src.replace(anchor, anchor + guard));
 fs.chmodSync(to, 0o755);
 SHIM
 }
@@ -156,7 +171,11 @@ if [[ "${1:-}" == "--status" ]]; then
 fi
 
 if [[ "${1:-}" == "--off" ]]; then
-  [ -L "$PI_BIN_LINK" ] && ln -sfn "$PKG/dist/cli.js" "$PI_BIN_LINK"
+  # Restore the package's declared entrypoint, not dist/cli.js: since 0.85
+  # upstream ships its own bundle at dist/bundle/cli.js and the unbundled
+  # dist/cli.js is the slow path nobody runs.
+  stock="$(node -p "require('$PKG/package.json').bin.pi" 2>/dev/null || echo dist/cli.js)"
+  [ -L "$PI_BIN_LINK" ] && ln -sfn "$PKG/$stock" "$PI_BIN_LINK"
   [ -f "$SHIM_BACKUP" ] && mv -f "$SHIM_BACKUP" "$PI_BIN_LINK"
   rm -f "$BUNDLE"
   # The bin no longer goes through pi-launch, so nothing would ever read these.
@@ -166,6 +185,19 @@ if [[ "${1:-}" == "--off" ]]; then
 fi
 
 [[ -z "${1:-}" ]] || die "unknown argument: $1"
+
+# Since 0.85 upstream ships its own pre-bundled entry (package.json bin ->
+# dist/bundle/cli.js, code-split with lazy chunks). Measured on two machines:
+# their bundle boots in ~150ms where this script's single-file output takes
+# ~210-380ms on the same box, so there is nothing left to optimize. Leave the
+# install alone — but sweep a bundle.mjs (and its bedrock shim) left behind
+# by an earlier run, which nothing references anymore.
+stock_bin="$(node -p "require('$PKG/package.json').bin.pi" 2>/dev/null || echo dist/cli.js)"
+if [ "$stock_bin" != "dist/cli.js" ] && [ -f "$PKG/$stock_bin" ]; then
+  rm -f "$BUNDLE" "$PKG/dist/bedrock-converse-stream.js"
+  echo "upstream ships its own bundle ($stock_bin) — nothing to build"
+  exit 0
+fi
 
 # Patch a copy, never the install. The copy goes next to the package rather
 # than in /tmp so that bare imports resolve exactly as they do for the real

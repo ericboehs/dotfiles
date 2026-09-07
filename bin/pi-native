@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+
+# Pull the official native pi release binary and make it the `pi` entrypoint.
+# Usage: pi-native [-h|--help] [--status|--off] [version]
+#
+# pi publishes bun-compiled single binaries per platform on its GitHub
+# releases (pi-darwin-arm64.tar.gz, ...), but neither the npm package nor the
+# curl installer ever touches them — the npm path ships JS and stops there.
+# This script is the missing step: download the latest release, verify it
+# against the release SHA256SUMS, unpack it under
+# ~/.local/share/pi-native/<version>/, and point the `pi` bins at it.
+#
+# mise can expose pi through more than one bin (the node install's bin/pi and
+# the npm backend's generated shim), and PATH may pick either, so every bin
+# found under the mise installs tree is normalized: symlinks are repointed at
+# the binary; shim scripts get an early exec guard prepended and keep their
+# original logic below as the fallback.
+#
+# The npm install stays on disk as the stock fallback (`--off` restores it).
+# An upgrade that lands in npm without a re-pull shows up in --status as
+# staleness, never as breakage — run pi-native again to catch up.
+#
+# macOS only: upstream's darwin tarballs are what this consumes, and the
+# Gatekeeper story makes them opt-in upstream anyway. Linux keeps the
+# node/bundle path (bin/pi-bundle + bin/pi-launch).
+#
+# The tarball's layout matches upstream's own packaging exactly — the binary
+# reads package.json, theme/, assets/, export-html/, docs/, examples/ and the
+# photon wasm from beside itself, plus the pi-tui prebuilds under native/ —
+# so the unpacked tree is used as-is, nothing is patched or moved.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $(basename "$0") [--status|--off] [version]"
+  echo ""
+  echo "Install the official native pi release binary and point the pi bins at it."
+  echo "With a version argument, installs that release instead of the latest."
+  echo ""
+  echo "  --status   show installed vs latest and where the pi bins point"
+  echo "  --off      restore the stock npm entrypoints (keeps the native install)"
+  echo ""
+  echo "PI_BIN=<path>            locate pi through a bin that is not on PATH"
+  echo "PI_NATIVE_DIR=<path>     install root (default ~/.local/share/pi-native)"
+  exit 0
+fi
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; NC=$'\033[0m'
+die() { echo "${RED}❌ $*${NC}" >&2; exit 1; }
+
+command -v curl >/dev/null || die "curl is not on PATH"
+command -v node >/dev/null || die "node is not on PATH"
+
+case "$(uname)" in
+  Darwin) ;;
+  *) die "this script consumes pi's darwin release tarballs; on Linux use bin/pi-bundle" ;;
+esac
+
+case "$(uname -m)" in
+  arm64) arch=arm64 ;;
+  x86_64) arch=x64 ;;
+  *) die "unsupported mac architecture: $(uname -m)" ;;
+esac
+
+NATIVE_ROOT="${PI_NATIVE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/pi-native}"
+NATIVE_BIN="$NATIVE_ROOT/current/pi/pi"
+RELEASES="https://github.com/earendil-works/pi/releases"
+MISE_INSTALLS="${HOME}/.local/share/mise/installs"
+
+# Resolve the npm install the same way bin/pi-bundle does: through the pi on
+# PATH, so PI_BIN can drive a pi that is not current. The npm package is the
+# stock fallback the shims and --off fall back to.
+PI_BIN="${PI_BIN:-$(command -v pi || true)}"
+[ -n "$PI_BIN" ] || die "pi is not on PATH (set PI_BIN to its path)"
+if [ -L "$PI_BIN" ] && [ "$(basename "$(readlink "$PI_BIN")")" = "mise" ] && command -v mise >/dev/null; then
+  # A mise-managed shim is a symlink to the mise binary itself, and the npm
+  # install lives nowhere near it. Ask mise where the shim dispatches to (the
+  # backend's real bin) and work on that instead.
+  PI_BIN="$(mise which pi 2>/dev/null || true)"
+  [ -n "$PI_BIN" ] || die "mise does not resolve a pi to work on (set PI_BIN to its path)"
+fi
+BIN_DIR="$(cd "$(dirname "$PI_BIN")" && pwd -P)"
+PKG=""
+for rel in ../lib/node_modules/@earendil-works/pi-coding-agent ../@earendil-works/pi-coding-agent; do
+  # -P: mise's npm backend symlinks the package into a pnpm-style store and
+  # keeps the dependencies there, so only the physical path resolves them.
+  if [ -d "$BIN_DIR/$rel" ]; then PKG="$(cd "$BIN_DIR/$rel" && pwd -P)"; break; fi
+done
+[ -n "$PKG" ] || die "no pi install found next to $BIN_DIR"
+
+# Every bin named pi that mise manages: the PATH winner plus whatever else
+# sits in the installs tree (node builds expose bin/pi, the npm backend writes
+# generated shims at .bin/pi). Deduped, existing entries only.
+pi_bins() {
+  {
+    printf '%s\n' "$(command -v pi 2>/dev/null || true)"
+    if [ -d "$MISE_INSTALLS" ]; then
+      find "$MISE_INSTALLS" -maxdepth 5 \( -path "*/bin/pi" -o -path "*/.bin/pi" \) 2>/dev/null || true
+    fi
+  } | while IFS= read -r b; do
+    [ -n "$b" ] && [ -e "$b" ] || continue
+    printf '%s\n' "$b"
+  done | sort -u
+}
+
+native_version() {
+  [ -f "$NATIVE_ROOT/current/pi/package.json" ] || return 1
+  node -p "require('$NATIVE_ROOT/current/pi/package.json').version" 2>/dev/null
+}
+
+latest_version() {
+  # The installer API is the same JSON pi.dev's own curl installer resolves
+  # releases from; GitHub's API rate-limits unauthenticated curl and this
+  # runs on every bootstrap.
+  curl -fsSL https://pi.dev/api/installer/releases/latest |
+    node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version"
+}
+
+npm_version() {
+  node -p "require('$PKG/package.json').version" 2>/dev/null || echo "unknown"
+}
+
+# One line describing how a bin resolves, for --status output.
+bin_desc() {
+  local b="$1" v
+  if [ -L "$b" ]; then
+    case "$(readlink "$b")" in
+      "$NATIVE_BIN")
+        v="$(native_version || true)"; echo "native (${v:-unversioned})" ;;
+      *pi-launch) echo "pi-launch (node/bundle mode)" ;;
+      *) readlink "$b" ;;
+    esac
+  elif [ -f "$b" ] && grep -q "pi-native:" "$b" 2>/dev/null; then
+    echo "shim, patched (native-first; stock copy at $(basename "$b").pre-native)"
+  elif [ -f "$b" ]; then
+    echo "shim (unpatched)"
+  else
+    echo "not a file or symlink"
+  fi
+}
+
+bin_is_native() {
+  local b="$1"
+  if [ -L "$b" ]; then
+    [ "$(readlink "$b")" = "$NATIVE_BIN" ]
+  elif [ -f "$b" ]; then
+    grep -q "pi-native:" "$b" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+# Prepend an early exec guard to a generated shim: run the native binary when
+# it is installed, otherwise fall through to the shim's own entrypoint
+# selection, untouched. Idempotent via the marker comment; the original file
+# is kept beside itself as <shim>.pre-native for --off.
+patch_shim() {
+  local shim="$1"
+  if grep -q "pi-native:" "$shim" 2>/dev/null; then
+    # Refresh the embedded path in case PI_NATIVE_DIR moved the install.
+    node - "$shim" "$NATIVE_BIN" <<'SHIM' || return 1
+const fs = require("node:fs");
+const [, , file, native] = process.argv;
+let src = fs.readFileSync(file, "utf8");
+src = src.replace(/# pi-native:.*\nif \[ -x "[^"]*" \]; then\n  exec "[^"]*" "\$@"\nfi\n/,
+  `# pi-native: run the official native release binary when installed\nif [ -x "${native}" ]; then\n  exec "${native}" "$@"\nfi\n`);
+fs.writeFileSync(file, src);
+SHIM
+    return 0
+  fi
+  [ -f "$shim.pre-native" ] || cp -p "$shim" "$shim.pre-native"
+  node - "$shim" "$NATIVE_BIN" <<'SHIM' || return 1
+const fs = require("node:fs");
+const [, , file, native] = process.argv;
+let src = fs.readFileSync(file, "utf8");
+const anchor = 'basedir=$(dirname "$link")\n';
+if (!src.includes(anchor)) { console.error("no basedir assignment to anchor on"); process.exit(1); }
+const guard = `# pi-native: run the official native release binary when installed\nif [ -x "${native}" ]; then\n  exec "${native}" "$@"\nfi\n`;
+src = src.replace(anchor, anchor + guard);
+fs.writeFileSync(file, src);
+SHIM
+}
+
+restore_bin() {
+  local b="$1"
+  if [ -f "$b.pre-native" ]; then
+    mv -f "$b.pre-native" "$b"
+  elif [ -L "$b" ]; then
+    # The package's declared entrypoint, not dist/cli.js: since 0.85 upstream
+    # ships its own bundle at dist/bundle/cli.js and the unbundled dist/cli.js
+    # is the slow path nobody runs.
+    stock="$(node -p "require('$PKG/package.json').bin.pi" 2>/dev/null || echo dist/cli.js)"
+    ln -sfn "$PKG/$stock" "$b"
+  else
+    echo "${YELLOW}no backup for $b — leave it alone${NC}" >&2
+    return 0
+  fi
+}
+
+if [[ "${1:-}" == "--status" ]]; then
+  have="$(native_version || true)"
+  want="$(latest_version 2>/dev/null || true)"
+  echo "pi        $(npm_version) via npm at $PKG"
+  if [ -n "$have" ]; then
+    stale=""
+    if [ -n "$want" ] && [ "$have" != "$want" ]; then
+      stale=" ${YELLOW}(stale: latest release is $want)${NC}"
+    fi
+    echo "native    $have at $NATIVE_ROOT/current$stale"
+  else
+    echo "native    ${YELLOW}not installed${NC}"
+  fi
+  pi_bins | while IFS= read -r b; do
+    echo "bin       $b -> $(bin_desc "$b")"
+  done
+  exit 0
+fi
+
+if [[ "${1:-}" == "--off" ]]; then
+  pi_bins | while IFS= read -r b; do restore_bin "$b"; done
+  echo "${GREEN}✅ pi bins restored to the stock npm entrypoints${NC}"
+  echo "   the native install stays at $NATIVE_ROOT; re-run pi-native to switch back"
+  exit 0
+fi
+
+[[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || -z "${1:-}" ]] || die "unknown argument: $1"
+version="${1:-$(latest_version)}"
+[ -n "$version" ] || die "could not resolve the latest release"
+tarball="pi-darwin-$arch.tar.gz"
+
+if [ "$(native_version || true)" = "$version" ]; then
+  bins_ok=1
+  while IFS= read -r b; do
+    bin_is_native "$b" || bins_ok=0
+  done < <(pi_bins)
+  if [ "$bins_ok" = 1 ]; then
+    echo "${GREEN}✅ native pi $version is already the entrypoint${NC}"
+    exit 0
+  fi
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+echo "⬇️  pi $version ($tarball)"
+curl -fsSL -o "$tmp/$tarball" "$RELEASES/download/v$version/$tarball" ||
+  die "download failed — is there a $tarball in release v$version?"
+curl -fsSL -o "$tmp/SHA256SUMS" "$RELEASES/download/v$version/SHA256SUMS" ||
+  die "could not fetch SHA256SUMS for v$version"
+# shasum -c wants the paths as named in the sums file, so verify in place.
+( cd "$tmp" && grep " $tarball\$" SHA256SUMS | shasum -a 256 -c - >/dev/null ) ||
+  die "checksum mismatch for $tarball — refusing to install"
+
+tar -xzf "$tmp/$tarball" -C "$tmp"
+[ -x "$tmp/pi/pi" ] || die "the tarball did not unpack to a pi/ tree with a binary"
+
+# Smoke test before anything is repointed: the version proves the embedded
+# graph evaluates, list proves settings and the package manager resolve.
+built="$("$tmp/pi/pi" --version 2>&1 | tail -1)"
+[ "$built" = "$version" ] || die "binary reports version '$built', expected '$version'"
+"$tmp/pi/pi" list >/dev/null 2>&1 || die "binary failed to run 'pi list'"
+
+mkdir -p "$NATIVE_ROOT/$version"
+rm -rf "$NATIVE_ROOT/$version/pi"
+mv "$tmp/pi" "$NATIVE_ROOT/$version/pi"
+# Relative link, like the version dirs it sits beside, so the whole tree can
+# move or be rsynced without rewriting it.
+ln -sfn "$version" "$NATIVE_ROOT/current"
+
+while IFS= read -r b; do
+  if [ -L "$b" ]; then
+    ln -sfn "$NATIVE_BIN" "$b"
+  elif [ -f "$b" ]; then
+    patch_shim "$b" || die "could not patch the shim at $b (restore it from $b.pre-native)"
+  else
+    echo "${YELLOW}skipped $b — neither symlink nor script${NC}" >&2
+  fi
+done < <(pi_bins)
+
+# Prune superseded versions; the current one is re-downloadable but the point
+# of keeping the tree is that pi runs without a network round trip. current is
+# a symlink to a directory, so the glob catches it — skip links or the prune
+# would strand the bins that were just written.
+for old in "$NATIVE_ROOT"/*/; do
+  [ -L "${old%/}" ] && continue
+  [ "${old%/}" = "$NATIVE_ROOT/$version" ] || rm -rf "${old%/}"
+done
+
+size="$(du -h "$NATIVE_BIN" | cut -f1)"
+echo "${GREEN}✅ native pi $version installed${NC} ($size) — pi bins now run it"
+npm_pkg="$(npm_version)"
+if [ "$npm_pkg" != "$version" ]; then
+  echo "${YELLOW}   note: the npm install is $npm_pkg — bump its mise pin to keep the two in step${NC}" >&2
+fi
