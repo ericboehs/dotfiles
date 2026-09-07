@@ -1,0 +1,101 @@
+# Herdr configuration: tmux-like navigation with agent-aware workspaces.
+onboarding = false
+
+[theme]
+# Follow Ghostty's Catppuccin light/dark appearance.
+name = "catppuccin"
+auto_switch = true
+light_name = "catppuccin-latte"
+dark_name = "catppuccin"
+
+[terminal]
+# New panes, tabs, and workspaces inherit the source terminal's directory.
+new_cwd = "follow"
+
+[keys]
+prefix = "ctrl+b"
+
+# Ghostty emits distinct Ctrl+number sequences, so tabs can use the same direct
+# shortcuts as tmux while retaining Herdr's prefix bindings.
+switch_tab = ["prefix+1..9", "ctrl+1..9"]
+
+# Keep DHH's direct arrow fallback. Ctrl+h/j/k/l below use herdr-pane-nav to
+# cross pane edges into adjacent tabs/workspaces like the tmux setup does.
+focus_pane_left = ["prefix+h", "ctrl+alt+left"]
+focus_pane_down = ["prefix+j", "ctrl+alt+down"]
+focus_pane_up = ["prefix+k", "ctrl+alt+up"]
+focus_pane_right = ["prefix+l", "ctrl+alt+right"]
+
+# tmux-pain-control's Prefix+H/J/K/L resize bindings.
+resize_pane_left = "prefix+shift+h"
+resize_pane_down = "prefix+shift+j"
+resize_pane_up = "prefix+shift+k"
+resize_pane_right = "prefix+shift+l"
+
+# Unlike the built-in directional actions, these continue at a pane edge:
+# left/right move through tabs and down/up move through workspaces.
+[[keys.command]]
+key = "ctrl+h"
+type = "shell"
+command = "$HOME/bin/herdr-pane-nav h"
+description = "focus left pane or previous tab"
+
+[[keys.command]]
+key = "ctrl+j"
+type = "shell"
+command = "$HOME/bin/herdr-pane-nav j"
+description = "focus lower pane or next workspace"
+
+[[keys.command]]
+key = "ctrl+k"
+type = "shell"
+command = "$HOME/bin/herdr-pane-nav k"
+description = "focus upper pane or previous workspace"
+
+[[keys.command]]
+key = "ctrl+l"
+type = "shell"
+command = "$HOME/bin/herdr-pane-nav l"
+description = "focus right pane or next tab"
+
+[ui]
+agent_panel_sort = "spaces"
+
+# Match the compact tmux presentation: shared internal dividers, no outside
+# frame, and no dedicated scrollbar column.
+pane_gaps = false
+pane_outer_borders = false
+pane_scrollbars = false
+
+# Create immediately and let Herdr derive the tab name.
+prompt_new_tab_name = false
+
+# Sidebar is a left rail only; hide it and use the tab bar as chrome.
+# sidebar_start_collapsed takes effect on the next Herdr launch.
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+
+tab_bar_position = "bottom"
+
+# Agent counts omit zero states; workspace label is last. There is no
+# tab-width setting; labels are centered with fixed padding, so many tabs
+# still yield this status cluster.
+tab_bar_right = [
+  { type = "command", command = "$HOME/bin/herdr-agent-counts", interval_seconds = 2, timeout_seconds = 2 },
+  { type = "zoom" },
+  { type = "command", command = "$HOME/bin/herdr-workspace-label", interval_seconds = 2, timeout_seconds = 2 },
+]
+tab_bar_right_separator = " · "
+window_title = "{hostname}: {workspace}"
+
+# Keep this until agent-notify has been verified as the notification owner.
+status_indicators = "symbols"
+[ui.toast]
+delivery = "herdr"
+
+[experimental]
+# Pane output can contain source, prompts, and secrets; do not persist it.
+pane_history = false
+
+[ui.sound]
+enabled = false

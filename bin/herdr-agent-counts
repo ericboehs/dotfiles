@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Compact agent-state counts for Herdr's tab_bar_right: "✓ 1 ◐ 1 ○ 2"
+
+set -euo pipefail
+
+herdr_bin=${HERDR_BIN_PATH:-herdr}
+
+"$herdr_bin" agent list | jq -r '
+  .result.agents
+  | reduce .[] as $a (
+      {blocked:0, done:0, working:0, idle:0, unknown:0};
+      .[$a.agent_status] += 1
+    )
+  | [
+      (if .blocked > 0 then "! \(.blocked)" else empty end),
+      (if .done > 0 then "✓ \(.done)" else empty end),
+      (if .working > 0 then "◐ \(.working)" else empty end),
+      (if .idle > 0 then "○ \(.idle)" else empty end),
+      (if .unknown > 0 then "? \(.unknown)" else empty end)
+    ]
+  | join(" ")
+'

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Move between Herdr panes, continuing through tabs/workspaces at an edge.
+# Mirrors ~/.tmux/pane-nav.sh: h/l fall into tabs; j/k into workspaces.
+
+set -euo pipefail
+
+case ${1-} in
+  h) pane_direction=left;  outer_direction=previous; outer_kind="tabs" ;;
+  j) pane_direction=down;  outer_direction=next;     outer_kind="workspaces" ;;
+  k) pane_direction=up;    outer_direction=previous; outer_kind="workspaces" ;;
+  l) pane_direction=right; outer_direction=next;     outer_kind="tabs" ;;
+  *) echo "usage: ${0##*/} h|j|k|l" >&2; exit 2 ;;
+esac
+
+herdr_bin=${HERDR_BIN_PATH:-herdr}
+pane_id=${HERDR_ACTIVE_PANE_ID:-${HERDR_PANE_ID:-}}
+tab_id=${HERDR_ACTIVE_TAB_ID:-${HERDR_TAB_ID:-}}
+workspace_id=${HERDR_ACTIVE_WORKSPACE_ID:-${HERDR_WORKSPACE_ID:-}}
+
+if [[ -z $pane_id || -z $tab_id || -z $workspace_id ]]; then
+  echo "${0##*/}: Herdr did not provide the active pane, tab, and workspace ids" >&2
+  exit 2
+fi
+
+# Use an explicit pane id: custom key commands are detached, so focus may move
+# again before this process reaches the server.
+neighbor=$(
+  "$herdr_bin" pane neighbor --pane "$pane_id" --direction "$pane_direction" |
+    jq -r '.result.neighbor.neighbor_pane_id // empty'
+)
+if [[ -n $neighbor ]]; then
+  exec "$herdr_bin" pane focus --pane "$pane_id" --direction "$pane_direction"
+fi
+
+# Select an adjacent id with wraparound. Herdr returns tabs/workspaces in their
+# display order, which is the same order its native next/previous actions use.
+adjacent_id() {
+  local current=$1 direction=$2 field=$3
+  jq -r --arg current "$current" --arg direction "$direction" --arg field "$field" '
+    map(.[$field]) as $ids |
+    ($ids | length) as $count |
+    ($ids | index($current)) as $index |
+    if $count < 2 or $index == null then empty
+    elif $direction == "previous" then
+      $ids[($index - 1 + $count) % $count]
+    else
+      $ids[($index + 1) % $count]
+    end
+  '
+}
+
+case $outer_kind in
+  tabs)
+    target=$(
+      "$herdr_bin" tab list --workspace "$workspace_id" |
+        jq '.result.tabs' |
+        adjacent_id "$tab_id" "$outer_direction" tab_id
+    )
+    [[ -n $target ]] && exec "$herdr_bin" tab focus "$target"
+    ;;
+  workspaces)
+    target=$(
+      "$herdr_bin" workspace list |
+        jq '.result.workspaces' |
+        adjacent_id "$workspace_id" "$outer_direction" workspace_id
+    )
+    [[ -n $target ]] && exec "$herdr_bin" workspace focus "$target"
+    ;;
+esac

@@ -51,6 +51,9 @@ REPO_PATH = "ericboehs/dotfiles"
 "brew:zsh-autosuggestions" = { version = "latest", os = ["macos"] }
 "brew:gnupg" = { version = "latest", os = ["macos"] }
 "brew:tmux" = { version = "latest", os = ["macos"] }
+# Agent-aware persistent terminal workspace manager. Its config and integration
+# bootstrap are tracked below; runtime sessions/logs remain local.
+"brew:herdr" = { version = "latest", os = ["macos"] }
 "brew:ripgrep" = { version = "latest", os = ["macos"] }
 "brew:fd" = { version = "latest", os = ["macos"] }
 "brew:lua" = { version = "latest", os = ["macos"] }
@@ -183,6 +186,9 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.config/gitleaks" = { source = ".config/gitleaks", mode = "symlink-each" }
 # Ghostty writes nothing here, but $HOME already has a real directory.
 "~/.config/ghostty" = { source = ".config/ghostty", mode = "symlink-each" }
+# Herdr writes sockets, logs, and session state beside its config, so manage the
+# reviewed config file alone rather than linking the runtime directory.
+"~/.config/herdr/config.toml" = ".config/herdr/config.toml"
 
 # ~/.claude/ is Claude Code runtime state and ~/.gem/ is runtime state for
 # `gem` (it writes credentials there on push), so link individual files.
@@ -437,7 +443,42 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:va-context", "bootstrap:claude"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:va-context", "bootstrap:claude", "bootstrap:herdr"]
+
+[tasks."bootstrap:herdr"]
+description = "Install Herdr integrations for available coding agents"
+depends = ["bootstrap:pi", "bootstrap:claude"]
+run = '''
+# Tasks run outside a login shell. Homebrew supplies Herdr on macOS; agent CLIs
+# may come from mise or their native installers.
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+
+if ! command -v herdr >/dev/null; then
+  echo "bootstrap:herdr: herdr is not installed on this platform — skipping integrations" >&2
+  exit 0
+fi
+
+# Herdr owns these generated hooks/extensions and updates their schema with new
+# releases. Keep them out of dotfiles and recreate only integrations whose CLI
+# and config home both exist on this machine.
+while IFS='|' read -r integration cli config_dir; do
+  [ -n "$integration" ] || continue
+  if ! command -v "$cli" >/dev/null; then
+    echo "bootstrap:herdr: $cli is not installed — skipping $integration"
+  elif [ ! -d "$config_dir" ]; then
+    echo "bootstrap:herdr: $config_dir does not exist — skipping $integration"
+  else
+    herdr integration install "$integration"
+  fi
+done <<EOF
+pi|pi|$HOME/.pi/agent
+claude|claude|${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+codex|codex|${CODEX_HOME:-$HOME/.codex}
+copilot|copilot|${COPILOT_HOME:-$HOME/.copilot}
+cursor|cursor-agent|${CURSOR_CONFIG_DIR:-$HOME/.cursor}
+grok|grok|${GROK_HOME:-$HOME/.grok}
+EOF
+'''
 
 [tasks."bootstrap:linux-shims"]
 description = "Debian binary-name shims, lsd fallback, zsh login shell"

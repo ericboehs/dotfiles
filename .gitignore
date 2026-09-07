@@ -17,6 +17,9 @@
 !.config/nvim/
 !.config/mise/
 !.config/ghostty/
+!.config/herdr/
+.config/herdr/*
+!.config/herdr/config.toml
 !.config/lsd/
 !.config/gitleaks/
 !.config/btop/

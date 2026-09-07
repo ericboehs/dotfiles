@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Active workspace label for Herdr's tab_bar_right.
+
+set -euo pipefail
+
+herdr_bin=${HERDR_BIN_PATH:-herdr}
+workspace_id=${HERDR_ACTIVE_WORKSPACE_ID:-}
+
+if [[ -n $workspace_id ]]; then
+  "$herdr_bin" workspace get "$workspace_id" | jq -r '.result.workspace.label // empty'
+else
+  "$herdr_bin" workspace list | jq -r '.result.workspaces[] | select(.focused) | .label // empty'
+fi
