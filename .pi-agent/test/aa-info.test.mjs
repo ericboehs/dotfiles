@@ -583,6 +583,156 @@ test("no peer line when nothing lands in range", async () => {
   });
 });
 
+test("a miss against a stale (>12h) cache buys one early refresh", async () => {
+  await withAgentDir(async (dir) => {
+    const cache = path.join(dir, "cache", "aa-models.json");
+    mkdirSync(path.dirname(cache), { recursive: true });
+    // AA knows the 1.2 point release but not 1.3 — the exact shape of a
+    // mid-week launch the weekly TTL would otherwise hide for days.
+    const spark = [
+      {
+        id: "aaa",
+        name: "Muse Spark 1.2",
+        slug: "muse-spark-1-2",
+        model_creator: { name: "Meta", slug: "meta" },
+        evaluations: { artificial_analysis_intelligence_index: 46.8 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 120,
+      },
+    ];
+    const museFetch = async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? { status: 200, data: [] }
+          : { status: 200, data: spark },
+    });
+
+    // 13 hours old: the miss is worth one forced re-fetch. The fresh snapshot
+    // still lacks 1.3, so the pending line is all the briefing can say.
+    writeFileSync(
+      cache,
+      JSON.stringify({
+        fetchedAt: Date.now() - 13 * 60 * 60 * 1000,
+        data: spark,
+        costs: {},
+      }),
+    );
+    const refetcher = withFetch(museFetch);
+    try {
+      const ui = mount();
+      await ui.select(model("muse-spark-1.3", "opencode"));
+      assert.equal(refetcher.count, FETCHES_PER_REFRESH, "refreshed for the miss");
+      assert.equal(ui.notifies[0].message, "muse-spark-1.3 — scores not yet on AA (AA)");
+    } finally {
+      refetcher.restore();
+    }
+
+    // 1 hour old: the miss rides the weekly TTL, no network at all.
+    writeFileSync(
+      cache,
+      JSON.stringify({
+        fetchedAt: Date.now() - 1 * 60 * 60 * 1000,
+        data: spark,
+        costs: {},
+      }),
+    );
+    const sleeper = withFetch(museFetch);
+    try {
+      const ui = mount();
+      await ui.select(model("muse-spark-1.3", "opencode"));
+      assert.equal(sleeper.count, 0, "young cache is not refreshed");
+      assert.equal(ui.notifies[0].message, "muse-spark-1.3 — scores not yet on AA (AA)");
+    } finally {
+      sleeper.restore();
+    }
+  });
+});
+
+test("when nothing is within ±1.0, the nearest peers take the line as Near", async () => {
+  await withAgentDir(async () => {
+    const rows = [
+      {
+        // The bare slug AA lists for the family's max row — the one lookup
+        // hits before forThinkingLevel steps down to the session's effort.
+        id: "cur-max", name: "Muse Spark 1.3 (max)", slug: "muse-spark-1-3",
+        model_creator: { name: "Meta", slug: "meta" },
+        evaluations: { artificial_analysis_intelligence_index: 53 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 177,
+      },
+      {
+        id: "cur", name: "Muse Spark 1.3 (xhigh)", slug: "muse-spark-1-3-xhigh",
+        model_creator: { name: "Meta", slug: "meta" },
+        evaluations: { artificial_analysis_intelligence_index: 51.6 },
+        pricing: { price_1m_blended_3_to_1: 2 },
+        median_output_tokens_per_second: 108,
+      },
+      {
+        // 1.8 away — outside par, first of the near misses.
+        id: "a", name: "Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)", slug: "claude-opus-5-xhigh",
+        model_creator: { name: "Anthropic", slug: "anthropic" },
+        evaluations: { artificial_analysis_intelligence_index: 53.4 },
+        pricing: { price_1m_blended_3_to_1: 10 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // Also 1.8 away; the lab order tiebreak puts it second.
+        id: "b", name: "GPT-5.6 Sol (Xhigh Effort)", slug: "gpt-5-6-sol-xhigh",
+        model_creator: { name: "OpenAI", slug: "openai" },
+        evaluations: { artificial_analysis_intelligence_index: 49.8 },
+        pricing: { price_1m_blended_3_to_1: 4.5 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // 2.3 away — third near miss.
+        id: "c", name: "Grok 4.6 (Xhigh Effort)", slug: "grok-4-6-xhigh",
+        model_creator: { name: "SpaceXAI", slug: "xai" },
+        evaluations: { artificial_analysis_intelligence_index: 49.3 },
+        pricing: { price_1m_blended_3_to_1: 1 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // 1.2 away and the nearest of all, but unlisted labs never peer.
+        id: "d", name: "Mistral Large 3", slug: "mistral-large-3",
+        model_creator: { name: "Mistral AI", slug: "mistralai" },
+        evaluations: { artificial_analysis_intelligence_index: 52.8 },
+        pricing: { price_1m_blended_3_to_1: 1 },
+        median_output_tokens_per_second: 100,
+      },
+      {
+        // 2.7 away — beyond the near window entirely.
+        id: "e", name: "GPT-6 Astra (Xhigh Effort)", slug: "gpt-6-astra-xhigh",
+        model_creator: { name: "OpenAI", slug: "openai" },
+        evaluations: { artificial_analysis_intelligence_index: 54.3 },
+        pricing: { price_1m_blended_3_to_1: 4.5 },
+        median_output_tokens_per_second: 100,
+      },
+    ];
+    const fetcher = withFetch(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? { status: 200, data: [] }
+          : { status: 200, data: rows },
+    }));
+    try {
+      const ui = mount();
+      await ui.select(model("muse-spark-1.3", "opencode"));
+      const [first, second] = ui.notifies[0].message.split("\n");
+      assert.match(first, /^Muse Spark 1\.3 — int 51\.6 /);
+      assert.equal(
+        second,
+        "Near Claude Opus 5 (53.4), GPT-5.6 Sol (49.8), and Grok 4.6 (49.3)",
+      );
+    } finally {
+      fetcher.restore();
+    }
+  });
+});
+
 test("a point release AA hasn't scored yet says so instead of a sibling's numbers", async () => {
   await withAgentDir(async () => {
     const spark = [

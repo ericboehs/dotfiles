@@ -21,8 +21,11 @@
  *
  * A second line names up to three peers within ±1.0 int points, limited to
  * the big labs (Anthropic, OpenAI, xAI, Google, Meta, Z.ai, DeepSeek,
- * MoonshotAI) and ordered by closeness, then that lab order. One notify carries both lines so
- * the pair always paints atomically after pi's switch status.
+ * MoonshotAI) and ordered by closeness, then that lab order. When nothing is
+ * that close, the nearest three within 2.5 take the line under "Near"
+ * instead — silence would read as the feature breaking, while "Near Opus 5
+ * (53.4)" tells the truth about a 1.8-point gap. One notify carries both
+ * lines so the pair always paints atomically after pi's switch status.
  *
  * Because pi's status line is overwritten in place rather than appended, this
  * briefing takes the place of "Switched to X" instead of adding a line — the
@@ -49,7 +52,11 @@
  * the model switch block on the network, and a failure is silent (the next
  * switch retries). A model the API does not know at all — local oMLX weights —
  * shows nothing. A model whose family AA knows but whose point release has no
- * scores yet says "scores not yet on AA" instead.
+ * scores yet says "scores not yet on AA" instead. Either kind of miss against
+ * a snapshot older than 12 hours buys one forced re-fetch, so a point release
+ * AA scores mid-week appears on the next switch instead of riding out the
+ * weekly TTL; a persistent unknown just re-fetches at that same pace, a
+ * couple of calls a day.
  *
  * The key resolves from $ARTIFICIAL_ANALYSIS_API_KEY, then `fnox get` (macOS
  * Keychain), the same chain web-providers/config.ts uses. It is held only in
@@ -69,6 +76,9 @@ const ENDPOINT = "https://artificialanalysis.ai/api/v2/data/llms/models";
 const COST_ENDPOINT = "https://artificialanalysis.ai/api/v2/language/models/free";
 const KEY_ENV = "ARTIFICIAL_ANALYSIS_API_KEY";
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** A miss against a cache this old buys an early refresh: AA scores models
+ *  mid-week, and the weekly TTL would otherwise hide them for days. */
+const REFRESH_ON_MISS_MS = 12 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
 
 /** The subset of the free-tier LLM response this extension renders. */
@@ -276,14 +286,21 @@ function oxford(items: string[]): string {
     : `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
+/** Peer distance bands: "On par with" inside 1.0, "Near" inside 2.5. */
+const PEERS_WINDOW = 1.0;
+const PEERS_FALLBACK_WINDOW = 2.5;
+
 /**
  * Up to three peers within ±1.0 int points from the big labs, e.g.
- * "On par with Grok 4.6 (61), Gemini 3.8 Flash (60.9), and Opus 5 (61)".
+ * "On par with Grok 4.6 (61), Gemini 3.8 Flash (60.9), and Opus 5 (61)". When
+ * nothing is that close, the nearest three within 2.5 take the line as
+ * "Near ..." — an absent line reads as missing data, while an honest
+ * 1.8-point gap is the actual story.
  *
  * One entry per model family, scored at the session's thinking level when the
  * family has an effort ladder. Sorted by closeness, then lab order. Returns
  * undefined when the current model has no int score (including the pending
- * "scores not yet" case) or when nothing lands in range.
+ * "scores not yet" case) or when nothing lands within 2.5.
  */
 function peersLine(aa: AaCache, entry: AaModel, thinking: string | undefined): string | undefined {
   const current = entry.evaluations?.artificial_analysis_intelligence_index;
@@ -313,20 +330,28 @@ function peersLine(aa: AaCache, entry: AaModel, thinking: string | undefined): s
     }
     const score = rep.evaluations?.artificial_analysis_intelligence_index;
     if (typeof score !== "number") continue;
-    const diff = Math.abs(score - current);
-    if (diff > 1.0 + 1e-9) continue;
     const label = fmt(score);
     if (label === undefined) continue;
     peers.push({
       text: `${cleanName(rep.name ?? rep.slug ?? rep.id ?? "")} (${label})`,
-      diff,
+      diff: Math.abs(score - current),
       rank: creatorRank(rep),
       released: rep.release_date ?? "",
     });
   }
   if (peers.length === 0) return undefined;
   peers.sort((a, b) => a.diff - b.diff || a.rank - b.rank || b.released.localeCompare(a.released));
-  return `On par with ${oxford(peers.slice(0, 3).map((p) => p.text))}`;
+  // Par first; when nothing is that close, near misses keep the line honest
+  // instead of dropping it.
+  const tight = peers.filter((p) => p.diff <= PEERS_WINDOW + 1e-9);
+  const pool =
+    tight.length > 0
+      ? tight
+      : peers.filter((p) => p.diff <= PEERS_FALLBACK_WINDOW + 1e-9);
+  if (pool.length === 0) return undefined;
+  return `${tight.length > 0 ? "On par with" : "Near"} ${oxford(
+    pool.slice(0, 3).map((p) => p.text),
+  )}`;
 }
 
 interface TaskCost {
@@ -516,9 +541,9 @@ async function fetchAll(): Promise<AaCache | undefined> {
 
 let inflightFetch: Promise<AaCache | undefined> | undefined;
 
-async function loadData(): Promise<AaCache | undefined> {
+async function loadData(force = false): Promise<AaCache | undefined> {
   const cached = await readCache();
-  if (cached && Date.now() - cached.fetchedAt < TTL_MS) return cached;
+  if (cached && !force && Date.now() - cached.fetchedAt < TTL_MS) return cached;
   if (!inflightFetch) {
     inflightFetch = fetchAll().finally(() => {
       inflightFetch = undefined;
@@ -548,8 +573,19 @@ export default function (pi: ExtensionAPI): void {
    */
   const brief = async (ctx: ExtensionContext, model: PiModel | undefined): Promise<void> => {
     if (!model?.id || !ctx.hasUI) return;
-    const aa = await loadData();
-    const matched = aa ? lookup(aa, model) : undefined;
+    let aa = await loadData();
+    let matched = aa ? lookup(aa, model) : undefined;
+    // A miss against a cache older than the refresh floor may just be stale
+    // data — AA scores point releases mid-week. One forced re-fetch, then the
+    // lookup runs against the fresh snapshot. Concurrent switches share the
+    // in-flight fetch, so a cycling pass buys at most one.
+    if (aa && !matched && Date.now() - aa.fetchedAt >= REFRESH_ON_MISS_MS) {
+      const fresh = await loadData(true);
+      if (fresh) {
+        aa = fresh;
+        matched = lookup(aa, model);
+      }
+    }
     const entry = aa && matched ? forThinkingLevel(aa, matched, ctx.thinkingLevel) : undefined;
     let line = aa && entry ? briefing(entry, costPerTask(aa, entry, ctx.thinkingLevel)) : undefined;
     if (!line && aa && !matched && hasPendingRelease(aa, model)) {
