@@ -7,7 +7,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isUserGivenName, recentContext, sanitizeName, titleFromContent } from "../extensions/auto-session-name.ts";
+import {
+  hasHistory,
+  isUserGivenName,
+  recentContext,
+  sanitizeName,
+  titleFromContent,
+} from "../extensions/auto-session-name.ts";
 
 test("empty and derived peer ids are not user-given", () => {
   assert.equal(isUserGivenName(undefined), false);
@@ -56,4 +62,19 @@ test("recentContext prefers later turns", () => {
   const ctx = recentContext(branch);
   assert.match(ctx, /price of glm 5.3/);
   assert.match(ctx, /hi/);
+});
+
+test("hasHistory only counts a real assistant reply", () => {
+  assert.equal(hasHistory([]), false);
+  assert.equal(
+    hasHistory([{ type: "message", message: { role: "user", content: "hi" } }]),
+    false,
+  );
+  assert.equal(
+    hasHistory([
+      { type: "message", message: { role: "user", content: "hi" } },
+      { type: "message", message: { role: "assistant", content: "hello" } },
+    ]),
+    true,
+  );
 });

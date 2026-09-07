@@ -1,7 +1,9 @@
 /**
  * Auto-name a session after the first turn if the user did not already.
  *
- * `--name` / `/name foo` win. `/auto-name` regenerates from recent context.
+ * `--name` / `/name foo` win, and a resumed session is never re-titled
+ * automatically — only a fresh session with no history gets an auto title.
+ * `/auto-name` regenerates on demand.
  * Names that look like pi-agent-link's derived peer
  * ids (`pi-dotfiles`, `pi-dotfiles-2`) are treated as unnamed so they still
  * get a real title. One cheap local call (ollama/glm-5.3-flash); override with
@@ -81,14 +83,22 @@ export function recentContext(branch: unknown[], maxChars = 2000): string {
   return parts.join("\n\n").slice(-maxChars);
 }
 
+/** True once the transcript holds a real exchange (i.e. this is a resume). */
+export function hasHistory(branch: unknown[]): boolean {
+  return (branch || []).some((e) => {
+    const entry = e as { type?: string; message?: { role?: string } };
+    return entry?.type === "message" && entry.message?.role === "assistant";
+  });
+}
+
 function pickModel(ctx: ExtensionContext): unknown {
   const reg = ctx.modelRegistry as {
     find?: (provider: string, id: string) => unknown;
     getAvailable?: () => { id?: string }[];
   };
-  if (typeof reg?.find === "function" && NAME_MODEL.includes("/")) {
-    const [provider, id] = NAME_MODEL.split("/", 2);
-    const found = reg.find(provider, id);
+  const slash = NAME_MODEL.indexOf("/");
+  if (typeof reg?.find === "function" && slash > 0) {
+    const found = reg.find(NAME_MODEL.slice(0, slash), NAME_MODEL.slice(slash + 1));
     if (found) return found;
   }
   const avail = typeof reg?.getAvailable === "function" ? reg.getAvailable() : [];
@@ -103,7 +113,7 @@ async function generateTitle(ctx: ExtensionContext, source: string): Promise<str
   if (!picked || !source.trim()) return "";
   const model = { ...picked, reasoning: false };
   const res = await (
-    ctx.modelRegistry as {
+    ctx.modelRegistry as unknown as {
       complete: (
         model: unknown,
         req: { systemPrompt?: string; messages: { role: string; content: string }[] },
@@ -141,8 +151,12 @@ export default function (pi: ExtensionAPI) {
     return title;
   }
 
-  pi.on("session_start", () => {
-    attempted = isUserGivenName(pi.getSessionName());
+  pi.on("session_start", (_event, ctx) => {
+    // A resumed session keeps whatever title it already had; only /auto-name
+    // re-titles it. Fresh sessions (new, /new) still get one automatically.
+    attempted =
+      isUserGivenName(pi.getSessionName()) ||
+      hasHistory(ctx.sessionManager.getBranch() || []);
   });
 
   pi.on("session_info_changed", (event) => {
