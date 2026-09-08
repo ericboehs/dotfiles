@@ -76,7 +76,7 @@ const AUTO_BUNDLE_LOCK = "pi-bundle.lock";
 const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
-const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window"] as const;
+const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window", "opencode-go-window"] as const;
 
 /**
  * The boot timer sits in the footer until the first message goes out, and every
@@ -104,7 +104,7 @@ const BOOT_LOG_KEEP = 1_000;
 const BOOT_LOG_MAX_BYTES = 200_000;
 
 /** Providers whose cost is meaningless (subscription-billed or local). */
-const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx", "ollama", "cerebras"]);
+const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx", "ollama", "cerebras", "opencode-go"]);
 
 /** Free-tier model ids on otherwise paid providers (exact ctx.model.id match). */
 const HIDE_COST_MODELS = new Set(["muse-spark-1.3-contributor-free"]);

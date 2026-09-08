@@ -1,6 +1,6 @@
 /**
  * All usage/quota chips in one extension: codex, copilot, grok,
- * claude-bridge, cerebras (status-line windows) and baseten, openrouter,
+ * claude-bridge, cerebras, opencode-go (status-line windows) and baseten, openrouter,
  * ollama (cost-slot chips).
  *
  * Each provider is a Driver: a provider gate, a fetch, and a display mode.
@@ -1444,6 +1444,203 @@ async function fetchOllamaWithCookie(
   };
 }
 
+// ---------- opencode-go ----------
+
+/**
+ * OpenCode Go publishes no usage API (opencode#31084) — the only source is
+ * the server-rendered workspace /go page, gated by the browser's `auth`
+ * session cookie (read from Safari's cookie store, like the ollama driver).
+ *
+ * The page embeds the three subscription windows as
+ *   $R[N]={status:"ok",resetInSec:…,usagePercent:…,usage:…,limit:…}
+ * in microcents (100,000,000 per dollar): $12 rolling-5h, $30 weekly,
+ * $60 monthly. Windows are classified by limit, not page order, so a
+ * future limit change degrades to ordered fallback instead of mislabeled
+ * chips. Usage renders through the shared codex window formatter, so pace
+ * coloring and the ↻-at-limit form apply unchanged.
+ */
+const COOKIE_ENV_OPENCODE_GO = "OPENCODE_SESSION_COOKIE";
+const WORKSPACE_ENV_OPENCODE_GO = "OPENCODE_WORKSPACE_ID";
+const WORKSPACE_CACHE_FILE = "opencode-workspace-id";
+const MICROCENTS_PER_DOLLAR = 100_000_000;
+const OPENCODE_GO_WINDOWS = [
+  { limit: 12 * MICROCENTS_PER_DOLLAR, seconds: 5 * 3_600, label: "5h rolling" },
+  { limit: 30 * MICROCENTS_PER_DOLLAR, seconds: 7 * 86_400, label: "Weekly" },
+  { limit: 60 * MICROCENTS_PER_DOLLAR, seconds: 30 * 86_400, label: "Monthly" },
+] as const;
+const OPENCODE_GO_USAGE_RE =
+  /\$R\[\d+\]=\{status:"ok",resetInSec:(\d+),usagePercent:([\d.]+),usage:(\d+),limit:(\d+)\}/g;
+
+interface OpencodeGoWindow {
+  resetInSec: number;
+  usagePercent: number;
+  usage: number;
+  limit: number;
+}
+
+/** The `auth` session cookie for opencode.ai from Safari's cookie store. */
+async function safariOpencodeAuthCookie(): Promise<string | undefined> {
+  let data: Buffer;
+  try {
+    data = await readFile(join(homedir(), SAFARI_COOKIES_FILE));
+  } catch {
+    return undefined; // no Full Disk Access, no Safari, or no cookie yet
+  }
+
+  const needle = "auth\0";
+  let pos = data.indexOf(needle);
+  while (pos !== -1) {
+    const pathEnd = data.indexOf(0, pos + needle.length);
+    const valueEnd = pathEnd === -1 ? -1 : data.indexOf(0, pathEnd + 1);
+    if (valueEnd !== -1) {
+      const value = data.toString("latin1", pathEnd + 1, valueEnd);
+      const domainStart = data.lastIndexOf(0, pos - 2) + 1;
+      const domain = data.toString("latin1", domainStart, pos - 1);
+      // Opaque session token: long, with no cookie metacharacters.
+      if (domain.includes("opencode.ai") && /^[^\s;,]{100,2000}$/.test(value)) {
+        return value;
+      }
+    }
+    pos = data.indexOf(needle, pos + needle.length);
+  }
+  return undefined;
+}
+
+/** Cookie candidates, freshest first: an explicit env override, the live
+ *  Safari store (slides forward on every opencode.ai visit), then the
+ *  fnox snapshot. */
+async function opencodeGoSessionCookies(): Promise<Array<{ source: string; value: string }>> {
+  const candidates: Array<{ source: string; value: string }> = [];
+  const fromEnv = process.env[COOKIE_ENV_OPENCODE_GO]?.trim();
+  if (fromEnv) candidates.push({ source: `$${COOKIE_ENV_OPENCODE_GO}`, value: fromEnv });
+  const fromSafari = await safariOpencodeAuthCookie();
+  if (fromSafari) candidates.push({ source: "safari", value: fromSafari });
+  const fromFnox = await fnoxGet(COOKIE_ENV_OPENCODE_GO);
+  if (fromFnox) candidates.push({ source: "fnox", value: fromFnox });
+  // Dedupe so one stale round trip is skipped when the stores agree.
+  return candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex((other) => other.value === candidate.value) === index,
+  );
+}
+
+/** The wrk_… id from the workspace URL: env first, then the cache file the
+ *  driver writes on its first success, so the env var is one-time setup. */
+async function opencodeGoWorkspaceId(): Promise<string> {
+  const fromEnv = process.env[WORKSPACE_ENV_OPENCODE_GO]?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const cached = (await readFile(join(agentDirectory(), WORKSPACE_CACHE_FILE), "utf8")).trim();
+    if (/^wrk_[A-Za-z0-9]+$/.test(cached)) return cached;
+  } catch {
+    // No cached id yet; the error below explains the one-time setup.
+  }
+  throw new Error(
+    `no OpenCode workspace id (set $${WORKSPACE_ENV_OPENCODE_GO} to the wrk_… id in your opencode.ai workspace URL)`,
+  );
+}
+
+function parseOpencodeGoUsage(html: string): OpencodeGoWindow[] {
+  const windows: OpencodeGoWindow[] = [];
+  for (const match of html.matchAll(OPENCODE_GO_USAGE_RE)) {
+    windows.push({
+      resetInSec: Number.parseInt(match[1] as string, 10),
+      usagePercent: Number.parseFloat(match[2] as string),
+      usage: Number.parseInt(match[3] as string, 10),
+      limit: Number.parseInt(match[4] as string, 10),
+    });
+  }
+  const byLimit = new Map(windows.map((window) => [window.limit, window]));
+  if (OPENCODE_GO_WINDOWS.every(({ limit }) => byLimit.has(limit))) {
+    return OPENCODE_GO_WINDOWS.map(({ limit }) => byLimit.get(limit) as OpencodeGoWindow);
+  }
+  return windows;
+}
+
+function opencodeGoDollars(microcents: number): string {
+  return formatDollars(microcents / MICROCENTS_PER_DOLLAR);
+}
+
+async function fetchOpencodeGo(_ctx: ExtensionContext): Promise<UsageDisplay> {
+  const workspaceId = await opencodeGoWorkspaceId();
+  const candidates = await opencodeGoSessionCookies();
+  if (candidates.length === 0) {
+    throw new Error(
+      `no OpenCode session cookie ($${COOKIE_ENV_OPENCODE_GO} env, fnox, or readable Safari store — log in to opencode.ai in Safari)`,
+    );
+  }
+
+  let lastError = new Error("no OpenCode session cookie resolved");
+  for (const { source, value: cookie } of candidates) {
+    try {
+      const { text, finalUrl } = await fetchText(
+        `https://opencode.ai/workspace/${workspaceId}/go`,
+        {
+          accept: "text/html",
+          cookie: `auth=${cookie}`,
+          "user-agent": "pi-opencode-go-window/1.0",
+        },
+      );
+      if (finalUrl.includes("/auth/")) {
+        throw new Error(`OpenCode session cookie from ${source} is invalid or expired`);
+      }
+      const windows = parseOpencodeGoUsage(text);
+      if (windows.length === 0) {
+        throw new Error("workspace page had no usage payload (signed out or page changed)");
+      }
+      // Remember the id so the env var is one-time setup.
+      await writeFile(join(agentDirectory(), WORKSPACE_CACHE_FILE), `${workspaceId}\n`).catch(() => {});
+
+      const nowMs = Date.now();
+      const groups = windows.map((window, index) => {
+        const totalSeconds =
+          OPENCODE_GO_WINDOWS[index]?.seconds ?? 30 * 86_400;
+        const label = OPENCODE_GO_WINDOWS[index]?.label ?? `Window ${index + 1}`;
+        return {
+          label,
+          window,
+          formatted: formatCodexWindow(
+            {
+              used_percent: window.usagePercent,
+              reset_at: (nowMs + window.resetInSec * 1000) / 1000,
+              limit_window_seconds: totalSeconds,
+            },
+            nowMs,
+          ),
+        };
+      });
+      const value = groups
+        .map((group) => group.formatted)
+        .filter((formatted): formatted is string => formatted !== undefined)
+        .join(" ");
+      if (!value) throw new Error("no OpenCode Go usage window was returned");
+
+      const detail = groups.map(
+        (group) =>
+          `${group.label}: ${opencodeGoDollars(group.window.usage)} of ` +
+          `${opencodeGoDollars(group.window.limit)} ` +
+          `(${formatNumber(group.window.usagePercent)}%) — ` +
+          `resets ${formatResetClock(nowMs + group.window.resetInSec * 1000, nowMs)}`,
+      );
+      return { value, commandText: detail.join("\n") };
+    } catch (err) {
+      // Only a rejected/expired cookie justifies trying the next source;
+      // a bad workspace id fails identically for every source.
+      if (err instanceof Error && err.message.includes("invalid or expired")) {
+        lastError = err;
+        continue;
+      }
+      if (err instanceof Error && err.message.includes("(404)")) {
+        throw new Error(
+          `OpenCode workspace ${workspaceId} not found — check $${WORKSPACE_ENV_OPENCODE_GO}`,
+        );
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
 // ---------- baseten ----------
 
 const USAGE_URL_BASETEN = "https://api.baseten.co/v1/billing/usage_summary";
@@ -1697,6 +1894,20 @@ const DRIVERS: Driver[] = [
     },
     isActive: (ctx) => isProvider(ctx, "ollama"),
     fetch: fetchOllama,
+  },
+  {
+    id: "opencode-go-window",
+    provider: "opencode-go",
+    statusKey: "opencode-go-window",
+    // An HTML scrape: a full page render per poll, so stay polite.
+    cacheTtlMs: SCRAPE_CACHE_TTL_MS,
+    command: {
+      name: "opencode-go-window",
+      description: "Refresh the compact OpenCode Go subscription windows",
+      scopeNote: "OpenCode Go usage is only shown for opencode-go models",
+    },
+    isActive: (ctx) => isProvider(ctx, "opencode-go"),
+    fetch: fetchOpencodeGo,
   },
   {
     id: "baseten-usage",
