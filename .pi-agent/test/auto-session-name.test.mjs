@@ -49,7 +49,7 @@ test("titleFromContent drops thinking and instruction echo", () => {
   );
   assert.equal(
     titleFromContent([{ type: "text", text: "one two three four five six seven eight" }]),
-    "one-two-three-four-five-six",
+    "one-two-three-four",
   );
 });
 

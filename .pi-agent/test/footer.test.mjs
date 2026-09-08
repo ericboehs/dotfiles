@@ -714,10 +714,10 @@ test("update notice shows both versions in a right-aligned widget above the prom
   );
 });
 
-test("clicking an explicit session name prefills its /name command", async () => {
+test("clicking an explicit session name prefills /auto-name", async () => {
   const ui = await mount({ sessionName: "footer-work" });
   assert.deepEqual(ui.click(79, 0, 80), { handled: true });
-  assert.equal(ui.editor(), "/name footer-work");
+  assert.equal(ui.editor(), "/auto-name");
 });
 
 test("clicking a name never replaces editor text", async () => {
@@ -806,14 +806,14 @@ function withPeerRegistry(name) {
   return () => { process.env.HOME = previous; };
 }
 
-test("clicking a derived peer name prefills a blank /name command", async () => {
+test("clicking a derived peer name prefills /auto-name", async () => {
   const restore = withPeerRegistry("pi-dotfiles-5");
   try {
     const ui = await mount({ sessionName: undefined });
     await ui.settled(80);
     assert.match(ui.plain(80)[0], / pi-dotfiles-5$/);
     assert.deepEqual(ui.click(79, 0, 80), { handled: true });
-    assert.equal(ui.editor(), "/name ");
+    assert.equal(ui.editor(), "/auto-name");
   } finally {
     restore();
   }
