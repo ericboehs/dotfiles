@@ -11,7 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -342,6 +342,72 @@ test("fresh cache is used without a fetch; stale cache is refetched", async () =
       assert.equal(refetcher.count, FETCHES_PER_REFRESH);
     } finally {
       refetcher.restore();
+    }
+  });
+});
+
+test("the briefing carries the cost endpoint's declared index version", async () => {
+  await withAgentDir(async (dir) => {
+    const cacheFile = path.join(dir, "cache", "aa-models.json");
+    const versioned = withFetch(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(url).includes("/language/models/free")
+          ? { status: 200, intelligence_index_version: 4.3, data: COSTS }
+          : { status: 200, data: SAMPLE },
+    }));
+    try {
+      const ui = mount();
+      await ui.start();
+      assert.deepEqual(ui.notifies, [
+        { message: OPUS_LINE.replace(/\(AA\)$/, "(AA v4.3)"), level: "info" },
+      ]);
+      // The version persists in the cache ...
+      const cached = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.equal(cached.indexVersion, 4.3);
+    } finally {
+      versioned.restore();
+    }
+
+    // ... so later switches brief from cache, versioned, with no network.
+    const offline = withFetch(async () => {
+      throw new Error("offline");
+    });
+    try {
+      const ui = mount();
+      await ui.start();
+      assert.deepEqual(ui.notifies, [
+        { message: OPUS_LINE.replace(/\(AA\)$/, "(AA v4.3)"), level: "info" },
+      ]);
+      assert.equal(offline.count, 0);
+    } finally {
+      offline.restore();
+    }
+  });
+});
+
+test("a cache written before index versions existed still briefs plain (AA)", async () => {
+  await withAgentDir(async (dir) => {
+    const cache = path.join(dir, "cache", "aa-models.json");
+    mkdirSync(path.dirname(cache), { recursive: true });
+    // Versionless but otherwise fresh: trusted, no refetch, plain tag.
+    writeFileSync(
+      cache,
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        data: SAMPLE,
+        costs: { "claude-opus-5-xhigh": 1.8012 },
+      }),
+    );
+    const fetcher = withFetch(okFetch());
+    try {
+      const ui = mount();
+      await ui.start();
+      assert.deepEqual(ui.notifies, [{ message: OPUS_LINE, level: "info" }]);
+      assert.equal(fetcher.count, 0);
+    } finally {
+      fetcher.restore();
     }
   });
 });

@@ -48,6 +48,17 @@
  * seconds were noise dressed up as data. Everything shown here is the API's
  * 1k-prompt, single-query snapshot — the free tier ignores prompt_length.
  *
+ * Intelligence scores skew the same way in miniature: the site chart (v4.3)
+ * shows GPT-6 Astra (xhigh) at 53 while the API row for the same slug reports
+ * 54.3, and minor index bumps re-mix the eval set (v4.3 runs Terminal-Bench
+ * v4.0 where the API row still carries terminalbench_v2_1). No endpoint takes
+ * a version parameter — the API serves current scores only — so a past index
+ * cannot be pinned; the cost endpoint at least declares its index as top-level
+ * `intelligence_index_version` (major.minor as a number, e.g. 4.3), while the
+ * quality endpoint carries no version field at all. The cached cost-endpoint
+ * version rides in the tag, `(AA v4.3)` when known and plain `(AA)` otherwise,
+ * so a gap against the site reads as a version gap rather than a bug.
+ *
  * The fetch is fire-and-forget: handlers never await it, so neither startup nor
  * the model switch block on the network, and a failure is silent (the next
  * switch retries). A model the API does not know at all — local oMLX weights —
@@ -61,7 +72,8 @@
  * The key resolves from $ARTIFICIAL_ANALYSIS_API_KEY, then `fnox get` (macOS
  * Keychain), the same chain web-providers/config.ts uses. It is held only in
  * memory and never logged or persisted. Data by artificialanalysis.ai — the
- * trailing (AA) is the attribution their free API terms ask for.
+ * trailing (AA) is the attribution their free API terms ask for; a version
+ * suffix (AA v4.3) names the cached cost-endpoint index on top of that.
  */
 
 import { spawn } from "node:child_process";
@@ -72,7 +84,12 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ENDPOINT = "https://artificialanalysis.ai/api/v2/data/llms/models";
-/** Sparser (200 models, arbitrary effort variants) but carries cost per task. */
+/**
+ * Sparser (200 models, arbitrary effort variants) but carries cost per task —
+ * and the only declared index version: its top-level
+ * `intelligence_index_version` (major.minor, e.g. 4.3). The quality endpoint
+ * above carries no version field.
+ */
 const COST_ENDPOINT = "https://artificialanalysis.ai/api/v2/language/models/free";
 const KEY_ENV = "ARTIFICIAL_ANALYSIS_API_KEY";
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -102,6 +119,12 @@ interface AaCache {
   data: AaModel[];
   /** AA slug → USD per Intelligence Index task. Absent marks a pre-cost cache. */
   costs?: Record<string, number>;
+  /**
+   * intelligence_index_version from the cost endpoint (major.minor, e.g. 4.3).
+   * The quality endpoint declares no version. Absent marks a cache written
+   * before versions were kept, which still briefs with a plain (AA) tag.
+   */
+  indexVersion?: number;
 }
 
 /** Minimal shape of the pi model objects carried by events and ctx. */
@@ -416,7 +439,16 @@ function rate(value: number | undefined): string | undefined {
   return `$${parseFloat(value.toFixed(value < 0.01 ? 3 : 2))}`;
 }
 
-function briefing(entry: AaModel, cost: TaskCost | undefined): string | undefined {
+/** Attribution tag, versioned when the cache knows the index: (AA) or (AA v4.3). */
+function aaTag(indexVersion: number | undefined): string {
+  return indexVersion === undefined ? "(AA)" : `(AA v${indexVersion})`;
+}
+
+function briefing(
+  entry: AaModel,
+  cost: TaskCost | undefined,
+  indexVersion?: number,
+): string | undefined {
   const evals = entry.evaluations ?? {};
   const taskCost = money(cost?.usd);
   const parts = [
@@ -438,7 +470,7 @@ function briefing(entry: AaModel, cost: TaskCost | undefined): string | undefine
   ].filter((part): part is string => part !== undefined);
   if (parts.length === 0) return undefined;
   const name = cleanName(entry.name ?? entry.slug ?? entry.id ?? "");
-  return `${name} — ${parts.join(" · ")} (AA)`;
+  return `${name} — ${parts.join(" · ")} ${aaTag(indexVersion)}`;
 }
 
 let resolvedKey: string | undefined;
@@ -506,14 +538,25 @@ function rowsOf(payload: unknown): unknown[] {
 }
 
 /**
- * Cost per Intelligence Index task, keyed by slug. Best-effort: this endpoint
- * failing must not cost the briefing its quality numbers, so it resolves to an
- * empty map rather than rejecting.
+ * Cost per Intelligence Index task, keyed by slug, plus the response's declared
+ * index version. Best-effort: this endpoint failing must not cost the briefing
+ * its quality numbers, so it resolves to empty costs and no version rather
+ * than rejecting.
  */
-async function fetchCosts(key: string): Promise<Record<string, number>> {
+interface CostData {
+  costs: Record<string, number>;
+  version?: number;
+}
+
+async function fetchCosts(key: string): Promise<CostData> {
   const costs: Record<string, number> = {};
+  let version: number | undefined;
   try {
-    for (const row of rowsOf(await getJson(COST_ENDPOINT, key))) {
+    const payload = await getJson(COST_ENDPOINT, key);
+    const declared = (payload as { intelligence_index_version?: unknown })
+      ?.intelligence_index_version;
+    if (typeof declared === "number" && Number.isFinite(declared)) version = declared;
+    for (const row of rowsOf(payload)) {
       const { slug, artificial_analysis_intelligence_index_cost: index } = row as {
         slug?: string;
         artificial_analysis_intelligence_index_cost?: { cost_per_task?: { total_cost?: number } };
@@ -524,17 +567,22 @@ async function fetchCosts(key: string): Promise<Record<string, number>> {
   } catch {
     /* no costs this week; the briefing simply drops its $/task segment */
   }
-  return costs;
+  return { costs, version };
 }
 
 /** Two requests cover every model; concurrent callers share the in-flight pair. */
 async function fetchAll(): Promise<AaCache | undefined> {
   const key = await apiKey();
   if (!key) return undefined;
-  const [payload, costs] = await Promise.all([getJson(ENDPOINT, key), fetchCosts(key)]);
+  const [payload, costData] = await Promise.all([getJson(ENDPOINT, key), fetchCosts(key)]);
   const data = rowsOf(payload) as AaModel[];
   if (data.length === 0) return undefined;
-  const aa: AaCache = { fetchedAt: Date.now(), data, costs };
+  const aa: AaCache = {
+    fetchedAt: Date.now(),
+    data,
+    costs: costData.costs,
+    indexVersion: costData.version,
+  };
   await writeCache(aa);
   return aa;
 }
@@ -587,9 +635,12 @@ export default function (pi: ExtensionAPI): void {
       }
     }
     const entry = aa && matched ? forThinkingLevel(aa, matched, ctx.thinkingLevel) : undefined;
-    let line = aa && entry ? briefing(entry, costPerTask(aa, entry, ctx.thinkingLevel)) : undefined;
+    let line =
+      aa && entry
+        ? briefing(entry, costPerTask(aa, entry, ctx.thinkingLevel), aa.indexVersion)
+        : undefined;
     if (!line && aa && !matched && hasPendingRelease(aa, model)) {
-      line = `${displayId(model)} — scores not yet on AA (AA)`;
+      line = `${displayId(model)} — scores not yet on AA ${aaTag(aa.indexVersion)}`;
     }
     if (!line) return;
     // Peers only accompany real numbers — never the pending line, which has no

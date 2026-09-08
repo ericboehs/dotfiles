@@ -369,7 +369,13 @@ AA's own site and API disagree about it by more than 2x for the same variant.
 
 Data comes from two free Artificial Analysis endpoints (`data/llms/models` for
 quality, speed and rate; `language/models/free` for $/task), fetched once a
-week and cached together in `~/.pi/agent/cache/aa-models.json`. The fetch is
+week and cached together in `~/.pi/agent/cache/aa-models.json`. The cost endpoint
+declares its Intelligence Index version (`intelligence_index_version`,
+major.minor); the cache keeps it and the briefing shows it as `(AA v4.3)`,
+falling back to plain `(AA)` for caches written before versions were kept. The
+quality endpoint declares no version and the API serves current scores only, so
+a past index can't be pinned — when the site and the briefing disagree, the tag
+says which index the briefing's numbers belong to. The fetch is
 fire-and-forget — neither startup nor the model switch waits on it — and a
 model the API does not know (local oMLX weights) or a failed fetch shows
 nothing. The key resolves from `$ARTIFICIAL_ANALYSIS_API_KEY`, then `fnox get`
