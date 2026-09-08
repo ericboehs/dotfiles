@@ -281,6 +281,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   "openai-codex": "o",
   openai: "o",
   opencode: "oc",
+  "opencode-go": "ocg",
   xai: "x",
   baseten: "b10",
   cerebras: "cb",
