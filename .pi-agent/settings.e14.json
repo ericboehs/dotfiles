@@ -51,7 +51,8 @@
     "xai/grok-4.6",
     "ollama/glm-5.3-flash",
     "opencode/muse-spark-1.3-contributor-free",
-    "openai-codex/gpt-6-astra"
+    "openai-codex/gpt-6-astra",
+    "openai-codex/gpt-daybreak-blue-latest"
   ],
   "retry": {
     "enabled": true,
