@@ -17,6 +17,14 @@ source "$HOME/.zsh/path.zsh"
 # — and moving it must not quietly change what those names resolve to.
 path=("$HOME/.local/share/mise/shims" "$path[@]")
 
+# GPG_TTY points gpg-agent's pinentry at this shell's terminal. Without it, any
+# passphrase prompt over ssh — key generation included — dies with
+# "agent_genkey failed: Timeout" (seen on coop). Guarded on stdin being a TTY
+# so non-interactive `ssh box cmd` runs don't export a bogus value.
+if [[ -t 0 ]]; then
+  export GPG_TTY="$(tty)"
+fi
+
 # Machine-local env, the .zshenv counterpart to .zshrc's .zshrc.local. It has to
 # be here rather than there because the things that need it are not interactive:
 # a work box's AWS profile and gov-cloud regions, a Homebrew prefix that only
