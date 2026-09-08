@@ -1,0 +1,339 @@
+#!/bin/bash
+# codex-resets — check Codex reset watch status and vote tally.
+#
+# Usage:
+#   codex-resets                            # watch status + votes + begs
+#   codex-resets --short                        # one line for tmux/prompt segments
+#   codex-resets --short --only-if-soon 12      # print nothing unless a reset is
+#                                               # expected within 12 hours
+#   codex-resets --short --min-chance 50        # print nothing unless chance >= 50%
+#   codex-resets --json                         # raw merged JSON (status + votes + begs)
+#   codex-resets --watch [n]                    # poll every n seconds (default 10)
+#
+# --short prints nothing (exit 0) when there is no active watch or a gate
+# fails, so prompts and tmux status lines stay clean when no reset is soon.
+#
+# API: https://codex-resets.com/api/docs
+#   Official:   GET /api/v1/status, GET /api/v1/resets
+#   Unofficial (from site JS): GET /api/watch/votes, GET /api/reset-requests
+
+set -euo pipefail
+export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+BASE="https://codex-resets.com"
+INTERVAL=10
+JSON=0
+WATCH=0
+SHORT=0
+ONLY_IF_SOON=""
+MIN_CHANCE=""
+
+usage() {
+  sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+    --json) JSON=1; shift ;;
+    --short) SHORT=1; shift ;;
+    --only-if-soon)
+      [[ "${2:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "error: --only-if-soon needs hours (e.g. 12)" >&2; exit 1; }
+      ONLY_IF_SOON="$2"; shift 2 ;;
+    --min-chance)
+      [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "error: --min-chance needs 0-100" >&2; exit 1; }
+      MIN_CHANCE="$2"; shift 2 ;;
+    --watch|-w)
+      WATCH=1
+      if [[ "${2:-}" =~ ^[0-9]+$ ]]; then INTERVAL="$2"; shift 2; else shift 1; fi ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+if [[ "$JSON" -eq 1 && "$SHORT" -eq 1 ]]; then
+  echo "error: --json and --short are mutually exclusive" >&2; exit 1
+fi
+
+kfmt() {
+  python3 -c '
+import sys
+n = int(sys.argv[1])
+print(f"{n/1000:.1f}k" if n >= 1000 else str(n))' "$1"
+}
+
+# One compact line for prompts/tmux, or nothing when no reset is soon.
+# Gates: no active watch -> nothing; --only-if-soon H -> nothing unless the
+# watch expires within H hours; --min-chance P -> nothing unless chance >= P.
+short_output() {
+  local chance="$1" level="$2" expires="$3" yes="$4" no="$5"
+
+  if [[ -z "$level" && -z "$chance" ]]; then return 0; fi
+
+  if [[ -n "$MIN_CHANCE" ]]; then
+    [[ -n "$chance" ]] || return 0
+    [[ "$chance" -ge "$MIN_CHANCE" ]] || return 0
+  fi
+
+  local secs="none" short_cd=""
+  if [[ -n "$expires" ]]; then
+    secs=$(python3 -c '
+import sys
+from datetime import datetime, timezone
+try:
+    exp = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    print(int((exp - datetime.now(timezone.utc)).total_seconds()))
+except Exception:
+    print("none")' "$expires" 2>/dev/null || echo "none")
+  fi
+  if [[ -n "$ONLY_IF_SOON" ]]; then
+    [[ "$secs" != "none" ]] || return 0
+    [[ "$secs" -ge 0 ]] || return 0
+    local limit_secs
+    limit_secs=$(python3 -c "print(int(float($ONLY_IF_SOON) * 3600))")
+    [[ "$secs" -le "$limit_secs" ]] || return 0
+  fi
+  # Watch window passed with no gate asked: over, stay quiet.
+  if [[ "$secs" != "none" && "$secs" -lt 0 ]]; then return 0; fi
+
+  if [[ "$secs" != "none" && "$secs" -ge 0 ]]; then
+    if [[ "$secs" -ge 86400 ]]; then
+      short_cd="$(( secs / 86400 ))d$(( secs % 86400 / 3600 ))h"
+    elif [[ "$secs" -ge 3600 ]]; then
+      short_cd="$(( secs / 3600 ))h$(( secs % 3600 / 60 ))m"
+    else
+      short_cd="$(( secs / 60 ))m"
+    fi
+  fi
+
+  local label="$level"
+  [[ -n "$chance" ]] && label="$chance%"
+
+  if [[ -n "$yes" && -n "$no" && "$(( yes + no ))" -gt 0 ]]; then
+    local tally_total=$(( yes + no )) pct
+    pct=$(python3 -c "print(f'{$yes/$tally_total*100:.1f}')")
+    if [[ -n "$short_cd" ]]; then
+      printf '%s · %s · yes %s%% (%s/%s)\n' "$label" "$short_cd" "$pct" "$(kfmt "$yes")" "$(kfmt "$no")"
+    else
+      printf '%s · yes %s%% (%s/%s)\n' "$label" "$pct" "$(kfmt "$yes")" "$(kfmt "$no")"
+    fi
+  else
+    if [[ -n "$short_cd" ]]; then
+      printf '%s · %s\n' "$label" "$short_cd"
+    else
+      printf '%s\n' "$label"
+    fi
+  fi
+}
+
+# "2026-09-08T02:00:00.000Z" -> "2h 10m left" / "expired" / ""
+time_left() {
+  python3 -c '
+import sys
+from datetime import datetime, timezone
+try:
+    exp = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    delta = (exp - datetime.now(timezone.utc)).total_seconds()
+    if delta < 0:
+        print("expired")
+    else:
+        h, r = divmod(int(delta), 3600)
+        m, _ = divmod(r, 60)
+        print(f"{h}h {m}m left")
+except Exception:
+    pass' "$1" 2>/dev/null
+}
+
+# "2026-09-08T02:00:00.000Z" -> "Sep 7, 9:09 PM CDT" in local time
+localtime_fmt() {
+  python3 -c '
+import sys
+from datetime import datetime
+try:
+    dt = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).astimezone()
+    h12 = dt.hour % 12 or 12
+    ap = "AM" if dt.hour < 12 else "PM"
+    print(f"{dt:%b} {dt.day}, {h12}:{dt.minute:02d} {ap} {dt:%Z}")
+except Exception:
+    pass' "$1" 2>/dev/null
+}
+
+# "2026-09-07T19:24:57.000Z" -> "4 hours ago" / "3 days ago" / "just now"
+rel_ago() {
+  python3 -c '
+import sys
+from datetime import datetime, timezone
+try:
+    dt = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    s = (datetime.now(timezone.utc) - dt).total_seconds()
+    if s < 0:
+        s = 0
+    if s < 60:
+        print("just now")
+    elif s < 3600:
+        m = int(s // 60)
+        print(f"{m} minute ago" if m == 1 else f"{m} minutes ago")
+    elif s < 86400:
+        h = int(s // 3600)
+        print(f"{h} hour ago" if h == 1 else f"{h} hours ago")
+    else:
+        d = int(s / 86400 + 0.5)
+        print(f"{d} day ago" if d == 1 else f"{d} days ago")
+except Exception:
+    pass' "$1" 2>/dev/null
+}
+
+# "2026-09-08T02:00:00.000Z" -> "9:00 PM" (adds "Sep 9, " when 24h+ out)
+expiry_short() {
+  python3 -c '
+import sys
+from datetime import datetime, timezone
+try:
+    exp = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).astimezone()
+    now = datetime.now(timezone.utc)
+    h12 = exp.hour % 12 or 12
+    ap = "AM" if exp.hour < 12 else "PM"
+    t = f"{h12}:{exp.minute:02d} {ap}"
+    if (exp - now).total_seconds() < 86400:
+        print(t)
+    else:
+        print(f"{exp:%b} {exp.day}, {t}")
+except Exception:
+    pass' "$1" 2>/dev/null
+}
+
+# Display names ("Tibo") are not in the JSON API; lift the name shown next to
+# the active watch tweet in the homepage HTML. Prints nothing when unavailable.
+watch_display_name() {
+  curl -sS --max-time 15 "$BASE/" 2>/dev/null | python3 -c '
+import sys, re, html
+doc = sys.stdin.read()
+url = sys.argv[1]
+for tag in re.finditer(r"<a\b([^>]*)>(.*?)</a>", doc, re.DOTALL):
+    attrs, inner = tag.groups()
+    if "watch-tweet" in attrs and f"href=\"{url}\"" in attrs:
+        m = re.search(r"class=\"[^\"]*watch-tweet-head[^\"]*\"[^>]*>(.*?)</span>", inner, re.DOTALL)
+        if m:
+            # head span nests the handle/relative-time spans; name is the
+            # direct text before the first nested tag
+            print(html.unescape(m.group(1).split("<", 1)[0]).strip())
+            break
+' "$1" 2>/dev/null
+}
+
+fetch() {
+  local status votes begs
+  if ! status=$(curl -sS --max-time 15 "$BASE/api/v1/status" 2>/dev/null); then
+    if [[ "$SHORT" -eq 1 ]]; then return 1; fi
+    echo "error: could not reach $BASE/api/v1/status" >&2
+    return 1
+  fi
+  votes=$(curl -sS --max-time 15 "$BASE/api/watch/votes" 2>/dev/null || echo '{}')
+  begs=$(curl -sS --max-time 15 "$BASE/api/reset-requests" 2>/dev/null || echo '{}')
+
+  if [[ "$JSON" -eq 1 ]]; then
+    jq -n --argjson s "$status" --argjson v "$votes" --argjson b "$begs" \
+      '{status: $s, votes: $v, reset_requests: $b}'
+    return
+  fi
+
+  local chance expires level total last avg yes no begs_count observed lr_type watch_text watch_url author_handle
+  chance=$(printf '%s' "$status" | jq -r '.data.active_watch.reset_chance_percent // empty')
+  level=$(printf '%s' "$status" | jq -r '.data.active_watch.level // empty')
+  expires=$(printf '%s' "$status" | jq -r '.data.active_watch.expires_at // empty')
+  observed=$(printf '%s' "$status" | jq -r '.data.active_watch.observed_at // empty')
+  author_handle=$(printf '%s' "$status" | jq -r '.data.active_watch.source.author // empty')
+  watch_text=$(printf '%s' "$status" | jq -r '.data.active_watch.text // empty')
+  watch_url=$(printf '%s' "$status" | jq -r '.data.active_watch.source.url // empty')
+  total=$(printf '%s' "$status" | jq -r '.data.stats.total')
+  last=$(printf '%s' "$status" | jq -r '.data.stats.last_reset_at')
+  avg=$(printf '%s' "$status" | jq -r '.data.stats.avg_interval_days')
+  lr_type=$(printf '%s' "$status" | jq -r '.data.latest_reset.reset_type // empty')
+  yes=$(printf '%s' "$votes" | jq -r '.yes // empty')
+  no=$(printf '%s' "$votes" | jq -r '.no // empty')
+  begs_count=$(printf '%s' "$begs" | jq -r '.count // empty')
+
+  if [[ "$SHORT" -eq 1 ]]; then
+    short_output "$chance" "$level" "$expires" "$yes" "$no"
+    return
+  fi
+
+  # --- full card output (mirrors codex-resets.com) ---
+  local width=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
+  [[ "$width" =~ ^[0-9]+$ ]] || width=80
+  [[ "$width" -ge 40 ]] || width=80
+  local wrap=$(( width - 4 ))
+
+  # color when writing to a terminal (honor NO_COLOR)
+  local BOLD="" DIM="" RESET="" GREEN="" RED="" YELLOW="" UL="" UL_END="" chance_color=""
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
+    BOLD=$(tput bold 2>/dev/null || true)
+    DIM=$(tput dim 2>/dev/null || true)
+    RESET=$(tput sgr0 2>/dev/null || true)
+    GREEN=$(tput setaf 2 2>/dev/null || true)
+    RED=$(tput setaf 1 2>/dev/null || true)
+    YELLOW=$(tput setaf 3 2>/dev/null || true)
+    UL=$(tput smul 2>/dev/null || true)
+    UL_END=$(tput rmul 2>/dev/null || true)
+  fi
+  if [[ -n "$chance" ]]; then
+    if [[ "$chance" -ge 80 ]]; then chance_color="$GREEN"
+    elif [[ "$chance" -ge 50 ]]; then chance_color="$YELLOW"
+    else chance_color="$RED"; fi
+  fi
+
+  echo "${BOLD}RESET WATCH${RESET}"
+  if [[ -z "$level" && -z "$chance" ]]; then
+    echo "  no active watch right now"
+  else
+    local headline
+    if [[ -n "$chance" ]]; then
+      headline="${chance_color}${BOLD}$chance% chance of reset${RESET}"
+    else
+      headline="${BOLD}Possible reset${RESET}"
+    fi
+    if [[ -n "$expires" ]]; then
+      local left by
+      left=$(time_left "$expires")
+      by=$(expiry_short "$expires")
+      [[ -n "$by" ]] && headline+=" by ${BOLD}$by${RESET}"
+      [[ -n "$left" ]] && headline+=" (${DIM}$left${RESET})"
+    fi
+    echo "  $headline"
+    if [[ -n "$yes" && -n "$no" && "$(( yes + no ))" -gt 0 ]]; then
+      local tally_total=$(( yes + no )) pct no_pct
+      pct=$(python3 -c "print(f'{$yes/$tally_total*100:.1f}')")
+      no_pct=$(python3 -c "print(f'{$no/$tally_total*100:.1f}')")
+      printf "  YOUR BET?  ${GREEN}Yes${RESET} %'d (%s%%) · ${RED}No${RESET} %'d (%s%%)\n" "$yes" "$pct" "$no" "$no_pct"
+    fi
+    local observed_rel="" display_name="" byline
+    [[ -n "$observed" ]] && observed_rel=$(rel_ago "$observed")
+    [[ -n "$watch_url" ]] && display_name=$(watch_display_name "$watch_url")
+    byline="@${author_handle:-thsottiaux}"
+    [[ -n "$display_name" ]] && byline="$display_name $byline"
+    echo "  $byline${observed_rel:+ · ${DIM}$observed_rel${RESET}}"
+    echo
+    if [[ -n "$watch_text" ]]; then
+      printf '%s\n' "$watch_text" | fold -s -w "$wrap" | awk '{ if (length) print "    " $0; else print "" }'
+    fi
+    [[ -n "$watch_url" ]] && echo "    ${DIM}$watch_url${RESET}"
+  fi
+  echo
+  echo "${BOLD}LATEST CODEX RESET${RESET}"
+  local lr_rel lr_by lr_label
+  lr_rel=$(rel_ago "$last")
+  lr_by=$(localtime_fmt "$last")
+  if [[ "$lr_type" == "banked" ]]; then lr_label="Banked reset"; else lr_label="Reset"; fi
+  echo "  ${YELLOW}${BOLD}${lr_rel:-$last}${RESET} — ${UL}$lr_label${UL_END} · $lr_by"
+  [[ -n "$begs_count" ]] && printf "  🙏 beg ${BOLD}%'d${RESET}\n" "$begs_count"
+  printf "  📊 %'d resets total · avg interval %sd\n" "$total" "$avg"
+}
+
+if [[ "$WATCH" -eq 1 ]]; then
+  while true; do
+    printf "%s " "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fetch | tr '\n' ' '; echo
+    sleep "$INTERVAL"
+  done
+else
+  fetch
+fi
