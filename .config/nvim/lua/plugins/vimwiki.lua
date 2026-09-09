@@ -1,8 +1,12 @@
 return {
   -- The plugin location on GitHub
   "vimwiki/vimwiki",
-  -- The event that triggers the plugin
-  event = "BufEnter *.md",
+  -- Load when a markdown file is read or created. Deliberately not BufEnter:
+  -- lazy replays only the event that triggered the load, and vimwiki sets
+  -- `filetype=vimwiki` from its BufNewFile,BufRead autocmd — under BufEnter
+  -- the ftplugin never ran, so the first .md opened in a session kept plain
+  -- markdown filetype and vimwiki's C-Up/C-Down diary navigation did nothing.
+  event = { "BufNewFile *.md", "BufReadPost *.md" },
   -- The keys that trigger the plugin
   keys = { "<leader>ww", "<leader>w<leader>w", "<leader>wt" },
   -- The configuration for the plugin
