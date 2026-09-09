@@ -14,7 +14,14 @@
 # @raycast.author Eric Boehs
 # @raycast.authorURL boehs.com
 
+# Usage: daily-note [editor]
+#   No argument: open in Typora (the Raycast default).
+#   With an editor command (e.g. `daily-note nvim`), create the note if
+#   needed then exec that editor — used by tmux's Ctrl-B W binding.
+
 set -euo pipefail
+
+EDITOR_CMD="${1:-}"
 
 DAILY_DIR="$HOME/Documents/Wiki/daily"
 TODAY=$(date +%Y-%m-%d)
@@ -39,6 +46,10 @@ if [ ! -f "$NOTE" ]; then
 
 ## Notes
 EOF
+fi
+
+if [ -n "$EDITOR_CMD" ]; then
+  exec "$EDITOR_CMD" "$NOTE"
 fi
 
 open -a Typora "$NOTE"
