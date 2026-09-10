@@ -107,6 +107,11 @@ sync_to(){  # returns 0 = unchanged, 1 = changed; an unconfirmed fetch dies inst
     exit 1
   fi
 
+  # Written to a scratch file and then compared with what is already on disk with
+  # the timestamp line masked out. A sync that changes nothing keeps the old file
+  # byte for byte, so the synced: stamp cannot turn a no-op into a diff to review;
+  # a real change rewrites it and restamps.
+  local mtmp; mtmp="$(mktemp "$DIR/.manifest.XXXXXX")" || die "cannot create a scratch file in $DIR"
   {
     echo "# Vendored from github.com/$REPO (Apache 2.0). Do not edit by hand."
     echo "# Refresh with: artifact-skills-sync --update"
@@ -123,7 +128,15 @@ sync_to(){  # returns 0 = unchanged, 1 = changed; an unconfirmed fetch dies inst
         printf 'sha256: %s  %s/%s\n' "$(sha_of "$DIR/$s/$f")" "$s" "$f"
       done
     done
-  } > "$MANIFEST"
+  } > "$mtmp"
+
+  if [[ -f "$MANIFEST" ]] \
+     && cmp -s <(grep -v '^synced:' "$mtmp") <(grep -v '^synced:' "$MANIFEST"); then
+    rm -f "$mtmp"
+  else
+    mv "$mtmp" "$MANIFEST"
+    changed=1
+  fi
 
   return $changed
 }
