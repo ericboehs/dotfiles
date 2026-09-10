@@ -11,7 +11,6 @@
     "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts"
   ],
   "skills": [
-    "~/.claude/skills/credentials",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/git-utils/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/gist/skills",
     "~/Code/github.com/ericboehs/claude-plugins/plugins/code-lint/skills",
