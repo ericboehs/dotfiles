@@ -77,6 +77,10 @@ REPO_PATH = "ericboehs/dotfiles"
 # .tmux/btop.sh). apt lags brew here — Debian 13 ships 1.3.2 against brew's
 # 1.4.7 — but nothing in the click path depends on the newer release.
 "brew:btop" = { version = "latest", os = ["macos"] }
+# extensions/image-preview.ts shells out to chafa for inline image previews:
+# kitty graphics through tmux passthrough, or braille characters elsewhere.
+# Without it the extension silently falls back to pi's plain text rendering.
+"brew:chafa" = { version = "latest", os = ["macos"] }
 "brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
 # The apps the post-defaults hook pins to the Dock are deliberately NOT
 # declared here. Ghostty and Slack do have casks, but Homebrew installed them
@@ -106,6 +110,8 @@ REPO_PATH = "ericboehs/dotfiles"
 "apt:jq" = { version = "latest", os = ["linux"] }
 # See brew:btop above.
 "apt:btop" = { version = "latest", os = ["linux"] }
+# See brew:chafa above.
+"apt:chafa" = { version = "latest", os = ["linux"] }
 # .tmux/agenda.sh opens with `cal -A 1 -B 1`. Debian splits the BSD tools up
 # and `cal` rides in ncal rather than the bsdextrautils that carries the rest,
 # so a stock trixie box has no cal at all. macOS ships one.
