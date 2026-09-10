@@ -3,7 +3,7 @@ description: Connect to a CyberArk PSM target from the GFE and drive its session
 argument-hint: "[target or instruction]"
 ---
 
-Read `~/.claude/skills/gfe-psm/SKILL.md` in full before doing anything — it is the
+Read `~/.pi/agent/skills/gfe-psm/SKILL.md` in full before doing anything — it is the
 authoritative playbook (FreeRDP invocation, one-time-token rules, coordinate mapping,
 failure modes). Do not improvise an alternative RDP client; the skill explains why the
 obvious ones fail.
