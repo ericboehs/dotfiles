@@ -59,7 +59,14 @@ terraform = "1.15.8"
 # unresolvable "latest" would leave nvim below the floor again, which is the
 # failure this entry exists to prevent.
 neovim = "0.12.4"
-"npm:@playwright/cli" = "latest"
+# Pinned, not "latest": 0.1.19 (2026-09-01) was published without Sigstore
+# provenance while every version back through 0.1.0 carries it, so mise's
+# npm backend (aube, trustPolicy=no-downgrade) refuses to resolve `latest`
+# as a trust downgrade — and rightly so. Re-pin to `latest` once an upstream
+# release carries provenance again; the narrow alternative is
+# `trust_policy_excludes = ["@playwright/cli@<version>"]` on this entry,
+# which should only bless a version after the same provenance check above.
+"npm:@playwright/cli" = "0.1.18"
 # Pi is pinned so its extension API and the bootstrapped package set move together.
 # After an upgrade lands here, run `mise task bootstrap:pi` to converge the
 # agent dir and re-check the entrypoint. Since 0.85 upstream ships its own

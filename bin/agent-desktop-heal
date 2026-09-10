@@ -14,7 +14,7 @@ set -u
 
 # bash -l does not source .zshenv, so put the mise shims on PATH ourselves —
 # same ordering rule .zshenv applies: shims in front of everything.
-path=("$HOME/.local/share/mise/shims" "$path[@]")
+export PATH="$HOME/.local/share/mise/shims:$PATH"
 
 BIN_DIR="$(npm root -g)/agent-desktop/bin"
 POSTINSTALL="$(npm root -g)/agent-desktop/scripts/postinstall.js"

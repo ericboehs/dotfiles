@@ -114,8 +114,7 @@ refresh_doc_repos() {
 		"$HOME/Code/va.ghe.com/software/devops" \
 		"$HOME/Code/va.ghe.com/software/eert"
 	do
-		out=$(git -C "$repo" pull --ff-only 2>&1)
-		if [ $? -ne 0 ]; then
+		if ! out=$(git -C "$repo" pull --ff-only 2>&1); then
 			echo "--- $(ts) git pull failed for $repo (non-fatal): $(echo "$out" | tail -1) ---"
 			continue
 		fi

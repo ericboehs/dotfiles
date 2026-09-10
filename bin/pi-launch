@@ -43,7 +43,7 @@ if [ -n "${TMUX:-}" ] && [ -z "${PI_HYPERLINKS:-}" ] && [ -z "${PI_NO_HYPERLINKS
   # complaint about the missing file before read even runs.
   read -r pi_hyperlinks 2>/dev/null < "$hyperlinks_cache" || true
   case ${pi_hyperlinks:-} in
-    1|0) export PI_HYPERLINKS=$pi_hyperlinks ;;
+    1|0) export PI_HYPERLINKS="$pi_hyperlinks" ;;
   esac
   /bin/sh -c '
     cache=$1 cache_dir=${1%/*}
