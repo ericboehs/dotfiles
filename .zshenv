@@ -25,16 +25,6 @@ if [[ -t 0 ]]; then
   export GPG_TTY="$(tty)"
 fi
 
-# VA's VPN re-signs TLS in flight (VA-Internal-S2-RCA2, pushed by MDM into the
-# macOS keychain). curl and the Copilot CLI read that keychain, but Node keeps
-# its own bundled roots, so every HTTPS call from pi dies at the OAuth refresh
-# with "fetch failed", whose cause is SELF_SIGNED_CERT_IN_CHAIN. That reads as
-# a va.ghe.com problem when it is only pi's TLS store. Guarded on the Cisco
-# client so a box without one is untouched.
-if [[ -x /opt/cisco/secureclient/bin/vpn && "$NODE_OPTIONS" != *use-system-ca* ]]; then
-  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca"
-fi
-
 # Machine-local env, the .zshenv counterpart to .zshrc's .zshrc.local. It has to
 # be here rather than there because the things that need it are not interactive:
 # a work box's AWS profile and gov-cloud regions, a Homebrew prefix that only
