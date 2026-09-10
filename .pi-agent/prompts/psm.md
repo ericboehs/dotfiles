@@ -21,10 +21,14 @@ Then, in order:
    `~/Code/github.com/ericboehs/claude-config/skills/gfe-psm/deploy.sh gfew`
    (this also installs the skill + this prompt onto the GFE).
 2. Kill any stale watcher (`pkill -f "psm watch"`), then **arm the watcher before**
-   asking me to download an `.rdp` — the token is single-use and ages in ~2 minutes.
-3. Ask me to click **Connect → SSH** in PVWA. The watcher launches FreeRDP within
-   ~0.2s and dismisses the VA security warning itself.
+   the download — the token is single-use and ages in ~2 minutes.
+3. Get the `.rdp` into `~/Downloads`: either ask me to click **Connect → SSH** in PVWA,
+   or run `pvwa-connect <target>` to drive Safari's PVWA DOM yourself (pair it with the
+   armed watcher). The watcher launches FreeRDP within ~0.2s and dismisses the VA
+   security warning itself — then check the target and click Yes on the PuTTY
+   **security alert** (never blind-press Return there; it aborts the session).
 4. Capture (`psm shot`) until the shell prompt appears; budget ~45–60s. Then drive with
-   `psm text` / `psm key` and read results the same way.
+   `psm text` / `psm key` and read results the same way. If you need to push files in,
+   use typed base64 per the skill (clipboard paste wedges after one payload).
 
 Ask: $@
