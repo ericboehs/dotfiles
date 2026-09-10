@@ -5,10 +5,15 @@
 #   artifact-skills-sync            # sync to the pinned commit in MANIFEST
 #   artifact-skills-sync --update   # move the pin to latest main, show what changed
 #   artifact-skills-sync --check    # report drift vs upstream main, write nothing
+#   artifact-skills-sync --verify   # check every file against MANIFEST, write nothing
 #   artifact-skills-sync --list     # show what's vendored, with token estimates
 #
 # Vendors SKILL.md + LICENSE.txt only — no fonts, no binaries. The files sit on
 # disk costing nothing until /artifact tells the agent to read one.
+#
+# MANIFEST records the sha256 of every vendored file, so --verify needs no network
+# and no gh auth: CI can hold the pin without depending on upstream or on GitHub
+# being reachable. Only --check and --update talk to the network.
 #
 # Source: github.com/anthropics/skills (Apache 2.0)
 
@@ -18,11 +23,16 @@ REPO="anthropics/skills"
 RAW="https://raw.githubusercontent.com/$REPO"
 SKILLS=(frontend-design web-artifacts-builder canvas-design algorithmic-art brand-guidelines)
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.pi-agent/artifact-skills" 2>/dev/null && pwd)" \
-  || DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.pi-agent/artifact-skills"
+# -P throughout, so the path is negotiated physically. ~/bin is a symlink to this
+# repo's bin/, which makes DIR's logical form "$HOME/.pi-agent/artifact-skills" —
+# a directory that does not exist today. If anything ever created it, a logical
+# DIR would silently point every mode (sync, --update, --verify) at a tree that
+# is not the one under test, and still report success.
+DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.pi-agent/artifact-skills" 2>/dev/null && pwd -P)" \
+  || DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.pi-agent/artifact-skills"
 MANIFEST="$DIR/MANIFEST"
 
-usage(){ sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage(){ awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; exit "${1:-0}"; }
 die(){ printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 dim(){ printf '\033[2m%s\033[0m\n' "$*"; }
 
@@ -34,30 +44,85 @@ fetch(){  # fetch <sha> <path> -> stdout, empty on 404
   curl -fsSL "$RAW/$1/$2" 2>/dev/null || true
 }
 
-sync_to(){
-  local sha="$1" changed=0
+sha_of(){  # sha_of <file> -> sha256 hex; sha256sum on Linux, shasum on macOS
+  if command -v sha256sum >/dev/null 2>&1
+  then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+vendored_files(){  # every vendored file, relative to DIR, sorted. MANIFEST excluded.
+  (cd "$DIR" && find . -type f ! -name MANIFEST | sed 's|^\./||' | sort)
+}
+
+sync_to(){  # returns 0 = unchanged, 1 = changed; an unconfirmed fetch dies instead
+  local sha="$1" changed=0 missing=""
   mkdir -p "$DIR"
   for s in "${SKILLS[@]}"; do
-    local body; body="$(fetch "$sha" "skills/$s/SKILL.md")"
-    [[ -n "$body" ]] || { printf '  \033[33m—\033[0m %-24s not found upstream\n' "$s"; continue; }
+    # Fetched to a file, never into $(...): command substitution strips trailing
+    # newlines, so every vendored file lost its last byte on the way in and the
+    # "verbatim" above was not true of the bytes on disk. mktemp lives in DIR so
+    # the move below is a rename and cannot half-write a live file.
+    local tmp; tmp="$(mktemp "$DIR/.fetch.XXXXXX")" || die "cannot create a scratch file in $DIR"
+    if ! fetch "$sha" "skills/$s/SKILL.md" > "$tmp" || [[ ! -s "$tmp" ]]; then
+      rm -f "$tmp"
+      printf '  \033[33m—\033[0m %-24s not found upstream\n' "$s"
+      missing="$missing $s"
+      continue
+    fi
     mkdir -p "$DIR/$s"
-    if [[ -f "$DIR/$s/SKILL.md" ]] && [[ "$body" == "$(cat "$DIR/$s/SKILL.md")" ]]; then
+    if [[ -f "$DIR/$s/SKILL.md" ]] && cmp -s "$tmp" "$DIR/$s/SKILL.md"; then
+      rm -f "$tmp"
       printf '  \033[2m=\033[0m %-24s unchanged\n' "$s"
     else
-      printf '%s' "$body" > "$DIR/$s/SKILL.md"
-      printf '  \033[32m↓\033[0m %-24s %s bytes\n' "$s" "${#body}"
+      mv "$tmp" "$DIR/$s/SKILL.md"
+      printf '  \033[32m↓\033[0m %-24s %s bytes\n' "$s" "$(wc -c < "$DIR/$s/SKILL.md")"
       changed=1
     fi
-    fetch "$sha" "skills/$s/LICENSE.txt" > "$DIR/$s/LICENSE.txt" 2>/dev/null || true
-    [[ -s "$DIR/$s/LICENSE.txt" ]] || rm -f "$DIR/$s/LICENSE.txt"
+
+    # Only ever written if it arrived: this used to redirect straight onto the
+    # real file and then rm it when empty, so a failed fetch truncated a LICENSE
+    # and deleted it. An empty body now leaves the existing one alone.
+    tmp="$(mktemp "$DIR/.fetch.XXXXXX")"
+    if fetch "$sha" "skills/$s/LICENSE.txt" > "$tmp" && [[ -s "$tmp" ]]; then
+      mv "$tmp" "$DIR/$s/LICENSE.txt"
+    else
+      rm -f "$tmp"
+    fi
   done
+
+  # A manifest must describe bytes that came from the pinned commit, and an empty
+  # body is a 404 and a dead network alike — fetch cannot tell them apart. So a
+  # missing SKILL.md aborts before the manifest is touched: writing it would pin
+  # the stale file still sitting on disk and assert a pin nothing confirmed.
+  # LICENSE.txt is exempt, since not every upstream skill ships one.
+  #
+  # Files already fetched this run stay on disk, so the worst case is a tree that
+  # disagrees with an untouched manifest — which --verify reports as drift, rather
+  # than a lie recorded inside the manifest itself.
+  if [[ -n "$missing" ]]; then
+    printf '\033[31merror:\033[0m no SKILL.md upstream for:%s\n' "$missing" >&2
+    dim "either the network is down, or those skills were renamed or removed"
+    dim "MANIFEST not written — it would pin bytes nothing confirmed"
+    exit 1
+  fi
 
   {
     echo "# Vendored from github.com/$REPO (Apache 2.0). Do not edit by hand."
     echo "# Refresh with: artifact-skills-sync --update"
+    echo "# The sha256 lines pin the bytes on disk; check them with --verify."
     echo "commit: $sha"
     echo "synced: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "skills: ${SKILLS[*]}"
+    # Hashed after the writes above, so the manifest can only ever pin bytes that
+    # are on disk right now — and every one of them came from $sha, since an empty
+    # fetch aborts above rather than reaching this block.
+    for s in "${SKILLS[@]}"; do
+      for f in SKILL.md LICENSE.txt; do
+        [[ -s "$DIR/$s/$f" ]] || continue
+        printf 'sha256: %s  %s/%s\n' "$(sha_of "$DIR/$s/$f")" "$s" "$f"
+      done
+    done
   } > "$MANIFEST"
 
   return $changed
@@ -88,6 +153,63 @@ case "${1:-sync}" in
         [[ "$a" == "$b" ]] || printf '    changed: %s\n' "$s"
       done
       dim "run --update to pull, then review the diff"
+    fi
+    ;;
+
+  --verify)
+    [[ -f "$MANIFEST" ]] || die "no MANIFEST — run: artifact-skills-sync"
+    grep -q '^sha256:' "$MANIFEST" \
+      || die "MANIFEST pins no hashes — re-record them with: artifact-skills-sync"
+    pin="$(pinned_sha)"; n=0; bad=0
+
+    # .gitignore here is a deny-by-default allowlist, so a vendored file with no
+    # '!' rule works locally and is simply absent in CI. Fail that here instead.
+    #
+    # Ask git for the prefix rather than stripping the toplevel off $DIR by string:
+    # git canonicalizes paths, and this script is reachable through symlinks (bin/
+    # is linked from ~/bin, and ~/.pi/agent carries a copy of this directory), so
+    # the path DIR resolves to is not always the path git reports.
+    top=""; prefix=""; ign=".pi-agent/.gitignore"
+    if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+      top="$(git -C "$DIR" rev-parse --show-toplevel)"
+      prefix="$(git -C "$DIR" rev-parse --show-prefix)"
+      ign="${prefix%artifact-skills/}.gitignore"
+    fi
+
+    # Every file the manifest pins: it is on disk, its bytes are unchanged, and
+    # git carries it. An untracked one is a file CI checks out without.
+    while read -r _ hash rel; do
+      n=$((n+1))
+      if [[ ! -f "$DIR/$rel" ]]; then
+        printf '\033[31m✗\033[0m %-32s missing\n' "$rel"; bad=1; continue
+      fi
+      got="$(sha_of "$DIR/$rel")"
+      if [[ "$got" != "$hash" ]]; then
+        printf '\033[31m✗\033[0m %-32s does not match MANIFEST\n' "$rel"
+        printf '    recorded %s\n    on disk  %s\n' "$hash" "$got"
+        bad=1
+      fi
+      if [[ -n "$top" ]] && ! git -C "$top" ls-files --error-unmatch "$prefix$rel" >/dev/null 2>&1; then
+        printf '\033[31m✗\033[0m %-32s not tracked by git\n' "$rel"
+        dim "    no '!' rule covers it in $ign, so CI never sees it"
+        bad=1
+      fi
+    done < <(grep '^sha256:' "$MANIFEST" || true)
+
+    # Anything else on disk. Walked rather than checked against SKILLS, so a
+    # hand-added file or whole skill directory cannot ride along unrecorded —
+    # /artifact reads what is on disk, not what the pin describes.
+    while read -r rel; do
+      grep -q "^sha256: [0-9a-f]\{64\}  $rel\$" "$MANIFEST" && continue
+      printf '\033[31m✗\033[0m %-32s present but not recorded\n' "$rel"; bad=1
+    done < <(vendored_files)
+
+    if [[ $bad -eq 0 ]]; then
+      printf '\033[32m✓\033[0m %d files match MANIFEST (pin %s)\n' "$n" "${pin:0:8}"
+    else
+      printf '\033[31merror:\033[0m vendored skills have drifted from their pin\n' >&2
+      dim "if the drift is intended: artifact-skills-sync --update, then review the diff"
+      exit 1
     fi
     ;;
 

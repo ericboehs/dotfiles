@@ -538,8 +538,8 @@ run.
 
 `artifact-skills/` holds Anthropic's own design skills, copied verbatim from
 [`anthropics/skills`](https://github.com/anthropics/skills) (Apache 2.0) and
-pinned by commit in `MANIFEST`. Only `SKILL.md` and `LICENSE.txt` are
-taken; the upstream scripts and assets are not.
+pinned by commit in `MANIFEST`, and every file by sha256 as well. Only `SKILL.md`
+and `LICENSE.txt` are taken; the upstream scripts and assets are not.
 
 | Skill | Tokens | Read when |
 | --- | --- | --- |
@@ -556,13 +556,20 @@ what the prompt does.
 
 ```sh
 bin/artifact-skills-sync            # sync to the pinned commit
+bin/artifact-skills-sync --verify   # files match MANIFEST, and git carries them?
 bin/artifact-skills-sync --check    # has upstream moved?
 bin/artifact-skills-sync --update   # repin, then review the diff
 bin/artifact-skills-sync --list     # token estimates
 ```
 
+`--verify` is the one CI runs, and it touches nothing but the working tree: MANIFEST
+records the sha256 of every vendored file, so holding the pin needs no network and no
+`gh auth`. Upstream moving is a reminder to repin by hand, never a red build.
+
 This directory is published, and `.gitignore` here is a deny-by-default
-allowlist, so the vendored files need explicit rules to be tracked at all.
+allowlist, so the vendored files need explicit rules to be tracked at all. `--verify`
+checks that too — a vendored file with no `!` rule works locally and is simply
+missing in CI, which is the one failure a local run otherwise cannot predict.
 
 **Do not hand-write a design system for this.** The first version did — fixed
 `:root` tokens plus six named layout archetypes — and every page it produced

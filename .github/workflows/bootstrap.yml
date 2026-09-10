@@ -131,6 +131,30 @@ jobs:
       - name: Check pi extensions
         run: bin/pi-ext-check
 
+  # Holds the /artifact design skills to their pin. Deliberately hermetic: MANIFEST
+  # records the sha256 of every vendored file, so this compares the committed bytes
+  # to the pin without a network call or gh auth. That is the whole point — an
+  # upstream commit, a GitHub outage or a rate limit must not be able to turn this
+  # red. The pin is meant to lag upstream; the reminder to move it is a human
+  # running --check, not a required check.
+  #
+  # No mise step: bin/artifact-skills-sync is bash plus sha256sum.
+  artifact-skills:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Fails on a hand-edited or partially synced skill file, on one deleted or
+      # added outside the manifest, and on a vendored file that the deny-by-default
+      # .gitignore allowlist leaves untracked — which works locally and is simply
+      # absent here, so it can only be caught after a checkout.
+      - name: Verify vendored skills match the pin
+        run: bin/artifact-skills-sync --verify
+
   # Ruby, node and python scripts: bin/ has 21 of the first and a handful of
   # the others, and until this job nothing checked that any of them parse.
   scripts:

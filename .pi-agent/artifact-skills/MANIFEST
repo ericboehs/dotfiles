@@ -1,5 +1,16 @@
 # Vendored from github.com/anthropics/skills (Apache 2.0). Do not edit by hand.
 # Refresh with: artifact-skills-sync --update
+# The sha256 lines pin the bytes on disk; check them with --verify.
 commit: 3b3fad96af16a10759d930941b4520ba0c40edae
-synced: 2026-08-29T13:59:01Z
+synced: 2026-09-10T18:56:54Z
 skills: frontend-design web-artifacts-builder canvas-design algorithmic-art brand-guidelines
+sha256: 1608ea77fbb6fc30d13a97d12cfa8ebf31358d40f0dd97beed24829d6b3f45dd  frontend-design/SKILL.md
+sha256: 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594  frontend-design/LICENSE.txt
+sha256: 81c5002c6643b0de7b8710b00e7a9038daa6fb9b68d59870ee6adb12da8d10f8  web-artifacts-builder/SKILL.md
+sha256: bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362  web-artifacts-builder/LICENSE.txt
+sha256: a1f288079624402f30682753c1d43920b6664785698d21d3e7aa197450a6448b  canvas-design/SKILL.md
+sha256: bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362  canvas-design/LICENSE.txt
+sha256: 3bc4092c09804853186524c826bc0621b940bb6122c05b84496dff95388e6eef  algorithmic-art/SKILL.md
+sha256: bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362  algorithmic-art/LICENSE.txt
+sha256: 1120b3769e2985cefb3d25be981b1f914abeba57ae079b83c20c666c164fa9fe  brand-guidelines/SKILL.md
+sha256: bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362  brand-guidelines/LICENSE.txt
