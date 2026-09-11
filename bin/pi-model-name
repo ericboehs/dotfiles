@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# pi-model-name — pretty model name for signoffs (e.g. "Muse Spark 1.3", "Opus 5").
+#
+# Usage: pi-model-name [provider/model]
+#   With no args, uses "$PI_PROVIDER/$PI_MODEL" from pi's session env.
+#   Prints curated pretty name, or a humanized fallback for unknown models.
+#
+# Curated map lives here so agents never guess — add a line when you add a model.
+set -euo pipefail
+
+raw="${1:-${PI_PROVIDER:-}/${PI_MODEL:-}}"
+# Normalize: strip leading/trailing slashes
+raw="${raw#/}"; raw="${raw%/}"
+
+case "$raw" in
+  opencode-go/muse-spark-1.3-contributor) echo "Muse 1.3" ;;
+  opencode-go/deepseek-flash)             echo "DeepSeek 4.1 Flash" ;;
+  github-copilot/claude-opus-5)           echo "Opus 5" ;;
+  openai-codex/gpt-5.6-sol)               echo "GPT 5.6 Sol" ;;
+  openai-codex/gpt-6-astra)               echo "GPT 6 Astra" ;;
+  openai-codex/gpt-daybreak-blue-latest)  echo "GPT Daybreak Blue" ;;
+  ollama/glm-5.3-flash)                   echo "GLM 5.3 Flash" ;;
+  xai/grok-4.6)                           echo "Grok 4.6" ;;
+  *)
+    # Fallback: humanize the model id so unknown models still read cleanly.
+    # "accounts/fireworks/models/kimi-k2p7-code" -> "Kimi K2p7 Code"
+    python3 - "$raw" <<'EOF'
+import re, sys
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+# Strip @preset/... first (it trails after a slash), then keep model part
+base = raw.split("@")[0].split(":")[0]
+mid = base.split("/")[-1]
+# Drop generic variant suffixes
+mid = re.sub(r"-(contributor|latest|preview|turbo|fast)$", "", mid)
+mid = mid.replace("_", "-")
+parts = mid.split("-")
+out = []
+for p in parts:
+  if re.fullmatch(r"v?\d+(\.\d+)+", p, re.I):  # version: keep as-is
+    out.append(p.upper() if p.lower().startswith("v") and p[1:2].isdigit() else p)
+  elif p.lower() in {"gpt", "glm", "mlx", "tee", "llm", "mtplx"}:
+    out.append(p.upper())
+  elif p.lower() in {"grok", "kimi", "qwen", "sol", "astra", "opus", "muse", "spark", "flash", "deepseek"}:
+    out.append(p.capitalize())
+  elif re.fullmatch(r"[a-z]+\d+(\.\d+)*", p, re.I):  # k2p7, gpt-ish alnum
+    out.append(p[0].upper() + p[1:])
+  else:
+    out.append(p.capitalize() if p else p)
+print(" ".join(out) or raw)
+EOF
+    ;;
+esac
