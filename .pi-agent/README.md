@@ -489,6 +489,37 @@ at session start, so the boot and per-turn cost is near zero.
 Pure helpers (`buildItems`, `parseMultiPicks`, `formatAnswerLines`) are
 exported for `test/ask.test.mjs`; the dialogs themselves need a terminal.
 
+## Local web chat
+
+`extensions/web-chat.ts` is an optional loader for the bridge maintained in
+`~/Code/github.com/ericboehs/psst-web/bridge/`. It does not copy the bridge,
+start the web server, read session history, or submit a prompt on load.
+Once pi emits `session_start`, the bridge automatically connects saved local
+TUI sessions. New sessions are checked again after an agent run, once saved. Machines without that checkout stay quiet until `/web-chat` is used.
+
+The existing `~/.pi/agent/extensions` directory link makes the loader available
+without editing per-host settings. Restart pi to load the updated native bridge
+implementation; eligible sessions then connect without a command. Reload `http://127.0.0.1:8900/discovery` and open that session. The separate
+psst-web server must already be running with discovery explicitly enabled.
+`/web-chat off` disconnects and pauses auto-connect for this pi process,
+including reloads and session switches. `/web-chat on` enables it again;
+restarting pi restores the automatic default. No preference file is written.
+Reload/session replacement closes the old socket before connecting the new
+eligible session; shutdown closes it. Restart pi after changing the bridge's
+`.mjs` implementation, since native dependencies may remain cached on reload.
+Do not also pass `pi -e .../bridge/index.ts`: that would load the bridge twice.
+
+Browser Send uses that session's existing tools and permissions. Busy sessions
+queue follow-ups; permission dialogs stay in pi. Only canonical saved sessions
+under `~/.pi/agent/sessions` are supported, not RPC or remote sessions. Selected
+text/tool results may contain private data; the companion is local, ephemeral,
+and not a secret-redaction layer. Auto-connection only makes the session
+available locally; it never starts/resumes an agent or submits a prompt.
+
+```sh
+node --test .pi-agent/test/web-chat.test.mjs
+```
+
 ## Inline images
 
 `extensions/image-preview.ts` makes `read` show pictures inline under tmux. pi
