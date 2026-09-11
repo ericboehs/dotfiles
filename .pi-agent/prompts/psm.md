@@ -23,7 +23,11 @@ Then, in order:
 2. Check PVWA's session: `pvwa-auth --status`. If it says `login required`, run
    `pvwa-auth` — it clicks through the sign-in state machine (welcome GO → PIV →
    warning Continue → PIV) and completes on its own when the card is unlocked. If it
-   reports a PIN prompt, ask me to enter the PIN, then re-run.
+   says `nothing clickable on the login page (card PIN prompt?)`, do **not** trust that
+   diagnosis: it also prints this when the Apple-Events JS bridge cannot reach the page,
+   and it exits `0` either way. `screencapture` and look — a visible `GO` button means
+   you should drive the four clicks with `cliclick` per the skill; an actual PIN dialog
+   is the only case where you ask me.
 3. Kill any stale watcher (`pkill -f "psm watch"`), then **arm the watcher before**
    the download — the token is single-use and ages in ~2 minutes.
 4. Get the `.rdp` into `~/Downloads`: either ask me to click **Connect → SSH** in PVWA,
