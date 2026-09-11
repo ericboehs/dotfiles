@@ -24,7 +24,8 @@
  *   auto-backgrounding.
  *
  * UI:
- *   footer          "● 2 bg · rspec 1m12s · vite 12s"   (zero tokens, TUI only)
+ *   above prompt    "● 2 background jobs · rspec 1m12s · vite 12s · /bg"
+ *                   Live elapsed times, hidden when idle; zero model tokens.
  *   /bg             job list; ↑/↓ select, enter opens a full-screen live log,
  *                   x stops the selected job, esc closes
  *   ctrl+shift+b    same panel
@@ -52,14 +53,6 @@
  *                     600); larger values are clamped, except values that read
  *                     as milliseconds (e.g. 60000 for a minute) are converted
  *                     to seconds first — models confuse the units constantly
- *   PI_BG_TICKLE_MAX  maximum tickle wakes per job (default 15)
- *
- * Tickler:
- *   `tickler` (seconds, minimum 5) on a bash call wakes the session every N
- *   seconds with a status line + 3-line log tail while a background job runs
- *   (explicit `background: true` or an adopted foreground overrun) — at most
- *   PI_BG_TICKLE_MAX wakes, off unless requested. The completion wake
- *   supersedes remaining ticks; when PI_BG_WAKE=off the tickler is ignored.
  */
 
 import { spawn } from "node:child_process";
@@ -101,8 +94,8 @@ const TAIL_LINES = Number.parseInt(process.env.PI_BG_TAIL_LINES ?? "15", 10);
 const TAIL_MAX_CHARS = 2000;
 const VIEWER_WINDOW_BYTES = 1024 * 1024;
 const WAKE = (process.env.PI_BG_WAKE ?? "followUp") as "followUp" | "nextTurn" | "off";
-const STATUS_KEY = "bg";
-const MAX_STATUS_JOBS = 3;
+const WIDGET_KEY = "bg";
+const MAX_WIDGET_JOBS = 3;
 
 /**
  * Foreground wait budget before a command with no explicit timeout is adopted
@@ -131,13 +124,6 @@ function timeoutToSeconds(timeout: number): number {
 	}
 	return timeout;
 }
-/** Floor for tickler intervals — a smaller value would hammer the session. */
-const TICKLE_MIN_SECS = 5;
-/** Upper bound on tickle wakes per job; after the last one the job runs silently. */
-const TICKLE_MAX_COUNT = (() => {
-	const parsed = Number.parseInt(process.env.PI_BG_TICKLE_MAX ?? "15", 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : 15;
-})();
 /** Cap for partial output streamed to the TUI while a foreground job runs. */
 const PARTIAL_CAP_BYTES = 64 * 1024;
 /** setTimeout() clamps delays above 2^31-1 ms down to 1ms — keep under it. */
@@ -162,15 +148,10 @@ interface Job {
 	quiet: boolean;
 	/** Drop the child's event-loop ref so an adopted job outlives the turn. */
 	unrefChild?: () => void;
-	/** Requested tickler interval in seconds, if any (0/undefined = off). */
-	tickleSecs?: number;
-	/** Tickle wakes delivered so far. */
-	tickleCount?: number;
-	tickleTimer?: NodeJS.Timeout;
 }
 
 /**
- * "bundle exec rspec spec/foo" -> "rspec". Best-effort label for the footer.
+ * "bundle exec rspec spec/foo" -> "rspec". Best-effort label for the widget.
  * Skips shell keywords, wrappers, env assignments, and loop variables so that
  * e.g. `for i in $(seq 1 400); do echo ...` labels as "echo", not "for".
  */
@@ -613,51 +594,62 @@ export default function (pi: ExtensionAPI) {
 	let ticker: NodeJS.Timeout | undefined;
 
 	const running = () => [...jobs.values()].filter((job) => job.endedAt === undefined);
-	/** Jobs the footer surfaces (quiet foreground-race jobs are invisible until adopted). */
+	/** Jobs the widget surfaces (quiet foreground-race jobs are invisible until adopted). */
 	const adopted = () => running().filter((job) => !job.quiet);
 
-	function renderStatus(): void {
+	function renderWidget(): void {
 		const ctx = ctxRef;
-		if (!ctx?.hasUI) return;
+		if (ctx?.mode !== "tui") return;
 		const active = adopted();
 		if (active.length === 0) {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			return;
 		}
-		const theme = ctx.ui.theme;
 		const now = Date.now();
 		// Shell loops often collapse to the same label (three `echo` jobs are
 		// indistinguishable), so fall back to the id whenever a name repeats.
 		const nameCounts = new Map<string, number>();
 		for (const job of active) nameCounts.set(job.name, (nameCounts.get(job.name) ?? 0) + 1);
 		const shown = active
-			.slice(0, MAX_STATUS_JOBS)
+			.slice(0, MAX_WIDGET_JOBS)
 			.map(
 				(job) =>
 					`${(nameCounts.get(job.name) ?? 0) > 1 ? job.id : job.name} ${humanDuration(now - job.startedAt)}`,
 			);
-		if (active.length > MAX_STATUS_JOBS) shown.push(`+${active.length - MAX_STATUS_JOBS}`);
-		const dot = theme.fg("accent", "●");
-		const label = active.length === 1 ? "1 bg" : `${active.length} bg`;
-		ctx.ui.setStatus(STATUS_KEY, `${dot} ${theme.fg("dim", `${label} · ${shown.join(" · ")}`)}`);
+		if (active.length > MAX_WIDGET_JOBS) shown.push(`+${active.length - MAX_WIDGET_JOBS}`);
+		const label = `${active.length} background job${active.length === 1 ? "" : "s"}`;
+		ctx.ui.setWidget(
+			WIDGET_KEY,
+			(_tui, theme) => ({
+				render: (width) => [
+					truncateToWidth(
+						`${theme.fg("accent", "●")} ${theme.fg("dim", `${label} · ${shown.join(" · ")} · /bg`)}`,
+						width,
+					),
+				],
+				invalidate() {}, // No cached colors; use the live theme on every render.
+			}),
+			{ placement: "aboveEditor" },
+		);
 	}
 
 	function syncTicker(): void {
-		const active = adopted().length > 0;
+		// This timer only refreshes the TUI, never wakes the model.
+		const active = ctxRef?.mode === "tui" && adopted().length > 0;
 		if (active && !ticker) {
-			ticker = setInterval(renderStatus, 1000);
+			ticker = setInterval(renderWidget, 1000);
 			ticker.unref?.();
 		} else if (!active && ticker) {
 			clearInterval(ticker);
 			ticker = undefined;
 		}
-		renderStatus();
+		renderWidget();
 	}
 
 	async function start(
 		command: string,
 		cwd: string,
-		opts: { quiet?: boolean; ctx?: unknown; tickleSecs?: number } = {},
+		opts: { quiet?: boolean; ctx?: unknown } = {},
 	): Promise<{ job: Job; exited: Promise<void> }> {
 		fs.mkdirSync(BG_DIR, { recursive: true, mode: 0o700 });
 		const id = crypto.randomBytes(3).toString("hex");
@@ -688,10 +680,8 @@ export default function (pi: ExtensionAPI) {
 			startedAt: Date.now(),
 			killedByUser: false,
 			quiet: opts.quiet === true,
-			tickleSecs: opts.tickleSecs,
 		};
 		jobs.set(id, job);
-		if (!job.quiet && job.tickleSecs) startTickler(job);
 
 		let resolveExited!: () => void;
 		const exited = new Promise<void>((resolve) => {
@@ -767,10 +757,6 @@ export default function (pi: ExtensionAPI) {
 	function finish(job: Job, code: number | null, signal: NodeJS.Signals | null): void {
 		if (job.endedAt !== undefined) return;
 		job.endedAt = Date.now();
-		if (job.tickleTimer) {
-			clearInterval(job.tickleTimer);
-			job.tickleTimer = undefined;
-		}
 		job.exitCode = code;
 		job.signal = signal;
 		syncTicker();
@@ -812,48 +798,6 @@ export default function (pi: ExtensionAPI) {
 				? { deliverAs: "nextTurn" }
 				: { deliverAs: "followUp", triggerTurn: true },
 		);
-	}
-
-	/**
-	 * Tickler: wake the session every job.tickleSecs with a status line, a small
-	 * log tail, and interaction hints, so the model can watch progress (and stop
-	 * the job) without polling. Bounded by TICKLE_MAX_COUNT; the completion wake
-	 * in finish() clears the timer, so an exited job never tickles.
-	 */
-	function startTickler(job: Job): void {
-		if (job.tickleTimer || !job.tickleSecs || WAKE === "off") return;
-		const everyMs = Math.min(Math.max(job.tickleSecs, TICKLE_MIN_SECS) * 1000, MAX_TIMER_MS);
-		job.tickleTimer = setInterval(() => {
-			if (job.endedAt !== undefined) {
-				clearInterval(job.tickleTimer);
-				job.tickleTimer = undefined;
-				return;
-			}
-			job.tickleCount = (job.tickleCount ?? 0) + 1;
-			if (job.tickleCount > TICKLE_MAX_COUNT) {
-				// Budget exhausted: keep the job running; the completion wake still fires.
-				clearInterval(job.tickleTimer);
-				job.tickleTimer = undefined;
-				return;
-			}
-			const elapsed = humanDuration(Date.now() - job.startedAt);
-			const oneLine = job.command.replace(/\s+/g, " ").trim();
-			const command = oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine;
-			const { text } = tailFile(job.logPath, 3);
-			const body = text ? `\nlast 3 lines:\n${text}` : "\n(no output yet)";
-			pi.sendMessage(
-				{
-					customType: "bg-tickle",
-					content:
-						`[bg ${job.id}] tickle ${job.tickleCount}/${TICKLE_MAX_COUNT} — \`${command}\` running ${elapsed}` +
-						`${body}\ninteract: /bg for the live log (x stops it) · tail -f ${job.logPath} for full output`,
-					display: true,
-					details: { id: job.id },
-				},
-				// Ticks are requested wakes: interrupt the idle session like a completion.
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
-		}, everyMs);
 	}
 
 	function kill(job: Job): boolean {
@@ -927,21 +871,14 @@ export default function (pi: ExtensionAPI) {
 						"Run detached; returns a job id immediately and notifies on completion",
 				}),
 			),
-			tickler: Type.Optional(
-				Type.Number({
-					description:
-						`Wake the session every N seconds with job status + last log lines while the job runs ` +
-						`(minimum 5, at most 15 wakes; works with background:true and on adopted foreground jobs; omitted = off)`,
-				}),
-			),
 		}),
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const input = params as { command: string; timeout?: number; background?: boolean; tickler?: number };
+			const input = params as { command: string; timeout?: number; background?: boolean };
 			// Follow the session, not the launch directory.
 			const cwd = (ctx as { cwd?: string } | undefined)?.cwd ?? process.cwd();
 
 			if (input.background) {
-				const { job } = await start(input.command, cwd, { ctx, tickleSecs: input.tickler });
+				const { job } = await start(input.command, cwd, { ctx });
 				if (job.endedAt !== undefined && job.exitCode === 127) {
 					return {
 						content: [{ type: "text", text: `bg job failed to start; see ${job.logPath}` }],
@@ -987,7 +924,7 @@ export default function (pi: ExtensionAPI) {
 			const budgetSecs = FG_TIMEOUT_SECS;
 			const prefix = shellCommandPrefix(cwd);
 			const command = prefix ? `${prefix}\n${input.command}` : input.command;
-			const { job, exited } = await start(command, cwd, { quiet: true, ctx, tickleSecs: input.tickler });
+			const { job, exited } = await start(command, cwd, { quiet: true, ctx });
 
 			// Stream the job log into partial tool updates so live output in the
 			// TUI matches the built-in tool.
@@ -1043,8 +980,7 @@ export default function (pi: ExtensionAPI) {
 			if (timedOut) {
 				job.quiet = false; // adopt: the completion wake now applies
 				job.unrefChild?.(); // outlive the turn, like an explicit bg job
-				syncTicker(); // footer ignored it while quiet; start the ticker now
-				if (job.tickleSecs) startTickler(job); // model asked for periodic status wakes
+				syncTicker(); // widget ignored it while quiet; start the UI ticker now
 				let peek = "";
 				try {
 					const all = tailLines(job.logPath, 8 * 1024);
@@ -1158,14 +1094,8 @@ export default function (pi: ExtensionAPI) {
 			clearInterval(ticker);
 			ticker = undefined;
 		}
-		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
 		const orphans = running();
-		for (const job of orphans) {
-			if (job.tickleTimer) {
-				clearInterval(job.tickleTimer);
-				job.tickleTimer = undefined;
-			}
-		}
 		if (orphans.length > 0 && ctx.hasUI) {
 			// Detached jobs outlive pi on purpose; surface where to find them.
 			ctx.ui.notify(

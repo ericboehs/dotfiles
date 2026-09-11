@@ -137,6 +137,28 @@ immediately; the old `symlink-each` layout required another bootstrap run for
 every new file. During that one-time migration, the pre-dotfiles hook preserves
 the previous directory as `~/.pi/agent/extensions.symlink-each.bak`.
 
+## Background jobs
+
+`extensions/bg.ts` adds `background: true` to the Bash tool and automatically
+backgrounds commands that exceed the foreground budget without an explicit
+timeout. Explicit foreground timeouts remain hard deadlines.
+
+Running background jobs appear in a compact widget **above the prompt**, not
+in the footer:
+
+```text
+● 2 background jobs · rspec 1m12s · vite 12s · /bg
+```
+
+The widget updates elapsed times without waking the model, shows up to three
+jobs plus an overflow count, and disappears when none remain. Foreground jobs
+stay hidden unless they are moved to the background. `/bg` (or Ctrl+Shift+B in
+a compatible terminal) opens the job list and live logs; `x` stops a job.
+
+There are no periodic model wakeups. Completion still sends the exit status
+and log tail, controlled by `PI_BG_WAKE=followUp|nextTurn|off` (default
+`followUp`). User-stopped jobs only notify the UI.
+
 ## Footer
 
 `extensions/footer.ts` renders the status line (dir, provider, model, git,
