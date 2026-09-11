@@ -17,6 +17,7 @@ import test from "node:test";
 import nextSteps, {
   buildPrompt,
   completionItems,
+  findInvocation,
   parseCommandChips,
   parseNextSteps,
   removeStep,
@@ -80,9 +81,15 @@ async function mount(replies = [REPLY]) {
   });
 
   // Stands in for pi's built-in provider: enough to prove delegation happened.
+  // shouldTriggerFileCompletion copies pi's own rule (no forced completion on a
+  // line that is nothing but a slash command), which is the one we override.
   const builtIn = {
     getSuggestions: async () => ({ prefix: "/", items: [{ value: "model", label: "model" }] }),
     applyCompletion: () => ({ lines: ["delegated"], cursorLine: 0, cursorCol: 9 }),
+    shouldTriggerFileCompletion: (lines, cursorLine, cursorCol) => {
+      const before = (lines[cursorLine] ?? "").slice(0, cursorCol).trim();
+      return !(before.startsWith("/") && !before.includes(" "));
+    },
   };
 
   const ctx = {
@@ -130,6 +137,26 @@ async function mount(replies = [REPLY]) {
     suggest: (line, options = {}) => provider.getSuggestions([line], 0, line.length, options),
     complete: (line, value) =>
       provider.applyCompletion([line], 0, line.length, { value, label: value }, value),
+    // Cursor at the end of the last line, which is where typing leaves it.
+    suggestAt: (lines, options = {}) =>
+      provider.getSuggestions(lines, lines.length - 1, lines[lines.length - 1].length, options),
+    completeAt: (lines, value) =>
+      provider.applyCompletion(
+        lines,
+        lines.length - 1,
+        lines[lines.length - 1].length,
+        { value, label: value },
+        value,
+      ),
+    // Same, with the cursor placed by hand (text after it on the line).
+    completeCursor: (lines, cursorLine, cursorCol, value) =>
+      provider.applyCompletion(lines, cursorLine, cursorCol, { value, label: value }, value),
+    shouldTriggerFiles: (lines) =>
+      provider.shouldTriggerFileCompletion(
+        lines,
+        lines.length - 1,
+        lines[lines.length - 1].length,
+      ),
   };
 }
 
@@ -297,6 +324,81 @@ test("a line that is not an invocation is left to pi", async () => {
   const pi = await mount();
   assert.deepEqual((await pi.suggest("/mod")).items.map((i) => i.value), ["model"]);
   assert.deepEqual(pi.complete("/1", "model").lines, ["delegated"]);
+});
+
+test("findInvocation takes the token at the cursor, and only a whole word", () => {
+  assert.deepEqual(findInvocation("/13"), { start: 0, digits: "13" });
+  assert.deepEqual(findInvocation("then do /2"), { start: 8, digits: "2" });
+  assert.deepEqual(findInvocation("/"), { start: 0, digits: "" });
+  assert.equal(findInvocation("1/2"), null, "a fraction is not an invocation");
+  assert.equal(findInvocation("src/2"), null);
+  assert.equal(findInvocation("https://1"), null);
+  assert.equal(findInvocation("/2 "), null, "the token has to end at the cursor");
+  assert.equal(findInvocation("do the thing"), null);
+});
+
+test("tab mid-prompt returns one item, so pi expands without a popup", async () => {
+  const pi = await mount();
+  const suggestions = await pi.suggestAt(["ship it, and then /2"], { force: true });
+
+  assert.equal(suggestions.prefix, "2");
+  assert.deepEqual(
+    suggestions.items.map((i) => i.value),
+    ["2"],
+    "combos would cost a second tab, and mid-prompt there was never a popup",
+  );
+});
+
+test("applying mid-prompt swaps the token and keeps the sentence around it", async () => {
+  const pi = await mount();
+  const lines = ["ship it, and then /2"];
+  const result = pi.completeAt(lines, "2");
+
+  assert.deepEqual(result.lines, [`ship it, and then ${STEPS[1]}`]);
+  assert.equal(result.cursorLine, 0);
+  assert.equal(result.cursorCol, result.lines[0].length);
+});
+
+test("text after the cursor survives the swap", async () => {
+  const pi = await mount();
+  const result = pi.completeCursor(["do /2 tomorrow"], 0, 5, "2");
+
+  assert.deepEqual(result.lines, [`do ${STEPS[1]} tomorrow`]);
+  assert.equal(result.cursorCol, `do ${STEPS[1]}`.length);
+});
+
+test("a multi-line prompt expands on the line the cursor is on", async () => {
+  const pi = await mount();
+  const lines = ["context first:", "/13"];
+
+  const suggestions = await pi.suggestAt(lines, { force: true });
+  assert.deepEqual(suggestions.items.map((i) => i.value), ["13"]);
+
+  const result = pi.completeAt(lines, "13");
+  assert.deepEqual(result.lines, ["context first:", ...`${STEPS[0]}\n\nAND\n\n${STEPS[2]}`.split("\n")]);
+  assert.equal(result.cursorLine, result.lines.length - 1);
+});
+
+test("a lone /2 on a later line still gets its tab", async () => {
+  const pi = await mount();
+  assert.equal(pi.shouldTriggerFiles(["context", "/2"]), true, "pi's own rule would veto this");
+  assert.equal(pi.shouldTriggerFiles(["context", "/model"]), false, "real commands delegate");
+  assert.equal(pi.shouldTriggerFiles(["context", "see src/"]), true);
+});
+
+test("a slash mid-word is a path, not a menu", async () => {
+  const pi = await mount();
+  assert.deepEqual((await pi.suggestAt(["look in src/"], { force: true })).items.map((i) => i.value), [
+    "model",
+  ]);
+  assert.deepEqual((await pi.suggestAt(["ratio 1/2"], { force: true })).items.map((i) => i.value), [
+    "model",
+  ]);
+  assert.deepEqual(
+    (await pi.suggestAt(["note this /"], { force: true })).items.map((i) => i.value),
+    ["model"],
+    "a bare slash mid-prompt is a path being typed",
+  );
 });
 
 const CLICK = {

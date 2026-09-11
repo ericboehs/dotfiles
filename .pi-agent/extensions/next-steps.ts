@@ -11,6 +11,9 @@
  *   /13         step 1, then AND, then step 3
  *   /2 but ssh  step 2 with the extra instruction appended
  *
+ * The completion also fires mid-prompt: "do that, and then /2" + Tab swaps the
+ * token in place, leaving the sentence around it alone. See "Mid-prompt" below.
+ *
  * It expands rather than sends. The step lands in the editor as ordinary text,
  * where it can be trimmed, argued with, or abandoned with Ctrl+C; Enter sends
  * it like anything else. Both routes end in the same place: Tab or Enter on the
@@ -35,6 +38,27 @@
  * popup can be missing — pasted text, Escape, a terminal that ate the Tab — and
  * it is the only path that can honour trailing arguments, since the completion
  * fires while the line is still just digits.
+ *
+ * ## Mid-prompt
+ *
+ * The slash only has to open a word, so `/2` expands anywhere in the prompt —
+ * any line, after any amount of text — and only the token itself is replaced;
+ * what was typed around it survives. "1/2" and "src/2" are left alone because
+ * the slash there is preceded by a non-space.
+ *
+ * Two things differ from the start-of-line case, both forced by pi's editor:
+ * it only auto-opens the popup for a slash in column zero of line one, and it
+ * applies a forced (Tab) completion without a popup when exactly one item comes
+ * back. So mid-prompt there is no popup as you type, and Tab returns just the
+ * exact selection — one Tab, expanded, no menu. The combo entries (`/1` also
+ * offering `/12`) stay a start-of-line affordance; mid-prompt, type `/12`.
+ *
+ * pi's built-in provider also vetoes forced completion for a line that is only
+ * a slash command, which would kill Tab on a `/2` sitting alone on line two of
+ * a multi-line prompt, so shouldTriggerFileCompletion overrides it for our own
+ * invocations. And the input-event backstop stays anchored: a whole message of
+ * "/2" expands, but "…and /2" submitted without Tab goes to the model as typed,
+ * since rewriting words out of the middle of a sent message is too surprising.
  *
  * ## Why the input event and not registered commands
  *
@@ -103,6 +127,9 @@ const CHIP_WIDGET_KEY = "next-steps-chips";
 /** `/13`, `/2 with more instructions`. Trailing space is what completion inserts. */
 const INVOCATION_RE = /^\/(\d{1,4})(?:[ \t]+([\s\S]+?))?[ \t]*$/;
 
+/** `/13` at the cursor, anywhere in a line. The slash must open a word. */
+const AT_CURSOR_RE = /(?:^|\s)\/(\d{0,4})$/;
+
 /** "Next steps:", "**Next steps**", "### Next steps" — the last one in a reply wins. */
 const HEADING_RE = /^[ \t>*_#]*next steps\b[^\n]*$/gim;
 
@@ -142,6 +169,20 @@ export function parseCommandChips(steps: string[]): CommandChip[] {
   if (BYPASS_RE.test(joined)) out.push("bypass");
   if (QUIT_RE.test(joined)) out.push("quit");
   return out.slice(0, MAX_COMMAND_CHIPS);
+}
+
+/**
+ * The invocation being typed at the cursor, or null when there is none.
+ *
+ * `start` is the index of the slash, so a caller can keep the text in front of
+ * it: the token is `before.slice(start)`. The slash has to open a word, which
+ * is what keeps "1/2", "src/2" and "http://1" out of it.
+ */
+export function findInvocation(before: string): { start: number; digits: string } | null {
+  const match = AT_CURSOR_RE.exec(before);
+  if (!match) return null;
+  const digits = match[1] ?? "";
+  return { start: before.length - digits.length - 1, digits };
 }
 
 export interface NextSteps {
@@ -487,14 +528,15 @@ export default function nextSteps(pi: ExtensionAPI) {
     ctx.ui.addAutocompleteProvider((current) => ({
       async getSuggestions(lines, cursorLine, cursorCol, options) {
         const base = await current.getSuggestions(lines, cursorLine, cursorCol, options);
-        // Slash commands only exist on the first line, at its start.
-        if (cursorLine !== 0) return base;
-        const typed = /^\/(\d*)$/.exec((lines[0] ?? "").slice(0, cursorCol));
-        if (!typed) return base;
+        const hit = findInvocation((lines[cursorLine] ?? "").slice(0, cursorCol));
+        if (!hit) return base;
 
-        const digits = typed[1]!;
-        // Tab at a bare "/" is pi's "list the filesystem root" gesture; leave it.
-        if (digits === "" && options.force) return base;
+        const digits = hit.digits;
+        // A bare "/" is the command menu, and pi only offers that in column zero
+        // of the first line; anywhere else it is a path being typed. Tab there is
+        // pi's "list the filesystem root" gesture either way; leave it.
+        const atPromptStart = cursorLine === 0 && hit.start === 0;
+        if (digits === "" && (!atPromptStart || options.force)) return base;
 
         const found = findSteps(ctx);
         if (!found) return base;
@@ -506,31 +548,41 @@ export default function nextSteps(pi: ExtensionAPI) {
         // prefix keeps its slash, so picking one inserts "/1" and submits it,
         // and the input handler above does the expanding.
         if (digits === "" && base) return { prefix: base.prefix, items: [...base.items, ...items] };
+        // Forced means Tab outside a start-of-line slash command, i.e. the
+        // mid-prompt case: pi applies a single item without drawing a popup, so
+        // hand back only the exact selection and expand on the first Tab.
+        if (options.force) return { prefix: digits, items: [items[0]!] };
         // Slash-less prefix: expand in place instead of submitting. See header.
         return { prefix: digits, items };
       },
       applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
         const fallback = () => current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
         const line = lines[cursorLine] ?? "";
-        // Ours only when the whole line so far is the invocation being completed.
-        if (cursorLine !== 0 || !/^\d+$/.test(item.value)) return fallback();
-        if (!/^\/\d*$/.test(line.slice(0, cursorCol))) return fallback();
+        // Ours only when the token at the cursor is the invocation being completed.
+        if (!/^\d+$/.test(item.value)) return fallback();
+        const hit = findInvocation(line.slice(0, cursorCol));
+        if (!hit) return fallback();
 
         const found = findSteps(ctx);
         const picks = found ? resolveSelection(item.value, found.steps.length) : null;
         if (!found || !picks) return fallback();
 
+        // Only the token is replaced: text before the slash and after the cursor
+        // is kept verbatim, so "…and /2" keeps its "…and ".
         const expanded = buildPrompt(found.steps, picks).split("\n");
-        const last = `${expanded[expanded.length - 1]}${line.slice(cursorCol)}`;
+        expanded[0] = `${line.slice(0, hit.start)}${expanded[0]}`;
+        const lastIndex = expanded.length - 1;
+        const endCol = (expanded[lastIndex] ?? "").length;
+        expanded[lastIndex] = `${expanded[lastIndex]}${line.slice(cursorCol)}`;
         const next = [...lines];
-        next.splice(cursorLine, 1, ...expanded.slice(0, -1), last);
-        return {
-          lines: next,
-          cursorLine: cursorLine + expanded.length - 1,
-          cursorCol: (expanded[expanded.length - 1] ?? "").length,
-        };
+        next.splice(cursorLine, 1, ...expanded);
+        return { lines: next, cursorLine: cursorLine + lastIndex, cursorCol: endCol };
       },
       shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+        // pi's own provider refuses forced completion for a line that is nothing
+        // but a slash command, which would eat Tab on a "/2" alone on line two.
+        const hit = findInvocation((lines[cursorLine] ?? "").slice(0, cursorCol));
+        if (hit && hit.digits !== "") return true;
         return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
       },
     }));
