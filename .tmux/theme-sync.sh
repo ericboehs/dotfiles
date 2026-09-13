@@ -41,8 +41,19 @@ fi
 # Detecting inline here used to mean calling `defaults`, which does not exist on
 # Linux and failed into the light branch — leaving coop's status bar in Latte
 # against a dark terminal no matter what the Mac was set to. bin/appearance
-# answers for both platforms; on Linux it reads what the SSH client forwarded.
-if [ "$("$HOME/bin/appearance")" = dark ]; then
+# answers for both platforms; on Linux the answer is ~/.cache/dark-mode, which
+# the login that started the server seeded from the forwarded value and
+# appearance-push keeps fresh.
+#
+# LC_APPEARANCE is cleared for the resolution call on purpose: a tmux server
+# started by an SSH connection inherits the client shell's value, and that was
+# resolved once when the shell started — possibly the night before. Left in
+# place it outranks the cache in bin/appearance for the life of the server,
+# freezing the theme at whatever the connection said at startup (seen on coop:
+# a server started at 09:00 stayed dark all morning against a light Mac).
+# Clearing it here is a no-op on macOS, where the defaults branch answers
+# before the environment is ever consulted.
+if [ "$(LC_APPEARANCE= "$HOME/bin/appearance")" = dark ]; then
   mode=dark
   # Mocha
   surface0="#313244"; surface1="#45475a"
@@ -70,6 +81,13 @@ fi
 # Mark the check before applying a changed theme; the lock remains held until
 # exit, so another client cannot observe this timestamp mid-update.
 printf '%s\n' "$now" >"$check_cache.$$" && mv -f "$check_cache.$$" "$check_cache"
+
+# Sync the server's global environment to the resolved mode, ahead of the
+# guard so it runs on every real check rather than only on flips: new panes
+# inherit LC_APPEARANCE from here, and a server carrying a stale value from
+# its starting connection heals on the next status redraw instead of waiting
+# for a toggle.
+tmux set-environment -g LC_APPEARANCE "$mode"
 
 # This script runs on every status redraw. Re-applying ~20 options each time is
 # pure waste, so bail out unless the appearance actually flipped. Editing the
