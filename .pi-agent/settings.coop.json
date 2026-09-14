@@ -27,7 +27,8 @@
     "ollama/glm-5.3-flash",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-daybreak-blue-latest",
-    "opencode-go/muse-spark-1.3-contributor"
+    "opencode-go/muse-spark-1.3-contributor",
+    "opencode-go/deepseek-v4.1-flash"
   ],
   "modelThinkingLevels": {
     "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
