@@ -1,7 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawn } from "node:child_process";
-import { Text } from "@earendil-works/pi-tui";
+import { Markdown, Text } from "@earendil-works/pi-tui";
 import { probeFetchTiers, resilientFetch } from "./web-fetch-resilient/fetch-core.ts";
 import {
   activeChain,
@@ -729,6 +729,27 @@ export default function web(pi: ExtensionAPI): void {
       if (backend) extras.push(backend);
       if (extras.length) text += theme.fg("muted", ` ${extras.join(" ")}`);
       return new Text(text, 0, 0);
+    },
+    // Display-only: the model still receives the raw markdown in content.
+    // Collapsed shows a plain preview; expanded renders the full markdown.
+    renderResult(result: any, options: any, _theme: any, context: any) {
+      const output = (result.content ?? [])
+        .filter((part: any) => part?.type === "text")
+        .map((part: any) => String(part.text ?? ""))
+        .join("\n");
+      if (!options?.expanded) {
+        const prior = context?.lastComponent;
+        const preview = prior instanceof Text ? prior : new Text("", 0, 0);
+        const lines = output.split("\n");
+        const shown = lines.slice(0, 10).join("\n");
+        const remaining = lines.length - 10;
+        preview.setText(remaining > 0 ? `${shown}\n... (${remaining} more lines)` : shown);
+        return preview;
+      }
+      const prior = context?.lastComponent;
+      const md = prior instanceof Markdown ? prior : new Markdown("", 0, 0, getMarkdownTheme());
+      md.setText(output);
+      return md;
     },
     async execute(_id, params: any, signal, onUpdate, ctx) {
       // An out-of-range mode would index EXCERPT_CHARS to undefined and
