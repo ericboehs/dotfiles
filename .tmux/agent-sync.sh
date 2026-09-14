@@ -67,7 +67,7 @@ ignore=${ignore:-zsh bash fish sh nu ksh dash pwsh \
 # One round trip for all pane state. Flag field is followed by another '|', so
 # a bash-native substring test finds flags without spawning grep.
 panes=$(tmux list-panes -a \
-  -F '#{window_id}|#{pane_id}|#{pane_tty}|#{pane_current_command}|#{alternate_on}|#{window_active}|#{@agent_running}|#{@agent_count}|#{@agent_pane}')
+  -F '#{window_id}|#{pane_id}|#{pane_tty}|#{pane_current_command}|#{alternate_on}|#{window_active}|#{@agent_running}|#{@agent_count}|#{@agent_pane}|#{@job_done}')
 
 case $panes in *'|on|'*) have_flags=1 ;; *) have_flags=0 ;; esac
 
@@ -108,15 +108,19 @@ fi
 # windows/counts/previous-values in parallel arrays (a handful of entries).
 # A pane that was busy last sweep but isn't now just finished a job: its
 # window gets @job_done (rendered as a bright index) until the user focuses it.
+# A window that goes busy again drops @job_done (see the final loop) so the
+# dim working signal wins over the stale bright one. @special_activity is
+# pi's own flag and can mark a live blocking prompt, so only the extension
+# clears it — never this sweep.
 # Last sweep's busy panes persist in a small state file, since every run is
 # a fresh process.
-wins=(); counts=(); prevs=()
+wins=(); counts=(); prevs=(); win_jobdone=()
 state=${XDG_CACHE_HOME:-$HOME/.cache}/tmux-agent-sync.state
 mkdir -p "${state%/*}" 2>/dev/null
 oldbusy=" $(cat "$state" 2>/dev/null) "
 newbusy=""
 done_windows=""
-while IFS='|' read -r win pane tty cmd alt active flag oldcount marker; do
+while IFS='|' read -r win pane tty cmd alt active flag oldcount marker jobdone; do
   case "$live" in *" ${tty#/dev/} "* ) live_agent=1 ;; *) live_agent=0 ;; esac
 
   # Sticky marker: alive means an agent session owns this pane — trust its
@@ -157,7 +161,7 @@ while IFS='|' read -r win pane tty cmd alt active flag oldcount marker; do
   i=0
   while [ "$i" -lt "${#wins[@]}" ] && [ "${wins[$i]}" != "$win" ]; do i=$((i+1)); done
   if [ "$i" -eq "${#wins[@]}" ]; then
-    wins+=("$win"); counts+=(0); prevs+=("$oldcount")
+    wins+=("$win"); counts+=(0); prevs+=("$oldcount"); win_jobdone+=("$jobdone")
   fi
   [ "$work" = 1 ] && counts[i]=$(( counts[i] + 1 ))
 
@@ -186,6 +190,16 @@ while [ "$i" -lt "${#wins[@]}" ]; do
       tmux set-window-option -u -t "${wins[$i]}" @agent_count
     else
       tmux set-window-option -t "${wins[$i]}" @agent_count "$c"
+    fi
+  fi
+  # A window that is working again shows dim, not bright: drop the stale
+  # completion flag — set in a previous sweep, or earlier this sweep next to
+  # a still-busy sibling — so @job_done never outranks @agent_count.
+  if [ "$c" -gt 0 ]; then
+    if [ "${win_jobdone[$i]}" = on ]; then
+      tmux set-window-option -u -t "${wins[$i]}" @job_done
+    else
+      case "$done_windows" in *"${wins[$i]} "*) tmux set-window-option -u -t "${wins[$i]}" @job_done ;; esac
     fi
   fi
   i=$((i+1))

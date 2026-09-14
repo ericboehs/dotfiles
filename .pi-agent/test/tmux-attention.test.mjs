@@ -31,7 +31,7 @@ async function loadExtension() {
 }
 
 /** Build a stub pi with a real-enough event bus, and mount the extension. */
-async function mount({ responder, windowActive = "0" } = {}) {
+async function mount({ responder, windowActive = "0", runningPanes = "" } = {}) {
   process.env.TMUX_PANE = "%9";
   const extension = await loadExtension();
 
@@ -44,8 +44,10 @@ async function mount({ responder, windowActive = "0" } = {}) {
     on: (name, handler) => handlers.set(name, handler),
     exec: async (command, args) => {
       execCalls.push(args.join(" "));
-      // Report window_active for markWindow(); other display-message callers
-      // (window_id) get the same stub, which is enough for these smoke tests.
+      // Report window_active for markWindow() and the running-pane listing
+      // for setRunning(); other display-message callers (window_id) get the
+      // same stub, which is enough for these smoke tests.
+      if (args[0] === "list-panes") return { stdout: runningPanes, stderr: "", code: 0 };
       return { stdout: args[0] === "display-message" ? windowActive : "", stderr: "", code: 0 };
     },
     events: {
@@ -71,6 +73,7 @@ async function mount({ responder, windowActive = "0" } = {}) {
   return {
     execCalls,
     requests,
+    start: () => handlers.get("agent_start")(),
     settle: () => handlers.get("agent_settled")(),
     prompt: (event = {}) => handlers.get("ui_prompt_start")(event),
     promptEnd: (event = {}) => handlers.get("ui_prompt_end")(event),
@@ -201,5 +204,39 @@ test("answering a prompt clears attention", async () => {
   assert.ok(
     pi.execCalls.some((call) => call.includes("-u") && call.includes("@special_activity")),
     "answering while focused must not leave a stale attention flag",
+  );
+});
+
+test("a resumed turn clears the stale attention flags", async () => {
+  const pi = await mount({ runningPanes: "on" });
+
+  await pi.start();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("-u") && call.includes("@special_activity")),
+    "resuming must drop the bright settled indicator so the dim shows",
+  );
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("-u") && call.includes("@job_done")),
+    "resuming supersedes a shell completion in the same window too",
+  );
+  assert.ok(
+    pi.execCalls.some((call) => call.includes("@agent_count") && !call.includes("-u")),
+    "the window still dims while the new turn works",
+  );
+});
+
+test("settling with a sibling still running stays dim", async () => {
+  const pi = await mount({ runningPanes: "on" });
+
+  await pi.settle();
+
+  assert.equal(pi.requests.length, 0, "no probe when another pane keeps working");
+  assert.equal(
+    pi.execCalls.filter((call) => call.includes("@special_activity") && !call.includes("-u"))
+      .length,
+    0,
+    "the last pane to settle announces, not an earlier one",
   );
 });

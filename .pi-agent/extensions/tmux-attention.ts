@@ -167,8 +167,17 @@ export default function (pi: ExtensionAPI): void {
    * agent. Dimming is decided at render time from window_active, so the flag
    * is maintained even when this window is currently focused — switching away
    * mid-turn dims it without any extra bookkeeping.
+   *
+   * Returns the window's remaining running-pane count. A window with any pane
+   * still working shows dim, so resuming work also drops the stale bright
+   * indicators (@special_activity from a settled turn, @job_done from a shell
+   * job): the new turn supersedes the previous settlement, and bright must
+   * never outrank the busy signal. Prompt attention shares @special_activity,
+   * so in a same-window multi-agent overlap this can also drop a sibling's
+   * prompt flag — accepted, matching the existing single-flag imprecision
+   * (answering one prompt already clears another's via ui_prompt_end).
    */
-  const setRunning = async (on: boolean): Promise<void> => {
+  const setRunning = async (on: boolean): Promise<number> => {
     try {
       await pi.exec(
         "tmux",
@@ -185,7 +194,7 @@ export default function (pi: ExtensionAPI): void {
         ["display-message", "-p", "-t", TMUX_PANE, "#{window_id}"],
         { timeout: 1000 },
       );
-      if (win.code !== 0) return;
+      if (win.code !== 0) return 0;
       const target = win.stdout.trim();
       const listing = await pi.exec(
         "tmux",
@@ -211,8 +220,26 @@ export default function (pi: ExtensionAPI): void {
           { timeout: 1000 },
         );
       }
+      // A start always means this window is working again, and a settle that
+      // leaves siblings running does too. Only a settle to fully idle keeps
+      // whatever attention was already there (markWindow then sets its own).
+      // Unsetting a missing option is a tmux no-op, so no read-before-write.
+      if (on || count > 0) {
+        await pi.exec(
+          "tmux",
+          ["set-window-option", "-u", "-t", target, "@special_activity"],
+          { timeout: 1000 },
+        );
+        await pi.exec(
+          "tmux",
+          ["set-window-option", "-u", "-t", target, "@job_done"],
+          { timeout: 1000 },
+        );
+      }
+      return count;
     } catch {
       // Same best-effort contract as markWindow above.
+      return 0;
     }
   };
 
@@ -225,7 +252,11 @@ export default function (pi: ExtensionAPI): void {
     // Clear this pane's running flag first: a turn that launched background
     // work still counts as settled for dimming purposes — the tasks below get
     // their own announcement path when they finish.
-    await setRunning(false);
+    const remaining = await setRunning(false);
+
+    // A sibling pane is still working: the window stays dim until the last
+    // one settles rather than flashing bright while work continues.
+    if (remaining > 0) return;
 
     // A turn that launched background work does not need attention yet. Its
     // completion notification will either wake another turn or be handled by
