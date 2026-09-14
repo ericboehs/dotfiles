@@ -1002,7 +1002,8 @@
     },
     "opencode-go": {
       "modelOverrides": {
-        "muse-spark-1.3-contributor": { "contextWindow": 266384 }
+        "muse-spark-1.3-contributor": { "contextWindow": 266384 },
+        "deepseek-v4.1-flash": { "contextWindow": 266384 }
       }
     },
     "claude-bridge": {
