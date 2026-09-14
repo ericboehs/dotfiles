@@ -713,6 +713,31 @@
           }
         },
         {
+          "id": "deepseek-v4.1-flash:cloud",
+          "name": "DeepSeek V4.1 Flash (Ollama)",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 230000,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        },
+        {
           "id": "minimax-m3",
           "name": "MiniMax M3 (Ollama)",
           "reasoning": true,
