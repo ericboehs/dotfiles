@@ -969,7 +969,11 @@
           "contextWindow": 272000,
           "maxTokens": 128000
         }
-      ]
+      ],
+      "modelOverrides": {
+        "gpt-5.6-sol": { "contextWindow": 246384 },
+        "gpt-daybreak-blue-latest": { "contextWindow": 246384 }
+      }
     },
     "claude-bridge": {
       "modelOverrides": {
@@ -981,6 +985,11 @@
         "claude-sonnet-5":  { "contextWindow": 256000 },
         "claude-sonnet-4-6": { "contextWindow": 256000 },
         "claude-haiku-4-5": { "contextWindow": 256000 }
+      }
+    },
+    "xai": {
+      "modelOverrides": {
+        "grok-4.6": { "contextWindow": 196384 }
       }
     }
   }
