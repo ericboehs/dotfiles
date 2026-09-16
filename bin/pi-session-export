@@ -48,7 +48,13 @@ sessions.each do |src|
     first_user  = nil
     turns       = []
 
-    File.foreach(src) do |line|
+    # Always read as UTF-8. Under launchd there is no LANG/LC_ALL, so Ruby's
+    # Encoding.default_external falls back to US-ASCII and every session
+    # containing a non-ASCII byte (box drawing, curly quotes, arrows) died with
+    # Encoding::InvalidByteSequenceError. The per-file rescue swallowed it and
+    # the script still exited 0, so the scheduled pass silently exported almost
+    # nothing while manual runs from a UTF-8 shell looked fine.
+    File.foreach(src, encoding: "UTF-8") do |line|
       begin
         entry = JSON.parse(line)
       rescue JSON::ParserError
