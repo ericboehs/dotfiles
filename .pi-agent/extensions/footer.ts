@@ -311,10 +311,16 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^muse-spark(?:-[\d.]+)?(?:-contributor)?(?:-free)?$/i, "muse"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
-  [/^z-ai\/GLM-5\.3-Flash$/i, "oxa"],
-  [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
+  // V4.1's dotted minor version misses the rule above, so match it across the
+  // provider spellings (org id, OpenRouter route, bare id — Ollama Cloud's
+  // ":cloud" suffix is stripped by baseModelId first).
+  [/^deepseek-ai\/DeepSeek-V(\d+\.\d+)-Flash$/i, "ds$1f"],
+  [/^deepseek\/deepseek-v(\d+\.\d+)-flash$/i, "ds$1f"],
+  [/^deepseek-v(\d+\.\d+)-flash$/i, "ds$1f"],
+  [/^z-ai\/GLM-5\.3-Flash$/i, "glm-5.3f"],
+  [/^zai-org\/GLM-5\.3-Flash$/i, "glm-5.3f"],
   // Ollama Cloud ships the same model under a bare, org-less id.
-  [/^GLM-5\.3-Flash$/i, "oxa"],
+  [/^GLM-5\.3-Flash$/i, "glm-5.3f"],
   [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];

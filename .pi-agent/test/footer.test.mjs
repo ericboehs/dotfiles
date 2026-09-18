@@ -310,10 +310,13 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["moonshotai/Kimi-K3", "k3"],
     ["deepseek-ai/DeepSeek-V4-Pro-0813", "ds v4-pro"],
     ["deepseek-ai/DeepSeek-V4-Flash-0731", "ds v4-flash"],
-    ["zai-org/GLM-5.3-Flash", "oxa"],
-    ["z-ai/glm-5.3-flash", "oxa"],
-    ["z-ai/glm-5.3-flash@preset/ox-alpha", "oxa"],
-    ["glm-5.3-flash", "oxa"],
+    ["deepseek-ai/DeepSeek-V4.1-Flash", "ds4.1f"],
+    ["deepseek/deepseek-v4.1-flash", "ds4.1f"],
+    ["deepseek-v4.1-flash", "ds4.1f"],
+    ["zai-org/GLM-5.3-Flash", "glm-5.3f"],
+    ["z-ai/glm-5.3-flash", "glm-5.3f"],
+    ["z-ai/glm-5.3-flash@preset/ox-alpha", "glm-5.3f"],
+    ["glm-5.3-flash", "glm-5.3f"],
     ["Qwen3.8-27B-4bit", "3.8-27b"],
     ["Qwen3.6-35B-A3B-UD-MLX-4bit", "3.6-35b-a3b"],
     ["Ornith-1.5-35B-A3B-MLX-4bit", "orn"],
@@ -332,7 +335,7 @@ test("provider-specific model aliases", async () => {
   for (const [model, expected] of [
     [{ id: "claude-opus-5", provider: "github-copilot", reasoning: true }, "opus"],
     [{ id: "grok-4.6", provider: "xai", reasoning: true }, "grok"],
-    [{ id: "glm-5.3-flash", provider: "ollama", reasoning: true }, "oxa"],
+    [{ id: "glm-5.3-flash", provider: "ollama", reasoning: true }, "glm-5.3f"],
   ]) {
     const ui = await mount({ model });
     const rest = ui.plain()[0].split(" ").slice(3).join(" ");
@@ -347,32 +350,32 @@ test("an OpenRouter route prefixes the model chip, for that model only", async (
   try {
     scope.__piOpenRouterRoute = { provider: "Novita", model: "z-ai/glm-5.3-flash", at: Date.now() };
     let ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or novita/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or novita/glm-5.3f");
 
     // A preset resolves server-side: the response names the underlying model.
     ui = await mount({
       model: { id: "z-ai/glm-5.3-flash@preset/ox-alpha", provider: "openrouter", reasoning: false },
     });
-    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or novita/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or novita/glm-5.3f");
 
     // Unmapped providers still read sensibly; mapped ones get the short name.
     scope.__piOpenRouterRoute = { provider: "Z.AI", model: "z-ai/glm-5.3-flash", at: Date.now() };
     ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or z/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or z/glm-5.3f");
 
     scope.__piOpenRouterRoute = { provider: "Parasail", model: "z-ai/glm-5.3-flash", at: Date.now() };
     ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or parasail/oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or parasail/glm-5.3f");
 
     // A route recorded for a different model, or a non-OpenRouter provider,
     // must not paint a prefix.
     scope.__piOpenRouterRoute = { provider: "Novita", model: "moonshotai/kimi-k3", at: Date.now() };
     ui = await mount({ model });
-    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "or glm-5.3f");
 
     scope.__piOpenRouterRoute = { provider: "BaseTen", model: "zai-org/GLM-5.3-Flash", at: Date.now() };
     ui = await mount({ model: { id: "zai-org/GLM-5.3-Flash", provider: "baseten", reasoning: false } });
-    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "b10 oxa");
+    assert.equal(ui.plain()[0].split(" ").slice(2, 4).join(" "), "b10 glm-5.3f");
   } finally {
     if (previous === undefined) delete scope.__piOpenRouterRoute;
     else scope.__piOpenRouterRoute = previous;

@@ -1,6 +1,6 @@
 /**
  * Which upstream provider OpenRouter actually routed a turn to, for the footer
- * chip: `or novita/oxa` instead of a bare `or oxa`.
+ * chip: `or novita/glm-5.3f` instead of a bare `or glm-5.3f`.
  *
  * OpenRouter reports the decision in `openrouter_metadata`, an opt-in field
  * enabled per request with `X-OpenRouter-Metadata: enabled`. It rides in the

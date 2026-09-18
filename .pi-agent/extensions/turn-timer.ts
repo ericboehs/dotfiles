@@ -61,8 +61,13 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^claude-(.+)$/i, "$1"],
   [/^moonshotai\/Kimi-(.+)$/i, "$1"],
   [/^deepseek-ai\/DeepSeek-(V\d+)-([A-Za-z]+)(?:-\d+)?$/i, "DS $1-$2"],
-  [/^z-ai\/GLM-5\.3-Flash$/i, "oxa"],
-  [/^zai-org\/GLM-5\.3-Flash$/i, "oxa"],
+  // V4.1's dotted minor version misses the rule above, so match it across the
+  // provider spellings (org id, OpenRouter route, bare id).
+  [/^deepseek-ai\/DeepSeek-V(\d+\.\d+)-Flash$/i, "ds$1f"],
+  [/^deepseek\/deepseek-v(\d+\.\d+)-flash$/i, "ds$1f"],
+  [/^deepseek-v(\d+\.\d+)-flash$/i, "ds$1f"],
+  [/^z-ai\/GLM-5\.3-Flash$/i, "glm-5.3f"],
+  [/^zai-org\/GLM-5\.3-Flash$/i, "glm-5.3f"],
   [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn-1.5"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];
