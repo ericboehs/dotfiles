@@ -21,7 +21,7 @@
     "git:github.com/ericboehs/pi-agent-link@adb68d89173e405156cd72f5bb8ae09c8e1ecb2e"
   ],
   "extensions": [
-    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts"
+    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts"
   ],
   "lastChangelogVersion": "0.85.1"
 }

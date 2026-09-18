@@ -8,21 +8,21 @@
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
   "extensions": [
-    "~/Code/github.com/ericboehs/claude-plugins/pi/extensions/code-lint.ts"
+    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts"
   ],
   "skills": [
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/git-utils/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/gist/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/code-lint/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/copy-for-slack/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/gh-copilot-review/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/watch-ci/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/agent-desktop/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/gh-actions-security/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/icloud-downloads/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/md-to-pdf/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/x-fetch/skills",
-    "~/Code/github.com/ericboehs/claude-plugins/plugins/pr-review/skills"
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/git-utils/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/gist/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/code-lint/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/copy-for-slack/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/gh-copilot-review/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/watch-ci/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/agent-desktop/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/gh-actions-security/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/icloud-downloads/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/md-to-pdf/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/x-fetch/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/pr-review/skills"
   ],
   "prompts": [
     "~/Code/github.com/ericboehs/claude-config/prompts"
