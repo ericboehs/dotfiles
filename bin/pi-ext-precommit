@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+
+# git pre-commit hook: typecheck the staged .pi-agent extensions before they land.
+#
+# Wired up in .gitconfig as a config hook (`[hook "pi-extensions-typecheck"]`),
+# which is global, so the first thing this does is check whether the repo being
+# committed to even has a bin/pi-ext-check -- everywhere else it exits 0 without
+# a word.
+#
+# Why this exists next to bin/pi-ext-prepush: that hook does catch a red
+# typecheck, but only at push time, by which point eight commits are written and
+# the offending one is buried. A TS2307 from an unlinked package (pi-ai ships
+# nested inside the global pi, so `import { uuidv7 } from "@earendil-works/pi-ai"`
+# resolved against nothing) is cheapest to fix while it is still the commit you
+# have staged, so this runs the same static checks at commit time.
+#
+# Three things it deliberately does not do:
+#
+#   * It does not check the working tree. Three agent sessions and a human share
+#     this clone, so at any moment the tree holds someone else's half-finished
+#     file. The check has to describe the commit that would land, so it builds a
+#     throwaway commit from the index (`git write-tree` + `git commit-tree`) and
+#     runs in a detached worktree of that -- which also never mutates shared
+#     state the way `git stash` does.
+#
+#   * It does not run the test suite. Tests take seconds and catch different
+#     things; pre-push already runs them plus the typecheck against the exact sha
+#     being pushed. --typecheck-only keeps a commit under a coffee break.
+#
+#   * It does not run when nothing under .pi-agent/ is staged, because it costs
+#     seconds and most commits here are shell scripts and config.
+
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$root" ] || exit 0
+
+# The only scoping this hook gets: no checker, not our repo, nothing to do.
+[ -x "$root/bin/pi-ext-check" ] || exit 0
+
+# A machine without a global pi cannot run the check at all. Warn and let the
+# commit through rather than making a fresh clone uncommittable -- CI still gates.
+if ! command -v npm >/dev/null 2>&1 ||
+  [ ! -d "$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent" ]; then
+  echo "pi-ext-precommit: pi is not installed globally, skipping the extension check" >&2
+  exit 0
+fi
+
+# --cached, so this reads the index the commit will use. Unborn HEAD is fine:
+# git already compares against the empty tree, so a first commit still checks.
+if git diff --cached --quiet -- .pi-agent 2>/dev/null; then
+  exit 0
+fi
+
+# An unmerged index (mid-merge or mid-rebase) has no tree to write, and
+# `git write-tree` refuses rather than guessing. Nothing useful to check anyway:
+# the resolution is still in progress, so let the commit proceed.
+if ! tree="$(git write-tree 2>/dev/null)"; then
+  echo "pi-ext-precommit: index has unmerged entries, skipping the extension check" >&2
+  exit 0
+fi
+
+# Hooks inherit GIT_DIR and friends, which then leak into the nested git calls
+# below (git worktree add especially) and make them operate on the wrong thing.
+# GIT_INDEX_FILE is unset only *after* write-tree, since it is what pointed at
+# the index being committed (git sets it for a pathspec commit).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
+# A worktree needs a commit-ish, not a bare tree, so wrap the index tree in a
+# throwaway commit. It is deliberately parentless and unreferenced: nothing
+# points at it, so it is garbage-collected like any other dangling object.
+commit="$(
+  GIT_AUTHOR_NAME="pi-ext-precommit" GIT_AUTHOR_EMAIL="pi-ext-precommit@localhost" \
+    GIT_COMMITTER_NAME="pi-ext-precommit" GIT_COMMITTER_EMAIL="pi-ext-precommit@localhost" \
+    git -C "$root" commit-tree "$tree" -m "pi-ext-precommit: staged index"
+)"
+
+worktree="$(mktemp -d "${TMPDIR:-/tmp}/pi-ext-precommit.XXXXXX")"
+# shellcheck disable=SC2329  # invoked by the trap below
+cleanup() {
+  git -C "$root" worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
+}
+trap cleanup EXIT
+
+if ! git -C "$root" worktree add --detach --quiet --force "$worktree" "$commit"; then
+  echo "pi-ext-precommit: could not build a worktree from the staged index, skipping the check" >&2
+  exit 0
+fi
+
+echo "pi-ext-precommit: checking the staged .pi-agent tree in a detached worktree..."
+if "$worktree/bin/pi-ext-check" --typecheck-only; then
+  exit 0
+fi
+
+echo "" >&2
+echo "pi-ext-precommit: the staged .pi-agent tree does not pass bin/pi-ext-check." >&2
+echo "Fix it and stage the fix; the commit that lands has to be the one that passed." >&2
+echo "Do not reach for --no-verify -- the tests above skipped run again at push time." >&2
+exit 1

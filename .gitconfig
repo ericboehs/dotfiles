@@ -131,6 +131,14 @@
 	# the command string, so it has to end in something that accepts them.
 	event = pre-push
 	command = "sh -c 'test -x ./bin/pi-ext-prepush || exit 0; exec ./bin/pi-ext-prepush \"$@\"' pi-ext-prepush"
+[hook "pi-extensions-typecheck"]
+	# Catches the same failures as the pre-push hook, but while the offending
+	# change is still the staged one instead of eight commits deep. Global like
+	# the push hook, so the script exits 0 unless the repo has bin/pi-ext-check.
+	# git appends the hook args to the command string, so it has to end in
+	# something that accepts them.
+	event = pre-commit
+	command = "sh -c 'test -x ./bin/pi-ext-precommit || exit 0; exec ./bin/pi-ext-precommit \"$@\"' pi-ext-precommit"
 [user]
 	signingkey = ~/.ssh/id_ed25519.pub
 [credential "https://github.ec.va.gov"]
