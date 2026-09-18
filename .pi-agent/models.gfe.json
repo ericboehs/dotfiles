@@ -3,6 +3,12 @@
     "github-copilot": {
       "baseUrl": "https://copilot-api.va.ghe.com",
       "modelOverrides": {
+        "gpt-5.6-sol": {
+          "headers": {
+            "User-Agent": "copilot/1.0.80 (client/github/cli darwin v24.18.1) term/tmux",
+            "Copilot-Integration-Id": "copilot-developer-cli"
+          }
+        },
         "claude-opus-4.8": {
           "contextWindow": 216384,
           "headers": {
