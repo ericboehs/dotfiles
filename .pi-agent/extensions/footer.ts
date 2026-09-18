@@ -321,7 +321,9 @@ const MODEL_RULES: Array<[RegExp, string]> = [
   [/^zai-org\/GLM-5\.3-Flash$/i, "glm-5.3f"],
   // Ollama Cloud ships the same model under a bare, org-less id.
   [/^GLM-5\.3-Flash$/i, "glm-5.3f"],
-  [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn"],
+  // Version stays: footer keeps it for Qwen too, and this string is also the
+  // stats key in turn-timer, where dropping it would conflate a future Ornith 2.x.
+  [/^Ornith-1\.5-35B-A3B-MLX-4bit$/i, "orn-1.5"],
   [/^Qwen([\d.]+-\d+B(?:-A\d+B)?)\b.*$/i, "$1"],
 ];
 

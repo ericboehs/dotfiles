@@ -319,7 +319,7 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["glm-5.3-flash", "glm-5.3f"],
     ["Qwen3.8-27B-4bit", "3.8-27b"],
     ["Qwen3.6-35B-A3B-UD-MLX-4bit", "3.6-35b-a3b"],
-    ["Ornith-1.5-35B-A3B-MLX-4bit", "orn"],
+    ["Ornith-1.5-35B-A3B-MLX-4bit", "orn-1.5"],
     ["gpt-5.2-codex", "gpt-5.2-codex"],
     ["GLM-4.6", "GLM-4.6"],
   ];
