@@ -36,12 +36,17 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 # The only scoping this hook gets: no checker, not our repo, nothing to do.
 [ -x "$root/bin/pi-ext-check" ] || exit 0
 
-# A machine without a global pi cannot run the check at all. Warn and let the
-# push through rather than making a fresh clone unpushable -- CI still gates it.
-if ! command -v npm >/dev/null 2>&1 ||
-  [ ! -d "$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent" ]; then
-  echo "pi-ext-prepush: pi is not installed globally, skipping the extension check" >&2
-  exit 0
+# A machine without pi cannot run the check at all. Warn and let the push
+# through rather than making a fresh clone unpushable -- CI still gates it.
+# Mirror pi-ext-check's resolution order: the mise pin is authoritative, and
+# `npm root -g` only finds pi where a stray global install exists.
+if ! pi_root="$(mise where npm:@earendil-works/pi-coding-agent 2>/dev/null)" ||
+  [ ! -d "$pi_root/node_modules/@earendil-works/pi-coding-agent" ]; then
+  if ! command -v npm >/dev/null 2>&1 ||
+    [ ! -d "$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent" ]; then
+    echo "pi-ext-prepush: pi not found via mise or npm, skipping the extension check" >&2
+    exit 0
+  fi
 fi
 
 # git feeds pre-push one line per ref: <local ref> <local sha> <remote ref> <remote sha>
