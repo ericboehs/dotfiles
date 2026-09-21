@@ -73,4 +73,8 @@ neovim = "0.12.4"
 # pre-bundled build, the stock npm entrypoint is the fastest option on every
 # machine — bin/pi-bundle detects that and exits without building, and
 # bin/pi-native stays a manual opt-in for experiments.
-"npm:@earendil-works/pi-coding-agent" = "0.85.1"
+#
+# Keep `pi` resolving to the mise shim. A stray `npm i -g` under the mise-managed
+# node puts a second pi on PATH ahead of the shim, where `pi update` can and does
+# move it off this pin without anything noticing.
+"npm:@earendil-works/pi-coding-agent" = "0.86.1"
