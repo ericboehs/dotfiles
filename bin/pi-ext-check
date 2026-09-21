@@ -63,9 +63,25 @@ if ! command -v npm >/dev/null; then
   exit 1
 fi
 
-PI_PKG="$(npm root -g)/@earendil-works/pi-coding-agent"
-if [ ! -d "$PI_PKG" ]; then
-  echo -e "${RED}❌ pi is not installed globally at $PI_PKG${NC}" >&2
+# Resolve pi from mise first. The pin in .config/mise/config.toml is the
+# authoritative install; `npm root -g` only finds pi on a machine that also has
+# a stray `npm i -g` under the active node, which is exactly the shim-shadowing
+# trap that let e14 drift to 0.86.1 while the pin said 0.85.1. gfew never had
+# that stray copy, so this script -- and the commit hooks that call it -- had
+# been failing there outright.
+PI_PKG=""
+if command -v mise >/dev/null; then
+  mise_root="$(mise where npm:@earendil-works/pi-coding-agent 2>/dev/null || true)"
+  if [ -n "$mise_root" ] && [ -d "$mise_root/node_modules/@earendil-works/pi-coding-agent" ]; then
+    PI_PKG="$mise_root/node_modules/@earendil-works/pi-coding-agent"
+  fi
+fi
+if [ -z "$PI_PKG" ] && [ -d "$(npm root -g)/@earendil-works/pi-coding-agent" ]; then
+  PI_PKG="$(npm root -g)/@earendil-works/pi-coding-agent"
+fi
+if [ -z "$PI_PKG" ]; then
+  echo -e "${RED}❌ pi not found via mise or npm root -g${NC}" >&2
+  echo "   Install it with: mise install" >&2
   exit 1
 fi
 
@@ -80,18 +96,30 @@ for manifest in "$PI_AGENT"/extensions/*/package.json; do
     --ignore-scripts --no-audit --no-fund
 done
 
-# Fresh links every run: the global pi moves with each node version bump, and a
+# mise's npm backend uses a pnpm-style virtual store, so pi's dependencies sit
+# in a shared root rather than nested under the package. A plain `npm i -g`
+# nests them. Find whichever layout this machine has.
+if [ -d "$PI_PKG/node_modules/@earendil-works/pi-tui" ]; then
+  PI_DEPS="$PI_PKG/node_modules"
+elif [ -d "$mise_root/node_modules/.mise/node_modules/@earendil-works/pi-tui" ]; then
+  PI_DEPS="$mise_root/node_modules/.mise/node_modules"
+else
+  echo -e "${RED}❌ cannot locate pi's dependencies under $PI_PKG${NC}" >&2
+  exit 1
+fi
+
+# Fresh links every run: the pi install moves with each version bump, and a
 # stale symlink fails in ways that read like a broken extension.
 mkdir -p "$PI_AGENT/node_modules/@earendil-works" "$PI_AGENT/node_modules/@types"
 ln -sfn "$PI_PKG" "$PI_AGENT/node_modules/@earendil-works/pi-coding-agent"
-ln -sfn "$PI_PKG/node_modules/@earendil-works/pi-tui" "$PI_AGENT/node_modules/@earendil-works/pi-tui"
-# pi-ai ships nested inside the global pi rather than as a top-level package, so
-# an extension importing it typechecks against nothing until it is linked too.
-ln -sfn "$PI_PKG/node_modules/@earendil-works/pi-ai" "$PI_AGENT/node_modules/@earendil-works/pi-ai"
-ln -sfn "$PI_PKG/node_modules/@types/node" "$PI_AGENT/node_modules/@types/node"
+ln -sfn "$PI_DEPS/@earendil-works/pi-tui" "$PI_AGENT/node_modules/@earendil-works/pi-tui"
+# pi-ai ships alongside pi rather than as a top-level package, so an extension
+# importing it typechecks against nothing until it is linked too.
+ln -sfn "$PI_DEPS/@earendil-works/pi-ai" "$PI_AGENT/node_modules/@earendil-works/pi-ai"
+ln -sfn "$PI_DEPS/@types/node" "$PI_AGENT/node_modules/@types/node"
 # Extensions that register tools declare their schemas with typebox, which pi
 # re-exports at runtime but tsc has to resolve on disk like any other import.
-ln -sfn "$PI_PKG/node_modules/typebox" "$PI_AGENT/node_modules/typebox"
+ln -sfn "$PI_DEPS/typebox" "$PI_AGENT/node_modules/typebox"
 
 status=0
 
