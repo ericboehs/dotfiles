@@ -2,13 +2,55 @@
   "providers": {
     "github-copilot": {
       "baseUrl": "https://copilot-api.va.ghe.com",
-      "modelOverrides": {
-        "gpt-5.6-sol": {
+      "models": [
+        {
+          "id": "claude-opus-5.5",
+          "name": "Claude Opus 5.5",
+          "api": "anthropic-messages",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 4,
+            "output": 20,
+            "cacheRead": 0.2,
+            "cacheWrite": 5
+          },
           "headers": {
             "User-Agent": "copilot/1.0.80 (client/github/cli darwin v24.18.1) term/tmux",
             "Copilot-Integration-Id": "copilot-developer-cli"
+          },
+          "compat": {
+            "supportsMidConvoSystemMessages": true,
+            "forceAdaptiveThinking": true,
+            "supportsTemperature": false
+          },
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 2000,
+                "maxHeight": 2000,
+                "maxBytes": 4718592,
+                "jpegQuality": 80
+              }
+            }
           }
-        },
+        }
+      ],
+      "modelOverrides": {
         "claude-opus-4.8": {
           "contextWindow": 200000,
           "headers": {

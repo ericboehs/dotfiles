@@ -33,7 +33,7 @@ function withAgentDir(fn) {
 /** Build the extension, drive session_start, and return a rendering handle. */
 async function mount(overrides = {}) {
   const {
-    model = { id: "claude-opus-5", provider: "github-copilot", reasoning: true },
+    model = { id: "claude-opus-5.5", provider: "github-copilot", reasoning: true },
     contextUsage = { tokens: 41234, contextWindow: 1000000, percent: 4 },
     branch = "master",
     sessionName = undefined,
@@ -303,7 +303,10 @@ test("provider aliases", async () => {
 
 test("model aliases are lowercased, unknown ids pass through", async () => {
   const cases = [
-    ["gpt-5.6-sol", "sol"],
+    ["gpt-6-sol", "sol"],
+    ["gpt-5.6-sol", "gpt-5.6-sol"],
+    ["gpt-6-astra", "astra"],
+    ["gpt-7-astra", "gpt-7-astra"],
     ["gpt-5.6-luna", "luna"],
     ["gpt-5.6-terra", "terra"],
     ["claude-opus-5", "opus-5"],
@@ -331,10 +334,20 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
   }
 });
 
-test("provider-specific model aliases", async () => {
+test("provider-specific model aliases are pinned to exact releases", async () => {
   for (const [model, expected] of [
-    [{ id: "claude-opus-5", provider: "github-copilot", reasoning: true }, "opus"],
-    [{ id: "grok-4.6", provider: "xai", reasoning: true }, "grok"],
+    [{ id: "claude-opus-5.5", provider: "github-copilot", reasoning: true }, "opus"],
+    [{ id: "claude-opus-5", provider: "github-copilot", reasoning: true }, "opus-5"],
+    [{ id: "claude-opus-6", provider: "github-copilot", reasoning: true }, "opus-6"],
+    [{ id: "claude-opus-5", provider: "claude-bridge", reasoning: true }, "opus-5"],
+    [{ id: "gpt-6-sol", provider: "openai-codex", reasoning: true }, "sol"],
+    [{ id: "gpt-5.6-sol", provider: "openai-codex", reasoning: true }, "gpt-5.6-sol"],
+    [{ id: "gpt-7-sol", provider: "openai-codex", reasoning: true }, "gpt-7-sol"],
+    [{ id: "gpt-6-astra", provider: "openai-codex", reasoning: true }, "astra"],
+    [{ id: "gpt-7-astra", provider: "openai-codex", reasoning: true }, "gpt-7-astra"],
+    [{ id: "grok-4.7", provider: "xai", reasoning: true }, "grok"],
+    [{ id: "grok-4.6", provider: "xai", reasoning: true }, "grok-4.6"],
+    [{ id: "grok-5", provider: "xai", reasoning: true }, "grok-5"],
     [{ id: "glm-5.3-flash", provider: "ollama", reasoning: true }, "glm-5.3f"],
   ]) {
     const ui = await mount({ model });

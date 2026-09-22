@@ -304,7 +304,10 @@ const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max
 
 /** Ordered rewrite rules for verbose model ids; first match wins. Results are lowercased. */
 const MODEL_RULES: Array<[RegExp, string]> = [
-  [/^gpt-[\d.]+-sol$/i, "sol"],
+  // Keep release aliases exact: an older Sol must say gpt-5.6-sol rather than
+  // inheriting the current release's deceptively versionless label.
+  [/^gpt-6-sol$/i, "sol"],
+  [/^gpt-6-astra$/i, "astra"],
   [/^gpt-[\d.]+-luna$/i, "luna"],
   [/^gpt-[\d.]+-terra$/i, "terra"],
   [/^claude-(.+)$/i, "$1"],
@@ -607,16 +610,19 @@ function shortProvider(provider: string | undefined): string {
 function shortModel(model: string | undefined, provider?: string): string {
   const base = baseModelId(model);
   if (!base) return "no-model";
-  // xai: grok-4.6 → grok (provider chip already says "x")
-  if (provider === "xai" && /^grok-(.+)$/i.test(base)) return "grok";
-  // claude-bridge: claude-opus-5 → opus (family only; the bridge only exposes Claude models)
+  // Release-specific aliases deliberately do not match siblings: the provider
+  // chip already supplies the family context, while the model chip identifies
+  // the exact current release. Older/newer releases keep their versioned name.
+  if (provider === "xai" && /^grok-4\.7$/i.test(base)) return "grok";
+  // claude-bridge can omit versions for the other Claude families, but Opus
+  // remains versioned unless it is the exact current Copilot release below.
   if (provider === "claude-bridge") {
-    const m = /^claude-(fable|opus|sonnet|haiku)(?:-[\d-]+)?$/i.exec(base);
+    const m = /^claude-(fable|sonnet|haiku)(?:-[\d-]+)?$/i.exec(base);
     // noUncheckedIndexedAccess: capture group 1 re-widens per access, so pin it once.
     const family = m?.[1];
     if (family) return family;
   }
-  if (provider === "github-copilot" && /^claude-opus-5$/i.test(base)) return "opus";
+  if (provider === "github-copilot" && /^claude-opus-5\.5$/i.test(base)) return "opus";
   for (const [pattern, replacement] of MODEL_RULES) {
     // Aliased ids render lowercase; unknown ids pass through with their original casing.
     if (pattern.test(base)) return base.replace(pattern, replacement).toLowerCase();

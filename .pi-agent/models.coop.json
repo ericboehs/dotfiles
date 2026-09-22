@@ -780,9 +780,164 @@
         }
       }
     },
+    "github-copilot": {
+      "models": [
+        {
+          "id": "claude-opus-5.5",
+          "name": "Claude Opus 5.5",
+          "api": "anthropic-messages",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 4,
+            "output": 20,
+            "cacheRead": 0.2,
+            "cacheWrite": 5
+          },
+          "headers": {
+            "User-Agent": "GitHubCopilotChat/0.35.0",
+            "Editor-Version": "vscode/1.107.0",
+            "Editor-Plugin-Version": "copilot-chat/0.35.0",
+            "Copilot-Integration-Id": "vscode-chat"
+          },
+          "compat": {
+            "supportsMidConvoSystemMessages": true,
+            "forceAdaptiveThinking": true,
+            "supportsTemperature": false
+          },
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 2000,
+                "maxHeight": 2000,
+                "maxBytes": 4718592,
+                "jpegQuality": 80
+              }
+            }
+          }
+        }
+      ]
+    },
     "openai-codex": {
+      "models": [
+        {
+          "id": "gpt-6-sol",
+          "name": "GPT-6 Sol",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 246384,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 2,
+            "output": 10,
+            "cacheRead": 0.2,
+            "cacheWrite": 2.5,
+            "tiers": [
+              {
+                "inputTokensAbove": 272000,
+                "input": 4,
+                "output": 15,
+                "cacheRead": 0.4,
+                "cacheWrite": 5
+              }
+            ]
+          },
+          "compat": {
+            "supportsOpenAIGrammarTools": true,
+            "supportsAdditionalTools": true,
+            "supportsToolSearch": true,
+            "supportsMidConvoSystemMessages": true
+          },
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 2000,
+                "maxHeight": 2000,
+                "maxBytes": 4718592,
+                "jpegQuality": 80
+              }
+            }
+          }
+        },
+        {
+          "id": "gpt-6-luna",
+          "name": "GPT-6 Luna",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 272000,
+          "maxTokens": 128000,
+          "cost": {
+            "input": 0.1,
+            "output": 0.5,
+            "cacheRead": 0.01,
+            "cacheWrite": 0.125,
+            "tiers": [
+              {
+                "inputTokensAbove": 272000,
+                "input": 0.2,
+                "output": 0.75,
+                "cacheRead": 0.02,
+                "cacheWrite": 0.25
+              }
+            ]
+          },
+          "compat": {
+            "supportsOpenAIGrammarTools": true,
+            "supportsAdditionalTools": true,
+            "supportsToolSearch": true,
+            "supportsMidConvoSystemMessages": true
+          },
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 2000,
+                "maxHeight": 2000,
+                "maxBytes": 4718592,
+                "jpegQuality": 80
+              }
+            }
+          }
+        }
+      ],
       "modelOverrides": {
-        "gpt-5.6-sol": { "contextWindow": 246384 },
         "gpt-daybreak-blue-latest": { "contextWindow": 246384 }
       }
     },

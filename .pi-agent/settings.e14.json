@@ -53,9 +53,9 @@
     "ollama/deepseek-v4.1-flash:cloud",
     "ollama/glm-5.3-flash",
     "ollama/glm-5.3",
-    "github-copilot/claude-opus-5",
-    "github-copilot/gpt-5.6-sol",
-    "openai-codex/gpt-5.6-sol",
+    "github-copilot/claude-opus-5.5",
+    "openai-codex/gpt-6-sol",
+    "openai-codex/gpt-6-luna",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-daybreak-blue-latest",
     "xai/grok-4.7"
