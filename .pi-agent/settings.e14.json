@@ -58,7 +58,7 @@
     "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-daybreak-blue-latest",
-    "xai/grok-4.6"
+    "xai/grok-4.7"
   ],
   "retry": {
     "enabled": true,

@@ -848,7 +848,7 @@
     },
     "xai": {
       "modelOverrides": {
-        "grok-4.6": {
+        "grok-4.7": {
           "contextWindow": 196384
         }
       }
