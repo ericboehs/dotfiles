@@ -77,4 +77,4 @@ neovim = "0.12.4"
 # Keep `pi` resolving to the mise shim. A stray `npm i -g` under the mise-managed
 # node puts a second pi on PATH ahead of the shim, where `pi update` can and does
 # move it off this pin without anything noticing.
-"npm:@earendil-works/pi-coding-agent" = "0.86.1"
+"npm:@earendil-works/pi-coding-agent" = "0.87.0"
