@@ -1447,84 +1447,129 @@ async function fetchOllamaWithCookie(
 // ---------- opencode-go ----------
 
 /**
- * OpenCode Go publishes no usage API (opencode#31084) — the only source is
- * the server-rendered workspace /go page, gated by the browser's `auth`
- * session cookie (read from Safari's cookie store, like the ollama driver).
+ * OpenCode Go's old server-rendered /workspace/<wrk>/go page is gone; the
+ * numbers now live behind the console JSON API:
  *
- * The page embeds the three subscription windows as
- *   $R[N]={status:"ok",resetInSec:…,usagePercent:…,usage:…,limit:…}
- * in microcents (100,000,000 per dollar): $12 rolling-5h, $30 weekly,
- * $60 monthly. Windows are classified by limit, not page order, so a
- * future limit change degrades to ordered fallback instead of mislabeled
- * chips. Usage renders through the shared codex window formatter, so pace
- * coloring and the ↻-at-limit form apply unchanged.
+ *   GET https://opencode.ai/console/api/go/status   (x-org-id: wrk_…)
+ *   -> { access: { endsAt, meters: {
+ *          fiveHour: { resetsAt, limitMicroCents, usedMicroCents },
+ *          week:     { resetsAt, limitMicroCents, usedMicroCents },
+ *          month:    { limitMicroCents, usedMicroCents } } } }
+ *
+ * The `__Host-console_session` cookie is read from Safari's cookie store,
+ * like the ollama driver. The older `auth` cookie is kept as a fallback
+ * candidate so a stale Safari session reports "invalid or expired" instead
+ * of "no cookie". Money fields are microcents (1e8 per dollar)
+ * and arrive as JSON strings (the server models them as bigint). The month
+ * meter has no rolling window of its own, so its reset is the paid period end.
+ * Usage renders through the shared codex window formatter, so pace coloring
+ * and the ↻-at-limit form apply unchanged.
  */
 const COOKIE_ENV_OPENCODE_GO = "OPENCODE_SESSION_COOKIE";
 const WORKSPACE_ENV_OPENCODE_GO = "OPENCODE_WORKSPACE_ID";
 const WORKSPACE_CACHE_FILE = "opencode-workspace-id";
 const MICROCENTS_PER_DOLLAR = 100_000_000;
+const OPENCODE_GO_STATUS_URL = "https://opencode.ai/console/api/go/status";
+/** Console session cookie; the older `auth` cookie still gates the web app. */
+const OPENCODE_GO_COOKIE_NAMES = ["__Host-console_session", "auth"] as const;
 const OPENCODE_GO_WINDOWS = [
-  { limit: 12 * MICROCENTS_PER_DOLLAR, seconds: 5 * 3_600, label: "5h rolling" },
-  { limit: 30 * MICROCENTS_PER_DOLLAR, seconds: 7 * 86_400, label: "Weekly" },
-  { limit: 60 * MICROCENTS_PER_DOLLAR, seconds: 30 * 86_400, label: "Monthly" },
+  { key: "fiveHour", seconds: 5 * 3_600, label: "5h rolling", fallbackToPeriodEnd: false },
+  { key: "week", seconds: 7 * 86_400, label: "Weekly", fallbackToPeriodEnd: false },
+  { key: "month", seconds: 30 * 86_400, label: "Monthly", fallbackToPeriodEnd: true },
 ] as const;
-const OPENCODE_GO_USAGE_RE =
-  /\$R\[\d+\]=\{status:"ok",resetInSec:(\d+),usagePercent:([\d.]+),usage:(\d+),limit:(\d+)\}/g;
 
-interface OpencodeGoWindow {
-  resetInSec: number;
-  usagePercent: number;
+interface OpencodeGoMeter {
+  label: string;
+  seconds: number;
+  /** Microcents, mirroring the API's bigint-encoded money fields. */
   usage: number;
   limit: number;
+  percent: number;
+  /** Epoch ms of rollover; undefined when the window has no reset. */
+  resetMs: number | undefined;
 }
 
-/** The `auth` session cookie for opencode.ai from Safari's cookie store. */
-async function safariOpencodeAuthCookie(): Promise<string | undefined> {
+function opencodeGoRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function opencodeGoMicrocents(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/** Session cookies for opencode.ai from Safari's cookie store. The console
+ *  session is what the API accepts; the old `auth` cookie is read as a
+ *  fallback candidate so a not-yet-refreshed Safari session fails with
+ *  "invalid or expired" instead of "no cookie". */
+async function safariOpencodeGoHeaders(): Promise<Array<{ source: string; header: string }>> {
   let data: Buffer;
   try {
     data = await readFile(join(homedir(), SAFARI_COOKIES_FILE));
   } catch {
-    return undefined; // no Full Disk Access, no Safari, or no cookie yet
+    return []; // no Full Disk Access, no Safari, or no cookie yet
   }
 
-  const needle = "auth\0";
-  let pos = data.indexOf(needle);
-  while (pos !== -1) {
-    const pathEnd = data.indexOf(0, pos + needle.length);
-    const valueEnd = pathEnd === -1 ? -1 : data.indexOf(0, pathEnd + 1);
-    if (valueEnd !== -1) {
-      const value = data.toString("latin1", pathEnd + 1, valueEnd);
-      const domainStart = data.lastIndexOf(0, pos - 2) + 1;
-      const domain = data.toString("latin1", domainStart, pos - 1);
-      // Opaque session token: long, with no cookie metacharacters.
-      if (domain.includes("opencode.ai") && /^[^\s;,]{100,2000}$/.test(value)) {
-        return value;
+  const headers: Array<{ source: string; header: string }> = [];
+  for (const name of OPENCODE_GO_COOKIE_NAMES) {
+    const needle = `${name}\0`;
+    let pos = data.indexOf(needle);
+    while (pos !== -1) {
+      const pathEnd = data.indexOf(0, pos + needle.length);
+      const valueEnd = pathEnd === -1 ? -1 : data.indexOf(0, pathEnd + 1);
+      if (valueEnd !== -1) {
+        const value = data.toString("latin1", pathEnd + 1, valueEnd);
+        const domainStart = data.lastIndexOf(0, pos - 2) + 1;
+        const domain = data.toString("latin1", domainStart, pos - 1);
+        // Opaque session token: long, with no cookie metacharacters.
+        if (domain.includes("opencode.ai") && /^[^\s;,\0]{20,4000}$/.test(value)) {
+          headers.push({ source: `safari (${name})`, header: `${name}=${value}` });
+          break; // one record per name is enough
+        }
       }
+      pos = data.indexOf(needle, pos + needle.length);
     }
-    pos = data.indexOf(needle, pos + needle.length);
   }
-  return undefined;
+  return headers;
+}
+
+/** A bare value gets the console cookie name; a `name=value` pair for a
+ *  known cookie name passes through untouched. Matching on the known names
+ *  (not just any `token=`) keeps a bare base64 value ending in `=` from
+ *  being misread as a pair. Exported for the parse tests. */
+export function opencodeGoCookieHeader(value: string): string {
+  const trimmed = value.trim().replace(/;+$/, "").trim();
+  return /^(?:__Host-console_session|__Host-auth|auth)=/.test(trimmed)
+    ? trimmed
+    : `${OPENCODE_GO_COOKIE_NAMES[0]}=${trimmed}`;
 }
 
 /** Cookie candidates, freshest first: an explicit env override, the live
  *  Safari store (slides forward on every opencode.ai visit), then the
  *  fnox snapshot. */
-async function opencodeGoSessionCookies(): Promise<Array<{ source: string; value: string }>> {
-  const candidates: Array<{ source: string; value: string }> = [];
+async function opencodeGoCookieCandidates(): Promise<Array<{ source: string; header: string }>> {
+  const candidates: Array<{ source: string; header: string }> = [];
   const fromEnv = process.env[COOKIE_ENV_OPENCODE_GO]?.trim();
-  if (fromEnv) candidates.push({ source: `$${COOKIE_ENV_OPENCODE_GO}`, value: fromEnv });
-  const fromSafari = await safariOpencodeAuthCookie();
-  if (fromSafari) candidates.push({ source: "safari", value: fromSafari });
+  if (fromEnv) {
+    candidates.push({ source: `$${COOKIE_ENV_OPENCODE_GO}`, header: opencodeGoCookieHeader(fromEnv) });
+  }
+  candidates.push(...(await safariOpencodeGoHeaders()));
   const fromFnox = await fnoxGet(COOKIE_ENV_OPENCODE_GO);
-  if (fromFnox) candidates.push({ source: "fnox", value: fromFnox });
+  if (fromFnox) candidates.push({ source: "fnox", header: opencodeGoCookieHeader(fromFnox) });
   // Dedupe so one stale round trip is skipped when the stores agree.
   return candidates.filter(
     (candidate, index) =>
-      candidates.findIndex((other) => other.value === candidate.value) === index,
+      candidates.findIndex((other) => other.header === candidate.header) === index,
   );
 }
 
-/** The wrk_… id from the workspace URL: env first, then the cache file the
+/** The wrk_… id from the console URL: env first, then the cache file the
  *  driver writes on its first success, so the env var is one-time setup. */
 async function opencodeGoWorkspaceId(): Promise<string> {
   const fromEnv = process.env[WORKSPACE_ENV_OPENCODE_GO]?.trim();
@@ -1536,34 +1581,110 @@ async function opencodeGoWorkspaceId(): Promise<string> {
     // No cached id yet; the error below explains the one-time setup.
   }
   throw new Error(
-    `no OpenCode workspace id (set $${WORKSPACE_ENV_OPENCODE_GO} to the wrk_… id in your opencode.ai workspace URL)`,
+    `no OpenCode workspace id (set $${WORKSPACE_ENV_OPENCODE_GO} to the wrk_… id in your opencode.ai console URL)`,
   );
 }
 
-function parseOpencodeGoUsage(html: string): OpencodeGoWindow[] {
-  const windows: OpencodeGoWindow[] = [];
-  for (const match of html.matchAll(OPENCODE_GO_USAGE_RE)) {
-    windows.push({
-      resetInSec: Number.parseInt(match[1] as string, 10),
-      usagePercent: Number.parseFloat(match[2] as string),
-      usage: Number.parseInt(match[3] as string, 10),
-      limit: Number.parseInt(match[4] as string, 10),
+export function parseOpencodeGoStatus(payload: unknown): OpencodeGoMeter[] {
+  const access = opencodeGoRecord(opencodeGoRecord(payload)?.access);
+  const meters = opencodeGoRecord(access?.meters);
+  if (!access || !meters) return [];
+  const periodEndMs =
+    typeof access.endsAt === "string" ? Date.parse(access.endsAt) : undefined;
+
+  const parsed: OpencodeGoMeter[] = [];
+  for (const window of OPENCODE_GO_WINDOWS) {
+    const meter = opencodeGoRecord(meters[window.key]);
+    if (!meter) continue;
+    const usage = opencodeGoMicrocents(meter.usedMicroCents);
+    const limit = opencodeGoMicrocents(meter.limitMicroCents);
+    if (usage === undefined || limit === undefined) continue;
+    const ownResetMs =
+      typeof meter.resetsAt === "string" ? Date.parse(meter.resetsAt) : undefined;
+    const resetMs =
+      ownResetMs !== undefined && Number.isFinite(ownResetMs)
+        ? ownResetMs
+        : window.fallbackToPeriodEnd
+          ? periodEndMs
+          : undefined;
+    parsed.push({
+      label: window.label,
+      seconds: window.seconds,
+      usage,
+      limit,
+      percent: limit > 0 ? Math.round((usage / limit) * 1000) / 10 : 0,
+      resetMs: resetMs !== undefined && Number.isFinite(resetMs) ? resetMs : undefined,
     });
   }
-  const byLimit = new Map(windows.map((window) => [window.limit, window]));
-  if (OPENCODE_GO_WINDOWS.every(({ limit }) => byLimit.has(limit))) {
-    return OPENCODE_GO_WINDOWS.map(({ limit }) => byLimit.get(limit) as OpencodeGoWindow);
-  }
-  return windows;
+  return parsed;
 }
 
 function opencodeGoDollars(microcents: number): string {
   return formatDollars(microcents / MICROCENTS_PER_DOLLAR);
 }
 
+async function fetchOpencodeGoWithCookie(
+  workspaceId: string,
+  header: string,
+  source: string,
+): Promise<UsageDisplay> {
+  let payload: unknown;
+  try {
+    payload = await fetchJson(OPENCODE_GO_STATUS_URL, {
+      // The console scopes every request to a workspace with this header.
+      "x-org-id": workspaceId,
+      cookie: header,
+      "user-agent": "pi-opencode-go-window/1.0",
+    });
+  } catch (err) {
+    if (err instanceof Error && /\((401|403)\)/.test(err.message)) {
+      throw new Error(`OpenCode session cookie from ${source} is invalid or expired`);
+    }
+    throw err;
+  }
+
+  const meters = parseOpencodeGoStatus(payload);
+  if (meters.length === 0) {
+    throw new Error(
+      "console API returned no Go meter windows (no Go plan on this workspace, or the API changed)",
+    );
+  }
+
+  const nowMs = Date.now();
+  const groups = meters.map((meter) => ({
+    meter,
+    formatted: formatCodexWindow(
+      {
+        used_percent: meter.percent,
+        reset_at: meter.resetMs !== undefined ? meter.resetMs / 1000 : undefined,
+        limit_window_seconds: meter.seconds,
+      },
+      nowMs,
+    ),
+  }));
+  const value = groups
+    .map((group) => group.formatted)
+    .filter((formatted): formatted is string => formatted !== undefined)
+    .join(" ");
+  if (!value) throw new Error("no OpenCode Go usage window was returned");
+
+  const detail = groups.map((group) => {
+    const percent = `${formatNumber(group.meter.percent)}%`;
+    const reset =
+      group.meter.resetMs !== undefined
+        ? ` — resets ${formatResetClock(group.meter.resetMs, nowMs)}`
+        : "";
+    return (
+      `${group.meter.label}: ${opencodeGoDollars(group.meter.usage)} of ` +
+      `${opencodeGoDollars(group.meter.limit)} (${percent})${reset}`
+    );
+  });
+  return { value, commandText: detail.join("\n") };
+}
+
 async function fetchOpencodeGo(_ctx: ExtensionContext): Promise<UsageDisplay> {
   const workspaceId = await opencodeGoWorkspaceId();
-  const candidates = await opencodeGoSessionCookies();
+  const candidates = await opencodeGoCookieCandidates();
   if (candidates.length === 0) {
     throw new Error(
       `no OpenCode session cookie ($${COOKIE_ENV_OPENCODE_GO} env, fnox, or readable Safari store — log in to opencode.ai in Safari)`,
@@ -1571,69 +1692,18 @@ async function fetchOpencodeGo(_ctx: ExtensionContext): Promise<UsageDisplay> {
   }
 
   let lastError = new Error("no OpenCode session cookie resolved");
-  for (const { source, value: cookie } of candidates) {
+  for (const { source, header } of candidates) {
     try {
-      const { text, finalUrl } = await fetchText(
-        `https://opencode.ai/workspace/${workspaceId}/go`,
-        {
-          accept: "text/html",
-          cookie: `auth=${cookie}`,
-          "user-agent": "pi-opencode-go-window/1.0",
-        },
-      );
-      if (finalUrl.includes("/auth/")) {
-        throw new Error(`OpenCode session cookie from ${source} is invalid or expired`);
-      }
-      const windows = parseOpencodeGoUsage(text);
-      if (windows.length === 0) {
-        throw new Error("workspace page had no usage payload (signed out or page changed)");
-      }
+      const display = await fetchOpencodeGoWithCookie(workspaceId, header, source);
       // Remember the id so the env var is one-time setup.
       await writeFile(join(agentDirectory(), WORKSPACE_CACHE_FILE), `${workspaceId}\n`).catch(() => {});
-
-      const nowMs = Date.now();
-      const groups = windows.map((window, index) => {
-        const totalSeconds =
-          OPENCODE_GO_WINDOWS[index]?.seconds ?? 30 * 86_400;
-        const label = OPENCODE_GO_WINDOWS[index]?.label ?? `Window ${index + 1}`;
-        return {
-          label,
-          window,
-          formatted: formatCodexWindow(
-            {
-              used_percent: window.usagePercent,
-              reset_at: (nowMs + window.resetInSec * 1000) / 1000,
-              limit_window_seconds: totalSeconds,
-            },
-            nowMs,
-          ),
-        };
-      });
-      const value = groups
-        .map((group) => group.formatted)
-        .filter((formatted): formatted is string => formatted !== undefined)
-        .join(" ");
-      if (!value) throw new Error("no OpenCode Go usage window was returned");
-
-      const detail = groups.map(
-        (group) =>
-          `${group.label}: ${opencodeGoDollars(group.window.usage)} of ` +
-          `${opencodeGoDollars(group.window.limit)} ` +
-          `(${formatNumber(group.window.usagePercent)}%) — ` +
-          `resets ${formatResetClock(nowMs + group.window.resetInSec * 1000, nowMs)}`,
-      );
-      return { value, commandText: detail.join("\n") };
+      return display;
     } catch (err) {
-      // Only a rejected/expired cookie justifies trying the next source;
-      // a bad workspace id fails identically for every source.
+      // Only a rejected/expired cookie justifies trying the next source; a
+      // bad workspace id or a changed API fails identically for every cookie.
       if (err instanceof Error && err.message.includes("invalid or expired")) {
         lastError = err;
         continue;
-      }
-      if (err instanceof Error && err.message.includes("(404)")) {
-        throw new Error(
-          `OpenCode workspace ${workspaceId} not found — check $${WORKSPACE_ENV_OPENCODE_GO}`,
-        );
       }
       throw err;
     }
@@ -1899,7 +1969,7 @@ const DRIVERS: Driver[] = [
     id: "opencode-go-window",
     provider: "opencode-go",
     statusKey: "opencode-go-window",
-    // An HTML scrape: a full page render per poll, so stay polite.
+    // A small JSON GET per poll; the scrape TTL keeps it polite.
     cacheTtlMs: SCRAPE_CACHE_TTL_MS,
     command: {
       name: "opencode-go-window",
