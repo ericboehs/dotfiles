@@ -53,7 +53,7 @@ fi
 # a server started at 09:00 stayed dark all morning against a light Mac).
 # Clearing it here is a no-op on macOS, where the defaults branch answers
 # before the environment is ever consulted.
-if [ "$(LC_APPEARANCE= "$HOME/bin/appearance")" = dark ]; then
+if [ "$(env -u LC_APPEARANCE "$HOME/bin/appearance")" = dark ]; then
   mode=dark
   # Mocha
   surface0="#313244"; surface1="#45475a"
