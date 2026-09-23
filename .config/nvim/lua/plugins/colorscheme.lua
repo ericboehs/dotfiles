@@ -1,5 +1,42 @@
 return {
   {
+    "catppuccin/nvim",
+    name = "catppuccin",
+    opts = function(_, opts)
+      local U = require("catppuccin.utils.colors")
+      -- Catppuccin paints markdown in red/pink by default: @markup.strong and
+      -- @markup.italic are C.red, @markup.quote is C.pink, and headings use the
+      -- rainbow ramp whose first stop is C.red. In a notes buffer that's mostly
+      -- bold text and blockquotes, that's a wall of red. Cool ramp instead, and
+      -- let bold/italic carry their own weight rather than a color.
+      opts.custom_highlights = function(colors)
+        local heading = {
+          colors.lavender,
+          colors.blue,
+          colors.sapphire,
+          colors.teal,
+          colors.green,
+          colors.yellow,
+        }
+        local hl = {
+          ["@markup.strong"] = { fg = colors.text, bold = true },
+          ["@markup.italic"] = { fg = colors.text, italic = true },
+          ["@markup.quote"] = { fg = colors.subtext0 },
+        }
+        for i, color in ipairs(heading) do
+          hl["@markup.heading." .. i .. ".markdown"] = { fg = color, bold = true }
+          -- render-markdown's H*/H*Bg are computed from catppuccin's rainbow*
+          -- groups inside its integration, so overriding rainbow* here wouldn't
+          -- reach them -- they have to be set directly.
+          hl["RenderMarkdownH" .. i] = { fg = color, bold = true }
+          hl["RenderMarkdownH" .. i .. "Bg"] = { bg = U.darken(color, 0.095, colors.base) }
+        end
+        return hl
+      end
+      return opts
+    end,
+  },
+  {
     "f-person/auto-dark-mode.nvim",
     lazy = false,
     priority = 1000,

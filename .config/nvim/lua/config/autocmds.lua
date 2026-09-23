@@ -2,13 +2,16 @@
 -- Default autocmds that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/autocmds.lua
 -- Add any additional autocmds here
 
--- Markdown: soft-wrap with hanging indent so wrapped list/checkbox lines
--- align under the text rather than the bullet. Scoped per-filetype so code
--- files keep the global wrap=false.
+-- Markdown: no wrap, no numbers, no spell -- long lines scroll horizontally
+-- rather than reflowing. The linebreak/breakindent settings below are inert
+-- while wrap is off, but keep the hanging indent for list/checkbox lines
+-- correct if wrap is toggled back on ad hoc with <leader>uw.
 vim.api.nvim_create_autocmd("FileType", {
   pattern = { "markdown", "markdown.mdx", "vimwiki" },
   callback = function()
-    vim.opt_local.wrap = true
+    vim.opt_local.wrap = false
+    vim.opt_local.number = false
+    vim.opt_local.relativenumber = false
     vim.opt_local.spell = false -- LazyVim enables spell for markdown; turn off the red squiggles
     vim.opt_local.linebreak = true -- break at word boundaries, not mid-word
     vim.opt_local.breakindent = true
