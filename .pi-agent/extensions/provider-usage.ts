@@ -60,6 +60,7 @@ interface CachedEntry {
   value: string;
   commandText?: string;
   resetMs?: number;
+  resetDate?: string;
   fetchedAt: number;
 }
 
@@ -94,6 +95,7 @@ async function writeSharedEntry(driverId: string, display: UsageDisplay, fetched
       value: display.value,
       ...(display.commandText !== undefined ? { commandText: display.commandText } : {}),
       ...(display.resetMs !== undefined ? { resetMs: display.resetMs } : {}),
+      ...(display.resetDate !== undefined ? { resetDate: display.resetDate } : {}),
       fetchedAt,
     };
     // Atomic write: tmp + rename so concurrent readers never see half a JSON doc.
@@ -148,6 +150,8 @@ interface UsageDisplay {
   /** Meter reset (ms epoch); lets the footer pace-color budget chips against
    *  the real billing cycle instead of assuming a calendar month. */
   resetMs?: number;
+  /** Calendar date only: do not imply a precise midnight reset. */
+  resetDate?: string;
 }
 
 interface Driver {
@@ -814,9 +818,12 @@ function previousMonthlyReset(reset: Date): Date {
 
 function parseResetDate(value?: string): Date | undefined {
   if (!value) return undefined;
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value;
-  const date = new Date(normalized);
-  return Number.isFinite(date.getTime()) ? date : undefined;
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const date = new Date(dateOnly ? `${value}T00:00:00Z` : value);
+  if (!Number.isFinite(date.getTime())) return undefined;
+  // Date can roll an invalid calendar day forward (e.g. February 30).
+  if (dateOnly && date.toISOString().slice(0, 10) !== value) return undefined;
+  return date;
 }
 
 function copilotUsedPercent(quota: QuotaSnapshot): number | undefined {
@@ -849,7 +856,8 @@ function formatCopilotQuota(
   if (quota.unlimited) return "unlimited";
 
   const percent = copilotUsedPercent(quota);
-  const reset = parseResetDate(quota.reset_date ?? resetDateValue);
+  const resetValue = quota.reset_date ?? resetDateValue;
+  const reset = parseResetDate(resetValue);
   if (percent === undefined || !reset) return undefined;
 
   const start = previousMonthlyReset(reset);
@@ -862,9 +870,27 @@ function formatCopilotQuota(
   // 100% is not actionable; the reset is. Footer colors ↻ red.
   const usage =
     formatNumber(percent) === "100"
-      ? `↻${formatResetClock(reset.getTime(), nowMs)}`
+      ? `↻${/^\d{4}-\d{2}-\d{2}$/.test(resetValue ?? "")
+        ? resetValue
+        : formatResetClock(reset.getTime(), nowMs)}`
       : `${formatNumber(percent)}%`;
   return `${formatNumber(elapsedDays)}/${formatNumber(totalDays)}D: ${usage}`;
+}
+
+export function copilotUsageDisplay(
+  quota: QuotaSnapshot,
+  resetDateValue?: string,
+  nowMs = Date.now(),
+): UsageDisplay | undefined {
+  const value = formatCopilotQuota(quota, resetDateValue, nowMs);
+  if (!value) return undefined;
+  if (quota.unlimited) return { value };
+  const resetValue = quota.reset_date ?? resetDateValue;
+  const reset = parseResetDate(resetValue);
+  if (!reset) return undefined;
+  return /^\d{4}-\d{2}-\d{2}$/.test(resetValue ?? "")
+    ? { value, resetDate: resetValue }
+    : { value, resetMs: reset.getTime() };
 }
 
 async function fetchCopilot(ctx: ExtensionContext): Promise<UsageDisplay> {
@@ -894,9 +920,9 @@ async function fetchCopilot(ctx: ExtensionContext): Promise<UsageDisplay> {
   const quota = usage.quota_snapshots?.premium_interactions;
   if (!quota) throw new Error("premium interaction quota was not returned");
 
-  const value = formatCopilotQuota(quota, usage.quota_reset_date);
-  if (!value) throw new Error("quota window could not be calculated");
-  return { value };
+  const display = copilotUsageDisplay(quota, usage.quota_reset_date);
+  if (!display) throw new Error("quota window could not be calculated");
+  return display;
 }
 
 // ---------- grok ----------
@@ -1019,6 +1045,12 @@ function formatGrokWindow(window: GrokUsageWindow, nowMs = Date.now()): string |
   return `${formatNumber(elapsedHours)}/${formatNumber(totalHours)}H: ${usage}`;
 }
 
+export function grokUsageDisplay(window: GrokUsageWindow, nowMs = Date.now()): UsageDisplay | undefined {
+  const value = formatGrokWindow(window, nowMs);
+  if (!value) return undefined;
+  return { value, resetMs: window.reset_at * 1000 };
+}
+
 async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
   const resolved = await ctx.modelRegistry.getProviderAuth("xai");
   const accessToken = resolved?.auth.apiKey;
@@ -1049,9 +1081,9 @@ async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
   }
 
   const window = weekly && !(weekly.inferred && monthly) ? weekly.window : monthly;
-  const value = window ? formatGrokWindow(window) : undefined;
-  if (!value) throw new Error("no SuperGrok usage window was returned");
-  return { value };
+  const display = window ? grokUsageDisplay(window) : undefined;
+  if (!display) throw new Error("no SuperGrok usage window was returned");
+  return display;
 }
 
 // ---------- cerebras ----------
@@ -2175,6 +2207,7 @@ async function refreshDriver(
             value: entry.value,
             ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
             ...(entry.resetMs !== undefined ? { resetMs: entry.resetMs } : {}),
+            ...(entry.resetDate !== undefined ? { resetDate: entry.resetDate } : {}),
           };
           state.last = display;
           state.lastFetchMs = entry.fetchedAt;
@@ -2216,6 +2249,7 @@ async function refreshDriver(
           value: entry.value,
           ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
           ...(entry.resetMs !== undefined ? { resetMs: entry.resetMs } : {}),
+          ...(entry.resetDate !== undefined ? { resetDate: entry.resetDate } : {}),
         };
         state.last = display;
         state.lastFetchMs = entry.fetchedAt;
@@ -2315,6 +2349,7 @@ export interface UsageCacheRow {
   value?: string;
   commandText?: string;
   resetMs?: number;
+  resetDate?: string;
   fetchedAt?: number;
 }
 
@@ -2327,6 +2362,8 @@ function cachedEntry(raw: unknown): CachedEntry | undefined {
     value: entry.value,
     ...(typeof entry.commandText === "string" ? { commandText: entry.commandText } : {}),
     ...(typeof entry.resetMs === "number" && Number.isFinite(entry.resetMs) ? { resetMs: entry.resetMs } : {}),
+    ...(typeof entry.resetDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry.resetDate) && parseResetDate(entry.resetDate)
+      ? { resetDate: entry.resetDate } : {}),
     fetchedAt: entry.fetchedAt,
   };
 }
@@ -2349,6 +2386,7 @@ export function summarizeUsageCache(
       value: entry.value,
       ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
       ...(entry.resetMs !== undefined ? { resetMs: entry.resetMs } : {}),
+      ...(entry.resetDate !== undefined ? { resetDate: entry.resetDate } : {}),
       fetchedAt: entry.fetchedAt,
     };
   });
@@ -2370,7 +2408,16 @@ export function formatUsageCacheReport(rows: UsageCacheRow[]): string {
     const age = row.ageMs === undefined ? "" : ` ${formatUsageAge(row.ageMs)}`;
     const head = `${row.provider} ${row.status}${age}`;
     const body = row.commandText ?? row.value;
-    return body ? `${head}\n${body}` : head;
+    // Window chips omit the reset until exhausted. Preserve Copilot's
+    // date-only precision; only timestamp-bearing responses get a UTC time.
+    const showReset = row.id === "grok-window" || row.id === "copilot-window";
+    const reset = showReset && row.resetMs !== undefined ? new Date(row.resetMs) : undefined;
+    const resetText = row.id === "copilot-window" && row.resetDate
+      ? `\nResets: ${row.resetDate} (date only)`
+      : reset && Number.isFinite(reset.getTime())
+        ? `\nResets: ${reset.toISOString()}`
+        : "";
+    return body ? `${head}\n${body}${resetText}` : head;
   }).join("\n");
 }
 
@@ -2524,6 +2571,7 @@ export default function providerUsage(pi: ExtensionAPI): void {
             value: display.value,
             ...(display.commandText !== undefined ? { commandText: display.commandText } : {}),
             ...(display.resetMs !== undefined ? { resetMs: display.resetMs } : {}),
+            ...(display.resetDate !== undefined ? { resetDate: display.resetDate } : {}),
             fetchedAt: Date.now(),
           };
           return usageToolResult(formatUsageCacheReport([row]), [row]);

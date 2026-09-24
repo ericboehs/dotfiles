@@ -12,7 +12,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  copilotUsageDisplay,
   formatUsageCacheReport,
+  grokUsageDisplay,
   opencodeGoCookieHeader,
   parseOpencodeGoStatus,
   parseOpencodeGoUsage,
@@ -211,6 +213,60 @@ test("summarizeUsageCache treats a future fetchedAt as stale with no age", () =>
   assert.equal(ollama.status, "stale");
   assert.equal(ollama.ageMs, undefined);
   assert.equal(ollama.value, "$1 / $60");
+});
+
+test("Grok keeps the exact reset in cache and shows it in the tool report", () => {
+  const resetMs = Date.parse("2023-11-20T08:15:30.000Z");
+  const display = grokUsageDisplay({
+    used_percent: 18,
+    reset_at: resetMs / 1000,
+    limit_window_seconds: 7 * 86_400,
+  }, NOW);
+  assert.equal(display.resetMs, resetMs);
+  assert.match(display.value, /18%$/);
+  assert.doesNotMatch(display.value, /Resets:/, "the footer chip stays compact");
+
+  const cached = { "grok-window": { ...display, fetchedAt: NOW - 30_000 } };
+  const grok = row("grok-window", cached);
+  assert.equal(grok.resetMs, resetMs);
+  assert.equal(
+    formatUsageCacheReport([grok]),
+    `xai fresh 30s\n${display.value}\nResets: 2023-11-20T08:15:30.000Z`,
+  );
+  assert.equal(
+    formatUsageCacheReport([row("grok-window", { "grok-window": { value: "2/7D: 18%", fetchedAt: NOW - 30_000 } })]),
+    "xai fresh 30s\n2/7D: 18%",
+    "old cache entries cannot reconstruct the reset",
+  );
+});
+
+test("Copilot caches a date-only reset without inventing a time", () => {
+  const display = copilotUsageDisplay({ percent_remaining: 70, reset_date: "2023-12-01" }, undefined, NOW);
+  assert.equal(display.resetDate, "2023-12-01");
+  assert.equal(display.resetMs, undefined);
+  assert.match(display.value, /30%$/);
+  const copilot = row("copilot-window", { "copilot-window": { ...display, fetchedAt: NOW - 30_000 } });
+  assert.equal(copilot.resetDate, "2023-12-01");
+  assert.equal(
+    formatUsageCacheReport([copilot]),
+    `github-copilot fresh 30s\n${display.value}\nResets: 2023-12-01 (date only)`,
+  );
+  const exhausted = copilotUsageDisplay({ percent_remaining: 0, reset_date: "2023-12-01" }, undefined, NOW);
+  assert.match(exhausted.value, /↻2023-12-01$/, "the footer must not claim midnight precision");
+  assert.equal(copilotUsageDisplay({ percent_remaining: 70, reset_date: "2023-02-30" }, undefined, NOW), undefined);
+});
+
+test("Copilot caches an exact timestamp only when supplied by the API", () => {
+  const timestamp = "2023-12-01T09:15:30.000Z";
+  const display = copilotUsageDisplay({ percent_remaining: 70 }, timestamp, NOW);
+  assert.equal(display.resetMs, Date.parse(timestamp));
+  assert.equal(display.resetDate, undefined);
+  const copilot = row("copilot-window", { "copilot-window": { ...display, fetchedAt: NOW - 30_000 } });
+  assert.equal(
+    formatUsageCacheReport([copilot]),
+    `github-copilot fresh 30s\n${display.value}\nResets: ${timestamp}`,
+  );
+  assert.deepEqual(copilotUsageDisplay({ unlimited: true, reset_date: "2023-12-01" }), { value: "unlimited" });
 });
 
 test("resolveUsageDriver accepts ids and the short names a model will pass", () => {
