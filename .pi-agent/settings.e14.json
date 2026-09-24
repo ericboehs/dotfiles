@@ -58,7 +58,8 @@
     "openai-codex/gpt-6-luna",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-daybreak-blue-latest",
-    "xai/grok-4.7"
+    "xai/grok-4.7",
+    "opencode/space-bunny-free"
   ],
   "retry": {
     "enabled": true,

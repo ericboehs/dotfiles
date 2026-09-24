@@ -107,7 +107,10 @@ const BOOT_LOG_MAX_BYTES = 200_000;
 const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx", "ollama", "cerebras", "opencode-go"]);
 
 /** Free-tier model ids on otherwise paid providers (exact ctx.model.id match). */
-const HIDE_COST_MODELS = new Set(["muse-spark-1.3-contributor-free"]);
+const HIDE_COST_MODELS = new Set([
+  "muse-spark-1.3-contributor-free",
+  "space-bunny-free",
+]);
 
 /**
  * Usage chips written by baseten-usage.ts / openrouter-usage.ts via globalThis
@@ -614,6 +617,9 @@ function shortModel(model: string | undefined, provider?: string): string {
   // chip already supplies the family context, while the model chip identifies
   // the exact current release. Older/newer releases keep their versioned name.
   if (provider === "xai" && /^grok-4\.7$/i.test(base)) return "grok";
+  // The stealth preview is announced by a name, not an id: 🪐🐰 reads as
+  // Space Bunny in two columns, where "space-bunny-free" would eat nine.
+  if (/^space-bunny(-free)?$/i.test(base)) return "🪐🐰";
   // claude-bridge can omit versions for the other Claude families, but Opus
   // remains versioned unless it is the exact current Copilot release below.
   if (provider === "claude-bridge") {

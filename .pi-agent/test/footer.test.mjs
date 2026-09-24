@@ -325,6 +325,8 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["Ornith-1.5-35B-A3B-MLX-4bit", "orn-1.5"],
     ["gpt-5.2-codex", "gpt-5.2-codex"],
     ["GLM-4.6", "GLM-4.6"],
+    ["space-bunny-free", "🪐🐰"],
+    ["space-bunny", "🪐🐰"],
   ];
   for (const [id, expected] of cases) {
     const ui = await mount({ model: { id, provider: "omlx", reasoning: false } });
@@ -502,6 +504,17 @@ test("cost formatting and subscription providers", async () => {
     usingOAuth: true,
   });
   assert.doesNotMatch(xaiOAuth.plain()[0], /\$/, "SuperGrok OAuth hides cost");
+
+  // Free preview on a paid provider: the model, not the provider, hides cost.
+  const freePreview = await mount({
+    model: { id: "space-bunny-free", provider: "opencode", reasoning: true },
+  });
+  assert.doesNotMatch(freePreview.plain()[0], /\$/, "free OpenCode model hides cost");
+
+  const opencodePaid = await mount({
+    model: { id: "glm-5.3", provider: "opencode", reasoning: true },
+  });
+  assert.match(opencodePaid.plain()[0], /\$0\.5123$/, "paid OpenCode models still show cost");
 });
 
 test("context colors escalate at 70% and 90%", async () => {
