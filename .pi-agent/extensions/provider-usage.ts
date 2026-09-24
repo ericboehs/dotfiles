@@ -17,12 +17,16 @@
  * Fire-and-forget refresh: pi awaits session_start/model_select handlers, so
  * awaiting the usage round-trip there blocks TUI startup and the model picker.
  * Per-driver generation guards discard stale responses instead.
+ *
+ * `provider_usage` reads this cache and refetches one named driver only when
+ * asked. No prompt snippet: the tool schema is the whole boot cost.
  */
 
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -2130,14 +2134,19 @@ async function refreshDriver(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   driver: Driver,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; allowInactive?: boolean; surfaceError?: boolean } = {},
 ): Promise<UsageDisplay | undefined> {
   const state = stateFor(driver);
   const generation = ++state.generation;
 
   const active = safeIsActive(driver, ctx);
-  if (active === undefined) return undefined;
-  if (!active) {
+  if (active === undefined) {
+    if (options.surfaceError) throw new Error("session context is stale");
+    return undefined;
+  }
+  // Polls clear an inactive chip. An explicit refresh must not: the footer
+  // paints every status key, so lighting grok while on another model is wrong.
+  if (!active && !options.allowInactive) {
     if (driver.statusKey && !safeSetStatus(ctx, driver.statusKey, undefined)) return undefined;
     return undefined;
   }
@@ -2230,7 +2239,7 @@ async function refreshDriver(
   }
 
   // Paint the stale value so a slow round trip doesn't blank the chip.
-  if (driver.statusKey && state.last) {
+  if (active && driver.statusKey && state.last) {
     if (!safeSetStatus(ctx, driver.statusKey, state.last.value)) return undefined;
   }
 
@@ -2240,12 +2249,10 @@ async function refreshDriver(
       if (locked) await releaseCacheLock();
       return undefined;
     }
-    {
-      const stillActive = safeIsActive(driver, ctx);
-      if (stillActive === undefined || !stillActive) {
-        if (locked) await releaseCacheLock();
-        return undefined;
-      }
+    const stillActive = safeIsActive(driver, ctx);
+    if (stillActive === undefined || (!stillActive && !options.allowInactive)) {
+      if (locked) await releaseCacheLock();
+      return undefined;
     }
     const fetchedAt = Date.now();
     state.last = display;
@@ -2253,13 +2260,20 @@ async function refreshDriver(
     state.lastFailureMs = 0;
     state.rateLimited = false;
     if (driver.stashKey) writeStash(driver, display);
-    if (driver.statusKey && !safeSetStatus(ctx, driver.statusKey, display.value)) {
+    // Inactive refresh updates the cache only. setStatus would show that
+    // provider's window on whatever model is current.
+    if (stillActive && driver.statusKey && !safeSetStatus(ctx, driver.statusKey, display.value)) {
       if (locked) await releaseCacheLock();
       return undefined;
     }
-    void writeSharedEntry(driver.id, display, fetchedAt).finally(() => {
-      if (locked) void releaseCacheLock();
-    });
+    if (options.allowInactive) {
+      await writeSharedEntry(driver.id, display, fetchedAt);
+      if (locked) await releaseCacheLock();
+    } else {
+      void writeSharedEntry(driver.id, display, fetchedAt).finally(() => {
+        if (locked) void releaseCacheLock();
+      });
+    }
     if (state.warned) {
       state.warned = false;
       console.error(`[${driver.id}] usage fetch recovered`);
@@ -2271,10 +2285,13 @@ async function refreshDriver(
   } catch (err) {
     if (locked) await releaseCacheLock();
     // Session went away mid-fetch (reload/switch): bail silently, no backoff.
-    if (isStaleCtxError(err)) return undefined;
+    if (isStaleCtxError(err)) {
+      if (options.surfaceError) throw new Error("session context is stale");
+      return undefined;
+    }
     state.lastFailureMs = Date.now();
     state.rateLimited = err instanceof Error && isRateLimitError(err);
-    if (driver.statusKey && !state.last) {
+    if (driver.statusKey && !state.last && !options.allowInactive) {
       safeSetStatus(ctx, driver.statusKey, undefined);
     }
     // Log only the first failure of a streak (and the recovery) so a dead
@@ -2285,8 +2302,101 @@ async function refreshDriver(
         `[${driver.id}] usage fetch failed: ${err instanceof Error ? err.message : err}`,
       );
     }
+    if (options.surfaceError) throw err;
     return undefined;
   }
+}
+
+export interface UsageCacheRow {
+  id: string;
+  provider: string;
+  status: "fresh" | "stale" | "missing";
+  ageMs?: number;
+  value?: string;
+  commandText?: string;
+  resetMs?: number;
+  fetchedAt?: number;
+}
+
+function cachedEntry(raw: unknown): CachedEntry | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const entry = raw as Partial<CachedEntry>;
+  if (typeof entry.value !== "string" || entry.value.length === 0) return undefined;
+  if (typeof entry.fetchedAt !== "number" || !Number.isFinite(entry.fetchedAt)) return undefined;
+  return {
+    value: entry.value,
+    ...(typeof entry.commandText === "string" ? { commandText: entry.commandText } : {}),
+    ...(typeof entry.resetMs === "number" && Number.isFinite(entry.resetMs) ? { resetMs: entry.resetMs } : {}),
+    fetchedAt: entry.fetchedAt,
+  };
+}
+
+/** One row per driver. Missing means no usable cache entry, not zero usage. */
+export function summarizeUsageCache(
+  cache: Record<string, unknown>,
+  nowMs: number,
+): UsageCacheRow[] {
+  return DRIVERS.map((driver) => {
+    const entry = cachedEntry(cache[driver.id]);
+    if (!entry) return { id: driver.id, provider: driver.provider, status: "missing" };
+    const ageMs = nowMs - entry.fetchedAt;
+    const fresh = ageMs >= 0 && ageMs < fileTtlFor(driver);
+    return {
+      id: driver.id,
+      provider: driver.provider,
+      status: fresh ? "fresh" : "stale",
+      ...(ageMs >= 0 ? { ageMs } : {}),
+      value: entry.value,
+      ...(entry.commandText !== undefined ? { commandText: entry.commandText } : {}),
+      ...(entry.resetMs !== undefined ? { resetMs: entry.resetMs } : {}),
+      fetchedAt: entry.fetchedAt,
+    };
+  });
+}
+
+export function formatUsageAge(ageMs: number): string {
+  const seconds = Math.max(0, Math.floor(ageMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/** Model-facing text. `commandText` is the slash-command body; otherwise `value`. */
+export function formatUsageCacheReport(rows: UsageCacheRow[]): string {
+  return rows.map((row) => {
+    const age = row.ageMs === undefined ? "" : ` ${formatUsageAge(row.ageMs)}`;
+    const head = `${row.provider} ${row.status}${age}`;
+    const body = row.commandText ?? row.value;
+    return body ? `${head}\n${body}` : head;
+  }).join("\n");
+}
+
+/** Friendly names the model will pass. Kept here, not in the tool description. */
+const USAGE_PROVIDER_ALIASES: Record<string, string> = {
+  openai: "openai-codex",
+  codex: "openai-codex",
+  claude: "claude-bridge",
+  copilot: "github-copilot",
+  grok: "xai",
+  supergrok: "xai",
+  opencode: "opencode-go",
+};
+
+export function resolveUsageDriver(name: string): Driver | undefined {
+  const key = name.trim().toLowerCase();
+  if (!key) return undefined;
+  const provider = USAGE_PROVIDER_ALIASES[key] ?? key;
+  return DRIVERS.find((driver) => driver.id === key || driver.provider === key || driver.provider === provider);
+}
+
+function usageToolResult(text: string, rows: UsageCacheRow[]) {
+  return {
+    content: [{ type: "text" as const, text }],
+    details: { rows },
+  };
 }
 
 export default function providerUsage(pi: ExtensionAPI): void {
@@ -2376,4 +2486,55 @@ export default function providerUsage(pi: ExtensionAPI): void {
       },
     });
   }
+
+  // No promptSnippet or promptGuidelines: those duplicate this schema in the
+  // system prompt. Aliases live in resolveUsageDriver, not in the description.
+  pi.registerTool({
+    name: "provider_usage",
+    label: "Provider usage",
+    description:
+      "Read cached provider usage; optionally refresh one named provider.",
+    parameters: Type.Object({
+      provider: Type.Optional(Type.String({ description: "Provider name or id" })),
+      refresh: Type.Optional(Type.Boolean({ description: "Refetch named provider" })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const requested = params.provider?.trim();
+      if (params.refresh && !requested) {
+        return usageToolResult("Error: refresh needs a provider.", []);
+      }
+      const driver = requested ? resolveUsageDriver(requested) : undefined;
+      if (requested && !driver) {
+        return usageToolResult(`Error: unknown provider "${requested}".`, []);
+      }
+      if (params.refresh && driver) {
+        try {
+          const display = await refreshDriver(pi, ctx, driver, {
+            force: true,
+            allowInactive: true,
+            surfaceError: true,
+          });
+          if (!display) return usageToolResult(`Error: ${driver.provider} refresh returned nothing.`, []);
+          const row: UsageCacheRow = {
+            id: driver.id,
+            provider: driver.provider,
+            status: "fresh",
+            ageMs: 0,
+            value: display.value,
+            ...(display.commandText !== undefined ? { commandText: display.commandText } : {}),
+            ...(display.resetMs !== undefined ? { resetMs: display.resetMs } : {}),
+            fetchedAt: Date.now(),
+          };
+          return usageToolResult(formatUsageCacheReport([row]), [row]);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return usageToolResult(`Error: ${driver.provider} refresh failed: ${message}`, []);
+        }
+      }
+      const rows = summarizeUsageCache(await readSharedCache(), Date.now());
+      const shown = driver ? rows.filter((row) => row.id === driver.id) : rows;
+      return usageToolResult(formatUsageCacheReport(shown), shown);
+    },
+  });
 }

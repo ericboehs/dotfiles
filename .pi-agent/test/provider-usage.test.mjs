@@ -12,9 +12,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatUsageCacheReport,
   opencodeGoCookieHeader,
   parseOpencodeGoStatus,
   parseOpencodeGoUsage,
+  resolveUsageDriver,
+  summarizeUsageCache,
 } from "../extensions/provider-usage.ts";
 
 // Shape of GET /console/api/go/status: microcents are bigints, so they arrive
@@ -152,4 +155,86 @@ test("opencodeGoCookieHeader pairs known names and prefixes bare values", () => 
   assert.equal(opencodeGoCookieHeader("Zm9vYmFy="), `${consoleName}=Zm9vYmFy=`);
   // An unknown name is treated as a bare value, and trailing `;` is trimmed.
   assert.equal(opencodeGoCookieHeader(" token ; "), `${consoleName}=token`);
+});
+
+const NOW = 1_700_000_000_000;
+
+function row(id, cache, now = NOW) {
+  return summarizeUsageCache(cache, now).find((entry) => entry.id === id);
+}
+
+test("summarizeUsageCache marks fresh, stale, and missing without treating a hole as zero", () => {
+  const rows = summarizeUsageCache({
+    "ollama-usage": {
+      value: "$1 / $60 (2%)",
+      commandText: "Included (pro): $1 of $60",
+      fetchedAt: NOW - 30_000,
+    },
+    // Window chips share the 2-minute file TTL. 130s is stale; a scrape is not.
+    "codex-window": { value: "1/5H: 10%", fetchedAt: NOW - 130_000 },
+    "grok-window": { value: "2/7D: 4%", fetchedAt: "nope" },
+  }, NOW);
+
+  assert.equal(rows.length, 9);
+  assert.equal(row("ollama-usage", {
+    "ollama-usage": { value: "$1 / $60 (2%)", commandText: "Included (pro): $1 of $60", fetchedAt: NOW - 30_000 },
+  }).status, "fresh");
+  assert.equal(row("ollama-usage", {
+    "ollama-usage": { value: "$1 / $60 (2%)", fetchedAt: NOW - 61_000 },
+  }).status, "stale");
+  assert.equal(row("codex-window", {
+    "codex-window": { value: "1/5H: 10%", fetchedAt: NOW - 119_000 },
+  }).status, "fresh");
+  assert.equal(row("codex-window", {
+    "codex-window": { value: "1/5H: 10%", fetchedAt: NOW - 130_000 },
+  }).status, "stale");
+  assert.equal(row("claude-bridge-window", {
+    "claude-bridge-window": { value: "1/5H: 8%", fetchedAt: NOW - 179_000 },
+  }).status, "fresh");
+  assert.equal(row("claude-bridge-window", {
+    "claude-bridge-window": { value: "1/5H: 8%", fetchedAt: NOW - 181_000 },
+  }).status, "stale");
+  assert.equal(row("grok-window", { "grok-window": { value: "2/7D: 4%", fetchedAt: "nope" } }).status, "missing");
+  assert.equal(row("copilot-window", {}).status, "missing");
+  assert.equal(row("copilot-window", {}).value, undefined);
+
+  const ollama = rows.find((entry) => entry.id === "ollama-usage");
+  assert.equal(ollama.status, "fresh");
+  assert.equal(ollama.ageMs, 30_000);
+  assert.equal(ollama.commandText, "Included (pro): $1 of $60");
+});
+
+test("summarizeUsageCache treats a future fetchedAt as stale with no age", () => {
+  const ollama = row("ollama-usage", {
+    "ollama-usage": { value: "$1 / $60", fetchedAt: NOW + 5_000 },
+  });
+  assert.equal(ollama.status, "stale");
+  assert.equal(ollama.ageMs, undefined);
+  assert.equal(ollama.value, "$1 / $60");
+});
+
+test("resolveUsageDriver accepts ids and the short names a model will pass", () => {
+  assert.equal(resolveUsageDriver("openai")?.id, "codex-window");
+  assert.equal(resolveUsageDriver("Codex")?.provider, "openai-codex");
+  assert.equal(resolveUsageDriver("grok")?.id, "grok-window");
+  assert.equal(resolveUsageDriver("xai")?.id, "grok-window");
+  assert.equal(resolveUsageDriver("copilot")?.provider, "github-copilot");
+  assert.equal(resolveUsageDriver("ollama-usage")?.provider, "ollama");
+  assert.equal(resolveUsageDriver("claude")?.id, "claude-bridge-window");
+  assert.equal(resolveUsageDriver(""), undefined);
+  assert.equal(resolveUsageDriver("nope"), undefined);
+});
+
+test("formatUsageCacheReport is one block per driver and prefers commandText", () => {
+  assert.equal(formatUsageCacheReport([
+    { id: "grok-window", provider: "xai", status: "missing" },
+    {
+      id: "ollama-usage",
+      provider: "ollama",
+      status: "fresh",
+      ageMs: 45_000,
+      value: "$1 / $60 (2%)",
+      commandText: "Included (pro): $1 of $60",
+    },
+  ]), "xai missing\nollama fresh 45s\nIncluded (pro): $1 of $60");
 });
