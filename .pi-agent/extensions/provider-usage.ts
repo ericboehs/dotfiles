@@ -1447,8 +1447,21 @@ async function fetchOllamaWithCookie(
 // ---------- opencode-go ----------
 
 /**
- * OpenCode Go's old server-rendered /workspace/<wrk>/go page is gone; the
- * numbers now live behind the console JSON API:
+ * OpenCode Go usage. The key-authenticated usage API is the primary path.
+ * Session cookies expire, and a stale `$OPENCODE_SESSION_COOKIE` used to
+ * fail the whole chip before any other credential was tried:
+ *
+ *   GET https://opencode.ai/zen/go/v1/usage
+ *   Authorization: Bearer <opencode-go API key>
+ *   -> { usage: {
+ *          rolling:  { status, percent, resetsAt },
+ *          weekly:   { status, percent, resetsAt },
+ *          monthly:  { status, percent, resetsAt } } }
+ *
+ * `percent` is already 0–100. This endpoint has no dollar figures, so the
+ * chip is percent + reset only.
+ *
+ * The console JSON API remains a fallback when no API key is configured:
  *
  *   GET https://opencode.ai/console/api/go/status   (x-org-id: wrk_…)
  *   -> { access: { endsAt, meters: {
@@ -1456,20 +1469,18 @@ async function fetchOllamaWithCookie(
  *          week:     { resetsAt, limitMicroCents, usedMicroCents },
  *          month:    { limitMicroCents, usedMicroCents } } } }
  *
- * The `__Host-console_session` cookie is read from Safari's cookie store,
- * like the ollama driver. The older `auth` cookie is kept as a fallback
- * candidate so a stale Safari session reports "invalid or expired" instead
- * of "no cookie". Money fields are microcents (1e8 per dollar)
- * and arrive as JSON strings (the server models them as bigint). The month
- * meter has no rolling window of its own, so its reset is the paid period end.
- * Usage renders through the shared codex window formatter, so pace coloring
- * and the ↻-at-limit form apply unchanged.
+ * It needs a workspace id and a `__Host-console_session` cookie
+ * (`$OPENCODE_SESSION_COOKIE`, then Safari, then fnox). Money fields are microcents
+ * (1e8 per dollar) and arrive as JSON strings. The month meter has no
+ * rolling window of its own, so its reset is the paid period end.
+ * Both paths render through the shared codex window formatter.
  */
 const COOKIE_ENV_OPENCODE_GO = "OPENCODE_SESSION_COOKIE";
 const WORKSPACE_ENV_OPENCODE_GO = "OPENCODE_WORKSPACE_ID";
 const WORKSPACE_CACHE_FILE = "opencode-workspace-id";
 const MICROCENTS_PER_DOLLAR = 100_000_000;
 const OPENCODE_GO_STATUS_URL = "https://opencode.ai/console/api/go/status";
+const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 /** Console session cookie; the older `auth` cookie still gates the web app. */
 const OPENCODE_GO_COOKIE_NAMES = ["__Host-console_session", "auth"] as const;
 const OPENCODE_GO_WINDOWS = [
@@ -1477,13 +1488,20 @@ const OPENCODE_GO_WINDOWS = [
   { key: "week", seconds: 7 * 86_400, label: "Weekly", fallbackToPeriodEnd: false },
   { key: "month", seconds: 30 * 86_400, label: "Monthly", fallbackToPeriodEnd: true },
 ] as const;
+/** Key usage API windows. Lengths are the plan windows; the payload has no
+ *  window size of its own, only `resetsAt`. */
+const OPENCODE_GO_USAGE_WINDOWS = [
+  { key: "rolling", seconds: 5 * 3_600, label: "5h rolling" },
+  { key: "weekly", seconds: 7 * 86_400, label: "Weekly" },
+  { key: "monthly", seconds: 30 * 86_400, label: "Monthly" },
+] as const;
 
 interface OpencodeGoMeter {
   label: string;
   seconds: number;
-  /** Microcents, mirroring the API's bigint-encoded money fields. */
-  usage: number;
-  limit: number;
+  /** Microcents from the console API. Absent on the key usage API. */
+  usage: number | undefined;
+  limit: number | undefined;
   percent: number;
   /** Epoch ms of rollover; undefined when the window has no reset. */
   resetMs: number | undefined;
@@ -1619,8 +1637,100 @@ export function parseOpencodeGoStatus(payload: unknown): OpencodeGoMeter[] {
   return parsed;
 }
 
+/** Key usage API: `percent` is already 0–100 and `resetsAt` is ISO-8601.
+ *  Exported for the parse tests. */
+export function parseOpencodeGoUsage(payload: unknown): OpencodeGoMeter[] {
+  const usage = opencodeGoRecord(opencodeGoRecord(payload)?.usage);
+  if (!usage) return [];
+
+  const parsed: OpencodeGoMeter[] = [];
+  for (const window of OPENCODE_GO_USAGE_WINDOWS) {
+    const meter = opencodeGoRecord(usage[window.key]);
+    if (!meter) continue;
+    const percent = opencodeGoMicrocents(meter.percent);
+    if (percent === undefined) continue;
+    const resetMs =
+      typeof meter.resetsAt === "string" ? Date.parse(meter.resetsAt) : undefined;
+    parsed.push({
+      label: window.label,
+      seconds: window.seconds,
+      usage: undefined,
+      limit: undefined,
+      percent: Math.round(percent * 10) / 10,
+      resetMs: resetMs !== undefined && Number.isFinite(resetMs) ? resetMs : undefined,
+    });
+  }
+  return parsed;
+}
+
 function opencodeGoDollars(microcents: number): string {
   return formatDollars(microcents / MICROCENTS_PER_DOLLAR);
+}
+
+function opencodeGoAuthFailed(err: unknown): err is Error {
+  return err instanceof Error && err.message.includes("invalid or expired");
+}
+
+function opencodeGoDisplay(meters: OpencodeGoMeter[]): UsageDisplay {
+  const nowMs = Date.now();
+  const groups = meters.map((meter) => ({
+    meter,
+    formatted: formatCodexWindow(
+      {
+        used_percent: meter.percent,
+        reset_at: meter.resetMs !== undefined ? meter.resetMs / 1000 : undefined,
+        limit_window_seconds: meter.seconds,
+      },
+      nowMs,
+    ),
+  }));
+  const value = groups
+    .map((group) => group.formatted)
+    .filter((formatted): formatted is string => formatted !== undefined)
+    .join(" ");
+  if (!value) throw new Error("no OpenCode Go usage window was returned");
+
+  const detail = groups.map((group) => {
+    const percent = `${formatNumber(group.meter.percent)}%`;
+    const reset =
+      group.meter.resetMs !== undefined
+        ? ` — resets ${formatResetClock(group.meter.resetMs, nowMs)}`
+        : "";
+    const money =
+      group.meter.usage !== undefined && group.meter.limit !== undefined
+        ? `${opencodeGoDollars(group.meter.usage)} of ${opencodeGoDollars(group.meter.limit)} (${percent})`
+        : percent;
+    return `${group.meter.label}: ${money}${reset}`;
+  });
+  return { value, commandText: detail.join("\n") };
+}
+
+/** pi auth first, then the env names other OpenCode clients use. */
+async function fetchOpencodeGoWithKey(ctx: ExtensionContext): Promise<UsageDisplay | undefined> {
+  const apiKey =
+    (await providerApiKey(ctx, "opencode-go")) ??
+    process.env.OPENCODE_API_KEY?.trim() ??
+    process.env.OPENCODE_GO_API_KEY?.trim();
+  if (!apiKey) return undefined;
+
+  let payload: unknown;
+  try {
+    payload = await fetchJson(OPENCODE_GO_USAGE_URL, {
+      authorization: `Bearer ${apiKey}`,
+      "user-agent": "pi-opencode-go-window/1.0",
+    });
+  } catch (err) {
+    if (err instanceof Error && /\((401|403)\)/.test(err.message)) {
+      throw new Error("OpenCode Go API key is invalid or expired");
+    }
+    throw err;
+  }
+
+  const meters = parseOpencodeGoUsage(payload);
+  if (meters.length === 0) {
+    throw new Error("OpenCode Go usage API returned no windows (the API changed)");
+  }
+  return opencodeGoDisplay(meters);
 }
 
 async function fetchOpencodeGoWithCookie(
@@ -1649,40 +1759,10 @@ async function fetchOpencodeGoWithCookie(
       "console API returned no Go meter windows (no Go plan on this workspace, or the API changed)",
     );
   }
-
-  const nowMs = Date.now();
-  const groups = meters.map((meter) => ({
-    meter,
-    formatted: formatCodexWindow(
-      {
-        used_percent: meter.percent,
-        reset_at: meter.resetMs !== undefined ? meter.resetMs / 1000 : undefined,
-        limit_window_seconds: meter.seconds,
-      },
-      nowMs,
-    ),
-  }));
-  const value = groups
-    .map((group) => group.formatted)
-    .filter((formatted): formatted is string => formatted !== undefined)
-    .join(" ");
-  if (!value) throw new Error("no OpenCode Go usage window was returned");
-
-  const detail = groups.map((group) => {
-    const percent = `${formatNumber(group.meter.percent)}%`;
-    const reset =
-      group.meter.resetMs !== undefined
-        ? ` — resets ${formatResetClock(group.meter.resetMs, nowMs)}`
-        : "";
-    return (
-      `${group.meter.label}: ${opencodeGoDollars(group.meter.usage)} of ` +
-      `${opencodeGoDollars(group.meter.limit)} (${percent})${reset}`
-    );
-  });
-  return { value, commandText: detail.join("\n") };
+  return opencodeGoDisplay(meters);
 }
 
-async function fetchOpencodeGo(_ctx: ExtensionContext): Promise<UsageDisplay> {
+async function fetchOpencodeGoFromCookies(): Promise<UsageDisplay> {
   const workspaceId = await opencodeGoWorkspaceId();
   const candidates = await opencodeGoCookieCandidates();
   if (candidates.length === 0) {
@@ -1709,6 +1789,34 @@ async function fetchOpencodeGo(_ctx: ExtensionContext): Promise<UsageDisplay> {
     }
   }
   throw lastError;
+}
+
+async function fetchOpencodeGo(ctx: ExtensionContext): Promise<UsageDisplay> {
+  let keyAuthError: Error | undefined;
+  try {
+    const fromKey = await fetchOpencodeGoWithKey(ctx);
+    if (fromKey) return fromKey;
+  } catch (err) {
+    // A rejected key should not hide a working console session, but a
+    // transport or shape error must not be masked by a stale cookie.
+    if (!opencodeGoAuthFailed(err)) throw err;
+    keyAuthError = err;
+  }
+
+  try {
+    return await fetchOpencodeGoFromCookies();
+  } catch (err) {
+    // $OPENCODE_SESSION_COOKIE going stale used to be the only error the
+    // chip showed. Prefer the key failure when the cookie path cannot auth.
+    if (
+      keyAuthError &&
+      (opencodeGoAuthFailed(err) ||
+        (err instanceof Error && /no OpenCode (session cookie|workspace id)/.test(err.message)))
+    ) {
+      throw keyAuthError;
+    }
+    throw err;
+  }
 }
 
 // ---------- baseten ----------

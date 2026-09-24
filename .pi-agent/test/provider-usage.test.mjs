@@ -1,10 +1,8 @@
 /**
- * Tests for the OpenCode Go console-API parser in provider-usage.ts.
+ * Tests for the OpenCode Go usage parsers in provider-usage.ts.
  *
- * The old workspace-page scrape broke when OpenCode moved usage behind
- * GET /console/api/go/status (x-org-id: wrk_…), so the parser's contract
- * with that JSON shape is pinned here: string-encoded microcents, month
- * without its own reset, and the paid-period end as the monthly fallback.
+ * The chip prefers GET /zen/go/v1/usage (API key). The console status API
+ * remains the cookie fallback. Both JSON shapes are pinned here.
  *
  *   bin/pi-ext-check            # typecheck + these tests
  *   node --test .pi-agent/test  # tests only (needs .pi-agent/node_modules)
@@ -16,6 +14,7 @@ import test from "node:test";
 import {
   opencodeGoCookieHeader,
   parseOpencodeGoStatus,
+  parseOpencodeGoUsage,
 } from "../extensions/provider-usage.ts";
 
 // Shape of GET /console/api/go/status: microcents are bigints, so they arrive
@@ -88,6 +87,52 @@ test("parseOpencodeGoStatus clamps a zero limit to 0%", () => {
   });
   assert.equal(meters.length, 1);
   assert.equal(meters[0]?.percent, 0);
+});
+
+test("parseOpencodeGoUsage maps the key usage API windows", () => {
+  const meters = parseOpencodeGoUsage({
+    usage: {
+      rolling: { status: "ok", percent: 0, resetsAt: "2026-09-25T00:43:18.063Z" },
+      weekly: { status: "ok", percent: 55.04, resetsAt: "2026-09-28T00:00:00.000Z" },
+      monthly: { status: "ok", percent: "84", resetsAt: "2026-10-08T22:06:17.000Z" },
+    },
+  });
+  assert.deepEqual(meters.map((m) => m.label), ["5h rolling", "Weekly", "Monthly"]);
+
+  const [rolling, weekly, monthly] = meters;
+  assert.equal(rolling.percent, 0);
+  assert.equal(rolling.resetMs, Date.parse("2026-09-25T00:43:18.063Z"));
+  assert.equal(rolling.seconds, 5 * 3_600);
+  assert.equal(rolling.usage, undefined);
+
+  // One decimal, matching the console meter's percent precision.
+  assert.equal(weekly.percent, 55);
+  assert.equal(weekly.resetMs, Date.parse("2026-09-28T00:00:00.000Z"));
+
+  // String percents count too.
+  assert.equal(monthly.percent, 84);
+  assert.equal(monthly.resetMs, Date.parse("2026-10-08T22:06:17.000Z"));
+  assert.equal(monthly.seconds, 30 * 86_400);
+});
+
+test("parseOpencodeGoUsage skips windows without a percent and ignores a bad reset", () => {
+  const meters = parseOpencodeGoUsage({
+    usage: {
+      rolling: { status: "ok", resetsAt: "2026-09-25T00:43:18.063Z" },
+      weekly: { status: "ok", percent: 12, resetsAt: "not-a-date" },
+    },
+  });
+  assert.equal(meters.length, 1);
+  assert.equal(meters[0]?.label, "Weekly");
+  assert.equal(meters[0]?.percent, 12);
+  assert.equal(meters[0]?.resetMs, undefined);
+});
+
+test("parseOpencodeGoUsage reports nothing for payloads without usage windows", () => {
+  assert.deepEqual(parseOpencodeGoUsage(null), []);
+  assert.deepEqual(parseOpencodeGoUsage({}), []);
+  assert.deepEqual(parseOpencodeGoUsage({ usage: {} }), []);
+  assert.deepEqual(parseOpencodeGoUsage({ rollingUsage: { usagePercent: 1 } }), []);
 });
 
 test("opencodeGoCookieHeader pairs known names and prefixes bare values", () => {
