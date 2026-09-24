@@ -22,10 +22,12 @@
     "~/Code/github.com/ericboehs/agent-plugins/plugins/icloud-downloads/skills",
     "~/Code/github.com/ericboehs/agent-plugins/plugins/md-to-pdf/skills",
     "~/Code/github.com/ericboehs/agent-plugins/plugins/x-fetch/skills",
-    "~/Code/github.com/ericboehs/agent-plugins/plugins/pr-review/skills"
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/pr-review/skills",
+    "~/Code/github.com/ericboehs/agent-plugins/plugins/security-review/skills"
   ],
   "prompts": [
-    "~/Code/github.com/ericboehs/claude-config/prompts"
+    "~/Code/github.com/ericboehs/claude-config/prompts",
+    "~/Code/github.com/ericboehs/agent-plugins/pi/prompts"
   ],
   "defaultProvider": "opencode-go",
   "defaultModel": "union-alpha",
