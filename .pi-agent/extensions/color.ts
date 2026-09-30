@@ -200,9 +200,15 @@ function describe(token: string, value: ColorValue): string {
 // Theme tinting
 // ---------------------------------------------------------------------------
 
-/** The private shape we borrow: pi keeps token -> SGR string, already encoded. */
+/**
+ * The private shape we borrow: pi keeps token -> SGR string, already encoded.
+ * The map was `fgColors` until pi 0.99 renamed it `fgAnsi`; either works.
+ * `dimTokens` (0.99+) marks tokens drawn faint.
+ */
 interface ThemeInternals {
-  fgColors: Map<string, string>;
+  fgAnsi?: Map<string, string>;
+  fgColors?: Map<string, string>;
+  dimTokens?: Set<string>;
 }
 
 /**
@@ -216,12 +222,23 @@ interface ThemeInternals {
  * so a pi upgrade degrades to an error message instead of a broken theme.
  */
 function tint(base: Theme, ansi: string): Theme | null {
-  const colors = (base as unknown as Partial<ThemeInternals>).fgColors;
-  if (!(colors instanceof Map)) return null;
+  const internals = base as unknown as ThemeInternals;
+  const key =
+    internals.fgAnsi instanceof Map ? "fgAnsi"
+    : internals.fgColors instanceof Map ? "fgColors"
+    : undefined;
+  if (!key) return null;
   const clone = Object.assign(Object.create(Object.getPrototypeOf(base) as object), base) as Theme;
-  const next = new Map(colors);
+  const next = new Map(internals[key]);
   for (const token of BORDER_TOKENS) next.set(token, ansi);
-  (clone as unknown as ThemeInternals).fgColors = next;
+  const cloned = clone as unknown as ThemeInternals;
+  cloned[key] = next;
+  // A theme that draws thinking levels faint would dim the session marker too.
+  if (internals.dimTokens instanceof Set) {
+    const dim = new Set(internals.dimTokens);
+    for (const token of BORDER_TOKENS) dim.delete(token);
+    cloned.dimTokens = dim;
+  }
   return clone;
 }
 
