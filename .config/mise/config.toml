@@ -78,3 +78,17 @@ neovim = "0.12.4"
 # node puts a second pi on PATH ahead of the shim, where `pi update` can and does
 # move it off this pin without anything noticing.
 "npm:@earendil-works/pi-coding-agent" = "0.99.1"
+# Local markdown search (index + MCP daemon on :8181, see launchd/com.qmd.*).
+# Declared here rather than `npm i -g`: a global install lives under
+# installs/node/<version>/, so the node 26.8.1 -> 26.10.0 bump on 2026-09-23
+# deleted it and the index went stale for a week. The mise install survives node
+# upgrades — better-sqlite3 13 ships N-API prebuilds, and qmd's launcher pins
+# the child to the node that started it. ~/.local/bin/qmd (the path the launchd
+# jobs call) is a symlink to the mise shim, so pin bumps need no relinking.
+# macOS only: the index, daemon and launchd jobs exist on this machine alone.
+# The postinstall prunes every bin but qmd. qmd declares typescript as a peer
+# (for SDK consumers; the CLI never imports it), aube auto-installs it into the
+# tool root, and mise then shimmed tsc and tsserver onto PATH globally. aube's
+# own switch (AUBE_AUTO_INSTALL_PEERS=false) is ignored via install_env, since
+# mise runs aube in-process, so this is the scoped fix.
+"npm:@tobilu/qmd" = { version = "2.8.3", os = ["macos"], postinstall = 'find "$MISE_TOOL_INSTALL_PATH/node_modules/.bin" -mindepth 1 ! -name qmd -delete' }

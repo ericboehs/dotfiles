@@ -11,14 +11,18 @@
 #     so the `||` arm could never run. 116 consecutive crashes over 2.4 days
 #     were each logged as a success. Hence the explicit if/else below.
 #
-#  2. Self-healing. ~/.npmrc sets ignore-scripts=true (deliberate supply-chain
-#     hardening), so better-sqlite3's native binding never gets built. Because
-#     node_modules lives under .../installs/node/<version>/, every mise Node
-#     upgrade lands a fresh unbuilt copy and qmd dies with "Could not locate the
-#     bindings file". Rebuild it in place rather than failing silently for days.
-#     NOTE 2026-08-28: qmd >= 2.8 ships prebuilt bindings under
-#     better-sqlite3/prebuilds/darwin-arm64.node, so a missing
-#     build/Release/better_sqlite3.node is no longer unhealthy by itself.
+#  2. Self-healing. qmd is a mise tool ("npm:@tobilu/qmd" in
+#     .config/mise/config.toml), installed under installs/npm-tobilu-qmd/. It
+#     used to be `npm i -g` under installs/node/<version>/, which the node
+#     26.8.1 -> 26.10.0 bump deleted on 2026-09-23; every run then failed with
+#     "qmd: command not found" for a week. If the pinned package or its
+#     better-sqlite3 binding is missing (mise prune, a pin bump not yet
+#     installed, a torn install), reinstall through mise rather than failing.
+#     History: before qmd 2.8 the binding had to be compiled, and ~/.npmrc's
+#     ignore-scripts=true meant each node upgrade landed an unbuilt copy that
+#     this step rebuilt. better-sqlite3 >= 13 ships N-API prebuilds
+#     (prebuilds/darwin-arm64.node), so a missing build/Release/ binding is no
+#     longer unhealthy by itself.
 #
 #  3. Notification on state *change* only. Pinging Slack every 30 minutes for
 #     two days would be its own kind of silence.
@@ -66,30 +70,39 @@ transition() {
 	[ "$new" != "$old" ]
 }
 
-# Resolve the globally-installed qmd against whichever Node is active, so this
-# keeps working across mise upgrades instead of pinning a version path.
+# Resolve the mise-managed qmd at its pinned version, so this keeps working
+# across pin bumps and node upgrades instead of hardcoding a version path.
 QMD_PKG=""
 QMD_BINDING=""
 QMD_PREBUILD=""
 resolve_paths() {
-	root=$(npm root -g 2>/dev/null) || return 1
+	root=$(mise where npm:@tobilu/qmd 2>/dev/null) || return 1
 	[ -n "$root" ] || return 1
-	QMD_PKG="$root/@tobilu/qmd"
-	QMD_BINDING="$QMD_PKG/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
-	QMD_PREBUILD="$QMD_PKG/node_modules/better-sqlite3/prebuilds/darwin-arm64.node"
-	[ -d "$QMD_PKG" ]
+	QMD_PKG="$root/node_modules/@tobilu/qmd"
+	[ -d "$QMD_PKG" ] || return 1
+	# aube lays dependencies out pnpm-style, as siblings of the package's real
+	# path, so ask node's resolver rather than assuming QMD_PKG/node_modules.
+	# realpath first: resolve's paths option walks up from the literal path.
+	sqlite=$(node -e 'const fs = require("fs"), p = require("path"); console.log(p.dirname(require.resolve("better-sqlite3/package.json", { paths: [fs.realpathSync(process.argv[1])] })))' "$QMD_PKG" 2>/dev/null) || sqlite=""
+	[ -n "$sqlite" ] || return 1
+	QMD_BINDING="$sqlite/build/Release/better_sqlite3.node"
+	QMD_PREBUILD="$sqlite/prebuilds/darwin-arm64.node"
 }
 
-# --ignore-scripts=false is scoped to this one rebuild; the global default-deny
-# in ~/.npmrc stays intact.
+healthy() {
+	resolve_paths && { [ -f "$QMD_BINDING" ] || [ -f "$QMD_PREBUILD" ]; }
+}
+
+# -f so a torn install is replaced rather than skipped as already present. The
+# config's postinstall re-prunes the stray peer bins on every reinstall.
 heal() {
-	echo "--- $(ts) better-sqlite3 binding missing, rebuilding ---"
-	(cd "$QMD_PKG" && npm rebuild better-sqlite3 --ignore-scripts=false --foreground-scripts)
-	if [ -f "$QMD_BINDING" ] || [ -f "$QMD_PREBUILD" ]; then
-		echo "--- $(ts) rebuild OK ---"
+	echo "--- $(ts) qmd package or better-sqlite3 binding missing, reinstalling via mise ---"
+	mise install -f npm:@tobilu/qmd
+	if healthy; then
+		echo "--- $(ts) reinstall OK ---"
 		return 0
 	fi
-	echo "--- $(ts) rebuild FAILED ---"
+	echo "--- $(ts) reinstall FAILED ---"
 	return 1
 }
 
@@ -129,13 +142,9 @@ refresh_doc_repos() {
 {
 	echo "=== $(ts) start ==="
 
-	if resolve_paths; then
-		if [ ! -f "$QMD_BINDING" ] && [ ! -f "$QMD_PREBUILD" ]; then
-			healed=yes
-			heal || healed=failed
-		fi
-	else
-		echo "warn: could not resolve the global qmd package path"
+	if ! healthy; then
+		healed=yes
+		heal || healed=failed
 	fi
 
 	try_index() {
@@ -178,7 +187,7 @@ refresh_doc_repos() {
 		transition ok &&
 			notify ":white_check_mark: qmd index update recovered"
 		[ "$healed" = yes ] &&
-			notify ":wrench: qmd: rebuilt better-sqlite3 after a Node upgrade"
+			notify ":wrench: qmd: reinstalled npm:@tobilu/qmd via mise"
 	fi
 } >>"$LOG" 2>&1
 
