@@ -14,6 +14,11 @@
 // so `!` still turns the border its own color no matter what /color is set to.
 // The footer paints a `/name`d session to match, reading the same stash.
 //
+// The choice is also exported as PI_SESSION_COLOR (the palette name, "#hex",
+// or xterm index) for tools this session runs: pi's bash tool copies
+// process.env for every command, so eert-bot-feed can post under an avatar
+// that matches the border. Process env only, so it's still not persisted.
+//
 // Two consequences of pi's setThemeInstance(), both intentional trades:
 //   - the theme file watcher stops, so editing the active custom theme's JSON
 //     no longer hot-reloads until /color off;
@@ -243,6 +248,9 @@ function liveTheme(ctx: ExtensionContext): Theme {
 
 export default function colorExtension(pi: ExtensionAPI): void {
   const state = stash();
+  // Re-export after /reload (the stash survives it), so a session colored
+  // before this line existed doesn't need /color again for PI_SESSION_COLOR.
+  if (state.spec) process.env.PI_SESSION_COLOR = state.spec;
 
   /**
    * The theme to tint from. While our own tint is live that is the remembered
@@ -274,6 +282,7 @@ export default function colorExtension(pi: ExtensionAPI): void {
     state.ansi = undefined;
     state.tinted = undefined;
     state.baseline = undefined;
+    delete process.env.PI_SESSION_COLOR;
     // Nothing to restore if the theme was replaced from elsewhere in the
     // meantime — that replacement is already untinted.
     if (base && base !== liveTheme(ctx)) ctx.ui.setTheme(base);
@@ -351,6 +360,7 @@ export default function colorExtension(pi: ExtensionAPI): void {
         return;
       }
       state.spec = token;
+      process.env.PI_SESSION_COLOR = token;
       ctx.ui.notify(`Session color: ${swatch(value)} ${describe(token, value)}`, "info");
     },
   });
