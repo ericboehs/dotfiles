@@ -1,6 +1,18 @@
 #!/bin/bash
 # Search VA acronyms database
 # Usage: va-wtf [-a|--all] <search-term>
+#
+# Source repo is configured locally (not in dotfiles) as host/owner/repo:
+#   VA_WTF_REPO=<host>/<owner>/<repo>   (env var, or in ~/.config/va-wtf)
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}/va-wtf"
+# shellcheck source=/dev/null
+[[ -z "$VA_WTF_REPO" && -f "$config" ]] && source "$config"
+
+if [[ -z "$VA_WTF_REPO" ]]; then
+  echo "va-wtf: VA_WTF_REPO not set (expected host/owner/repo in env or $config)" >&2
+  exit 1
+fi
 
 search_all=false
 while [[ $# -gt 0 ]]; do
@@ -26,7 +38,8 @@ else
   filter="awk -F',' 'tolower(\$1) ~ /$lc_term/'"
 fi
 
-curl -s https://raw.githubusercontent.com/department-of-veterans-affairs/acronyms/master/acronyms.csv \
+GH_HOST="${VA_WTF_REPO%%/*}" gh api "repos/${VA_WTF_REPO#*/}/contents/acronyms.csv" \
+    -H 'Accept: application/vnd.github.raw' \
   | eval "$filter" \
   | awk -F',' -v term="$term" '
     function highlight(str, pat,    result, lc_str, lc_pat, idx, len) {
