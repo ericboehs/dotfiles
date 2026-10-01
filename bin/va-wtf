@@ -1,35 +1,76 @@
 #!/bin/bash
 # Search VA acronyms database
-# Usage: va-wtf [-a|--all] <search-term>
+# Usage: va-wtf [-a|--all] [-r|--refresh] <search-term>
 #
 # Source repo is configured locally (not in dotfiles) as host/owner/repo:
 #   VA_WTF_REPO=<host>/<owner>/<repo>   (env var, or in ~/.config/va-wtf)
+#
+# The CSV is cached for 24h under $XDG_CACHE_HOME/va-wtf (default ~/.cache).
+# If a refresh fails, a stale cache is used with a warning.
 
 config="${XDG_CONFIG_HOME:-$HOME/.config}/va-wtf"
-# shellcheck source=/dev/null
-[[ -z "$VA_WTF_REPO" && -f "$config" ]] && source "$config"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/va-wtf"
+cache="$cache_dir/acronyms.csv"
+cache_max_age_min=1440
 
-if [[ -z "$VA_WTF_REPO" ]]; then
-  echo "va-wtf: VA_WTF_REPO not set (expected host/owner/repo in env or $config)" >&2
-  exit 1
-fi
+usage() {
+  echo "Usage: va-wtf [-a|--all] [-r|--refresh] <search-term>"
+  echo "  -a, --all      Search acronyms, definitions, and notes"
+  echo "  -r, --refresh  Force re-download of the cached CSV (term optional)"
+}
+
+fetch_csv() {
+  # shellcheck source=/dev/null
+  [[ -z "$VA_WTF_REPO" && -f "$config" ]] && source "$config"
+  if [[ -z "$VA_WTF_REPO" ]]; then
+    echo "va-wtf: VA_WTF_REPO not set (expected host/owner/repo in env or $config)" >&2
+    return 1
+  fi
+
+  mkdir -p "$cache_dir" || return 1
+  local tmp
+  tmp=$(mktemp "$cache_dir/.acronyms.XXXXXX") || return 1
+
+  # Only replace the cache with a successful response that looks like the CSV
+  if GH_HOST="${VA_WTF_REPO%%/*}" gh api "repos/${VA_WTF_REPO#*/}/contents/acronyms.csv" \
+       -H 'Accept: application/vnd.github.raw' > "$tmp" \
+     && head -1 "$tmp" | grep -q '^Title,'; then
+    mv -f "$tmp" "$cache"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
 
 search_all=false
+refresh=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -a|--all) search_all=true; shift ;;
-    -h|--help)
-      echo "Usage: va-wtf [-a|--all] <search-term>"
-      echo "  -a, --all  Search acronyms, definitions, and notes"
-      exit 0 ;;
+    -r|--refresh) refresh=true; shift ;;
+    -h|--help) usage; exit 0 ;;
     *) term="$1"; shift ;;
   esac
 done
 
-if [[ -z "$term" ]]; then
-  echo "Usage: va-wtf [-a|--all] <search-term>" >&2
+if [[ -z "$term" && "$refresh" != true ]]; then
+  usage >&2
   exit 1
 fi
+
+# Refresh when forced, missing, or older than 24h (find prints nothing if stale)
+if [[ "$refresh" == true || -z "$(find "$cache" -mmin -"$cache_max_age_min" 2>/dev/null)" ]]; then
+  if ! fetch_csv; then
+    if [[ -s "$cache" ]]; then
+      echo "va-wtf: refresh failed; using stale cache" >&2
+    else
+      echo "va-wtf: could not fetch acronyms and no cache exists" >&2
+      exit 1
+    fi
+  fi
+fi
+
+[[ -z "$term" ]] && exit 0
 
 if [[ "$search_all" == true ]]; then
   filter="grep -i \"$term\""
@@ -38,9 +79,7 @@ else
   filter="awk -F',' 'tolower(\$1) ~ /$lc_term/'"
 fi
 
-GH_HOST="${VA_WTF_REPO%%/*}" gh api "repos/${VA_WTF_REPO#*/}/contents/acronyms.csv" \
-    -H 'Accept: application/vnd.github.raw' \
-  | eval "$filter" \
+eval "$filter" < "$cache" \
   | awk -F',' -v term="$term" '
     function highlight(str, pat,    result, lc_str, lc_pat, idx, len) {
       result = ""
