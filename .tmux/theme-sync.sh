@@ -1,42 +1,11 @@
 #!/usr/bin/env bash
 # Sync the tmux theme with the system appearance: Catppuccin Latte / Mocha.
-# Called on tmux startup and re-evaluated via #() in status-format.
+# Called on tmux startup, and by status-daemon.sh whenever the appearance
+# flips (it passes the mode it detected as $1, so this skips the lookup).
 #
 # Two deliberate exceptions to the palettes: the accent stays Latte's sky in
 # both modes (it reads on either background, so the active window is the same
 # color all day), and @time_fg stays Latte's overlay1 for the same reason.
-
-# Every attached client evaluates #() independently, and active output can
-# redraw the status line more often than status-interval. Share one appearance
-# check per tmux server for a short window; two seconds still makes a system
-# appearance toggle feel immediate. Set THEME_SYNC_INTERVAL=0 to only dedupe
-# concurrent checks.
-interval=${THEME_SYNC_INTERVAL:-2}
-case $interval in ''|*[!0-9]*) interval=2 ;; esac
-server_id=${TMUX#*,}; server_id=${server_id%%,*}
-check_cache=${TMPDIR:-/tmp}/tmux-theme-sync-check.$EUID.${server_id:-unknown}
-check_lock=$check_cache.lock
-now=$(printf '%(%s)T' -1)
-read -r last_check 2>/dev/null <"$check_cache"
-if [[ $last_check =~ ^[0-9]+$ ]] && ((now - last_check < interval)); then
-  exit 0
-fi
-
-if ! mkdir "$check_lock" 2>/dev/null; then
-  if [[ -n $(find "$check_lock" -maxdepth 0 -mmin +1 2>/dev/null) ]]; then
-    rmdir "$check_lock" 2>/dev/null
-    mkdir "$check_lock" 2>/dev/null || exit 0
-  else
-    exit 0
-  fi
-fi
-trap 'rmdir "$check_lock" 2>/dev/null' EXIT
-
-# Recheck after taking the lock in case another client just completed.
-read -r last_check 2>/dev/null <"$check_cache"
-if [[ $last_check =~ ^[0-9]+$ ]] && ((now - last_check < interval)); then
-  exit 0
-fi
 
 # Detecting inline here used to mean calling `defaults`, which does not exist on
 # Linux and failed into the light branch — leaving coop's status bar in Latte
@@ -53,7 +22,11 @@ fi
 # a server started at 09:00 stayed dark all morning against a light Mac).
 # Clearing it here is a no-op on macOS, where the defaults branch answers
 # before the environment is ever consulted.
-if [ "$(env -u LC_APPEARANCE "$HOME/bin/appearance")" = dark ]; then
+case ${1:-} in
+  dark|light) resolved=$1 ;;
+  *) resolved=$(env -u LC_APPEARANCE "$HOME/bin/appearance") ;;
+esac
+if [ "$resolved" = dark ]; then
   mode=dark
   # Mocha
   surface0="#313244"; surface1="#45475a"
@@ -78,20 +51,17 @@ else
   mark="#8839ef"; mark_fg="#eff1f5"
 fi
 
-# Mark the check before applying a changed theme; the lock remains held until
-# exit, so another client cannot observe this timestamp mid-update.
-printf '%s\n' "$now" >"$check_cache.$$" && mv -f "$check_cache.$$" "$check_cache"
-
 # Sync the server's global environment to the resolved mode, ahead of the
-# guard so it runs on every real check rather than only on flips: new panes
-# inherit LC_APPEARANCE from here, and a server carrying a stale value from
-# its starting connection heals on the next status redraw instead of waiting
-# for a toggle.
+# guard so it runs on every call rather than only on flips: new panes inherit
+# LC_APPEARANCE from here, and a server carrying a stale value from its
+# starting connection heals as soon as status-daemon.sh starts instead of
+# waiting for a toggle.
 tmux set-environment -g LC_APPEARANCE "$mode"
 
-# This script runs on every status redraw. Re-applying ~20 options each time is
-# pure waste, so bail out unless the appearance actually flipped. Editing the
-# colors below? Run `tmux set -gu @appearance` first to force a re-apply.
+# Re-applying ~20 options when nothing changed is pure waste (startup and
+# config reloads call this too), so bail out unless the appearance actually
+# flipped. Editing the colors below? Run `tmux set -gu @appearance` first to
+# force a re-apply.
 [ "$(tmux show-options -gqv @appearance)" = "$mode" ] && exit 0
 tmux set-option -gq @appearance "$mode"
 

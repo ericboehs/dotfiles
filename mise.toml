@@ -170,7 +170,7 @@ REPO_PATH = "ericboehs/dotfiles"
 # TPM installs into ~/.tmux/plugins/, which .gitignore excludes, so the whole
 # directory can be one link — which is also what gets every helper script
 # .tmux.conf binds (agenda.sh, btop.sh, goto-window.sh, move-window.sh,
-# session-jump.sh, theme-sync.sh) onto a fresh machine.
+# session-jump.sh, status-daemon.sh, theme-sync.sh) onto a fresh machine.
 "~/.tmux" = ".tmux"
 # .zsh/path.zsh puts ~/bin at the front of $PATH, but nothing created it — on
 # this machine it was a hand-made symlink from years back, so the gap only

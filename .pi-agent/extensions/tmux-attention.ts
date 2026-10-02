@@ -123,7 +123,7 @@ export default function (pi: ExtensionAPI): void {
       { timeout: 1000 },
     )
     .catch(() => {
-      // Cosmetic only; agent-sync's tty check covers unmarked sessions.
+      // Cosmetic only; status-daemon's tty check covers unmarked sessions.
     });
 
   const setAttention = async (on: boolean): Promise<void> => {
@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI): void {
    * Maintain this pane's @agent_running flag and roll it up into the window's
    * @agent_count. The status bar dims #I on background windows while
    * @agent_count is set; Claude's hooks (claude-agent-state.sh) keep the same
-   * convention, and ~/.tmux/agent-sync.sh clears flags orphaned by a dead
+   * convention, and ~/.tmux/status-daemon.sh clears flags orphaned by a dead
    * agent. Dimming is decided at render time from window_active, so the flag
    * is maintained even when this window is currently focused — switching away
    * mid-turn dims it without any extra bookkeeping.
@@ -311,7 +311,7 @@ export default function (pi: ExtensionAPI): void {
     removeTerminalListener?.();
     removeTerminalListener = undefined;
     // Best effort: a clean exit should leave no dim or stale marker behind.
-    // Anything harsher is agent-sync's job (it drops dead markers itself).
+    // Anything harsher is status-daemon's job (it drops dead markers itself).
     void setRunning(false);
     void pi
       .exec("tmux", ["set-option", "-p", "-u", "-t", TMUX_PANE, "@agent_pane"], {

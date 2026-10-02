@@ -5,11 +5,11 @@
 # ~/.cache/dark-mode on a Linux box is otherwise only refreshed by a login shell
 # there (see .zsh/appearance.zsh), so toggling the Mac while already attached to
 # coop left its status bar in the old theme until the next new window. Writing
-# the file is the whole job — the remote tmux re-runs theme-sync.sh on its next
-# status-interval and picks the change up within five seconds.
+# the file is the whole job — the remote tmux's status-daemon.sh reads it every
+# two seconds and runs theme-sync.sh when it changes.
 #
-# Called from .tmux/theme-sync.sh on the redraw where the mode actually flips,
-# so it runs once per toggle rather than once per redraw.
+# Called from .tmux/theme-sync.sh when the mode actually flips, so it runs
+# once per toggle.
 
 # Only the machine that can answer the question gets to push an answer. On a
 # Linux box `defaults` is absent and the local value is itself second-hand.

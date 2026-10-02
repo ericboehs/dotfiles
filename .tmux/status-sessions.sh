@@ -64,12 +64,12 @@ session_format() {
   printf '%s' "#{S:#{?#{==:#{session_id},${session_id}},${row},}}"
 }
 
-# These helpers intentionally print nothing. Keeping them on the first physical
-# row preserves the existing five-second theme and agent-state refresh cadence.
-hidden='#(~/.tmux/theme-sync.sh)#(~/.tmux/agent-sync.sh)'
+# No #() here on purpose: tmux re-runs those on nearly every redraw, per
+# client, and each run is a fork+exec that the VA Mac audits and scans.
+# status-daemon.sh samples on its own clock and publishes these options.
 right="\
 #[align=right]#[fg=#{E:@time_fg}]\
-#[range=right]#(~/.tmux/gpu.sh)#(~/.tmux/loadavg.sh)#[norange] \
+#[range=right]#{E:@status_gpu}#{E:@status_load}#[norange] \
 #[fg=#{E:@clock_fg}]#[range=user|clock]%H:%M CT#[norange]#[fg=default]"
 separator='#[fg=#{E:@dim_fg}]│#[fg=default] '
 
@@ -102,7 +102,6 @@ else
   done
 fi
 
-formats[0]="${hidden}${formats[0]}"
 last=$((height - 1))
 formats[last]="${formats[last]}${right}"
 

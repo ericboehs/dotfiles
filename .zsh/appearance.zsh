@@ -4,7 +4,7 @@
 # only a login shell can do. Two jobs:
 #
 #   1. Cache the answer in ~/.cache/dark-mode, which is where anything running
-#      outside a login shell reads it — fzf.zsh's popups and .tmux/theme-sync.sh
+#      outside a login shell reads it — fzf.zsh's popups and .tmux/status-daemon.sh
 #      on a Linux box, neither of which can ask the system itself.
 #
 #   2. Export LC_APPEARANCE, which is how the answer crosses an SSH hop at all.

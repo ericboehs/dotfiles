@@ -4,7 +4,7 @@
 # .tmux/theme-sync.sh, and through tmux's @appearance, .tmux/btop.sh.
 #
 # Precedence, most authoritative first:
-#   1. macOS, which can be asked directly, so a toggle lands on the next redraw.
+#   1. macOS, which can be asked directly, so a toggle lands within seconds.
 #   2. LC_APPEARANCE, forwarded by the SSH client from a Mac. It is the only
 #      answer a Linux box has; see .zsh/appearance.zsh for why LC_* carries it.
 #   3. ~/.cache/dark-mode, whatever the last login resolved. This is the branch
