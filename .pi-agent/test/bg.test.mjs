@@ -30,6 +30,7 @@ function mount() {
     registerShortcut: () => {},
     on: (name, handler) => handlers.set(name, handler),
     sendMessage: () => {},
+    events: { on: () => () => {}, emit: () => {} },
   };
   backgroundTasks(pi);
 

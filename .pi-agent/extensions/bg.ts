@@ -41,6 +41,14 @@
  *   When a job exits, injects exit code + tail into the conversation and
  *   triggers a turn. User-initiated kills never wake the model.
  *
+ * Event bus (for other extensions, e.g. subagent.ts):
+ *   pi.events.emit("bg:start", req) starts `req.command` as a regular bg job
+ *   (same widget, /bg panel, kill, and wake). bg.ts sets `req.accepted = true`
+ *   synchronously, so the sender can detect that bg.ts is not loaded, then calls
+ *   `req.reply({ id, logPath } | { error })`. Optional per-job overrides: `name`
+ *   (widget label), `summary` (wake header instead of the command), and
+ *   `tailLines`/`tailMaxChars` (how much of the log the wake carries).
+ *
  * Env knobs:
  *   PI_BG_DIR         log/spool directory (default /tmp/pi-bg-<uid>, mode
  *                     0700; not $TMPDIR — macOS makes that per-user and
@@ -146,6 +154,11 @@ interface Job {
 	killedByUser: boolean;
 	/** Foreground-race job: its tool result carries the outcome; suppress the wake. */
 	quiet: boolean;
+	/** Wake header text instead of the command (event-bus jobs). */
+	summary?: string;
+	/** Per-job overrides of TAIL_LINES / TAIL_MAX_CHARS for the wake. */
+	tailLines?: number;
+	tailMaxChars?: number;
 	/** Drop the child's event-loop ref so an adopted job outlives the turn. */
 	unrefChild?: () => void;
 }
@@ -269,20 +282,34 @@ function shellCommandPrefix(cwd: string): string | undefined {
 }
 
 /** Read the last `count` lines without slurping a huge log into memory. */
+/** Request shape for the `bg:start` event-bus channel (see header). */
+interface BgStartRequest {
+	command: string;
+	cwd?: string;
+	ctx?: unknown;
+	name?: string;
+	summary?: string;
+	tailLines?: number;
+	tailMaxChars?: number;
+	accepted?: boolean;
+	reply?: (result: { id: string; logPath: string } | { error: string }) => void;
+}
+
 function tailFile(
 	logPath: string,
 	count: number,
 	windowBytes = 256 * 1024,
+	maxChars = TAIL_MAX_CHARS,
 ): { text: string; lines: number; shown: number } {
 	const all = tailLines(logPath, windowBytes);
 	let selected = count > 0 ? all.slice(-count) : [];
 	// Drop whole lines from the front until it fits, so the tail never begins
 	// mid-line; only fall back to a hard character cut for a single huge line.
-	while (selected.length > 1 && selected.join("\n").length > TAIL_MAX_CHARS) {
+	while (selected.length > 1 && selected.join("\n").length > maxChars) {
 		selected = selected.slice(1);
 	}
 	let text = selected.join("\n");
-	if (text.length > TAIL_MAX_CHARS) text = `…${text.slice(-TAIL_MAX_CHARS)}`;
+	if (text.length > maxChars) text = `…${text.slice(-maxChars)}`;
 	return { text, lines: all.length, shown: selected.length };
 }
 
@@ -649,7 +676,14 @@ export default function (pi: ExtensionAPI) {
 	async function start(
 		command: string,
 		cwd: string,
-		opts: { quiet?: boolean; ctx?: unknown } = {},
+		opts: {
+			quiet?: boolean;
+			ctx?: unknown;
+			name?: string;
+			summary?: string;
+			tailLines?: number;
+			tailMaxChars?: number;
+		} = {},
 	): Promise<{ job: Job; exited: Promise<void> }> {
 		fs.mkdirSync(BG_DIR, { recursive: true, mode: 0o700 });
 		const id = crypto.randomBytes(3).toString("hex");
@@ -672,7 +706,7 @@ export default function (pi: ExtensionAPI) {
 		);
 		const job: Job = {
 			id,
-			name: labelFor(command),
+			name: opts.name?.slice(0, 20) || labelFor(command),
 			command,
 			cwd,
 			logPath,
@@ -680,6 +714,9 @@ export default function (pi: ExtensionAPI) {
 			startedAt: Date.now(),
 			killedByUser: false,
 			quiet: opts.quiet === true,
+			summary: opts.summary,
+			tailLines: opts.tailLines,
+			tailMaxChars: opts.tailMaxChars,
 		};
 		jobs.set(id, job);
 
@@ -774,12 +811,17 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const { text, lines, shown } = tailFile(job.logPath, TAIL_LINES);
+		const { text, lines, shown } = tailFile(
+			job.logPath,
+			job.tailLines ?? TAIL_LINES,
+			undefined,
+			job.tailMaxChars,
+		);
 		const omitted = lines - shown;
 		// The model saw the command when it launched the job, so replaying it in
 		// full on every completion is pure token cost. Collapse whitespace too:
 		// a multi-line command would otherwise mangle the header.
-		const oneLine = job.command.replace(/\s+/g, " ").trim();
+		const oneLine = (job.summary ?? job.command).replace(/\s+/g, " ").trim();
 		const command = oneLine.length > 80 ? `${oneLine.slice(0, 79)}…` : oneLine;
 		const header =
 			`[bg ${job.id}] \`${command}\` ${outcome} after ${elapsed}\n` +
@@ -1077,6 +1119,33 @@ export default function (pi: ExtensionAPI) {
 		handler: async (ctx) => {
 			await openPanel(ctx);
 		},
+	});
+
+	// ---- event bus: other extensions start jobs through bg.ts ---------------
+	// Subscribing is not a resource (pi tracks and drops it on reload); the job
+	// itself only starts when a request arrives, after session_start.
+	pi.events.on("bg:start", async (data) => {
+		const req = data as BgStartRequest | undefined;
+		if (!req || typeof req.command !== "string" || req.accepted) return;
+		req.accepted = true; // synchronous: the sender checks this right after emit()
+		try {
+			const ctx = req.ctx ?? ctxRef;
+			const cwd = req.cwd ?? (ctx as { cwd?: string } | undefined)?.cwd ?? process.cwd();
+			const { job } = await start(req.command, cwd, {
+				ctx,
+				name: req.name,
+				summary: req.summary,
+				tailLines: req.tailLines,
+				tailMaxChars: req.tailMaxChars,
+			});
+			if (job.endedAt !== undefined && job.exitCode === 127) {
+				req.reply?.({ error: `failed to start; see ${job.logPath}` });
+			} else {
+				req.reply?.({ id: job.id, logPath: job.logPath });
+			}
+		} catch (error) {
+			req.reply?.({ error: error instanceof Error ? error.message : String(error) });
+		}
 	});
 
 	// ---- lifecycle ----------------------------------------------------------

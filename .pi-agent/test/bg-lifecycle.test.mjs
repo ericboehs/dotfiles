@@ -74,12 +74,17 @@ async function mount(t, { mode = "tui", wake = "followUp" } = {}) {
       }),
     },
   };
+  const bus = new Map();
   backgroundTasks({
     registerTool: (definition) => tools.set(definition.name, definition),
     registerCommand: (name, definition) => commands.set(name, definition),
     registerShortcut() {},
     on: (name, handler) => handlers.set(name, handler),
     sendMessage: (message, options) => sent.push({ message, options }),
+    events: {
+      on: (channel, handler) => (bus.set(channel, handler), () => bus.delete(channel)),
+      emit: (channel, data) => bus.get(channel)?.(data),
+    },
   });
 
   let stopped = false;
@@ -102,6 +107,7 @@ async function mount(t, { mode = "tui", wake = "followUp" } = {}) {
   const bash = tools.get("bash");
   return {
     bash, children, sent, notices, widgets, statuses, theme, shutdown,
+    emit: (channel, data) => bus.get(channel)?.(data),
     run: (params) => bash.execute("test-job", params, undefined, undefined, ctx),
     render: (width = 160) => component?.render(width) ?? [],
     component: () => component,
@@ -202,6 +208,39 @@ test("foreground completion remains quiet and never displays a running-job widge
   assert.equal((await pending).content[0].text, "done");
   assert.deepEqual(h.sent, []);
   assert.ok(h.widgets.every(({ content }) => content === undefined));
+});
+
+test("bg:start runs another extension's job with its own label, header, and tail", async (t) => {
+  const h = await mount(t);
+  const req = {
+    command: "PI_SUBAGENT_CHILD=1 pi --mode json -p 'Task: x' | node -e 'filter'",
+    name: "sa:scout",
+    summary: "subagent scout: count the files",
+    tailLines: 100,
+    tailMaxChars: 10_000,
+  };
+  const reply = new Promise((resolve) => (req.reply = resolve));
+  h.emit("bg:start", req);
+  assert.equal(req.accepted, true, "accepted synchronously so senders can detect bg.ts");
+  const { id, logPath } = await reply;
+  assert.match(id, /^[0-9a-f]{6}$/);
+  assert.equal(logPath, h.children[0].logPath);
+  assert.match(h.render().join("\n"), /sa:scout/);
+
+  // 40 lines: past the default 15-line tail, inside this job's 100.
+  writeFileSync(logPath, `${Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n")}\n`);
+  h.children[0].exit();
+  assert.equal(h.sent.length, 1);
+  const wake = h.sent[0].message.content;
+  assert.match(wake, /`subagent scout: count the files` succeeded/);
+  assert.doesNotMatch(wake, /PI_SUBAGENT_CHILD/, "summary replaces the raw command");
+  assert.match(wake, /last 40 lines:\nline 0\n/);
+});
+
+test("bg:start ignores requests another listener already accepted", async (t) => {
+  const h = await mount(t);
+  h.emit("bg:start", { command: "true", accepted: true, reply: () => assert.fail("must not start") });
+  assert.equal(h.children.length, 0);
 });
 
 test("failed jobs retain exit-code and log-tail completion notifications", async (t) => {
