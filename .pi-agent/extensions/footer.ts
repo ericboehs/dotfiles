@@ -309,6 +309,7 @@ const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max
 const MODEL_RULES: Array<[RegExp, string]> = [
   // Keep release aliases exact: an older Sol must say gpt-5.6-sol rather than
   // inheriting the current release's deceptively versionless label.
+  [/^gpt-6\.1-sol$/i, "sol"],
   [/^gpt-6-sol$/i, "sol"],
   [/^gpt-6-astra$/i, "astra"],
   [/^gpt-[\d.]+-luna$/i, "luna"],

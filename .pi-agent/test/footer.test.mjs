@@ -303,6 +303,7 @@ test("provider aliases", async () => {
 
 test("model aliases are lowercased, unknown ids pass through", async () => {
   const cases = [
+    ["gpt-6.1-sol", "sol"],
     ["gpt-6-sol", "sol"],
     ["gpt-5.6-sol", "gpt-5.6-sol"],
     ["gpt-6-astra", "astra"],
@@ -342,6 +343,7 @@ test("provider-specific model aliases are pinned to exact releases", async () =>
     [{ id: "claude-opus-5", provider: "github-copilot", reasoning: true }, "opus-5"],
     [{ id: "claude-opus-6", provider: "github-copilot", reasoning: true }, "opus-6"],
     [{ id: "claude-opus-5", provider: "claude-bridge", reasoning: true }, "opus-5"],
+    [{ id: "gpt-6.1-sol", provider: "openai-codex", reasoning: true }, "sol"],
     [{ id: "gpt-6-sol", provider: "openai-codex", reasoning: true }, "sol"],
     [{ id: "gpt-5.6-sol", provider: "openai-codex", reasoning: true }, "gpt-5.6-sol"],
     [{ id: "gpt-7-sol", provider: "openai-codex", reasoning: true }, "gpt-7-sol"],

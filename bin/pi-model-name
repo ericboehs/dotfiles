@@ -17,6 +17,7 @@ case "$raw" in
   opencode-go/deepseek-flash)             echo "DeepSeek 4.1 Flash" ;;
   github-copilot/claude-opus-5)           echo "Opus 5" ;;
   github-copilot/claude-opus-5.5)         echo "Opus 5.5" ;;
+  openai-codex/gpt-6.1-sol)              echo "GPT 6.1 Sol" ;;
   openai-codex/gpt-6-sol)                 echo "GPT 6 Sol" ;;
   openai-codex/gpt-6-luna)                echo "GPT 6 Luna" ;;
   openai-codex/gpt-6-astra)               echo "GPT 6 Astra" ;;
