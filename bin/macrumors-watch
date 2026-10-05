@@ -1,0 +1,477 @@
+#! /usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'fileutils'
+require 'json'
+require 'net/http'
+require 'optparse'
+require 'rexml/document'
+require 'time'
+require 'uri'
+
+# Watch MacRumors front-page / recent RSS stories and Slack when comment
+# counts spike. Default is a dry print. --notify slacks new hits via
+# slack-noti and remembers them.
+class MacRumorsWatch
+  RSS = 'https://feeds.macrumors.com/MacRumors-All'
+  HOME = 'https://www.macrumors.com/'
+  CACHE_DIR = File.expand_path('~/.cache/macrumors-watch')
+  SEEN_PATH = File.join(CACHE_DIR, 'seen.json')
+  LOCK_PATH = File.join(CACHE_DIR, 'seen.lock')
+  LOG_PATH = File.join(CACHE_DIR, 'launchd.log')
+  LABEL = 'com.ericboehs.macrumors-watch'
+  PLIST_PATH = File.expand_path("~/Library/LaunchAgents/#{LABEL}.plist")
+  USER_AGENT = 'macrumors-watch (ericboehs/dotfiles)'
+
+  DEFAULTS = {
+    min_comments: 500,
+    max_age_comments: 6.0,
+    min_cph: 100.0,
+    min_cph_comments: 40,
+    max_age: 6.0,
+    max_stories: 25,
+    source: 'rss'
+  }.freeze
+
+  Story = Struct.new(
+    :id, :title, :url, :comments, :published_at, :age_h, :cph,
+    keyword_init: true
+  )
+
+  def initialize(argv)
+    @opts = DEFAULTS.dup.merge(
+      notify: false, reset: false, list_seen: false, watch: nil,
+      install: false, uninstall: false
+    )
+    parse! argv
+  end
+
+  def run
+    $stdout.sync = $stderr.sync = true
+    if @opts[:install]
+      install_launch_agent
+      return
+    end
+    if @opts[:uninstall]
+      uninstall_launch_agent
+      return
+    end
+    if @opts[:reset]
+      reset_seen
+      return
+    end
+    if @opts[:list_seen]
+      print_seen
+      return
+    end
+
+    if @opts[:watch]
+      loop { tick; sleep @opts[:watch] }
+    else
+      tick
+    end
+  end
+
+  private
+
+  def parse!(argv)
+    parser = OptionParser.new do |o|
+      o.banner = <<~BANNER
+        Usage: macrumors-watch [options]
+
+        Print recent MacRumors stories with comment counts and whether each
+        would fire. Does not Slack or record anything unless --notify.
+        --watch re-scans (and --notify still slacks new fires each tick).
+        --install loads a LaunchAgent that runs --watch --notify in the background.
+
+        A story fires when either:
+          comments >= #{DEFAULTS[:min_comments]} and age < #{DEFAULTS[:max_age_comments]}h
+          cph      >= #{DEFAULTS[:min_cph]} and comments >= #{DEFAULTS[:min_cph_comments]} and age < #{DEFAULTS[:max_age]}h
+      BANNER
+      o.on('--notify', 'Slack new fires via slack-noti and remember them') { @opts[:notify] = true }
+      o.on('--watch [SECONDS]', Integer, 'Re-scan every SECONDS (default 180). Works with --notify') do |v|
+        interval = v || 180
+        raise OptionParser::InvalidArgument, 'watch interval must be at least 15' if interval < 15
+
+        @opts[:watch] = interval
+      end
+      o.on('--install', 'Load LaunchAgent for --watch --notify') { @opts[:install] = true }
+      o.on('--uninstall', 'Unload LaunchAgent') { @opts[:uninstall] = true }
+      o.on('--seen', 'List remembered story IDs') { @opts[:list_seen] = true }
+      o.on('--reset', 'Forget remembered story IDs') { @opts[:reset] = true }
+      o.on('--source NAME', %w[rss homepage], 'rss (default) or homepage') { |v| @opts[:source] = v }
+      o.on('--min-comments N', Integer, "Comment floor (default #{DEFAULTS[:min_comments]})") { |v| @opts[:min_comments] = v }
+      o.on('--max-age-comments H', Float, "Max age hours for the comments rule (default #{DEFAULTS[:max_age_comments]})") { |v| @opts[:max_age_comments] = v }
+      o.on('--min-cph N', Float, "Comments-per-hour floor (default #{DEFAULTS[:min_cph]})") { |v| @opts[:min_cph] = v }
+      o.on('--min-cph-comments N', Integer, "Comment floor when using cph (default #{DEFAULTS[:min_cph_comments]})") { |v| @opts[:min_cph_comments] = v }
+      o.on('--max-age H', Float, "Max age hours for the cph rule (default #{DEFAULTS[:max_age]})") { |v| @opts[:max_age] = v }
+      o.on('--max-stories N', Integer, "How many recent stories to check (default #{DEFAULTS[:max_stories]})") { |v| @opts[:max_stories] = v }
+      o.on('-h', '--help', 'Show this help') do
+        puts o
+        exit
+      end
+    end
+    parser.parse! argv
+  end
+
+  def tick
+    stories = fetch_stories.sort_by { |s| [-s.cph, -s.comments] }
+    seen = load_seen
+    reprint_board stories, seen
+    notify_new(stories, seen) if @opts[:notify]
+  rescue StandardError => e
+    raise unless @opts[:watch]
+
+    warn "#{Time.now.strftime('%H:%M:%S')}  #{e.message}"
+  end
+
+  def reprint_board(stories, seen)
+    if @opts[:watch] && !$stdout.tty?
+      fires = stories.count { |s| fire?(s) && !seen.key?(s.id) }
+      puts format(
+        '%s  %d stories  %d new fire  %d seen  next %ds',
+        Time.now.strftime('%H:%M:%S'), stories.size, fires,
+        seen.size, @opts[:watch]
+      )
+      return
+    end
+
+    print "\e[2J\e[H" if @opts[:watch] && $stdout.tty?
+    puts "#{Time.now.strftime('%H:%M:%S')}  source=#{@opts[:source]}" if @opts[:watch]
+    print_board stories, seen
+    return unless @opts[:watch]
+
+    extra = @opts[:notify] ? '  notifying new fires' : ''
+    puts "next in #{@opts[:watch]}s#{extra}  (Ctrl-C to stop)"
+  end
+
+  def notify_new(stories, _seen)
+    with_seen_lock do
+      seen = load_seen
+      fires = stories.select { |s| fire?(s) && !seen.key?(s.id) }
+      if fires.empty?
+        warn 'Nothing new to notify.' unless @opts[:watch]
+        return
+      end
+      fires.each { |story| notify story, seen }
+      save_seen seen
+    end
+  end
+
+  def fetch_stories
+    stubs = @opts[:source] == 'homepage' ? homepage_stubs : rss_stubs
+    now = Time.now.to_f
+    stubs.first(@opts[:max_stories]).filter_map { |stub| enrich_stub(stub, now) }
+  end
+
+  def rss_stubs
+    xml = get_body(RSS)
+    doc = REXML::Document.new(xml)
+    stubs = []
+    doc.elements.each('rss/channel/item') do |item|
+      link = text_of(item, 'link')
+      title = text_of(item, 'title')
+      pub = text_of(item, 'pubDate')
+      next if link.to_s.empty?
+
+      stubs << {
+        id: story_id_from_url(link),
+        title: decode_entities(title || '(untitled)'),
+        url: link,
+        published_at: (Time.parse(pub) rescue nil)
+      }
+    end
+    stubs
+  end
+
+  def homepage_stubs
+    html = get_body(HOME)
+    urls = html.scan(%r{https://www\.macrumors\.com/\d{4}/\d{2}/\d{2}/[a-z0-9\-]+/?}).uniq
+    urls.map do |url|
+      {
+        id: story_id_from_url(url),
+        title: nil,
+        url: url.sub(%r{/$}, ''),
+        published_at: nil
+      }
+    end
+  end
+
+  def enrich_stub(stub, now)
+    html = get_body(stub[:url])
+    comments = comment_count_from_html(html)
+    return if comments.nil?
+
+    title = stub[:title] || title_from_html(html) || '(untitled)'
+    published = stub[:published_at] || published_from_html(html)
+    age_h =
+      if published
+        [(now - published.to_f) / 3600.0, 0.05].max
+      else
+        0.05
+      end
+
+    Story.new(
+      id: stub[:id],
+      title: title,
+      url: stub[:url],
+      comments: comments,
+      published_at: published,
+      age_h: age_h,
+      cph: comments / age_h
+    )
+  rescue StandardError => e
+    warn "skip #{stub[:url]}: #{e.message}" unless @opts[:watch] && !$stdout.tty?
+    nil
+  end
+
+  def comment_count_from_html(html)
+    if (m = html.match(/"commentCount"\s*:\s*(\d+)/))
+      return m[1].to_i
+    end
+    if (m = html.match(/Comments?\s*\((\d+)\)/i))
+      return m[1].to_i
+    end
+    0
+  end
+
+  def title_from_html(html)
+    if (m = html.match(/<title>([^<]+)<\/title>/i))
+      decode_entities(m[1].split(' - ').first.strip)
+    end
+  end
+
+  def published_from_html(html)
+    if (m = html.match(/property="article:published_time"\s+content="([^"]+)"/))
+      Time.parse(m[1])
+    end
+  rescue ArgumentError
+    nil
+  end
+
+  def story_id_from_url(url)
+    path = URI(url).path.to_s.sub(%r{/$}, '')
+    path.empty? ? url : path
+  end
+
+  def text_of(element, name)
+    child = element.elements[name]
+    child&.text&.strip
+  end
+
+  def decode_entities(text)
+    text.to_s
+        .gsub('&amp;', '&')
+        .gsub('&lt;', '<')
+        .gsub('&gt;', '>')
+        .gsub('&quot;', '"')
+        .gsub('&#039;', "'")
+        .gsub('&apos;', "'")
+  end
+
+  def fire?(story)
+    comments_hit = story.comments >= @opts[:min_comments] && story.age_h < @opts[:max_age_comments]
+    cph_hit = story.cph >= @opts[:min_cph] &&
+              story.comments >= @opts[:min_cph_comments] &&
+              story.age_h < @opts[:max_age]
+    comments_hit || cph_hit
+  end
+
+  def fire_reason(story)
+    reasons = []
+    reasons << 'cmt' if story.comments >= @opts[:min_comments] && story.age_h < @opts[:max_age_comments]
+    if story.cph >= @opts[:min_cph] && story.comments >= @opts[:min_cph_comments] && story.age_h < @opts[:max_age]
+      reasons << 'cph'
+    end
+    reasons.join('+')
+  end
+
+  def print_board(stories, seen)
+    puts format('%5s %7s %7s %-8s %s', 'cmt', 'age', 'cph', 'flag', 'title')
+    stories.each do |story|
+      flag =
+        if seen.key?(story.id)
+          'seen'
+        elsif fire?(story)
+          fire_reason(story)
+        else
+          '-'
+        end
+      puts format(
+        '%5d %7s %7.1f %-8s %s',
+        story.comments,
+        format_age(story.age_h),
+        story.cph,
+        flag,
+        story.title
+      )
+    end
+  end
+
+  def format_age(hours)
+    if hours < 1
+      format('%dm', (hours * 60).round)
+    else
+      format('%.1fh', hours)
+    end
+  end
+
+  def notify(story, seen)
+    body = [
+      "*#{story.title}*",
+      format(
+        '%d comments · %s · %.0f cph',
+        story.comments, format_age(story.age_h), story.cph
+      ),
+      story.url
+    ].join("\n")
+
+    ok = system 'slack-noti', body
+    raise "slack-noti failed for #{story.id}" unless ok
+
+    seen[story.id] = {
+      'title' => story.title,
+      'comments' => story.comments,
+      'cph' => story.cph.round(1),
+      'notified_at' => Time.now.utc.iso8601
+    }
+    warn "notified #{story.id}  #{story.title}"
+  end
+
+  def load_seen
+    return {} unless File.exist?(SEEN_PATH)
+
+    JSON.parse(File.read(SEEN_PATH))
+  rescue JSON::ParserError
+    {}
+  end
+
+  def save_seen(seen)
+    FileUtils.mkdir_p CACHE_DIR
+    tmp = "#{SEEN_PATH}.tmp"
+    File.write tmp, JSON.pretty_generate(seen)
+    File.rename tmp, SEEN_PATH
+  end
+
+  def reset_seen
+    FileUtils.rm_f SEEN_PATH
+    warn "cleared #{SEEN_PATH}"
+  end
+
+  def print_seen
+    seen = load_seen
+    if seen.empty?
+      puts 'No remembered stories.'
+      return
+    end
+    seen.each do |id, meta|
+      puts format('%s  %s  %s', id, meta['notified_at'], meta['title'])
+    end
+  end
+
+  def with_seen_lock
+    FileUtils.mkdir_p CACHE_DIR
+    File.open(LOCK_PATH, File::RDWR | File::CREAT, 0o644) do |file|
+      file.flock(File::LOCK_EX)
+      yield
+    end
+  end
+
+  def install_launch_agent
+    FileUtils.mkdir_p CACHE_DIR
+    FileUtils.mkdir_p File.dirname(PLIST_PATH)
+    File.write PLIST_PATH, launch_agent_plist
+    launchctl 'bootout', "#{launch_domain}/#{LABEL}"
+    unless launchctl 'bootstrap', launch_domain, PLIST_PATH
+      raise "launchctl bootstrap failed for #{LABEL}"
+    end
+    warn "loaded #{LABEL}"
+    warn "logs: #{LOG_PATH}"
+  end
+
+  def uninstall_launch_agent
+    launchctl 'bootout', "#{launch_domain}/#{LABEL}"
+    FileUtils.rm_f PLIST_PATH
+    warn "unloaded #{LABEL}"
+  end
+
+  def launch_domain
+    "gui/#{Process::UID.eid}"
+  end
+
+  def launchctl(*args)
+    system('launchctl', *args, out: File::NULL, err: File::NULL)
+  end
+
+  def launch_agent_plist
+    home = Dir.home
+    command = 'mkdir -p "$HOME/.cache/macrumors-watch" && ' \
+              'eval "$(fnox hook-env -s zsh --if-missing ignore </dev/null 2>/dev/null)" && ' \
+              'exec macrumors-watch --watch --notify'
+    <<~XML
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+      <dict>
+        <key>Label</key>
+        <string>#{LABEL}</string>
+        <key>ProgramArguments</key>
+        <array>
+          <string>/bin/zsh</string>
+          <string>-l</string>
+          <string>-c</string>
+          <string>#{xml_escape(command)}</string>
+        </array>
+        <key>WorkingDirectory</key>
+        <string>#{xml_escape(home)}</string>
+        <key>EnvironmentVariables</key>
+        <dict>
+          <key>HOME</key>
+          <string>#{xml_escape(home)}</string>
+        </dict>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>KeepAlive</key>
+        <true/>
+        <key>ThrottleInterval</key>
+        <integer>60</integer>
+        <key>ProcessType</key>
+        <string>Background</string>
+        <key>LowPriorityIO</key>
+        <true/>
+        <key>StandardOutPath</key>
+        <string>#{xml_escape(LOG_PATH)}</string>
+        <key>StandardErrorPath</key>
+        <string>#{xml_escape(LOG_PATH)}</string>
+      </dict>
+      </plist>
+    XML
+  end
+
+  def xml_escape(text)
+    text.to_s.gsub('&', '&amp;').gsub('<', '&lt;').gsub('>', '&gt;')
+  end
+
+  def get_body(url)
+    uri = URI(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == 'https'
+    http.open_timeout = 10
+    http.read_timeout = 20
+    req = Net::HTTP::Get.new(uri)
+    req['User-Agent'] = USER_AGENT
+    res = http.request req
+    raise "GET #{url} -> #{res.code}" unless res.is_a?(Net::HTTPSuccess)
+
+    res.body
+  end
+end
+
+Signal.trap('SIGINT') { exit 1 }
+
+begin
+  MacRumorsWatch.new(ARGV).run
+rescue StandardError => e
+  warn e.message
+  exit 1
+end

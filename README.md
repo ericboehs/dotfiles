@@ -159,6 +159,8 @@ Collection of utility scripts in `bin/` including:
 - **Claude Code helpers**: claude-resume, claude-babysit, claude-browser
 - **GitHub CLI extensions**: gh-pm, gh-sprint, gh-action-trace, watch-ci
 - **Tmux utilities**: notes, tmux-agent-save, tmux-agent-restore, tmux-title-format
+- **Story watchers**: hn-watch, macrumors-watch (Slack via slack-noti when a story's comments spike; `--install` loads a LaunchAgent that runs `--watch --notify`)
+- **Agent mesh**: grok-bot-peer (symlink into pi-agent-link's `contrib/grok-bot`; registers Grok as a peer session on this Mac), pi-link
 - **Development tools**: colors, true-colors, utcdate
 - **Pi**: pi-native (opt-in: official release binary, SHA-verified), pi-bundle (retires itself where upstream bundles; kept for older pi), pi-launch, pi-pin (bump a pinned package everywhere and reconcile its clone), pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
 - **Setup integrity**: dotfiles-link-check (every managed path is still the symlink bootstrap made), pi-profile-check (that, plus packages a local extension has replaced)
