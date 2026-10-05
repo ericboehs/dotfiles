@@ -10,6 +10,8 @@ Tracked here:
 - approval-guardian policy
 - local TypeScript extensions, plus the tooling to check them
 - prompt templates, and the vendored design skills behind `/artifact`
+- subagent definitions and prompt templates for a two-builder team with an
+  adversary reviewer (`/team`, `/adversary-gate`, `/retro`)
 
 ## Per-host settings
 
@@ -54,7 +56,7 @@ every host rather than one. `pi install` and `pi remove` are safe either way:
 they rewrite in place, so their edits land in the tracked copy.
 
 The same holds for every other file `bootstrap:pi` links — `keybindings.json`,
-`models.json`, `approval-guardian.json` and `prompts/`. Each one has a
+`models.json`, `approval-guardian.json`, `prompts/` and `agents/`. Each one has a
 bootstrap step that will quietly restore the link over whatever replaced it.
 
 Three things now say so out loud, because the gap between the mistake and the
@@ -583,6 +585,111 @@ page could beacon data out; and there is no versioning or expiry. `artifact.md`
 therefore ends with an explicit check for secrets, tokens, internal hostnames,
 PII and client-internal material before anything is published — anything that
 fails it stays local.
+
+## Agent team
+
+Three subagents and three prompt templates set up a small team for one task:
+two builders that each change only their own folder, and an adversary that
+never edits and only attacks their work. The main pi session is the lead. It
+plans, hands out work, runs the checks, and reports back.
+
+### Roles
+
+The roles are subagent definitions in `agents/`, read by `extensions/subagent.ts`
+from `~/.pi/agent/agents/`. No role names a project folder. The lead assigns
+each builder's folder in the task, on an `Owned folder:` line, and a builder
+that is not given one changes nothing and asks.
+
+| Agent | Side | Tools | May change |
+| --- | --- | --- | --- |
+| `builder-a` | client, usually the user interface | read, bash, edit, write, grep, find, ls | only its owned folder |
+| `builder-b` | server, usually the application programming interface (API) | read, bash, edit, write, grep, find, ls | only its owned folder |
+| `adversary` | none | read, grep, find, ls, bash | nothing |
+
+Both builders may read the whole repository. A builder that needs a change
+outside its folder stops and names it in its hand-back instead of making it,
+never edits a file the other builder owns, and never calls the task done. Each
+hands back what changed, how to check it, the contract the other side must
+match, and anything still needed elsewhere. A contract here means the agreement
+between the two sides: field names, allowed values, errors, and what each
+answer means.
+
+The adversary owns no folder and writes no code. Asked to edit, it refuses and
+reports the attack it would make instead. It has bash so that it can run the
+tests itself, and its prompt limits bash to commands that do not change the
+repository. Pi cannot enforce that limit, because any bash access can write.
+
+No role pins a model, so each subagent runs on the lead session's model.
+
+### The adversary gates
+
+The adversary appears only at three points, and a task is not done until it
+signs off at the last one.
+
+| Gate | When | Question | Verdicts |
+| --- | --- | --- | --- |
+| interface | before an interface locks | Do both sides agree? Each mismatch in one sentence, with no rewrite. | agree, disagree |
+| repeated failure | when the same test has failed twice | Was it fixed, or only hidden? Hidden means the assertion was weakened, the test was skipped, or the test now checks a different case. It names the line. | fixed, hidden |
+| done | before the task is called done | What still breaks? Sign off only if it cannot be broken. | sign off, not done |
+
+Every gate hands back the same three lines: the gate name, the verdict, and one
+sentence with the reason (one sentence per mismatch or break).
+
+### Commands
+
+```text
+/team <task>                                    # lead the whole task with the three roles
+/adversary-gate <interface|repeated-failure|done> [context]   # run one gate by hand
+/retro [session]                                # review a session's environment, most severe first
+```
+
+`/team` walks the lead through the order: pick the two owned folders and tell
+you, get each builder's side of the contract with no code, run the interface
+gate until it agrees, build in parallel, run the repeated failure gate when a
+test fails twice, and run the done gate until it signs off. Nothing is
+committed or pushed unless you ask.
+
+`/retro` reads a session, the current one by default or a log under
+`~/.pi/agent/sessions/`, and lists changes to the agent's environment rather
+than the application: navigation pointers, automated checks (starting from the
+repository's own check command and continuous integration workflow), coding
+standards, large `AGENTS.md` files, tool use, instructions that change nothing,
+and missing information. It lists suggestions and changes nothing. It is adapted from
+Matt Pocock's [`retro` skill](https://github.com/mattpocock/skills/blob/24fe0ef7737efae15c87225755e9f6f5965e4888/skills/engineering/retro/SKILL.md)
+under the MIT License; the license text is in `licenses/mattpocock-skills.txt`.
+The original first loads his `writing-for-agents` skill. That guide is public
+under the same license, so `/retro` fetches it by pinned URL when it can and
+skips the step when it cannot, rather than vendoring a second file.
+
+These are prompt templates rather than skills for the reason given under
+Artifacts: each one is something you start on purpose, and a template costs
+nothing until it is typed. The `subagent` tool is deferred too, so none of this
+adds to a session's context until it is used.
+
+### Setting it up
+
+With the full bootstrap, there is nothing extra to do. Pull, then run
+`mise bootstrap`: it links `.pi-agent/extensions` as a whole and links each file
+in `.pi-agent/agents/` and `.pi-agent/prompts/` into `~/.pi/agent/agents/` and
+`~/.pi/agent/prompts/`. Run `/reload` in an open pi session, or restart pi.
+
+To take only the team without the rest of these dotfiles, clone the repository
+and link the four pieces by hand. `subagent.ts` imports nothing from this
+repository, so it works on its own. `bg.ts` is needed only for the subagent
+tool's `background: true` option.
+
+```sh
+git clone https://github.com/ericboehs/dotfiles.git ~/Code/github.com/ericboehs/dotfiles
+cd ~/Code/github.com/ericboehs/dotfiles/.pi-agent
+mkdir -p ~/.pi/agent/extensions ~/.pi/agent/agents ~/.pi/agent/prompts
+ln -s "$PWD/extensions/subagent.ts" ~/.pi/agent/extensions/
+ln -s "$PWD"/agents/*.md ~/.pi/agent/agents/
+ln -s "$PWD"/prompts/{team,adversary-gate,retro}.md ~/.pi/agent/prompts/
+```
+
+Because these are links, a later `git pull` updates the existing files in
+place. A new agent or prompt file added upstream needs one more link, or another
+`mise bootstrap` run.
 
 ## Schedulers
 
