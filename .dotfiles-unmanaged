@@ -32,3 +32,6 @@ channel.xml
 # linked. The links are to the copies, under their real names.
 *.example
 *.example.json
+
+# Retired bin scripts, kept off $PATH on purpose. See archive/bin/README.md.
+archive/*

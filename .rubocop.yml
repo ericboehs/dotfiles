@@ -12,7 +12,6 @@ AllCops:
   Include:
     - "bin/**/*"
   Exclude:
-    - "bin/yt-assets/**/*"
     - "**/node_modules/**/*"
 
 Lint:

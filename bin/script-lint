@@ -54,8 +54,8 @@ while IFS= read -r file; do
   # Skips directories (submodules) and dangling symlinks into sibling repos,
   # which are checked out on my machine and absent in CI.
   [ -f "$file" ] || continue
-  # Bounded read with NULs stripped: bin/claude-code-proxy-or is a tracked
-  # symlink to a Mach-O binary.
+  # Bounded read with NULs stripped: a symlink into a sibling repo can point at
+  # a compiled binary, as bin/claude-code-proxy-or did before archive/.
   shebang="$(head -c 512 "$file" 2>/dev/null | LC_ALL=C tr -d '\0' | head -1)"
   case "$shebang" in
     '#!'*ruby*) ruby_files+=("$file") ;;
