@@ -237,9 +237,20 @@ tilesize = 99
 show_recents = false
 mru_spaces = false
 
+# Both values are below what System Settings > Keyboard will let you drag to.
+# That is the whole point: the GUI tops out at initial 15 / repeat 2, so the
+# only way past it is writing the prefs directly, which is what this does.
+# Roughly 15ms per unit: repeat 1 is a 15ms interval, initial 10 a 150ms
+# hold before the first repeat.
+#
+# Karabiner-Elements is not an alternative here — pqrs-org states outright that
+# it does not adjust key repeat rate (it remaps; it does not retime the OS).
+# These two keys are the entire surface.
 [bootstrap.macos.keyboard]
-initial_key_repeat = 15
-key_repeat = 2
+initial_key_repeat = 10
+key_repeat = 1
+# Off, or long-pressing a letter opens the accent picker instead of repeating,
+# which makes repeat useless for anything but the arrow keys.
 press_and_hold = false
 
 [bootstrap.macos.trackpad]
