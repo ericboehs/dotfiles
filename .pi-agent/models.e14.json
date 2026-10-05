@@ -1079,11 +1079,11 @@
     "openai-codex": {
       "models": [
         {
-          "id": "gpt-6-sol",
-          "name": "GPT-6 Sol",
+          "id": "gpt-6.1-sol",
+          "name": "GPT-6.1 Sol",
           "reasoning": true,
           "thinkingLevelMap": {
-            "off": "none",
+            "off": null,
             "minimal": "low",
             "low": "low",
             "medium": "medium",
@@ -1100,14 +1100,14 @@
           "cost": {
             "input": 2,
             "output": 10,
-            "cacheRead": 0.2,
+            "cacheRead": 0.1,
             "cacheWrite": 2.5,
             "tiers": [
               {
                 "inputTokensAbove": 272000,
                 "input": 4,
                 "output": 15,
-                "cacheRead": 0.4,
+                "cacheRead": 0.2,
                 "cacheWrite": 5
               }
             ]
