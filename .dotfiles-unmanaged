@@ -28,6 +28,10 @@ channel.xml
 .pi-agent/settings.*.json
 .pi-agent/models.*.json
 
+# License texts for third-party material adapted into prompts/. They are kept
+# for the record and read by nobody at runtime, so nothing links them.
+.pi-agent/licenses/*
+
 # Templates for a file that holds secrets, copied and edited rather than
 # linked. The links are to the copies, under their real names.
 *.example

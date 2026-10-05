@@ -219,6 +219,10 @@ REPO_PATH = "ericboehs/dotfiles"
 # symlink-each because the directory is shared: prompts written for one machine
 # and never tracked (checkin.md) sit beside the tracked ones and should stay.
 "~/.pi/agent/prompts" = { source = ".pi-agent/prompts", mode = "symlink-each" }
+# Subagent definitions (builder-a, builder-b, adversary) read by the subagent
+# extension. symlink-each for the same reason as prompts: agents a machine keeps
+# for itself and never tracks should stay beside the shared ones.
+"~/.pi/agent/agents" = { source = ".pi-agent/agents", mode = "symlink-each" }
 
 # ---------------------------------------------------------------------------
 # macOS defaults
