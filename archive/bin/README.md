@@ -62,6 +62,27 @@ which is this repo's `bin/`. Running it again puts the four claude-config links
 back in `bin/`. claude-dashboard (last run 2026-02) shells out to `claude-send`
 for its send action, so that action fails until `claude-send` is on PATH again.
 
+## Claude Code launchers
+
+Wrappers that pointed Claude Code at another provider or into a container.
+Not used anymore (Eric, 2026-10-05).
+
+| Script | Last run (count) | What it did |
+|---|---|---|
+| clapilot | 2026-08-06 (492) | Claude Code via the GitHub Copilot proxy. Took the `clap`, `clapd`, `clapr` and `clapdr` abbreviations with it |
+| claor | 2026-07-30 (15) | Claude Code via OpenRouter |
+| clas | 2026-06-22 (4) | Claude Code via Synthetic.dev (GLM-5.2) |
+| clacer | 2026-03-31 (30) | Claude Code via Cerebras (GLM 4.7) through claude-code-proxy |
+| cerebras-usage | 2026-03-19 (16) | Cerebras daily request/token remainders from rate-limit headers |
+| ccc | 2026-02-27 (2) | Claude Cerebras Client |
+| claude-sandbox | 2026-02-16 (13) | Claude Code in a container with scoped credentials |
+| cco → `nikvdp/cco/cco` | 2026-02-16 (16) | nikvdp's sandboxed Claude Code launcher |
+| sandbox → `nikvdp/cco/sandbox` | never | cco's sandbox helper |
+
+`.claude/scripts/statusline.sh` still has its own Cerebras segment (for a
+proxy on :8083). It calls the API itself rather than `cerebras-usage`, and only
+shows when such a proxy is set.
+
 ## Stale
 
 | Script | Last run | What it did |

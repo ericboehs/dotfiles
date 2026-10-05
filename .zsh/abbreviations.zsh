@@ -331,14 +331,6 @@ abbrevs+=(
   "clu"   'claude "/usage"'
 )
 
-# Claude (Copilot proxy)
-abbrevs+=(
-  "clap"   "clapilot"
-  "clapd"  "clapilot --dangerously-skip-permissions"
-  "clapr"  "clapilot --resume"
-  "clapdr" "clapilot --dangerously-skip-permissions --resume"
-)
-
 for abbr in ${(k)abbrevs}; do
   alias $abbr="${abbrevs[$abbr]}"
 done

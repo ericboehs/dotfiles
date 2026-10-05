@@ -1093,7 +1093,7 @@ async function fetchGrok(ctx: ExtensionContext): Promise<UsageDisplay> {
  * x-ratelimit-* response headers on every inference request. The probe is a
  * minimal non-streaming chat completion (max_tokens: 1, roughly a dozen
  * tokens total) whose cost is negligible next to a daily quota, parsed for
- * the daily request/token pairs bin/cerebras-usage already relies on.
+ * the daily request/token pairs archive/bin/cerebras-usage read.
  * Because the probe spends quota, the driver caches for the scrape TTL
  * instead of refetching on every settle like the free usage endpoints do.
  *
