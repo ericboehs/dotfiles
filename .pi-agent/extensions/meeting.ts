@@ -864,6 +864,10 @@ export default function (pi: ExtensionAPI) {
 		cancelDigs();
 		ctxRef = undefined;
 	});
+	// watch-slack holds its digests during a live meeting; it asks when it starts.
+	pi.events.on("meeting:query", () => {
+		if (st && !st.replay && st.phase === "live") pi.events.emit("meeting:state", { active: true, title: st.title });
+	});
 
 	pi.registerMessageRenderer(MSG_TYPE, (message, options, theme) => {
 		const text =
@@ -947,6 +951,7 @@ export default function (pi: ExtensionAPI) {
 	function finish(reason: string) {
 		const m = st;
 		if (!m) return;
+		if (!m.replay) pi.events.emit("meeting:state", { active: false, title: m.title });
 		if (m.announced) {
 			postRecap(m, `Meeting copilot stopped (${reason}) · ${m.checks} checks · transcript: ${tilde(m.file.replace(/\.jsonl$/, ".txt"))}`);
 		} else if (ctxRef?.hasUI) {
@@ -1033,6 +1038,7 @@ export default function (pi: ExtensionAPI) {
 		m.partial = "";
 		m.phase = "live";
 		if (!continuing) m.title = meetingKey(file);
+		pi.events.emit("meeting:state", { active: true, title: m.title });
 		await pollFile(history); // reads the metadata line, so the title is real for qmd
 		if (!continuing) m.backgroundReady = buildBackground(file);
 		if (!m.announced && st === m) {
