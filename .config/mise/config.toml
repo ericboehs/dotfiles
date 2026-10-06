@@ -34,6 +34,12 @@ uv = "latest"
 # the .gitconfig hook), hk (project pre-commit manager, takes hk.pkl),
 # pkl (Apple's config language hk uses), watchexec (file-watch task runner).
 gitleaks = "latest"
+# semgrep rides along for the same reason: the security-review plugin shells
+# out to it as one of its deterministic scanners, and it was previously
+# reporting "not installed" on every Java project reviewed. Pinned like
+# shellcheck above — semgrep's rulesets change between releases, so "latest"
+# means a review can disagree with itself run to run.
+semgrep = "1.179.0"
 hk = "latest"
 pkl = "latest"
 # Pinned, not "latest": CI lints the same scripts with the same binary, and
