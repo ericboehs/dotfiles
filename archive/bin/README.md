@@ -28,6 +28,7 @@ extra `../` so they still resolve. Take it off again when moving it back.
 | gh-reviews-by-user | PRs reviewed by a user since a date |
 | ghmpr | fzf-pick a PR awaiting my review and check it out |
 | ghp | List issues in the VA GitHub project (927) |
+| internet | Packet-loss ping tests against a series of hosts |
 | parse-argocd-jwt | Decode the ArgoCD JWT |
 | pbpastes | Stream the clipboard, printing each change |
 | propresenter-status | Read-only ProPresenter status |
@@ -88,11 +89,13 @@ segment (the :4141 context branch and premium-request quota and pace) with them.
 
 ## Claude Code session tools
 
-Readers and pickers for Claude Code session transcripts. Not run since
-January–April 2026; `claude --resume` covers the picker.
+Readers, pickers and minders for Claude Code sessions. Not run since July
+2026 at the latest; `claude --resume` covers the picker.
 
 | Script | Last run (count) | What it did |
 |---|---|---|
+| claude-babysit | 2026-07-27 (56) | Watch a tmux pane running Claude and restart it after a crash |
+| claude-browser | 2026-07-15 (2) | Browse, search and view Claude Code context surfaces |
 | claude-active → `claude-config/bin/` | 2026-04-16 (51) | List active Claude Code sessions in fzf |
 | claude-tail → `claude-config/bin/` | 2026-04-16 (92) | Show assistant messages from a session |
 | claude-resume | 2026-04-15 (13) | fzf session picker with message search |
@@ -103,14 +106,30 @@ January–April 2026; `claude --resume` covers the picker.
 
 | Script | Last run | What it did |
 |---|---|---|
+| chatgpt-history → `chatgpt-history/chatgpt-history` | 2026-03-01 | ChatGPT conversation history via Safari |
 | clf | 2021-05-20 | Find a gem's changelog URL via rubygems.org |
 | code-editor | never | Switch tmux to the 👨🏼‍💻 session, which no longer exists |
+| colors | 2021-08-30 | Print the 256-color test pattern |
+| earl | 2026-04-16 | Run the EARL bot from ~/.local/share/earl under fnox's production profile |
+| gh-action-trace | 2026-03-25 | Find direct and transitive uses of a GitHub Action |
 | gh-labeler | 2022-11-04 | Remove labels in bulk from GitHub issues (GraphQL) |
+| gh-pm | 2025-11-20 | fzf picker over `gh pm list`. The gh-pm extension itself stays installed |
 | ghb | 2022-08-30 | gh workflow helper for the current branch |
 | llama-coder | never | Qwen3-Coder-Next via llama-server |
+| llama-serve | 2026-02-25 | Switch llama.cpp models |
 | mksh | 2025-10-23 | Create an executable bash script and open it in $EDITOR |
 | ollama-search | 2025-12-20 | Search and explore Ollama models |
+| pbcopy-decrypt | 2026-02-24 | Decrypt age-encrypted clipboard contents |
+| pbpaste-enc | 2026-02-24 | Encrypt clipboard contents with age |
+| pearl → `pearl-agents/bin/pearl` | 2026-04-21 | PEARL agent runner: Claude Code agents in Docker |
+| pocket-speak | 2026-06-05 | Stream pocket-tts speech to the speakers |
 | refresh_safari | 2020-02-28 | Reload Safari's front document (was the `rfs` abbreviation) |
 | slack-slash-slash | 2021-05-17 | Turn https://*.slack.com URLs into slack:// URLs |
+| ssm-param-envs | 2026-01-23 | Which environments (dev, staging, sandbox, prod) have an SSM parameter |
+| ssm-param-history | 2026-01-23 | Recently updated SSM parameters under a path |
+| true-colors | 2021-08-30 | Test the terminal's true-color support |
+| utcdate | 2020-01-29 | Print the time in UTC as HH:MMZ |
+| watch-ci | 2026-02-04 | Watch CI for the current branch. The watch-ci skill ships its own copy |
 | watch-copilot-reviews | never | Wait for Copilot PR reviews. Replaced by the agent-plugins gh-copilot-review skill |
+| wso | 2026-01-04 | OpenCode workspace launcher |
 | yt → `yt/yt` (+ yt-assets/) | 2022-03-23 | YouTube app. Its LaunchAgent was already `.disabled` |
