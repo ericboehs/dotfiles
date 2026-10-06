@@ -245,6 +245,57 @@ model is woken to draft one.
 Teams writes a caption only when it scrolls out of its ~3-line window, so the
 copilot runs a couple of utterances behind the room.
 
+## Slack watcher
+
+`extensions/watch-slack.ts` watches Slack and `#eert-bot-feed` so you don't
+have to. It lists what needs you, tracks what you're waiting on, and closes a
+wait when its answer lands:
+
+```text
+● slack · 2 need you · 4 waits · 1:55 PM
+  ! bot feed · Prep iFAMS questions for Thursday session 7m
+  ✉ Maleesha (oddball DM) Maleesha confirms she sent it 2m
+  ✓ W3 Lindsey Hattamer · Dynatrace migration analysis → 13:01 dsva DM
+```
+
+```text
+/watch-slack start [--force] | stop                     /watch-slack alone shows status
+/watch-slack list | clear N|all | since 9am | digest | recap
+/watch-slack wait Lindsey Hattamer: Platform analysis [slack link]
+/watch-slack waits [close|drop|reopen Wn]
+```
+
+It never starts on its own, and only one session can run it at a time (a lock
+in `~/.local/share/watch-slack`; `--force` takes over a live one). It reads
+Slack every 3 minutes while you're active, every 10 after 30 idle minutes, and
+every 15 outside `PI_WATCH_SLACK_HOURS` (default `7-18`, weekdays). Each read
+runs `slk unread`, `slk activity` and `slk sent --mine` per workspace
+(`PI_WATCH_SLACK_WORKSPACES`, default `oddball,dsva,boehs`). The bot feed goes
+through `eert-bot-feed`, at most once a minute. Nothing it runs posts, reacts or
+marks anything read. New items go to a small model (`PI_WATCH_SLACK_MODEL`,
+default Opencode Go's DeepSeek V4.1 Flash) that sorts each into needs you,
+context or noise with a short why. Code decides the rest: DMs, @-mentions and
+bot-feed asks addressed to you always need you.
+
+Waits come from three places:
+
+- open TODOs in today's daily note, re-read when the note changes
+- your own posts and DMs that ask a named person for something
+- `/watch-slack wait`
+
+A reply in the same DM, or from that person in the same thread, closes a wait
+in code. When the model only thinks a reply answers one, it shows as "maybe"
+until you `close` it. An item clears when you read it in Slack or reply after
+it.
+
+Every 15 minutes with something new, a digest goes into the session as a
+`watch-slack` message sent with `triggerTurn: false`. It's marked as data, not
+instructions. During a live `/meeting`, digests wait until it ends. On stop, a
+recap goes into today's daily note as a `###` block at the end of `## Notes`,
+and `/watch-slack recap` rewrites the same block.
+Every item lands in `~/.local/share/watch-slack/YYYY-MM-DD.jsonl` (mode 600),
+so `/watch-slack since 9am` works after a restart.
+
 ## Footer
 
 `extensions/footer.ts` renders the status line (dir, provider, model, git,
