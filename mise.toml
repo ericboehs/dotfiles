@@ -907,6 +907,138 @@ case "$(uname)" in
 esac
 '''
 
+# pi is pinned in .config/mise/config.toml and installed by mise, so `pi update`
+# refuses to self-update. /update (the extension) shells out to this task, which
+# is why it has to be runnable from the dotfiles checkout rather than from
+# whatever project happens to be open: the extension cds here first.
+# PI_UPDATE_CHECK=1 reports the available version and changes nothing.
+[tasks."update:pi"]
+description = "Bump the pinned Pi release, install it, and reconverge its packages"
+run = '''
+# Tasks run in a non-login shell. Keep mise's own install ahead of a stale
+# Homebrew copy while still making Homebrew-provided helpers available.
+export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+
+pkg="npm:@earendil-works/pi-coding-agent"
+npm_name="@earendil-works/pi-coding-agent"
+
+# The config that defined this task sits inside the dotfiles checkout, either
+# this repo's mise.toml or .config/mise/config.toml reached through the
+# ~/.config/mise symlink. MISE_PROJECT_ROOT is the cwd, which is whatever
+# project /update was run from, so locate the checkout from the task file.
+task_file="$MISE_TASK_FILE"
+p="$task_file"
+while [ -L "$p" ]; do
+  t=$(readlink "$p")
+  case "$t" in
+    /*) p=$t ;;
+    *) p=$(dirname "$p")/$t ;;
+  esac
+done
+root=$(git -C "$(dirname "$p")" rev-parse --show-toplevel 2>/dev/null || true)
+config="$root/.config/mise/config.toml"
+if [ -z "$root" ] || [ ! -f "$config" ]; then
+  echo "update:pi: cannot find the dotfiles checkout that pins pi (from $task_file)" >&2
+  exit 1
+fi
+
+# Editing through a symlink would replace the link with a regular file and
+# orphan the tracked config.
+if [ -L "$config" ]; then
+  echo "update:pi: $config is a symlink - refusing to edit through it" >&2
+  exit 1
+fi
+
+pin=$(sed -n 's/^[[:space:]]*"npm:@earendil-works\/pi-coding-agent"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config")
+if [ -z "$pin" ]; then
+  echo "update:pi: no pin for $pkg in $config" >&2
+  exit 1
+fi
+
+# `npm view` reports the latest dist-tag, which is metadata rather than an
+# install resolution, so the global min-release-age does not apply. Set it
+# anyway so a future npm that honors the age for view cannot hide a release.
+latest=$(NPM_CONFIG_MIN_RELEASE_AGE=0 npm view "$npm_name" version 2>/dev/null)
+if [ -z "$latest" ]; then
+  echo "update:pi: could not read the latest $npm_name version from npm" >&2
+  exit 1
+fi
+
+# Optional publish timestamp, so the report can say how fresh the release is.
+# Non-fatal: a parse miss just omits it.
+flat=$(NPM_CONFIG_MIN_RELEASE_AGE=0 npm view "$npm_name" time --json 2>/dev/null | tr -d ' \n"{}')
+published=$(printf '%s' "$flat" | awk -v v="$latest:" 'BEGIN{RS=","} index($0,v)==1 {sub("^"v,""); print; exit}')
+
+note=""
+[ -n "$published" ] && note=" (published $published)"
+
+# `latest` is the registry's newest release. A pin ahead of it is a deliberate
+# prerelease, and moving to latest would be a downgrade.
+older=$(printf '%s\n%s\n' "$pin" "$latest" | sort -V | head -1)
+if [ "$latest" != "$pin" ] && [ "$older" != "$pin" ]; then
+  echo "update:pi: latest ($latest) is older than the pin ($pin) - refusing to downgrade" >&2
+  exit 1
+fi
+
+if [ "$latest" = "$pin" ]; then
+  echo "update:pi: pi $pin is current"
+  changed=no
+else
+  echo "update:pi: pi $pin -> $latest$note"
+  changed=yes
+fi
+
+if [ -n "$PI_UPDATE_CHECK" ]; then
+  echo "update:pi: check only - nothing changed"
+  echo "update:pi: result from=$pin to=$latest published=${published:-none} restart=no changed=$changed check=yes"
+  exit 0
+fi
+
+if [ "$changed" = yes ]; then
+  echo "update:pi: installing $latest"
+  # mise hides releases newer than its minimum_release_age — aube reads the
+  # 10-day floor from the global npm config — and the npm config holds installs
+  # back the same way. bootstrap:pi scopes the npm exception to its exact
+  # reviewed pins; here the exception is the whole point of /update, so both
+  # are scoped to this one install. The pin is rewritten only after it lands,
+  # so a failure leaves the tracked config untouched.
+  if ! MISE_MINIMUM_RELEASE_AGE=0 NPM_CONFIG_MIN_RELEASE_AGE=0 mise install "$pkg@$latest"; then
+    echo "update:pi: install failed - pin left at $pin" >&2
+    exit 1
+  fi
+
+  tmp=$(mktemp)
+  sed -E 's|^([[:space:]]*"npm:@earendil-works/pi-coding-agent"[[:space:]]*=[[:space:]]*)"[^"]*"|\1"'"$latest"'"|' "$config" > "$tmp"
+  newpin=$(sed -n 's/^[[:space:]]*"npm:@earendil-works\/pi-coding-agent"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp")
+  if [ "$newpin" != "$latest" ]; then
+    rm -f "$tmp"
+    echo "update:pi: pin rewrite did not take - $config left unchanged" >&2
+    exit 1
+  fi
+  mv "$tmp" "$config"
+  echo "update:pi: pin updated in .config/mise/config.toml"
+  echo "update:pi:   - \"$pkg\" = \"$pin\""
+  echo "update:pi:   + \"$pkg\" = \"$latest\""
+  echo "update:pi: not committed - review and commit the pin"
+fi
+
+echo "update:pi: reconverging packages"
+log=$(mktemp)
+if (cd "$root" && mise run bootstrap:pi) > "$log" 2>&1; then
+  converged=$(grep -E '^bootstrap:pi: [0-9]' "$log" | tail -1)
+  echo "update:pi: ${converged:-packages converged}"
+  rm -f "$log"
+else
+  echo "update:pi: bootstrap:pi failed - last lines of $log:" >&2
+  tail -30 "$log" >&2
+  exit 1
+fi
+
+restart=no
+[ "$changed" = yes ] && restart=yes
+echo "update:pi: result from=$pin to=$latest published=${published:-none} restart=$restart changed=$changed check=no"
+'''
+
 [tasks."bootstrap:va-context"]
 description = "Link the work context file above ~/Code/va.ghe.com, when one is configured"
 run = '''
