@@ -48,20 +48,22 @@ extra `../` so they still resolve. Take it off again when moving it back.
 | clauki | never | Claude Code via Fireworks FirePass (Kimi K2.5 Turbo) |
 | claude-code-proxy-or → `claude-code-proxy/claude-code-proxy` | never | OpenRouter proxy binary for Claude Code |
 | claude-cred-push | never | Copy this Mac's Claude Code login to another machine's keychain |
-| claude-fleet → `claude-config/bin/claude-fleet` | 2026-06-18 | Fleet-wide Claude session status from transcript JSONL |
+| claude-fleet → `claude-config/archive/bin/claude-fleet` | 2026-06-18 | Fleet-wide Claude session status from transcript JSONL |
 | claude-jsx-to-html | never | Claude Desktop JSX artifact to standalone HTML |
 | claude-man (+ CLAUDE_MAN_README.md) | 2025-12-23 | tmux manager for Claude CLI sessions |
 | claude-manager-slack-poller | never | Poll Slack for a message from Eric, then exit |
-| claude-manager-tickler → `claude-config/bin/` | never | Wait on the Claude Manager events queue, exit when events land |
-| claude-send → `claude-config/bin/` | never | Manager dispatch: send a prompt to a worker Claude pane |
-| claude-watch → `claude-config/bin/` | never | Watch the manager queue, exit with new events |
+| claude-manager-tickler → `claude-config/archive/bin/` | never | Wait on the Claude Manager events queue, exit when events land |
+| claude-send → `claude-config/archive/bin/` | never | Manager dispatch: send a prompt to a worker Claude pane |
+| claude-watch → `claude-config/archive/bin/` | never | Watch the manager queue, exit with new events |
 | claude-watcher | never | Tail a Claude session log's tool calls |
 | monitor_tmux_pane | never | Notify when a tmux pane running Claude goes idle |
 
-`claude-config/install.sh` symlinks `claude-config/bin/*` into `~/bin`, which is
-this repo's `bin/`, but skips any name with an entry here, so rerunning it
-leaves the seven claude-config links (here and under Claude Code session tools)
-archived. Restoring one with `git mv` is enough for install.sh to link it again.
+The seven claude-config links (here and under Claude Code session tools) point
+into `claude-config/archive/bin`, where claude-config parks the scripts it no
+longer installs. Its `install.sh` links only `claude-config/bin/*` into `~/bin`,
+which is this repo's `bin/`, and also skips any name with an entry here. To
+restore one, `git mv` it back to `claude-config/bin/`, delete its link here, and
+rerun install.sh.
 claude-dashboard (last run 2026-02) shells out to `claude-send` for its send
 action, so that action fails until `claude-send` is on PATH again.
 
@@ -96,11 +98,11 @@ Readers, pickers and minders for Claude Code sessions. Not run since July
 |---|---|---|
 | claude-babysit | 2026-07-27 (56) | Watch a tmux pane running Claude and restart it after a crash |
 | claude-browser | 2026-07-15 (2) | Browse, search and view Claude Code context surfaces |
-| claude-active → `claude-config/bin/` | 2026-04-16 (51) | List active Claude Code sessions in fzf |
-| claude-tail → `claude-config/bin/` | 2026-04-16 (92) | Show assistant messages from a session |
+| claude-active → `claude-config/archive/bin/` | 2026-04-16 (51) | List active Claude Code sessions in fzf |
+| claude-tail → `claude-config/archive/bin/` | 2026-04-16 (92) | Show assistant messages from a session |
 | claude-resume | 2026-04-15 (13) | fzf session picker with message search |
 | daily-ai-sessions | 2026-02-27 (22) | Browse and resume Claude sessions linked from daily notes |
-| claude-sessions → `claude-config/bin/` | 2026-01-03 (21) | Status of all sessions, for the manager Claude |
+| claude-sessions → `claude-config/archive/bin/` | 2026-01-03 (21) | Status of all sessions, for the manager Claude |
 
 ## Stale
 
