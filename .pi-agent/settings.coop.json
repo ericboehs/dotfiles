@@ -1,19 +1,27 @@
 {
-  "lastChangelogVersion": "0.85.1",
+  "lastChangelogVersion": "1.0.3",
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@9d03cfd6ccd99190f6eb4f537686bd4bf29062fc",
-    "git:github.com/ericboehs/pi-agent-link@adb68d89173e405156cd72f5bb8ae09c8e1ecb2e",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
     "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
+    "git:github.com/ericboehs/pi-agent-link@adb68d89173e405156cd72f5bb8ae09c8e1ecb2e",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
-  "defaultProvider": "ollama",
-  "defaultModel": "glm-5.3-flash",
+  "prompts": [
+    "~/Code/github.com/ericboehs/claude-config/prompts"
+  ],
+  "defaultProvider": "opencode-go",
+  "defaultModel": "union-alpha",
   "defaultThinkingLevel": "xhigh",
+  "modelThinkingLevels": {
+    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
+    "ollama/glm-5.3-flash": "max",
+    "inco/deepseek-v4.1-flash:fast": "high"
+  },
   "theme": "light/dark",
   "steeringMode": "all",
   "transport": "auto",
-  "quietStartup": true,
+  "quietStartup": false,
   "defaultProjectTrust": "always",
   "doubleEscapeAction": "tree",
   "treeFilterMode": "default",
@@ -21,23 +29,28 @@
     "anthropicExtraUsage": false
   },
   "enabledModels": [
-    "openai-codex/gpt-6-sol",
-    "openai-codex/gpt-6-luna",
-    "github-copilot/claude-opus-5.5",
+    "opencode/space-bunny-free",
     "xai/grok-4.7",
-    "ollama/glm-5.3-flash",
+    "github-copilot/claude-opus-5.5",
     "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-daybreak-blue-latest",
-    "opencode-go/muse-spark-1.3-contributor",
-    "opencode-go/deepseek-v4.1-flash"
+    "openai-codex/gpt-6.1-sol",
+    "opencode-go/glm-5.3",
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode-go/muse-spark-1.3-contributor"
   ],
-  "modelThinkingLevels": {
-    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
-    "ollama/glm-5.3-flash": "max"
-  },
   "retry": {
     "enabled": true,
     "maxRetries": 10,
     "baseDelayMs": 2000
-  }
+  },
+  "showHardwareCursor": true,
+  "editorPaddingX": 1,
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto",
+  "fullscreenExitOutput": "resume-hint",
+  "enableInstallTelemetry": false,
+  "hideThinkingBlock": false
 }
