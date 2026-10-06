@@ -16,6 +16,8 @@ tier only — see "Why TinyFish is not in the search chain" below.
 tavily → exa → brave → firecrawl → codex
 ```
 
+Plus one deep tier that is **not** in this list — see "The deep tier" below.
+
 Failover is **narrow on purpose**. A backend is only abandoned for auth
 (401/403, and Brave's 422), quota (402/429/432), 5xx, or a timeout. An empty
 result set is an answer, not a failure — otherwise one unlucky query walks the
@@ -68,6 +70,99 @@ tier, where it is the only thing that can rescue a page nothing else can read.
 A credit is worth more there than as a fourth opinion on a SERP.
 
 Caveat: n=3 and n=6, one afternoon. `/web search order …` reverts it.
+
+## The deep tier
+
+`perplexity` (Sonar) is in `SEARCH_BACKENDS` but deliberately **not** in
+`search.order`. Nothing reaches it by falling down the chain; only
+`hard: true` does, and only the model sets that:
+
+```
+hard: true  →  perplexity → tavily → exa → brave → firecrawl → codex
+```
+
+It sits outside the order for one reason: it is the only call here priced per
+token rather than against a monthly pool (~$0.004 at the `fast` preset, against
+Tavily's credit and Exa's $0.007), and a backend that can be fallen into is a
+backend that gets spent on the queries that did not need it. `/web search off
+perplexity` disables it; so does a live cool-off, and both leave the rest of the
+chain untouched.
+
+`hard` **reorders, it does not add a failure path.** If Sonar is spent,
+benched or off, the chain below it runs exactly as it always has — same
+`cooloffForStatus` rules, same 24h/10min benching, same "empty is an answer".
+The escalation can never become an exit from the chain.
+
+### Why this is not the metric the leaderboard ranks on
+
+Artificial Analysis ranks the Search API providers, and Perplexity tops it at
+80. That column does not measure a search call. It measures a whole agent
+turn, answer model included, and the proof is in the no-search baseline:
+
+| row | Search Index | time per task |
+|---|---:|---:|
+| Model only (no search at all) | 33 | 21.0s |
+| Octen Search (highlights) | 77 | **15.9s** |
+| Perplexity Search (medium) | 80 | 27.5s |
+
+Octen posts 77 — four points below the leader — *faster than doing no search
+at all*, which is only possible if the number is dominated by the model
+generating the answer rather than by the retrieval feeding it. Everything in
+this table is priced per benchmark task; a task runs many searches behind a
+reasoning model. None of that is comparable to the per-call numbers above,
+which is why `/web test` keeps them in separate columns.
+
+The row that actually argued for Sonar was not the index. It was that
+`sonar` is the one endpoint on that board that returns a finished answer
+rather than links, which is a different product from everything else in the
+chain — and the reason it belongs behind a flag rather than at the head.
+Tavily and Exa both synthesize too (`include_answer`, `/answer`), and both
+measured *worse* for it; see "Synthesis costs accuracy".
+
+### Sonar is gone; the Agent API replaced it
+
+`perplexity` is **not** Sonar any more. Sonar's chat-completions endpoint was
+retired on 2026-09-27 and now answers `403` with a migration notice, so this
+calls the Agent API:
+
+| | Sonar (retired) | Agent API |
+|---|---|---|
+| endpoint | `/v1/chat/completions` | `/v1/responses` (alias of `/v1/agent`) |
+| prompt | `messages` | `input` |
+| model | `model: "sonar"` | `preset: "fast"` |
+| answer | `choices[0].message.content` | `output[].content[].text` |
+| sources | `citations[]` | `output[]` item of `type: "search_results"` |
+| recency | `search_recency_filter` | same key, under the tool's `filters` |
+
+Two traps worth writing down. `output_text` is an **SDK** convenience
+property — a raw `fetch` does not get it for free, so `agentText()` falls
+back to walking `output[]`. And `preset: "fast"` enables web search on its
+own, so the plain request needs no `tools` block at all; only a recency
+filter adds one.
+
+### The price changed too
+
+`COST_PER_CALL` says ~$0.004, computed from Perplexity's published rates:
+1000 input tokens × $0.20/1M, 500 output × $1.20/1M, one `web_search`
+invocation × $0.0025. That is roughly Exa's price, not the order of magnitude
+above it this section originally claimed.
+
+The old figure came from the leaderboard's "$62.30 per 1k tasks" column, which
+is a different unit again — a benchmark task is many searches behind a
+reasoning model. It was never a per-call price, and reading it as one is the
+single easiest way to mis-plan this tier. Treat the leaderboard as a quality
+ceiling, never as a price list.
+
+### What it costs when the model asks for it
+
+Sonar answers in one round trip. Measured against Tavily's ~1.0s, expect
+roughly 3–10s. The excerpt params do not apply to it — there are no excerpts
+to truncate. Under `links_only` the citations become the hits and the essay
+is dropped, so the flag still means something on this backend.
+
+`eval.mjs --paid` scores it against the same ten ground-truth queries as
+everything else. Without the flag it does not run: twenty calls is real spend
+to re-derive what the free three already answer.
 
 ### Why TinyFish is not in the search chain
 
@@ -294,6 +389,7 @@ cached per process. Never logged, never written to `web.json`, never shown by
 `/web` — status prints presence only.
 
 `BRAVE_API_KEY` · `TAVILY_API_KEY` · `EXA_API_KEY` · `FIRECRAWL_API_KEY` ·
+`PERPLEXITY_API_KEY` (deep tier; `PERPLEXITY_SEARCH_API_KEY` also accepted) ·
 `TINY_FISH_API_KEY` (fetch tier; `TINYFISH_API_KEY` also accepted, since that is
 the name TinyFish's own docs use)
 
@@ -313,12 +409,16 @@ unknown names are dropped on read.
 /web                                   chains, key presence, cool-offs
 /web search order tavily exa brave firecrawl codex
 /web fetch  order plain curl chrome tinyfish firecrawl safari
-/web search|fetch off|on <name>
+/web search|fetch off|on <name>            # off perplexity kills the deep tier
 /web format native|serp|answer
 /web excerpts auto|short|long
 /web test [all] [query]                probe each backend: latency, size, cost
 /web reset                             clear cool-offs
 ```
+
+`perplexity` is not part of `/web search order` by default. Adding it there is
+allowed and is your call — it just makes it reachable by exhaustion too, which
+costs ~$0.004 a hit.
 
 A partial `order` reprioritises rather than amputates: names you leave out keep
 working and move to the back.
@@ -329,6 +429,19 @@ diagnostic tells you the state of the world, it does not change it — and it
 probes backends that are off or cooling, since "has it recovered?" is the main
 reason to ask. Its first run in a process is cold: TLS setup and Keychain
 resolution dominate, so expect the second run to be several times faster.
+
+Codex and Perplexity are skipped unless you ask for `/web test all`, for the
+same reason Firecrawl and Safari are skipped below: one needs the live model
+registry and the other bills ~$0.004 a call. A diagnostic you hesitate to run
+is one you stop running.
+
+The table carries an `index` column from `SEARCH_INDEX` — the Artificial
+Analysis Search Index, where a provider publishes one. It is a dash for
+tavily, exa, brave and firecrawl, and that dash is the honest answer rather
+than a missing one: the index ranks providers whose product *writes the
+answer*, and scores a whole agent turn with a reasoning model attached. Its
+number and this table's `ms` column are not the same measurement. Do not
+sort by it. See "Why this is not the metric the leaderboard ranks on".
 
 It prints a second table for the fetch ladder, probing each tier once against
 `example.com` via `probeFetchTiers()` — same no-cool-off rule, same real code
@@ -346,3 +459,6 @@ check; scored quality across hostile pages lives in
    rules.
 3. Add a `case` to `callBackend()` — the chain and the probe both pick it up.
 4. Add a row to `COST_PER_CALL`.
+5. Add it to `DEFAULT_CONFIG.search.order` — **unless** it is a deep tier. A
+   backend that only `hard` should reach stays out of the order (see
+   "The deep tier"), and is gated in `deepTier()` instead.

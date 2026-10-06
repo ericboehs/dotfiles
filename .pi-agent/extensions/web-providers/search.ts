@@ -45,6 +45,11 @@ export interface SearchOptions {
   maxResults?: number;
   /** Per-call override of the configured excerpt length. */
   excerpts?: Excerpts;
+  /**
+   * Ask for the deep tier first. The model sets this and nothing more — it
+   * never names a vendor, exactly as it never picks `recency` for the chain.
+   */
+  hard?: boolean;
 }
 
 export type CodexRunner = (
@@ -388,6 +393,90 @@ async function firecrawlSearch(
   return { hits };
 }
 
+/**
+ * The Agent API's answer text. `output_text` is an SDK convenience property, so
+ * a raw fetch walks `output[]` itself; prefer the convenience field when it is
+ * there, fall back to the documented REST shape.
+ */
+function agentText(data: any): string {
+  if (typeof data?.output_text === "string" && data.output_text.trim()) return clean(data.output_text);
+  if (!Array.isArray(data?.output)) return "";
+  const parts: string[] = [];
+  for (const item of data.output) {
+    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const c of item.content) if (typeof c?.text === "string") parts.push(c.text);
+  }
+  return clean(parts.join("\n"));
+}
+
+/** Sonar's top-level `citations` is gone; sources ride on a typed output item. */
+function agentSources(output: any): string[] {
+  if (!Array.isArray(output)) return [];
+  const urls: string[] = [];
+  for (const item of output) {
+    if (item?.type !== "search_results" || !Array.isArray(item.results)) continue;
+    for (const r of item.results) if (typeof r?.url === "string") urls.push(r.url);
+  }
+  return urls;
+}
+
+/**
+ * Perplexity Agent API — the deep tier.
+ *
+ * Sonar's chat-completions endpoint was retired on 2026-09-27 and now answers
+ * 403 with a migration notice. This is the Agent API: `POST /v1/responses`
+ * (the documented alias of `/v1/agent`), `preset` where Sonar had `model`, and
+ * `input` where it had `messages`.
+ *
+ * `fast` is the documented successor to `sonar` and enables web search on its
+ * own, so the plain request carries no tools block. Only a recency filter adds
+ * one — the filter keys kept their names, they just moved under the tool.
+ *
+ * Returns `hits: []` with the synthesis in `answer`, the shape codex already
+ * uses, so `render()` hands back the prose under `native` instead of collapsing
+ * it into a one-item link list. Under `links_only` the caller asked for links,
+ * so the citations become the hits and the essay is dropped by the renderer.
+ */
+async function perplexitySearch(
+  query: string,
+  opts: SearchOptions,
+  key: string,
+  signal?: AbortSignal,
+): Promise<BackendResult> {
+  const body: Record<string, unknown> = { preset: "fast", input: query };
+  const days = recencyDays(opts.recency);
+  if (days) {
+    body.tools = [
+      {
+        type: "web_search",
+        filters: {
+          search_recency_filter: days <= 1 ? "day" : days <= 7 ? "week" : days <= 31 ? "month" : "year",
+        },
+      },
+    ];
+  }
+
+  const res = await fetch("https://api.perplexity.ai/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: timeout(signal),
+  });
+  if (!res.ok) throw httpError(res.status, await res.text());
+
+  const data = (await res.json()) as any;
+  const answer = agentText(data);
+  const sources = agentSources(data?.output);
+  // Nothing usable at all is a failure, not an empty answer: the caller asked
+  // for the deep tier specifically. Cool-off 0 — pass to the next backend for
+  // this call, but do not bench a paid key over one thin response.
+  if (!answer && !sources.length) throw new BackendError("no answer and no search results", 0);
+  if (opts.linksOnly) {
+    return { hits: sources.map((url) => ({ title: url, url })), answer, sources };
+  }
+  return { hits: [], answer: answer || undefined, sources };
+}
+
 /* --------------------------------------------------------------- render */
 
 function truncate(text: string, limit: number): string {
@@ -466,7 +555,23 @@ async function callBackend(
       );
       return { hits: [], answer, sources };
     }
+    case "perplexity":
+      return perplexitySearch(query, opts, cred!.key, signal);
   }
+}
+
+/**
+ * The deep tier. Kept out of `search.order` on purpose: even at ~$0.004 a call
+ * it is the most expensive thing in the chain, and a backend that can be
+ * fallen into is one that gets spent on queries that did not need it.
+ */
+const DEEP_BACKEND = "perplexity" as const;
+
+/** The deep tier, but only if the operator left it on and it is not cooling. */
+function deepTier(cfg: WebConfig): SearchBackend | undefined {
+  if (cfg.search.off.includes(DEEP_BACKEND)) return undefined;
+  if ((cfg.skipUntil[DEEP_BACKEND] ?? 0) > Date.now()) return undefined;
+  return DEEP_BACKEND;
 }
 
 export interface ChainOutcome {
@@ -490,16 +595,21 @@ export async function runSearchChain(
   // operator-owned: the model may say how much text it wants, never from whom.
   const cfg: WebConfig = opts.excerpts ? { ...stored, excerpts: opts.excerpts } : stored;
   const chain = activeChain(cfg.search.order, cfg.search.off, cfg.skipUntil);
+  // `hard` promotes the deep tier to the head. It does not touch failover:
+  // if Perplexity is spent or benched, the chain below runs exactly as it
+  // always has, so the escalation can never become an exit from the chain.
+  const deep = opts.hard ? deepTier(cfg) : undefined;
+  const ordered = deep ? [deep, ...chain.filter((b) => b !== deep)] : chain;
   const tried: string[] = [];
   const linksOnly = opts.linksOnly === true;
 
-  if (!chain.length) {
+  if (!ordered.length) {
     throw new Error(
       "web_search: every backend is disabled or cooling off. Run /web to see the chain, /web reset to clear skips.",
     );
   }
 
-  for (const backend of chain) {
+  for (const backend of ordered) {
     let cred: ResolvedKey | undefined;
     if (backend !== "codex") {
       cred = await resolveKeyInfo(backend);
@@ -542,6 +652,27 @@ export const COST_PER_CALL: Record<SearchBackend, string> = {
   exa: "1 search (~$0.007)",
   firecrawl: "2 credits",
   codex: "subscription tokens",
+  // `fast` on gpt-5.6-luna, at the preset's median 1000 in / 500 out tokens,
+  // plus one web_search invocation. Checked against Perplexity's published
+  // rates; the Agent API replaced the old per-request Sonar fee this sat on.
+  perplexity: "1 request (~$0.004)",
+};
+
+/**
+ * Artificial Analysis Search Index, for the `/web test` table — only the
+ * providers that publish a row. It is a dash for everything else, and it is
+ * worth understanding why rather than reading it as a ranking of this chain:
+ * the index scores a whole agent turn with an answer model attached, so it is
+ * not comparable to the per-call latency and character counts beside it.
+ * Only perplexity has a row here; Octen (77) is the alternative `hard` was
+ * weighed against but is not a backend in this chain.
+ *
+ * The 80 is also a different product from the one below: it was measured on
+ * "Perplexity Search (medium)", while this calls the Agent API `fast` preset.
+ * Snapshot: 2026-10, and the board moves.
+ */
+export const SEARCH_INDEX: Partial<Record<SearchBackend, string>> = {
+  perplexity: "80",
 };
 
 export interface ProbeResult {

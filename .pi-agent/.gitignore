@@ -57,6 +57,11 @@ extensions/herdr-agent-state.ts
 # aborts the entire launch when an extension's import cannot resolve.
 !extensions/*/
 !extensions/*/*.ts
+# The one .mjs in here. pi does not import it — it is the scoring harness for
+# the search chain, run by hand before a backend change. The numbers in
+# web-providers/README.md came out of it, and a host that cannot re-run them
+# can only take them on trust.
+!extensions/*/*.mjs
 
 # Extension tooling (not linked into ~/.pi/agent — see tsconfig.json).
 # node_modules/ is symlinks to the global pi, created by bin/pi-ext-check.

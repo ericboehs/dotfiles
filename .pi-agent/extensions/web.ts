@@ -22,7 +22,7 @@ import {
   type SearchBackend,
   type WebConfig,
 } from "./web-providers/config.ts";
-import { cooloffForStatus, COST_PER_CALL, probeBackends, runSearchChain } from "./web-providers/search.ts";
+import { cooloffForStatus, COST_PER_CALL, probeBackends, runSearchChain, SEARCH_INDEX } from "./web-providers/search.ts";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 // Plain OpenAI API keys speak the same Responses API shape, just at the
@@ -394,7 +394,9 @@ async function statusText(cfg: WebConfig): Promise<string> {
         ? "  (search + fetch share one credit pool)"
         : name === "brave" && found?.env === "BRAVE_API_KEY"
           ? "  (no extra_snippets on this plan \u2014 teaser excerpts)"
-          : "";
+          : name === "perplexity"
+            ? "  (deep tier \u2014 only when the model sets hard)"
+            : "";
     creds.push(`${name.padEnd(10)} ${label}${note}`);
   }
   lines.push(...creds);
@@ -445,7 +447,10 @@ function pad(value: string, width: number): string {
 async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
   const includeAll = args[0]?.toLowerCase() === "all";
   const query = (includeAll ? args.slice(1) : args).join(" ").trim() || TEST_QUERY;
-  const backends = SEARCH_BACKENDS.filter((b) => includeAll || b !== "codex");
+  // codex needs the live model registry and perplexity bills ~$0.004 a call,
+  // so both wait for `test all` — same rule as Firecrawl and Safari in the
+  // fetch ladder. A diagnostic you hesitate to run is one you stop running.
+  const backends = SEARCH_BACKENDS.filter((b) => includeAll || (b !== "codex" && b !== "perplexity"));
 
   const results = await probeBackends(query, [...backends], {
     codex: (q, opts, s) => codexSearch(q, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
@@ -454,13 +459,13 @@ async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
   const lines = [
     `query: "${query}"`,
     "",
-    `${pad("backend", 11)}${pad("state", 9)}${pad("result", 10)}${pad("ms", 7)}${pad("chars", 8)}cost`,
+    `${pad("backend", 11)}${pad("state", 9)}${pad("result", 10)}${pad("ms", 7)}${pad("chars", 8)}${pad("index", 7)}cost`,
   ];
   for (const r of results) {
     const verdict = r.ok ? `${r.hits} hits` : "FAIL";
     const ms = r.ok ? String(r.ms) : r.ms ? String(r.ms) : "\u2013";
     lines.push(
-      `${pad(r.backend, 11)}${pad(r.state, 9)}${pad(verdict, 10)}${pad(ms, 7)}${pad(r.ok ? String(r.chars) : "\u2013", 8)}${COST_PER_CALL[r.backend]}`,
+      `${pad(r.backend, 11)}${pad(r.state, 9)}${pad(verdict, 10)}${pad(ms, 7)}${pad(r.ok ? String(r.chars) : "\u2013", 8)}${pad(SEARCH_INDEX[r.backend] ?? "\u2013", 7)}${COST_PER_CALL[r.backend]}`,
     );
   }
 
@@ -707,6 +712,12 @@ export default function web(pi: ExtensionAPI): void {
       links_only: Type.Optional(
         Type.Boolean({ description: "Skip excerpts, return just a ranked [title](url) list" }),
       ),
+      hard: Type.Optional(
+        Type.Boolean({
+          description:
+            "Set when one round of excerpts will not do. Starts with an answer-writing backend that reasons over its own search — expect several seconds, not milliseconds. Use it for hard questions, not for speed.",
+        }),
+      ),
       // `enum` rather than a union of literals: TypeBox serialises a union as
       // three separate anyOf branches, which costs ~150 characters of schema
       // in every request for no extra meaning. Validation of the value itself
@@ -725,6 +736,7 @@ export default function web(pi: ExtensionAPI): void {
       if (args.recency) extras.push(`recency=${args.recency}`);
       if (args.excerpts) extras.push(`excerpts=${args.excerpts}`);
       if (args.links_only) extras.push("links_only");
+      if (args.hard) extras.push("hard");
       const backend = context?.toolCallId ? searchBackends.get(context.toolCallId) : undefined;
       if (backend) extras.push(backend);
       if (extras.length) text += theme.fg("muted", ` ${extras.join(" ")}`);
@@ -760,7 +772,7 @@ export default function web(pi: ExtensionAPI): void {
         : undefined;
       const outcome = await runSearchChain(
         params.query,
-        { recency: params.recency, linksOnly: params.links_only, excerpts },
+        { recency: params.recency, linksOnly: params.links_only, excerpts, hard: params.hard === true },
         {
           codex: (query, opts, s) => codexSearch(query, { recency: opts.recency, linksOnly: opts.linksOnly }, ctx, s),
           onAttempt: (msg) => {

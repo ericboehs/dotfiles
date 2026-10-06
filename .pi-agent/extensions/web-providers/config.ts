@@ -10,7 +10,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const SEARCH_BACKENDS = ["brave", "tavily", "exa", "firecrawl", "codex"] as const;
+export const SEARCH_BACKENDS = ["brave", "tavily", "exa", "firecrawl", "codex", "perplexity"] as const;
 export const FETCH_TIERS = ["plain", "curl", "obscura", "chrome", "safari", "firecrawl", "tinyfish"] as const;
 
 export type SearchBackend = (typeof SEARCH_BACKENDS)[number];
@@ -72,6 +72,8 @@ export interface WebConfig {
  * `OBSCURA_BIN=obscura-stealth` selects the stealth transport for eval.
  */
 export const DEFAULT_CONFIG: WebConfig = {
+  // perplexity is deliberately absent from search.order. It is the deep tier:
+  // only `hard: true` reaches it, so nothing spends money on it by accident.
   search: { order: ["tavily", "exa", "brave", "firecrawl", "codex"], off: [] },
   fetch: { order: ["plain", "curl", "obscura", "chrome", "tinyfish", "firecrawl", "safari"], off: ["obscura"] },
   format: "native",
@@ -189,6 +191,7 @@ export const KEY_ENV: Record<string, string[]> = {
   exa: ["EXA_API_KEY"],
   firecrawl: ["FIRECRAWL_API_KEY"],
   tinyfish: ["TINY_FISH_API_KEY", "TINYFISH_API_KEY"],
+  perplexity: ["PERPLEXITY_API_KEY", "PERPLEXITY_SEARCH_API_KEY"],
 };
 
 const keyCache = new Map<string, ResolvedKey | undefined>();
