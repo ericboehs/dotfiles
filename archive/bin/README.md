@@ -58,8 +58,8 @@ extra `../` so they still resolve. Take it off again when moving it back.
 | monitor_tmux_pane | never | Notify when a tmux pane running Claude goes idle |
 
 `claude-config/install.sh` symlinks every `claude-config/bin/*` into `~/bin`,
-which is this repo's `bin/`. Running it again puts the four claude-config links
-back in `bin/`. claude-dashboard (last run 2026-02) shells out to `claude-send`
+which is this repo's `bin/`. Running it again puts the seven claude-config links
+(here and under Claude Code session tools) back in `bin/`. claude-dashboard (last run 2026-02) shells out to `claude-send`
 for its send action, so that action fails until `claude-send` is on PATH again.
 
 ## Claude Code launchers
@@ -79,9 +79,21 @@ Not used anymore (Eric, 2026-10-05).
 | cco → `nikvdp/cco/cco` | 2026-02-16 (16) | nikvdp's sandboxed Claude Code launcher |
 | sandbox → `nikvdp/cco/sandbox` | never | cco's sandbox helper |
 
-`.claude/scripts/statusline.sh` still has its own Cerebras segment (for a
-proxy on :8083). It calls the API itself rather than `cerebras-usage`, and only
-shows when such a proxy is set.
+`.claude/scripts/statusline.sh` lost its Cerebras segment (the :8083 proxy
+context override, quota probe and `pace_projected` helper) at the same time.
+
+## Claude Code session tools
+
+Readers and pickers for Claude Code session transcripts. Not run since
+January–April 2026; `claude --resume` covers the picker.
+
+| Script | Last run (count) | What it did |
+|---|---|---|
+| claude-active → `claude-config/bin/` | 2026-04-16 (51) | List active Claude Code sessions in fzf |
+| claude-tail → `claude-config/bin/` | 2026-04-16 (92) | Show assistant messages from a session |
+| claude-resume | 2026-04-15 (13) | fzf session picker with message search |
+| daily-ai-sessions | 2026-02-27 (22) | Browse and resume Claude sessions linked from daily notes |
+| claude-sessions → `claude-config/bin/` | 2026-01-03 (21) | Status of all sessions, for the manager Claude |
 
 ## Stale
 

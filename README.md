@@ -156,7 +156,7 @@ Enhanced replacements for common commands:
 
 Collection of utility scripts in `bin/` including:
 
-- **Claude Code helpers**: claude-resume, claude-babysit, claude-browser
+- **Claude Code helpers**: claude-babysit, claude-browser
 - **GitHub CLI extensions**: gh-pm, gh-sprint, gh-action-trace, watch-ci
 - **Tmux utilities**: notes, tmux-agent-save, tmux-agent-restore, tmux-title-format
 - **Story watchers**: hn-watch, macrumors-watch (Slack via slack-noti when a story's comments spike; `--install` loads a LaunchAgent that runs `--watch --notify`)

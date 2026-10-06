@@ -39,9 +39,6 @@ model=$(echo "$model_id" | sed 's/\[.*\]$//; s/^claude-//')
 if echo "$ANTHROPIC_BASE_URL" | grep -qE ':4141'; then
   # Uses context_window_size from Claude Code; set CLAUDE_CODE_AUTO_COMPACT_WINDOW in clapilot to override
   pct=$(echo "$used * 100 / $total" | bc)
-elif echo "$ANTHROPIC_BASE_URL" | grep -qE ':8083'; then
-  total=131000
-  pct=$(echo "$used * 100 / $total" | bc)
 elif echo "$ANTHROPIC_BASE_URL" | grep -qE ':8000'; then
   # Derive currently-loaded oMLX model from server log (cached 10s)
   omlx_cache="/tmp/omlx-active-cache"
@@ -75,7 +72,7 @@ fi
 # the setting is what keeps this correct in the desktop app and cloud sessions,
 # which never see the shell alias. Either source can only shrink the
 # denominator, never exceed the backend's real window (protects capped proxies
-# like cerebras/oMLX).
+# like oMLX).
 acw="$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 [ -z "$acw" ] && acw=$(jq -r '.autoCompactWindow // empty' "$HOME/.claude/settings.json" 2>/dev/null)
 if [ -n "$acw" ] && [ "$acw" -gt 0 ] 2>/dev/null; then
@@ -121,22 +118,6 @@ else
   pct_color='\033[36m'
 fi
 
-
-# --- Time-aware usage projection ---
-# Projects usage to end of window. Outputs: "projected_pct color_code"
-# Args: usage_pct elapsed_pct (both 0-100 integers)
-pace_projected() {
-  local usage=$1 elapsed=$2
-  local projected=$usage
-  if [ "$elapsed" -gt 5 ] 2>/dev/null && [ "$usage" -gt 0 ] 2>/dev/null; then
-    projected=$(( usage * 100 / elapsed ))
-  fi
-  local color
-  if [ "$projected" -ge 100 ] 2>/dev/null; then color='\033[31m'
-  elif [ "$projected" -ge 75 ] 2>/dev/null; then color='\033[33m'
-  else color='\033[36m'; fi
-  echo "${projected}:${color}"
-}
 
 # === Build segments (plain text for measuring, colored for display) ===
 now=$(date +%s)
@@ -277,52 +258,6 @@ elif proxy="${ANTHROPIC_BASE_URL:-${HTTPS_PROXY:-$HTTP_PROXY}}"; [ -n "$proxy" ]
   if echo "$proxy" | grep -qE ':8000'; then
     seg_proxy_plain=" oMLX"
     seg_proxy_color=" \033[31moMLX\033[0m"
-  elif echo "$proxy" | grep -qE ':8083'; then
-    seg_proxy_plain=" cerebras"
-    seg_proxy_color=" \033[31mcerebras\033[0m"
-    cache_file="/tmp/cerebras-usage-cache"
-    cache_max_age=60
-    if [ -f "$cache_file" ] && [ "$(( now - $(file_mtime "$cache_file") ))" -lt "$cache_max_age" ]; then
-      cerebras_info=$(cat "$cache_file")
-    else
-      (
-        CEREBRAS_API_KEY="${CEREBRAS_API_KEY:-$(op item get "cerebras.ai" --fields "label=API Key (Cerebras Code)" --reveal 2>/dev/null)}"
-        if [ -n "$CEREBRAS_API_KEY" ]; then
-          headers=$(curl -sS -D /dev/stdout --max-time 5 'https://api.cerebras.ai/v1/chat/completions' \
-            -H "Authorization: Bearer $CEREBRAS_API_KEY" \
-            -H 'Content-Type: application/json' \
-            -d '{"model":"zai-glm-4.7","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
-            -o /dev/null 2>/dev/null)
-          req_day_rem=$(echo "$headers" | grep -i 'x-ratelimit-remaining-requests-day' | cut -d' ' -f2 | tr -d '\r')
-          tok_day_rem=$(echo "$headers" | grep -i 'x-ratelimit-remaining-tokens-day' | cut -d' ' -f2 | tr -d '\r')
-          if [ -n "$req_day_rem" ]; then
-            req_pct=$(( (72000 - req_day_rem) * 100 / 72000 ))
-            tok_pct=$(( (24000000 - tok_day_rem) * 100 / 24000000 ))
-            echo "${req_pct}:${tok_pct}" > "$cache_file"
-          fi
-        fi
-      ) &
-      [ -f "$cache_file" ] && cerebras_info=$(cat "$cache_file")
-    fi
-    if [ -n "$cerebras_info" ]; then
-      req_pct=$(echo "$cerebras_info" | cut -d: -f1)
-      tok_pct=$(echo "$cerebras_info" | cut -d: -f2)
-      day_elapsed=$(( (now % 86400) * 100 / 86400 ))
-      req_result=$(pace_projected "$req_pct" "$day_elapsed")
-      req_proj=$(echo "$req_result" | cut -d: -f1)
-      rc=$(echo "$req_result" | cut -d: -f2-)
-      tok_result=$(pace_projected "$tok_pct" "$day_elapsed")
-      tok_proj=$(echo "$tok_result" | cut -d: -f1)
-      tc=$(echo "$tok_result" | cut -d: -f2-)
-      if [ "$req_proj" -ge 90 ] 2>/dev/null; then
-        usage_str="${usage_str} ${rc}r:~${req_proj}%\033[0m"
-        usage_str_plain="${usage_str_plain} r:~${req_proj}%"
-      fi
-      if [ "$tok_proj" -ge 90 ] 2>/dev/null; then
-        usage_str="${usage_str} ${tc}t:~${tok_proj}%\033[0m"
-        usage_str_plain="${usage_str_plain} t:~${tok_proj}%"
-      fi
-    fi
   else
     proxy_short="${proxy#http://}"
     proxy_short="${proxy_short#https://}"
