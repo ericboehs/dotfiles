@@ -88,10 +88,18 @@ backend that gets spent on the queries that did not need it. `/web search off
 perplexity` disables it; so does a live cool-off, and both leave the rest of the
 chain untouched.
 
-`hard` **reorders, it does not add a failure path.** If Sonar is spent,
+`hard` **reorders, it does not add a failure path.** If Perplexity is spent,
 benched or off, the chain below it runs exactly as it always has — same
 `cooloffForStatus` rules, same 24h/10min benching, same "empty is an answer".
 The escalation can never become an exit from the chain.
+
+One exception to the 24h rule, and it is Perplexity's. Its 429 with
+`"type": "request_rate_limit_exceeded"` is a requests-per-minute bucket, not
+a spent allowance, so it benches for 60s and logs `rate limited`, not `quota
+exhausted`. Before this, two `hard` calls sent at once took the deep tier out
+for a day with credit still on the account. The match is on that exact type,
+not on the words "rate limit": Brave's monthly-quota 429 says "Request rate
+limit exceeded" too, and that one is spent until the month rolls over.
 
 ### Why this is not the metric the leaderboard ranks on
 

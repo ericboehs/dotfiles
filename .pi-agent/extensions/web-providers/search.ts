@@ -77,6 +77,8 @@ class BackendError extends Error {
 
 const QUOTA_COOLOFF_MS = 24 * 60 * 60 * 1000; // monthly allowances: re-probe daily
 const TRANSIENT_COOLOFF_MS = 10 * 60 * 1000;
+/** Per-minute buckets: long enough for the window to roll, no longer. */
+const PACE_COOLOFF_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 
 const EXCERPT_CHARS: Record<Excerpts, number> = { short: 200, auto: 1200, long: 2500 };
@@ -116,10 +118,25 @@ function recencyDays(recency?: string): number | undefined {
  * "auth" would silently bench a working backend for a day; guessing "bug"
  * would re-hit a dead key on every search forever.
  */
+/**
+ * A 429 that only means "slow down". Perplexity says so in the body: its
+ * `request_rate_limit_exceeded` is a requests-per-minute bucket, and the
+ * account still has credit. Reading it as a spent allowance benched the deep
+ * tier for a day over two `hard` calls sent at once.
+ *
+ * Keyed on Perplexity's exact error type, not on the words "rate limit":
+ * Brave's monthly-quota 429 says RATE_LIMITED and "Request rate limit
+ * exceeded" too, and that one really is spent until the month rolls over.
+ */
+function isPaceLimit(status: number, body: string): boolean {
+  return status === 429 && /\brequest_rate_limit_exceeded\b/.test(body);
+}
+
 export function cooloffForStatus(status: number, body = ""): number {
   const authShaped =
     /SUBSCRIPTION_TOKEN_INVALID|"component"\s*:\s*"authentication"|invalid api key|unauthorized/i.test(body);
   if (status === 401 || status === 403 || (status === 422 && authShaped)) return QUOTA_COOLOFF_MS;
+  if (isPaceLimit(status, body)) return PACE_COOLOFF_MS;
   if (status === 402 || status === 429 || status === 432) return QUOTA_COOLOFF_MS;
   if (status >= 500) return TRANSIENT_COOLOFF_MS;
   // Other 4xx: almost certainly our request shape. Do not cool off — surfacing
@@ -136,6 +153,9 @@ function httpError(status: number, body: string): BackendError {
   if (status === 401 || status === 403 || status === 422) {
     return new BackendError(`auth rejected (${status}) ${detail}`, cooloff);
   }
+  // "quota exhausted" on a per-minute bucket sends whoever reads the log to
+  // check a billing page that is fine.
+  if (isPaceLimit(status, body)) return new BackendError(`rate limited (${status}) ${detail}`, cooloff);
   return new BackendError(`quota exhausted (${status}) ${detail}`, cooloff);
 }
 
@@ -399,14 +419,29 @@ async function firecrawlSearch(
  * there, fall back to the documented REST shape.
  */
 function agentText(data: any): string {
-  if (typeof data?.output_text === "string" && data.output_text.trim()) return clean(data.output_text);
+  if (typeof data?.output_text === "string" && data.output_text.trim()) return cleanProse(data.output_text);
   if (!Array.isArray(data?.output)) return "";
   const parts: string[] = [];
   for (const item of data.output) {
     if (item?.type !== "message" || !Array.isArray(item.content)) continue;
     for (const c of item.content) if (typeof c?.text === "string") parts.push(c.text);
   }
-  return clean(parts.join("\n"));
+  return cleanProse(parts.join("\n"));
+}
+
+/**
+ * `clean()` is for one-line excerpts and folds every whitespace run into a
+ * space — newlines included. The Agent API answers in Markdown, and a table
+ * folded onto one line stops being a table. Keep the line structure; only
+ * tidy runs of spaces and runs of blank lines.
+ */
+function cleanProse(text: string): string {
+  return text
+    .replace(/<\/?strong>/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** Sonar's top-level `citations` is gone; sources ride on a typed output item. */
