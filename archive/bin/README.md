@@ -57,10 +57,12 @@ extra `../` so they still resolve. Take it off again when moving it back.
 | claude-watcher | never | Tail a Claude session log's tool calls |
 | monitor_tmux_pane | never | Notify when a tmux pane running Claude goes idle |
 
-`claude-config/install.sh` symlinks every `claude-config/bin/*` into `~/bin`,
-which is this repo's `bin/`. Running it again puts the seven claude-config links
-(here and under Claude Code session tools) back in `bin/`. claude-dashboard (last run 2026-02) shells out to `claude-send`
-for its send action, so that action fails until `claude-send` is on PATH again.
+`claude-config/install.sh` symlinks `claude-config/bin/*` into `~/bin`, which is
+this repo's `bin/`, but skips any name with an entry here, so rerunning it
+leaves the seven claude-config links (here and under Claude Code session tools)
+archived. Restoring one with `git mv` is enough for install.sh to link it again.
+claude-dashboard (last run 2026-02) shells out to `claude-send` for its send
+action, so that action fails until `claude-send` is on PATH again.
 
 ## Claude Code launchers
 
@@ -71,6 +73,7 @@ Not used anymore (Eric, 2026-10-05).
 |---|---|---|
 | clapilot | 2026-08-06 (492) | Claude Code via the GitHub Copilot proxy. Took the `clap`, `clapd`, `clapr` and `clapdr` abbreviations with it |
 | claor | 2026-07-30 (15) | Claude Code via OpenRouter |
+| copilot-usage | 2026-07-20 (21) | Watch Copilot premium-request use, projection and overage cost from the proxy's `/usage` on :4141 |
 | clas | 2026-06-22 (4) | Claude Code via Synthetic.dev (GLM-5.2) |
 | clacer | 2026-03-31 (30) | Claude Code via Cerebras (GLM 4.7) through claude-code-proxy |
 | cerebras-usage | 2026-03-19 (16) | Cerebras daily request/token remainders from rate-limit headers |
@@ -80,7 +83,8 @@ Not used anymore (Eric, 2026-10-05).
 | sandbox → `nikvdp/cco/sandbox` | never | cco's sandbox helper |
 
 `.claude/scripts/statusline.sh` lost its Cerebras segment (the :8083 proxy
-context override, quota probe and `pace_projected` helper) at the same time.
+context override, quota probe and `pace_projected` helper) and its Copilot
+segment (the :4141 context branch and premium-request quota and pace) with them.
 
 ## Claude Code session tools
 
