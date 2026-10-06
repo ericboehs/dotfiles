@@ -30,8 +30,6 @@
 .config/btop/btop.conf
 channel.xml
 bin/awake
-bin/claude-dashboard
-bin/forge-copilot
 bin/md2maildir
 bin/onedrive-index
 bin/outlook
