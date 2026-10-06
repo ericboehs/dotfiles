@@ -159,6 +159,92 @@ There are no periodic model wakeups. Completion still sends the exit status
 and log tail, controlled by `PI_BG_WAKE=followUp|nextTurn|off` (default
 `followUp`). User-stopped jobs only notify the UI.
 
+## Meeting copilot
+
+`extensions/meeting.ts` watches the live
+[meeting-capture](https://github.com/ericboehs/meeting-capture) transcript and
+keeps a list of questions worth asking. The widget above the prompt shows the
+three most worth asking right now:
+
+```text
+● meeting · EERT Weekly Sync · 16m · Victoria cert fix · 4 checks · /meeting stop
+  Q3 Has Venu confirmed Thunderbird is out of prod Mongo too? — Eric said maybe only dev
+  Q4 Who signs off before the cert fix deploys, the ISSO or the EI? — no approver named
+  Q6 Does the fix wait for the EI approval? — EI not approved yet
+  +2 more open · 1 answered or asked · /meeting list
+```
+
+```text
+/meeting start [filter|path] [--wake] [--model provider/id] [--replay [speed]]
+/meeting ask | focus <text> | list | recap | stop      /meeting alone shows status
+/q3 [what to look for]                                 research one question (/q to pick)
+```
+
+A question leaves the list only when the scout sees it answered or asked. The
+rest stay open even after the talk moves on. New questions show up right away.
+Otherwise a question stays in view for three minutes before the scout's
+re-ranking can swap it out. `/meeting list` expands the widget to every
+question.
+
+When the meeting ends, the recap goes into the session and into the daily note
+(`PI_MEETING_DAILY_DIR`, default `~/Documents/Wiki/daily`, for the capture's
+date). It's a `###` block at the end of `## Meetings` that lists every question
+as still open, answered (with the answer), or asked. A hidden marker ties the
+block to its capture, so `/meeting recap` mid-meeting and the final recap
+rewrite the same block. Replays never write to the note.
+
+`/q3` researches Q3 in the background while you keep talking. It starts a
+separate `pi -p` process on the session's model (`PI_MEETING_RESEARCH_MODEL`
+overrides it) at medium thinking, with read-only tools. That process searches
+qmd, Slack, va.ghe.com, `~/Code` and the web. Nothing runs in the main session.
+Text after the number steers the search (`/q3 check the eMASS notes`), and `/q`
+alone opens a picker. Each run has three minutes and at most two run at once.
+The widget shows `Q3 🔎 1:20` while it works. The brief then lands as a
+session message with an `Answer:` line, evidence with sources, a sharper version
+of the question, and gaps. The answer also shows under the question in the
+widget and as a `Researched:` line in the recap. A call that ends with research
+still running waits for it before stopping. `/meeting stop` cancels research.
+`/q` still works after the meeting, and a finished brief then rewrites the
+daily-note recap.
+
+With no live meeting, `start` waits for the next capture to begin. When the
+recorder writes `stopped`, the widget counts down 90 seconds ("stopping in 1:12
+unless it resumes") so a reconnect, which starts a new file, carries on.
+`--replay 30` plays a finished transcript back at 30×, which is how to tune
+the prompt without a meeting.
+
+The model is never polled on a timer. The file is polled, and code decides
+when a check is worth a call. A check runs on:
+
+- someone else saying your name, or "any questions?"
+- about six new lines followed by a pause
+- 45 seconds of unchecked talk
+- a flood of lines
+
+There is never more than one check per 15 seconds. Each check sends the
+transcript to a small model (`PI_MEETING_MODEL`, default Opencode Go's
+DeepSeek V4.1 Flash, so it's covered by the subscription). The system prompt
+holds the background:
+
+- `~/.pi/agent/meeting-context.md`, a few lines on who you are, kept local
+  because this directory is published
+- the end of the previous transcript of the same meeting
+- `qmd search` hits for the meeting title
+
+The system prompt stays fixed and the transcript is append-only, so the
+provider can cache the prompt prefix. A replay of a 33-minute meeting cost
+five checks and a tenth of a cent.
+
+New questions and suggested replies also go into the session as `meeting`
+messages sent with `triggerTurn: false`. They land in the transcript and in the
+main model's context, but the main model doesn't start a turn. Ask it "what
+should I say?" and it already has them, plus the transcript path. `--wake` is
+the one exception: when someone names you and the scout has a reply, the main
+model is woken to draft one.
+
+Teams writes a caption only when it scrolls out of its ~3-line window, so the
+copilot runs a couple of utterances behind the room.
+
 ## Footer
 
 `extensions/footer.ts` renders the status line (dir, provider, model, git,
