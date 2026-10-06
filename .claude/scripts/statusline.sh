@@ -36,10 +36,7 @@ model_id=$(echo "$input" | jq -r '.model.id // "unknown"')
 model=$(echo "$model_id" | sed 's/\[.*\]$//; s/^claude-//')
 
 # --- Proxy-specific context window overrides ---
-if echo "$ANTHROPIC_BASE_URL" | grep -qE ':4141'; then
-  # Uses context_window_size from Claude Code; set CLAUDE_CODE_AUTO_COMPACT_WINDOW in clapilot to override
-  pct=$(echo "$used * 100 / $total" | bc)
-elif echo "$ANTHROPIC_BASE_URL" | grep -qE ':8000'; then
+if echo "$ANTHROPIC_BASE_URL" | grep -qE ':8000'; then
   # Derive currently-loaded oMLX model from server log (cached 10s)
   omlx_cache="/tmp/omlx-active-cache"
   if [ -f "$omlx_cache" ] && [ "$(( $(date +%s) - $(file_mtime "$omlx_cache") ))" -lt 10 ]; then
@@ -172,89 +169,7 @@ seg_proxy_plain=""
 seg_proxy_color=""
 usage_str=""
 usage_str_plain=""
-if echo "$ANTHROPIC_BASE_URL" | grep -qE ':4141'; then
-  seg_proxy_plain=" copilot"
-  seg_proxy_color=" \033[31mcopilot\033[0m"
-  # Cache copilot usage to avoid hitting the API every statusline refresh
-  # Cache format: usage_pct:usage_pct_int:reset_epoch
-  copilot_cache="/tmp/copilot-usage-cache"
-  copilot_cache_max_age=120
-  if [ -f "$copilot_cache" ] && [ "$(( now - $(file_mtime "$copilot_cache") ))" -lt "$copilot_cache_max_age" ]; then
-    copilot_info=$(cat "$copilot_cache")
-  else
-    (
-      copilot_host=$(echo "$ANTHROPIC_BASE_URL" | sed 's|^http://||; s|/.*||')
-      resp=$(curl -s --max-time 3 "http://${copilot_host}/usage" 2>/dev/null)
-      if [ -n "$resp" ]; then
-        cp_usage_pct=$(echo "$resp" | jq -r '.quota_snapshots.premium_interactions | ((.entitlement - .remaining) / .entitlement * 100 * 10 | round / 10)' 2>/dev/null)
-        cp_reset_date=$(echo "$resp" | jq -r '.quota_reset_date // empty' 2>/dev/null)
-        if [ -n "$cp_usage_pct" ] && [ "$cp_usage_pct" != "null" ]; then
-          cp_usage_int=$(echo "$cp_usage_pct" | cut -d. -f1)
-          [ -z "$cp_usage_int" ] && cp_usage_int=0
-          cp_reset_epoch=0
-          if [ -n "$cp_reset_date" ]; then
-            cp_reset_epoch=$(parse_date "%Y-%m-%d" "$cp_reset_date")
-          fi
-          echo "${cp_usage_pct}:${cp_usage_int}:${cp_reset_epoch}" > "$copilot_cache"
-        fi
-      fi
-    ) &
-    [ -f "$copilot_cache" ] && copilot_info=$(cat "$copilot_cache")
-  fi
-  if [ -n "$copilot_info" ]; then
-    usage_pct=$(echo "$copilot_info" | cut -d: -f1)
-    usage_pct_int=$(echo "$copilot_info" | cut -d: -f2)
-    copilot_reset_epoch=$(echo "$copilot_info" | cut -d: -f3)
-    if [ "$usage_pct_int" -ge 80 ] 2>/dev/null; then uc='\033[31m'
-    elif [ "$usage_pct_int" -ge 50 ] 2>/dev/null; then uc='\033[33m'
-    else uc='\033[36m'; fi
-    usage_str=" ${uc}${usage_pct}%\033[0m"
-    usage_str_plain=" ${usage_pct}%"
-    # Monthly pace projection against reset date
-    if [ "$copilot_reset_epoch" -gt 0 ] 2>/dev/null && [ "$usage_pct_int" -gt 0 ] 2>/dev/null; then
-      # Determine month start (1st of current month)
-      month_start_epoch=$(parse_date "%Y-%m-%d" "$(date +%Y-%m)-01")
-      if [ "$month_start_epoch" -gt 0 ] 2>/dev/null; then
-        month_total=$(( copilot_reset_epoch - month_start_epoch ))
-        month_elapsed=$(( now - month_start_epoch ))
-        [ "$month_elapsed" -lt 0 ] && month_elapsed=0
-        if [ "$month_elapsed" -gt 3600 ] 2>/dev/null; then
-          elapsed_pct=$(( month_elapsed * 100 / month_total ))
-          ahead=$(( usage_pct_int - elapsed_pct ))
-          if [ "$ahead" -ge "$PACE_AHEAD_THRESHOLD" ] 2>/dev/null || [ "$(( -ahead ))" -ge "$PACE_BEHIND_THRESHOLD" ] 2>/dev/null || [ "$usage_pct_int" -ge "$USAGE_ALWAYS_SHOW" ] 2>/dev/null; then
-            if [ "$ahead" -ge 20 ] 2>/dev/null; then pc='\033[31m'
-            elif [ "$ahead" -ge 10 ] 2>/dev/null; then pc='\033[33m'
-            else pc='\033[36m'; fi
-            if [ "$ahead" -gt 0 ] 2>/dev/null; then
-              pace_label="+${ahead}%"
-              pace_label_plain="+${ahead}%"
-            else
-              pace_label="${ahead}%"
-              pace_label_plain="${ahead}%"
-            fi
-            # Add time-to-reset when usage is high
-            if [ "$usage_pct_int" -ge 80 ] 2>/dev/null; then
-              remaining_secs=$(( copilot_reset_epoch - now ))
-              [ "$remaining_secs" -lt 0 ] && remaining_secs=0
-              if [ "$remaining_secs" -lt 86400 ]; then
-                reset_fmt="$((remaining_secs / 3600))h"
-              else
-                reset_d=$((remaining_secs / 86400))
-                reset_h=$(( (remaining_secs % 86400) / 3600 ))
-                if [ "$reset_h" -ge 12 ]; then reset_fmt="$(( reset_d + 1 ))d"
-                else reset_fmt="${reset_d}d"; fi
-              fi
-              pace_label="${pace_label}↻${reset_fmt}"
-              pace_label_plain="${pace_label_plain}↻${reset_fmt}"
-            fi
-            usage_str="${usage_str} ${pc}${pace_label}\033[0m"
-            usage_str_plain="${usage_str_plain} ${pace_label_plain}"
-          fi
-        fi
-      fi
-    fi
-  fi
-elif proxy="${ANTHROPIC_BASE_URL:-${HTTPS_PROXY:-$HTTP_PROXY}}"; [ -n "$proxy" ]; then
+if proxy="${ANTHROPIC_BASE_URL:-${HTTPS_PROXY:-$HTTP_PROXY}}"; [ -n "$proxy" ]; then
   if echo "$proxy" | grep -qE ':8000'; then
     seg_proxy_plain=" oMLX"
     seg_proxy_color=" \033[31moMLX\033[0m"
