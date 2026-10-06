@@ -24,6 +24,27 @@ artifact-skills/*/*
 !artifact-skills/*/SKILL.md
 !artifact-skills/*/LICENSE.txt
 
+# html-plan vendored from anthropics/claude-plugins-community. Text only.
+# Read on demand by /html-plan, so it costs nothing until that prompt runs.
+# runtime/htmlplan.js has one local patch (copy toast says Pi, not Claude).
+!html-plan/
+html-plan/*
+!html-plan/SKILL.md
+!html-plan/LICENSE
+!html-plan/MANIFEST
+!html-plan/UPSTREAM.plugin.json
+!html-plan/references/
+html-plan/references/*
+!html-plan/references/blocks.md
+!html-plan/runtime/
+html-plan/runtime/*
+!html-plan/runtime/htmlplan.css
+!html-plan/runtime/htmlplan.js
+!html-plan/runtime/pack.mjs
+!html-plan/examples/
+html-plan/examples/*
+!html-plan/examples/scheduled-send.html
+
 !extensions/
 extensions/*
 !extensions/*.ts

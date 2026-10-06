@@ -216,6 +216,8 @@ REPO_PATH = "ericboehs/dotfiles"
 # The vendored Anthropic design skills behind /artifact. One link, like
 # extensions, so a skill added by a later pull is there without a bootstrap.
 "~/.pi/agent/artifact-skills" = ".pi-agent/artifact-skills"
+# Vendored html-plan skill behind /html-plan. One directory link, same reason.
+"~/.pi/agent/html-plan" = ".pi-agent/html-plan"
 # symlink-each because the directory is shared: prompts written for one machine
 # and never tracked (checkin.md) sit beside the tracked ones and should stay.
 "~/.pi/agent/prompts" = { source = ".pi-agent/prompts", mode = "symlink-each" }

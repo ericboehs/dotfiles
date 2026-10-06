@@ -9,7 +9,7 @@ Tracked here:
 - custom keybindings (e.g. Opt+Enter inserts a newline)
 - approval-guardian policy
 - local TypeScript extensions, plus the tooling to check them
-- prompt templates, and the vendored design skills behind `/artifact`
+- prompt templates, the vendored design skills behind `/artifact`, and the vendored `html-plan` skill behind `/html-plan`
 
 ## Per-host settings
 

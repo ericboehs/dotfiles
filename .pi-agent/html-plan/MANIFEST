@@ -1,0 +1,20 @@
+# Vendored from github.com/anthropics/claude-plugins-community (html-plan/skills/html-plan).
+# Do not edit by hand, except the one local patch below.
+# Pin: f60f0454df3045f724c43c6346ec80bdcc3472b2 (2026-10-05, html-plan-calmer-style)
+# Marketplace repo LICENSE is Apache-2.0 (copied here as LICENSE).
+# UPSTREAM.plugin.json declares license MIT and author Thariq Shihipar.
+# synced: 2026-10-06T02:22:55Z
+#
+# Local patch, one string, runtime/htmlplan.js only:
+#   toast('Copied — paste it back to Claude')
+#   toast('Copied — paste it back to Pi')
+# The comment placeholder and the Respond-sheet hint still say Claude. Leave them.
+commit: f60f0454df3045f724c43c6346ec80bdcc3472b2
+sha256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  LICENSE
+sha256: ac5dd7da4f7f5233b732c5519e690a272893c6a03f71ca7a3e5c8a3070be4d85  SKILL.md
+sha256: 98e3d3cd311dac9c9dbd8a325260f3e278b88b4895c0dc072d14325ddadcf796  UPSTREAM.plugin.json
+sha256: 472f1a9180d4384a6499eb9991641368d8dfde1083b393d62b64ee81609c138a  examples/scheduled-send.html
+sha256: dfdfd2c79b6c049c788be73076c27b3bfbd8b1e220ef75e4c0413ffe872de8ca  references/blocks.md
+sha256: f16d2c6aa08e5f275bceee96e38ec38f05dd0add91c4bb6636e8a0a8a4836a9e  runtime/htmlplan.css
+sha256: 0110f847c2e41a9185a84bb727c89701bc1d79b0fdbe2337ac94694804225e2f  runtime/htmlplan.js
+sha256: 88ca711cfc4a3c37c9155357487763f75aa8a9cf1ebc789dfefe1542a38944df  runtime/pack.mjs
