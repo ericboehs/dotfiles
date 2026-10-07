@@ -864,7 +864,7 @@ export default function (pi: ExtensionAPI) {
 		cancelDigs();
 		ctxRef = undefined;
 	});
-	// watch-slack holds its digests during a live meeting; it asks when it starts.
+	// watch.ts holds its digests during a live meeting; it asks when it starts.
 	pi.events.on("meeting:query", () => {
 		if (st && !st.replay && st.phase === "live") pi.events.emit("meeting:state", { active: true, title: st.title });
 	});
