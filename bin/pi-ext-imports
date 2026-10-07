@@ -136,7 +136,9 @@ function ignoreRule(path) {
 	try {
 		// check-ignore -v prints "<file>:<line>:<pattern>\t<path>"; the path is
 		// already in the message, so keep only the rule that did the ignoring.
-		return git(["check-ignore", "-v", "--", path], repoRoot).trim().split("\t")[0];
+		const rule = git(["check-ignore", "-v", "--", path], repoRoot).trim().split("\t")[0];
+		// -v also reports a matching "!pattern", which un-ignores: merely untracked.
+		return /^[^:]*:\d+:!/.test(rule) ? undefined : rule;
 	} catch {
 		return undefined; // not ignored; check-ignore exits 1
 	}
