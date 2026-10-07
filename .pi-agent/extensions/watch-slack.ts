@@ -27,6 +27,9 @@
  * A small model (meeting.ts DEFAULT_MODELS) sorts each new message into
  * needs / context / drop and writes an 8-word "why"; code decides the rest.
  * DMs, @-mentions, bot-feed asks and exact replies on an open wait always need you.
+ * Work workspaces (dsva) go only to the work scout (VA Copilot's Claude Haiku 5.5):
+ * one route per call, never the default scout, rules when it fails. Each call
+ * stays under PROMPT_MAX_TOKENS by trimming the batch.
  *
  * Output:
  *   widget above the editor   the top 3 "needs you" items. An item clears when slk
@@ -43,6 +46,7 @@
  * In-session only: no launchd, and nothing keeps running after the session ends.
  *
  * Env: PI_WATCH_SLACK_WORKSPACES=oddball,dsva,boehs  PI_WATCH_SLACK_MODEL=provider/id[,…]
+ *      PI_WATCH_SLACK_WORK_WORKSPACES=dsva  PI_WATCH_SLACK_WORK_MODEL=github-copilot/claude-haiku-5.5[,…]
  *      PI_WATCH_SLACK_REASONING=low  PI_WATCH_SLACK_ME="First Last"  PI_WATCH_SLACK_DIR
  *      PI_WATCH_SLACK_DAILY_DIR (falls back to PI_MEETING_DAILY_DIR; "" disables the note)
  *      PI_WATCH_SLACK_HOURS=7-18 (work hours; slower polls outside them and on weekends)
@@ -66,6 +70,16 @@ export const WORKSPACES = (process.env.PI_WATCH_SLACK_WORKSPACES || "oddball,dsv
 	.filter(Boolean);
 export const FEED_CHANNEL = "C0C6HKPMFCG";
 export const FEED_WS = "oddball";
+/** Workspaces whose text goes only to WORK_MODELS, never the default scout. */
+export const WORK_WORKSPACES = (process.env.PI_WATCH_SLACK_WORK_WORKSPACES ?? "dsva")
+	.split(",")
+	.map((s) => s.trim())
+	.filter(Boolean);
+const WORK_MODELS = (process.env.PI_WATCH_SLACK_WORK_MODEL || "github-copilot/claude-haiku-5.5").split(/[\s,]+/).filter((x) => x.includes("/"));
+/** VA Copilot caps prompts at 100k tokens; each scout call stays well under, by a conservative estimate. */
+export const PROMPT_MAX_TOKENS = 60_000;
+/** The newest open waits a scout call sees; older ones still close by rule. */
+export const WAITS_SHOWN = 40;
 const DATA_DIR = process.env.PI_WATCH_SLACK_DIR || path.join(os.homedir(), ".local/share/watch-slack");
 const DAILY_DIR =
 	process.env.PI_WATCH_SLACK_DAILY_DIR ?? process.env.PI_MEETING_DAILY_DIR ?? path.join(os.homedir(), "Documents/Wiki/daily");
@@ -655,6 +669,42 @@ const KIND_LABEL: Record<Kind, string> = {
 	"feed-reply": "bot-feed thread reply",
 };
 
+/** Which scout may see a workspace's text. */
+export type Route = "work" | "personal";
+export const ROUTES: readonly Route[] = ["work", "personal"];
+export const routeOf = (workspace: string, work: readonly string[] = WORK_WORKSPACES): Route => (work.includes(workspace) ? "work" : "personal");
+
+/**
+ * The open waits one route's scout may see: never a conversation from the other
+ * route. Note waits have no conversation and go to both. Newest WAITS_SHOWN only.
+ */
+export function waitsFor(route: Route, waits: WaitItem[], work: readonly string[] = WORK_WORKSPACES): WaitItem[] {
+	return waits.filter((w) => w.state === "open" && (!w.where || routeOf(w.where.workspace, work) === route)).slice(-WAITS_SHOWN);
+}
+
+/** About 3 characters a token: high for English prose, so the cap holds for links, code and non-Latin text. */
+export const estTokens = (text: string) => Math.ceil(text.length / 3);
+
+/** The triage prompt, with the batch trimmed from the end until it fits; the rest waits for the next call. */
+export function fitTriage(
+	system: string,
+	items: { id: string; item: Item }[],
+	mine: { id: string; post: MyPost }[],
+	waits: WaitItem[],
+	now: Date,
+	max = PROMPT_MAX_TOKENS,
+): { user: string; ids: { id: string; item: Item }[]; pids: { id: string; post: MyPost }[] } {
+	const ids = items.slice();
+	const pids = mine.slice();
+	let user = buildTriageUser(ids, pids, waits, now);
+	while (estTokens(system) + estTokens(user) > max && ids.length + pids.length > 1) {
+		if (pids.length >= ids.length) pids.pop();
+		else ids.pop();
+		user = buildTriageUser(ids, pids, waits, now);
+	}
+	return { user, ids, pids };
+}
+
 export function buildTriageUser(items: { id: string; item: Item }[], mine: { id: string; post: MyPost }[], waits: WaitItem[], now: Date): string {
 	const out = [`Now: ${dayKey(now)} ${clock24(now)}`, "Open waits:"];
 	const open = waits.filter((w) => w.state === "open");
@@ -969,7 +1019,7 @@ type Watch = {
 	loaded: Set<string>;
 	pending: Item[];
 	pendingMine: MyPost[];
-	scoutFails: number;
+	scoutFails: Record<Route, number>;
 	noteMtime: number;
 	noteCache: Record<string, WaitGuess | null>;
 	noteRetryAt: number;
@@ -982,7 +1032,7 @@ type Watch = {
 	expanded: boolean;
 	started: boolean;
 	startedAt: number;
-	models: Model<Api>[];
+	scouts: Record<Route, Model<Api>[]>; // work text never reaches the personal list
 	modelLabel: string;
 	system: string;
 	me: string;
@@ -1194,11 +1244,17 @@ export default function (pi: ExtensionAPI) {
 		const holder = lockHolder();
 		if (holder && !force) return notify(`Another pi session (pid ${holder}) is watching Slack. /watch-slack start --force takes over.`, "warning");
 		const registry = ctx.modelRegistry;
+		const resolve = (list: string[]) =>
+			list
+				.map((spec) => registry.find(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1)))
+				.filter((m): m is Model<Api> => !!m && registry.hasConfiguredAuth(m));
 		const specs = (process.env.PI_WATCH_SLACK_MODEL || "").split(/[\s,]+/).filter((x) => x.includes("/"));
-		const models = (specs.length ? specs : DEFAULT_MODELS)
-			.map((spec) => registry.find(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1)))
-			.filter((m): m is Model<Api> => !!m && registry.hasConfiguredAuth(m));
+		const models = resolve(specs.length ? specs : DEFAULT_MODELS);
 		if (!models.length) notify(`No scout model with credentials (${(specs.length ? specs : DEFAULT_MODELS).join(", ")}); sorting by rule only`, "warning");
+		const workModels = WORK_WORKSPACES.length ? resolve(WORK_MODELS) : [];
+		if (WORK_WORKSPACES.length && !workModels.length)
+			notify(`No work scout with credentials (${WORK_MODELS.join(", ")}); ${WORK_WORKSPACES.join(", ")} sorted by rule only`, "warning");
+		const names = (ms: Model<Api>[]) => ms.map((m) => m.name || m.id).join(" → ") || "rules only";
 		const me = process.env.PI_WATCH_SLACK_ME || process.env.PI_MEETING_ME || (await run("git", ["config", "--global", "--includes", "user.name"], 3000)).out.trim();
 		let about = "";
 		try {
@@ -1237,7 +1293,7 @@ export default function (pi: ExtensionAPI) {
 			loaded: new Set(),
 			pending: [],
 			pendingMine: [],
-			scoutFails: 0,
+			scoutFails: { work: 0, personal: 0 },
 			noteMtime: 0,
 			noteCache: state.noteCache ?? {},
 			noteRetryAt: 0,
@@ -1250,8 +1306,8 @@ export default function (pi: ExtensionAPI) {
 			expanded: false,
 			started: false,
 			startedAt: Date.now(),
-			models,
-			modelLabel: models.map((m) => m.name || m.id).join(" → ") || "rules only",
+			scouts: { work: workModels, personal: models },
+			modelLabel: WORK_WORKSPACES.length ? `${WORK_WORKSPACES.join(", ")}: ${names(workModels)} · rest: ${names(models)}` : names(models),
 			system: buildTriageSystem(me, about),
 			me,
 			meTokens: nameTokens(me),
@@ -1408,9 +1464,9 @@ export default function (pi: ExtensionAPI) {
 		const todos = noteTodos(fs.readFileSync(file, "utf8"));
 		const uncached = todos.filter((t) => !(t in w.noteCache));
 		const fresh = uncached.slice(0, 25);
-		if (fresh.length && w.models.length) {
+		if (fresh.length && w.scouts.personal.length) {
 			const ids = fresh.map((text, k) => ({ id: `t${k + 1}`, text }));
-			const reply = await callScout(w, buildNoteSystem(w.me), buildNoteUser(ids));
+			const reply = await callScout(w, w.scouts.personal, buildNoteSystem(w.me), buildNoteUser(ids));
 			if (s !== w) return;
 			const parsed = reply ? parseTriage(reply) : null;
 			if (!parsed) {
@@ -1425,7 +1481,7 @@ export default function (pi: ExtensionAPI) {
 			w.dirty = true;
 		}
 		// More TODOs than one call takes: leave the mtime stale so the next loop does the rest.
-		w.noteMtime = w.models.length && uncached.length > fresh.length ? 0 : mtime;
+		w.noteMtime = w.scouts.personal.length && uncached.length > fresh.length ? 0 : mtime;
 		// Note waits follow the note: checking off or deleting the TODO takes its open wait with it.
 		const live = new Set<string>();
 		for (const t of todos) {
@@ -1776,11 +1832,11 @@ export default function (pi: ExtensionAPI) {
 
 	// ── scout ──
 
-	async function callScout(w: Watch, system: string, user: string, maxTokens = 4000): Promise<string | null> {
+	async function callScout(w: Watch, models: Model<Api>[], system: string, user: string, maxTokens = 4000): Promise<string | null> {
 		const registry = ctxRef?.modelRegistry;
 		if (!registry) return null;
 		const errors: string[] = [];
-		for (const model of w.models) {
+		for (const model of models) {
 			const stream = registry.streamSimple(
 				model,
 				{ systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
@@ -1811,9 +1867,13 @@ export default function (pi: ExtensionAPI) {
 		return null;
 	}
 
-	async function triage(w: Watch) {
-		const batch = w.pending.slice(0, TRIAGE_BATCH);
-		const mineBatch = w.pendingMine.slice(0, 20);
+	const pendingFor = (w: Watch, route: Route) =>
+		w.pending.filter((i) => routeOf(i.workspace) === route).length + w.pendingMine.filter((p) => routeOf(p.workspace) === route).length;
+
+	/** One scout call for one route: work text only ever goes to the work scout, or to the rules. */
+	async function triage(w: Watch, route: Route) {
+		const batch = w.pending.filter((i) => routeOf(i.workspace) === route).slice(0, TRIAGE_BATCH);
+		const mineBatch = w.pendingMine.filter((p) => routeOf(p.workspace) === route).slice(0, 20);
 		if (!batch.length && !mineBatch.length) return;
 		// Exact wait replies are code's call, not the model's.
 		for (const it of batch) {
@@ -1825,20 +1885,26 @@ export default function (pi: ExtensionAPI) {
 			it.forced = true;
 			closeWait(w, hit, it);
 		}
-		const ids = batch.map((item, k) => ({ id: `m${k + 1}`, item }));
-		const pids = mineBatch.map((post, k) => ({ id: `p${k + 1}`, post }));
+		let ids = batch.map((item, k) => ({ id: `m${k + 1}`, item }));
+		let pids = mineBatch.map((post, k) => ({ id: `p${k + 1}`, post }));
+		const shown = waitsFor(route, w.waits);
+		const models = w.scouts[route];
 		let parsed: ReturnType<typeof parseTriage> = null;
-		if (w.models.length) {
-			const reply = await callScout(w, w.system, buildTriageUser(ids, pids, w.waits, new Date()));
+		if (models.length) {
+			const fit = fitTriage(w.system, ids, pids, shown, new Date());
+			ids = fit.ids;
+			pids = fit.pids;
+			const reply = await callScout(w, models, w.system, fit.user);
 			if (s !== w) return;
 			parsed = reply ? parseTriage(reply) : null;
 			if (!parsed && reply !== null) w.error = clip(`scout: ${reply.trim() ? `unreadable reply ${reply.replace(/\s+/g, " ").slice(0, 40)}` : "empty reply"}`, 90);
 			// Retry a failed batch on the next loops; fall back to the rules after three tries.
-			if (!parsed && ++w.scoutFails < 3) return;
+			if (!parsed && ++w.scoutFails[route] < 3) return;
 		}
-		w.scoutFails = 0;
-		w.pending.splice(0, batch.length);
-		w.pendingMine.splice(0, mineBatch.length);
+		w.scoutFails[route] = 0;
+		const taken = new Set<unknown>([...ids.map((x) => x.item), ...pids.map((x) => x.post)]);
+		w.pending = w.pending.filter((i) => !taken.has(i));
+		w.pendingMine = w.pendingMine.filter((p) => !taken.has(p));
 		const done: Item[] = [];
 		for (const { id, item } of ids) {
 			const t = parsed?.items.find((x) => x.id === id);
@@ -1849,7 +1915,7 @@ export default function (pi: ExtensionAPI) {
 				...(t?.due ? { due: t.due } : {}),
 			};
 			if (t?.closesWait && !next.closesWait) {
-				const wait = w.waits.find((x) => x.id === t.closesWait && x.state === "open" && !x.maybeBy);
+				const wait = shown.find((x) => x.id === t.closesWait && x.state === "open" && !x.maybeBy);
 				if (wait) {
 					next.maybeWait = wait.id;
 					next.bucket = "needs";
@@ -1957,12 +2023,14 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (s !== w) return;
 			await refreshNote(w);
-			for (let k = 0; k < 3 && s === w && (w.pending.length || w.pendingMine.length); k++) {
-				w.busy = true;
-				render();
-				const before = w.pending.length + w.pendingMine.length;
-				await triage(w);
-				if (w.pending.length + w.pendingMine.length >= before) break; // scout failed; next loop
+			for (const route of ROUTES) {
+				for (let k = 0; k < 3 && s === w && pendingFor(w, route); k++) {
+					w.busy = true;
+					render();
+					const before = pendingFor(w, route);
+					await triage(w, route);
+					if (pendingFor(w, route) >= before) break; // scout failed; next loop
+				}
 			}
 			if (s !== w) return;
 			update(w, applyClearing(w.items.values(), w.unread, w.loaded, [...w.mine, ...w.feedMine]));

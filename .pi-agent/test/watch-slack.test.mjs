@@ -25,8 +25,11 @@ import watchSlack, {
 	clip,
 	DIGEST_HEAD,
 	digestText,
+	estTokens,
 	FEED_CHANNEL,
+	FEED_WS,
 	feedAddress,
+	fitTriage,
 	isMine,
 	itemKey,
 	jsonValues,
@@ -49,17 +52,23 @@ import watchSlack, {
 	plainText,
 	POLL,
 	pollInterval,
+	PROMPT_MAX_TOKENS,
 	recapBlock,
 	recapMarker,
 	resolveIds,
+	ROUTES,
+	routeOf,
 	sameWho,
 	sinceText,
 	slackWhere,
 	tsAfter,
 	unreadKeys,
 	usableWho,
+	WAITS_SHOWN,
 	waitSig,
+	waitsFor,
 	widgetLines,
+	WORK_WORKSPACES,
 } from "../extensions/watch-slack.ts";
 
 const ME = ["eric", "boehs"];
@@ -351,6 +360,58 @@ test("the scout is told Slack text is untrusted and kept away from personal data
 	assert.match(user, /p1 · mine · dsva DM with Lindsey Hattamer/);
 	assert.match(user, /> @someone can you send/);
 	assert.match(user, /<items>[\s\S]*<\/items>$/);
+});
+
+test("dsva text routes only to the work scout; the rest to the default scout", () => {
+	assert.deepEqual(WORK_WORKSPACES, ["dsva"]);
+	assert.equal(routeOf("dsva"), "work");
+	assert.equal(routeOf("oddball"), "personal");
+	assert.equal(routeOf("boehs"), "personal");
+	assert.equal(routeOf(FEED_WS), "personal", "the bot feed lives in oddball");
+	assert.equal(routeOf("oddball", ["dsva", "oddball"]), "work");
+	assert.deepEqual(ROUTES, ["work", "personal"]);
+});
+
+test("a scout sees only its own route's waits; note waits go to both", () => {
+	const waits = [
+		wait({ id: "W1", where: { workspace: "dsva", channel: "D1" } }),
+		wait({ id: "W2", where: { workspace: "boehs", channel: "D2" } }),
+		wait({ id: "W3", source: "note" }),
+		wait({ id: "W4", state: "closed", where: { workspace: "dsva", channel: "D3" } }),
+	];
+	assert.deepEqual(waitsFor("work", waits).map((w) => w.id), ["W1", "W3"]);
+	assert.deepEqual(waitsFor("personal", waits).map((w) => w.id), ["W2", "W3"]);
+	const many = Array.from({ length: WAITS_SHOWN + 5 }, (_, k) => wait({ id: `W${k + 1}`, source: "note" }));
+	const shown = waitsFor("work", many);
+	assert.equal(shown.length, WAITS_SHOWN);
+	assert.equal(shown[0].id, "W6", "the newest waits");
+});
+
+test("the triage prompt is trimmed to fit the token cap; small batches pass whole", () => {
+	assert.equal(PROMPT_MAX_TOKENS, 60_000);
+	assert.equal(estTokens("x".repeat(300)), 100);
+	const now = new Date(2026, 9, 6, 13, 10);
+	const items = Array.from({ length: 30 }, (_, k) => ({ id: `m${k + 1}`, item: item({ ts: `17913023${String(k).padStart(2, "0")}.000100`, text: "y".repeat(500), parent: "z".repeat(160) }) }));
+	const mine = Array.from({ length: 20 }, (_, k) => ({ id: `p${k + 1}`, post: { workspace: "dsva", channel: "D1", ts: `17913024${String(k).padStart(2, "0")}.000000`, text: "q".repeat(500), where: "dsva DM" } }));
+	const whole = fitTriage("sys", items, mine, [wait()], now);
+	assert.equal(whole.ids.length, 30);
+	assert.equal(whole.pids.length, 20);
+	assert.equal(whole.user, buildTriageUser(items, mine, [wait()], now));
+	assert.ok(estTokens(whole.user) < 12_000, `a full batch is ~${estTokens(whole.user)} tokens`);
+
+	const fit = fitTriage("sys", items, mine, [wait()], now, 3_000);
+	assert.ok(estTokens("sys") + estTokens(fit.user) <= 3_000);
+	assert.ok(fit.ids.length >= 1 && fit.ids.length < 30);
+	assert.ok(fit.pids.length < 20);
+	assert.deepEqual(
+		fit.ids.map((x) => x.id),
+		items.slice(0, fit.ids.length).map((x) => x.id),
+		"keeps the oldest items, in order",
+	);
+	assert.match(fit.user, /W1 Lindsey Hattamer/);
+
+	const one = fitTriage("s".repeat(9_000), items.slice(0, 1), [], [], now, 10);
+	assert.equal(one.ids.length, 1, "never trims below one item");
 });
 
 // ── daily note ──

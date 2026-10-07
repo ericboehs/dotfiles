@@ -274,8 +274,13 @@ runs `slk unread`, `slk activity` and `slk sent --mine` per workspace
 through `eert-bot-feed`, at most once a minute. Nothing it runs posts, reacts or
 marks anything read. New items go to a small model (`PI_WATCH_SLACK_MODEL`,
 default Opencode Go's DeepSeek V4.1 Flash) that sorts each into needs you,
-context or noise with a short why. Code decides the rest: DMs, @-mentions and
-bot-feed asks addressed to you always need you.
+context or noise with a short why. Work workspaces (`PI_WATCH_SLACK_WORK_WORKSPACES`,
+default `dsva`) go only to the work scout (`PI_WATCH_SLACK_WORK_MODEL`, default
+VA Copilot's `github-copilot/claude-haiku-5.5`). Their text, and waits from
+their conversations, never reach the default scout. When the work scout fails,
+code rules sort them. Each scout call stays under about 60k tokens (VA Copilot
+caps prompts at 100k); a bigger batch waits for the next call. Code decides the
+rest: DMs, @-mentions and bot-feed asks addressed to you always need you.
 
 Waits come from three places:
 
