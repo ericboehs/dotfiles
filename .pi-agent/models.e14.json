@@ -460,6 +460,52 @@
               }
             }
           }
+        },
+        {
+          "id": "claude-haiku-5.5",
+          "name": "Claude Haiku 5.5",
+          "api": "anthropic-messages",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 100000,
+          "maxTokens": 32000,
+          "cost": {
+            "input": 0.11,
+            "output": 0.55,
+            "cacheRead": 0.011,
+            "cacheWrite": 0.1375
+          },
+          "headers": {
+            "User-Agent": "copilot/1.0.80 (client/github/cli darwin v24.18.1) term/tmux",
+            "Copilot-Integration-Id": "copilot-developer-cli"
+          },
+          "compat": {
+            "supportsMidConvoSystemMessages": true,
+            "forceAdaptiveThinking": true,
+            "supportsTemperature": false
+          },
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 2000,
+                "maxHeight": 2000,
+                "maxBytes": 4718592,
+                "jpegQuality": 80
+              }
+            }
+          }
         }
       ],
       "modelOverrides": {
