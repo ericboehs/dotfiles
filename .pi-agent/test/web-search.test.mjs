@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cooloffForStatus, costLabel, parseBraveMonthly, quotaLeft } from "../extensions/web-providers/search.ts";
+import { agentCost, cooloffForStatus, costLabel, formatUsd, parseBraveMonthly, quotaLeft } from "../extensions/web-providers/search.ts";
 
 test("reads the monthly half of Brave's paired remaining and limit headers", () => {
 	assert.equal(parseBraveMonthly("0, 1985"), 1985);
@@ -34,6 +34,33 @@ test("a live count replaces the static allowance in the /web test cost cell", ()
 	// No headers (failed probe, or a backend that never reports) keeps the plan.
 	assert.equal(costLabel({ backend: "brave" }), "1 req · 2,000 free/mo");
 	assert.equal(costLabel({ backend: "perplexity" }), "~$0.004 · no free tier");
+});
+
+test("a reported cost replaces the estimate, and the allowance half survives", () => {
+	assert.equal(costLabel({ backend: "perplexity", costUsd: 0.00105 }), "$0.00105 · no free tier");
+	// A label with no allowance half stays one part, live cost or not.
+	assert.equal(costLabel({ backend: "codex" }), "subscription tokens");
+	assert.equal(costLabel({ backend: "codex", costUsd: 0.01 }), "$0.01");
+});
+
+test("reads the Agent API bill from usage.cost, in USD only", () => {
+	// Trimmed from a real fast-preset response.
+	assert.equal(agentCost({ cost: { currency: "USD", tool_calls_cost: 0.001, total_cost: 0.00105 } }), 0.00105);
+	assert.equal(agentCost({ cost: { total_cost: 0.002 } }), 0.002); // no currency: USD is the API's only one
+	// The docs show usage with no cost block at all: unknown, never a guessed 0.
+	assert.equal(agentCost({ input_tokens: 150, output_tokens: 320 }), undefined);
+	assert.equal(agentCost(undefined), undefined);
+	assert.equal(agentCost({ cost: { total_cost: "0.001" } }), undefined);
+	assert.equal(agentCost({ cost: { total_cost: Number.NaN } }), undefined);
+	assert.equal(agentCost({ cost: { currency: "EUR", total_cost: 0.001 } }), undefined);
+	assert.equal(agentCost({ cost: { total_cost: 0 } }), 0); // a free call is a real 0
+});
+
+test("formats a bill to Perplexity's five places, without float noise", () => {
+	assert.equal(formatUsd(0.00105), "$0.00105");
+	assert.equal(formatUsd(0.018930000001), "$0.01893");
+	assert.equal(formatUsd(0.0025), "$0.0025");
+	assert.equal(formatUsd(0), "$0");
 });
 
 const DAY = 24 * 60 * 60 * 1000;

@@ -40,6 +40,14 @@ function stubFetch(fail = {}) {
 		"api.search.brave.com": braveOk,
 		"api.tavily.com": () => Response.json({ results: [{ ...hit, content: "Follow redirects with -L." }] }),
 		"api.exa.ai": () => Response.json({ results: [{ ...hit, highlights: ["Follow redirects with -L."] }] }),
+		"api.perplexity.ai": () =>
+			Response.json({
+				output: [
+					{ type: "search_results", results: [{ url: hit.url }] },
+					{ type: "message", content: [{ type: "output_text", text: "Use `curl -L`." }] },
+				],
+				usage: { cost: { currency: "USD", total_cost: 0.00105 } },
+			}),
 	};
 	globalThis.fetch = async (url) => {
 		const host = new URL(String(url)).host;
@@ -86,4 +94,11 @@ test("a hard search that fell through says the deep tier did not answer", async 
 	assert.equal(out.backend, "brave");
 	// Failures and quota share the line, failures first: they explain the "via".
 	assert.match(out.text, /\[via brave · perplexity failed · 1,930 of 2,000 left this month\]$/);
+});
+
+test("a deep-tier answer carries what Perplexity billed for it", async () => {
+	stubFetch();
+	const out = await runSearchChain("curl follow redirects", { hard: true }, deps);
+	assert.equal(out.backend, "perplexity");
+	assert.match(out.text, /\n\n---\n\[via perplexity · \$0\.00105\]$/);
 });

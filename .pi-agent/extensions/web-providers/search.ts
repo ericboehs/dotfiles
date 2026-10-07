@@ -39,6 +39,8 @@ export interface BackendResult {
   remaining?: number;
   /** The monthly allowance `remaining` counts down from, when it is reported. */
   limit?: number;
+  /** What this call billed, in USD, when the backend says (Perplexity's `usage.cost`). */
+  costUsd?: number;
 }
 
 export interface SearchOptions {
@@ -515,10 +517,32 @@ async function perplexitySearch(
   // for the deep tier specifically. Cool-off 0 — pass to the next backend for
   // this call, but do not bench a paid key over one thin response.
   if (!answer && !sources.length) throw new BackendError("no answer and no search results", 0);
+  const costUsd = agentCost(data?.usage);
   if (opts.linksOnly) {
-    return { hits: sources.map((url) => ({ title: url, url })), answer, sources };
+    return { hits: sources.map((url) => ({ title: url, url })), answer, sources, costUsd };
   }
-  return { hits: [], answer: answer || undefined, sources };
+  return { hits: [], answer: answer || undefined, sources, costUsd };
+}
+
+/**
+ * The bill for one Agent API response, from `usage.cost.total_cost`. Measured
+ * rather than estimated because the estimate went stale without notice: the
+ * `fast` preset moved to gpt-6-luna and search_web dropped to $0.001, so a
+ * call computed at ~$0.004 billed $0.00105. The docs also show responses
+ * whose `usage` has no `cost` at all — undefined then, never a guessed 0. A
+ * non-USD bill is dropped rather than shown with a dollar sign it never had.
+ */
+export function agentCost(usage: any): number | undefined {
+  const cost = usage?.cost;
+  const total = cost?.total_cost;
+  if (typeof total !== "number" || !Number.isFinite(total)) return undefined;
+  if ((cost.currency ?? "USD") !== "USD") return undefined;
+  return total;
+}
+
+/** "$0.00105" — five places, which is what Perplexity bills to; no trailing zeros. */
+export function formatUsd(n: number): string {
+  return `$${Number(n.toFixed(5))}`;
 }
 
 /* --------------------------------------------------------------- render */
@@ -621,17 +645,19 @@ function deepTier(cfg: WebConfig): SearchBackend | undefined {
 }
 
 /**
- * The last line of every result: who answered, who failed first, and Brave's
- * quota when it reports one — `[via exa · tavily failed]`. Failures are
- * listed bare, in the order tried; the reasons stay in `details.tried`, since
- * the model needs to know a failover happened, not why. The one that matters
- * most is `hard`: `[via tavily · perplexity failed]` says the deep tier was
- * asked for and did not answer, which the text alone would hide.
+ * The last line of every result: who answered, who failed first, and what
+ * the call cost when the backend reports it — Brave's quota, Perplexity's
+ * bill: `[via exa · tavily failed]`, `[via perplexity · $0.00105]`. Failures
+ * are listed bare, in the order tried; the reasons stay in `details.tried`,
+ * since the model needs to know a failover happened, not why. The one that
+ * matters most is `hard`: `[via tavily · perplexity failed]` says the deep
+ * tier was asked for and did not answer, which the text alone would hide.
  */
 function chainFooter(backend: SearchBackend, failed: readonly SearchBackend[], result: BackendResult): string {
   const parts = [`via ${backend}`];
   if (failed.length) parts.push(`${failed.join(", ")} failed`);
   if (result.remaining !== undefined) parts.push(`${quotaLeft(result.remaining, result.limit)} this month`);
+  if (result.costUsd !== undefined) parts.push(formatUsd(result.costUsd));
   return `[${parts.join(" · ")}]`;
 }
 
@@ -747,15 +773,19 @@ export function quotaLeft(remaining: number, limit?: number): string {
 }
 
 /**
- * The /web test cost cell. Each label is `<per call> · <free allowance>`; when
- * the probe came back with a live count, that replaces the allowance half, so
- * Brave reads "1 req · 1,930 of 2,000 left" rather than the plan's ceiling. A
- * failed probe has no headers to read and keeps the static label.
+ * The /web test cost cell. Each label is `<per call> · <free allowance>`, and
+ * a probe that came back with live numbers swaps them in: a reported cost
+ * replaces the per-call half, a live count replaces the allowance half. So
+ * Brave reads "1 req · 1,930 of 2,000 left" and Perplexity "$0.00105 · no free
+ * tier" rather than the plan's ceiling and a stale estimate. A failed probe
+ * has nothing to read and keeps the static label.
  */
-export function costLabel(r: Pick<ProbeResult, "backend" | "remaining" | "limit">): string {
+export function costLabel(r: Pick<ProbeResult, "backend" | "remaining" | "limit" | "costUsd">): string {
   const label = COST_PER_CALL[r.backend];
-  if (r.remaining === undefined) return label;
-  return `${label.split(" · ")[0]} · ${quotaLeft(r.remaining, r.limit)}`;
+  const [perCall = label, allowance] = label.split(" · ");
+  const call = r.costUsd === undefined ? perCall : formatUsd(r.costUsd);
+  const left = r.remaining === undefined ? allowance : quotaLeft(r.remaining, r.limit);
+  return left === undefined ? call : `${call} · ${left}`;
 }
 
 /**
@@ -786,6 +816,8 @@ export interface ProbeResult {
   /** Live monthly quota, for backends that report it (Brave). */
   remaining?: number;
   limit?: number;
+  /** What the probe call billed, for backends that report it (Perplexity). */
+  costUsd?: number;
 }
 
 /**
@@ -834,6 +866,7 @@ export async function probeBackends(
         hits: result.hits.length || (result.answer ? 1 : 0),
         remaining: result.remaining,
         limit: result.limit,
+        costUsd: result.costUsd,
       });
     } catch (e) {
       if (signal?.aborted) throw e;

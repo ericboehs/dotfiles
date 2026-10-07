@@ -434,6 +434,14 @@ the operator-owns-order invariant holds. Brave adds its monthly quota from
 `x-ratelimit-remaining`/`-limit`, the only backend that reports one on
 success; `/web test` shows the same live count in its cost column.
 
+Perplexity adds what the call billed, read from the response's
+`usage.cost.total_cost` — `[via perplexity · $0.00105]` — and `/web test`
+puts the measured figure in place of the estimate. Measured, because the
+estimate went stale silently: the `fast` preset moved to `gpt-6-luna` and
+`search_web` dropped to $0.001, so a call priced at ~$0.004 on paper billed
+$0.00105–$0.00119 in practice. A response whose `usage` has no `cost` block
+shows nothing rather than a guessed figure.
+
 Backends that errored on the way are listed too, in the order tried, so a
 failover shows in the text and not only in `details.tried`:
 
