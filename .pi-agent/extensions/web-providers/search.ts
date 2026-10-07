@@ -620,6 +620,21 @@ function deepTier(cfg: WebConfig): SearchBackend | undefined {
   return DEEP_BACKEND;
 }
 
+/**
+ * The last line of every result: who answered, who failed first, and Brave's
+ * quota when it reports one — `[via exa · tavily failed]`. Failures are
+ * listed bare, in the order tried; the reasons stay in `details.tried`, since
+ * the model needs to know a failover happened, not why. The one that matters
+ * most is `hard`: `[via tavily · perplexity failed]` says the deep tier was
+ * asked for and did not answer, which the text alone would hide.
+ */
+function chainFooter(backend: SearchBackend, failed: readonly SearchBackend[], result: BackendResult): string {
+  const parts = [`via ${backend}`];
+  if (failed.length) parts.push(`${failed.join(", ")} failed`);
+  if (result.remaining !== undefined) parts.push(`${quotaLeft(result.remaining, result.limit)} this month`);
+  return `[${parts.join(" · ")}]`;
+}
+
 export interface ChainOutcome {
   text: string;
   backend: SearchBackend;
@@ -647,6 +662,10 @@ export async function runSearchChain(
   const deep = opts.hard ? deepTier(cfg) : undefined;
   const ordered = deep ? [deep, ...chain.filter((b) => b !== deep)] : chain;
   const tried: string[] = [];
+  // Errors on *this* call, for the footer. Narrower than `tried` on purpose: a
+  // missing key is standing config (`/web` reports it) and would repeat on
+  // every result, and a benched backend never got here — it failed earlier.
+  const failed: SearchBackend[] = [];
   const linksOnly = opts.linksOnly === true;
 
   if (!ordered.length) {
@@ -672,10 +691,8 @@ export async function runSearchChain(
       // differs by backend (ranked excerpts vs. written prose) and so does how
       // far to trust it, which the model cannot otherwise tell from the text.
       // It reports; it does not invite a choice — there is no parameter that
-      // could act on it. Brave also adds its quota, the only backend that
-      // reports one on success; Tavily/Exa/Firecrawl only say when it's gone.
-      const left = result.remaining === undefined ? "" : ` · ${quotaLeft(result.remaining, result.limit)} this month`;
-      const text = `${render(result, cfg.format, cfg.excerpts, linksOnly)}\n\n---\n[via ${backend}${left}]`;
+      // could act on it. What goes on the line is chainFooter's business.
+      const text = `${render(result, cfg.format, cfg.excerpts, linksOnly)}\n\n---\n${chainFooter(backend, failed, result)}`;
       return { text, backend, tried, excerpts: cfg.excerpts, searchedAs: result.searchedAs };
     } catch (e) {
       const err = e as Error;
@@ -683,6 +700,7 @@ export async function runSearchChain(
       const cooloff = e instanceof BackendError ? e.cooloffMs : TRANSIENT_COOLOFF_MS;
       if (cooloff > 0) await markSkip(backend, cooloff);
       tried.push(`${backend}: ${err.message}`);
+      failed.push(backend);
     }
   }
 

@@ -434,6 +434,22 @@ the operator-owns-order invariant holds. Brave adds its monthly quota from
 `x-ratelimit-remaining`/`-limit`, the only backend that reports one on
 success; `/web test` shows the same live count in its cost column.
 
+Backends that errored on the way are listed too, in the order tried, so a
+failover shows in the text and not only in `details.tried`:
+
+```
+[via exa · brave, tavily failed]
+[via brave · perplexity failed · 1,929 of 2,000 left this month]
+```
+
+The second is the one worth having: a `hard` search that Perplexity did not
+answer otherwise reads like an ordinary result. Only the names are listed —
+the model needs to know a failover happened, not why; the reasons stay in
+`details.tried`. Two things are deliberately left off. A missing key is
+standing config that `/web` already reports, and would repeat on every
+result. A backend that is cooling off never ran: it failed on an earlier
+query, not this one.
+
 ## Keys
 
 Resolved from the environment first, then `fnox get <NAME>` (macOS Keychain),
