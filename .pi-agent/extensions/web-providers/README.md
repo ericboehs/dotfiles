@@ -81,12 +81,11 @@ Caveat: n=3 and n=6, one afternoon. `/web search order …` reverts it.
 hard: true  →  perplexity → tavily → exa → brave → firecrawl → codex
 ```
 
-It sits outside the order for one reason: it is the only call here priced per
-token rather than against a monthly pool (~$0.004 at the `fast` preset, against
-Tavily's credit and Exa's $0.007), and a backend that can be fallen into is a
-backend that gets spent on the queries that did not need it. `/web search off
-perplexity` disables it; so does a live cool-off, and both leave the rest of the
-chain untouched.
+It sits outside the order because it is the only backend here with **no free
+monthly allowance** — see [No free tier](#no-free-tier) below — and a backend
+that can be fallen into is a backend that gets spent on the queries that did
+not need it. `/web search off perplexity` disables it; so does a live
+cool-off, and both leave the rest of the chain untouched.
 
 `hard` **reorders, it does not add a failure path.** If Perplexity is spent,
 benched or off, the chain below it runs exactly as it always has — same
@@ -152,14 +151,41 @@ filter adds one.
 
 `COST_PER_CALL` says ~$0.004, computed from Perplexity's published rates:
 1000 input tokens × $0.20/1M, 500 output × $1.20/1M, one `web_search`
-invocation × $0.0025. That is roughly Exa's price, not the order of magnitude
-above it this section originally claimed.
+invocation × $0.0025. That is *below* Exa's $0.007 list price, not the order
+of magnitude above it this section originally claimed — which is exactly why
+list price is the wrong comparison. See the next section.
 
 The old figure came from the leaderboard's "$62.30 per 1k tasks" column, which
 is a different unit again — a benchmark task is many searches behind a
 reasoning model. It was never a per-call price, and reading it as one is the
 single easiest way to mis-plan this tier. Treat the leaderboard as a quality
 ceiling, never as a price list.
+
+### No free tier
+
+Perplexity's API has **no complimentary credits on any plan** — the help
+center says so for the API Platform, and a Pro subscription no longer carries
+the $5/month of API credit that older guides still cite. Every call bills
+from the first one. The other backends do not:
+
+| backend | free each month | ≈ searches | checked |
+|---|---|---|---|
+| tavily | 1,000 credits | 1,000 | docs |
+| exa | $10 of credit | ~1,400 at $0.007 | `costDollars` on a live call |
+| brave | 2,000 requests | 2,000 | `x-ratelimit-limit` on a live call |
+| **perplexity** | **none** | 0 | help center |
+
+So the chain answers roughly 4,400 searches a month before anything bills,
+and the cheap-looking comparison inverts once the allowance is counted. Put
+perplexity second and every Tavily failure that Exa would have answered for
+free costs $0.004 instead. That, not its list price, is what keeps it behind
+`hard`.
+
+Two things moved this table on 2026-10-07 and are worth not re-learning.
+Exa's highlights are **not** billed as page contents: `costDollars` came back
+`0.007`, all of it `search`. And Brave's 2,000 is a **legacy** free plan —
+Brave now offers new accounts $5/month of credit, about 1,000 searches — so a
+re-created `BRAVE_AI_API_KEY` would quietly halve the largest pool here.
 
 ### What it costs when the model asks for it
 

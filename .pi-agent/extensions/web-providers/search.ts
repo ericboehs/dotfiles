@@ -596,9 +596,11 @@ async function callBackend(
 }
 
 /**
- * The deep tier. Kept out of `search.order` on purpose: even at ~$0.004 a call
- * it is the most expensive thing in the chain, and a backend that can be
- * fallen into is one that gets spent on queries that did not need it.
+ * The deep tier. Kept out of `search.order` on purpose, and not for its list
+ * price — ~$0.004 undercuts Exa's $0.007. It is the only backend here with no
+ * free monthly allowance, so in the fallback slot it would bill for searches
+ * that exa and brave cover for nothing. A backend that can be fallen into is
+ * one that gets spent on queries that did not need it.
  */
 const DEEP_BACKEND = "perplexity" as const;
 
@@ -681,16 +683,32 @@ export async function runSearchChain(
  * than measured: only Tavily reports usage, and a diagnostic should not need
  * four different billing endpoints to tell you what it just spent.
  */
+/**
+ * What one call costs, and what each month covers before anything bills — for
+ * the /web test table. The free allowance is the half that decides behaviour:
+ * tavily, exa and brave together cover ~4,400 searches a month at no charge,
+ * so the price that matters for a fallback is "free until spent", not list.
+ *
+ * Checked 2026-10-07, against live headers where the vendor sends them:
+ * - brave: `x-ratelimit-limit: 1, 2000` on a 31-day window. A legacy free
+ *   plan — Brave now offers new accounts $5/mo of credit (~1,000 at $5/1k)
+ *   instead, so a re-created key would land on the smaller allowance.
+ * - exa: `costDollars` was 0.007 for 5 results with highlights, all of it
+ *   search; highlights are not billed as contents. $10/mo free ≈ 1,400.
+ * - tavily: 1,000 credits/mo free, 1 per basic search (docs; no header).
+ * - perplexity: no complimentary API credits on any plan (help center), so
+ *   every call bills from the first one.
+ */
 export const COST_PER_CALL: Record<SearchBackend, string> = {
-  brave: "1 req of 2000/mo",
-  tavily: "1 credit",
-  exa: "1 search (~$0.007)",
+  brave: "1 req · 2,000 free/mo",
+  tavily: "1 credit · 1,000 free/mo",
+  exa: "~$0.007 · $10 free/mo",
   firecrawl: "2 credits",
   codex: "subscription tokens",
   // `fast` on gpt-5.6-luna, at the preset's median 1000 in / 500 out tokens,
   // plus one web_search invocation. Checked against Perplexity's published
   // rates; the Agent API replaced the old per-request Sonar fee this sat on.
-  perplexity: "1 request (~$0.004)",
+  perplexity: "~$0.004 · no free tier",
 };
 
 /**
