@@ -1,0 +1,670 @@
+#!/usr/bin/env swift
+
+// notif-watch — Mac and iPhone notifications as JSON lines, for the pi watcher.
+//
+// Reads two local stores, read-only, with no private frameworks:
+//   Mac     ~/Library/Group Containers/group.com.apple.usernoted/db2/db
+//           SQLite. Each record's data is a binary plist: app, date, req.titl/subt/body/thre.
+//   iPhone  ~/Library/Group Containers/group.com.apple.UserNotifications/Library/
+//           UserNotifications/Remote/default (iPhone Mirroring). Library.plist maps each
+//           app to a folder; <folder>/DeliveredNotifications.plist holds what is on the
+//           phone's screen. Both are NSKeyedArchiver graphs, read here as plain plists.
+//
+// Privacy: only apps given with --allow have their text read and printed. Another
+// Mac app shows as "dropped", with its app id only. Another iPhone app's file is
+// never opened. OTP codes and VA ICNs are masked before any line is printed.
+//
+//   notif-watch --allow com.apple.ical,com.microsoft.Office.Outlook --once
+//   notif-watch --allow-file ~/.config/notif-watch/allow --since 2h --pretty
+//   notif-watch apps        app ids in both stores, with counts; no text
+//   notif-watch mask        stdin to stdout, OTP codes and ICNs masked
+//
+// Output, one JSON object per line:
+//   {"ev":"posted","src":"iphone","app":"com.microsoft.Office.Outlook","id":"iphone:…",
+//    "title":"…","subtitle":"…","body":"…","sender":"…","thread":"…","at":"2026-10-07T13:52:04-05:00"}
+//   {"ev":"removed","src":"iphone","app":"com.microsoft.Office.Outlook","id":"iphone:…"}
+//   {"ev":"dropped","src":"mac","app":"com.apple.MobileSMS","at":"…"}
+//   {"ev":"error","src":"mac","message":"…"}
+//   {"ev":"ready","mac":"ok","iphone":"ok","allowed":10}    after the first read
+//
+// --follow (the default) prints only what arrives after the first read, plus what
+// --since covers. It exits when its parent goes away. Needs Full Disk Access for
+// whatever runs it; a child of pi gets the terminal's. usernoted writes a record
+// about 5 s after the banner shows; iPhone files change as the phone's screen does.
+//
+// `swift` is slow to start. Build a binary for pi to spawn (~/.local/bin is first on PATH):
+//   ln -sf "$PWD/bin/notif-watch" /tmp/notif-watch.swift && swiftc -O /tmp/notif-watch.swift -o ~/.local/bin/notif-watch
+// Tests: node --test .pi-agent/test/notif-watch.test.mjs
+
+import Foundation
+import SQLite3
+
+// MARK: - Options
+
+let home = NSHomeDirectory()
+
+struct Options {
+    var command = "watch"  // watch | apps | mask
+    var follow = true
+    var allow = Set<String>()  // lowercased: the Mac store lowercases some ids (com.apple.ical)
+    var since: Date?
+    var interval = 2.0
+    var pretty = false
+    var mac = true
+    var iphone = true
+    var db = home + "/Library/Group Containers/group.com.apple.usernoted/db2/db"
+    var remote = home + "/Library/Group Containers/group.com.apple.UserNotifications/Library/UserNotifications/Remote/default"
+
+    func allows(_ app: String) -> Bool { allow.contains(app.lowercased()) }
+
+    /// Whether a notification already there at the first read gets printed.
+    func printsAtStart(_ at: Date?) -> Bool {
+        guard let since else { return !follow }
+        return (at ?? .distantPast) >= since
+    }
+}
+
+let usage = """
+Usage: notif-watch [--follow | --once] --allow ID[,ID…] [options]
+       notif-watch apps        app ids in both stores, with counts; no text
+       notif-watch mask        stdin to stdout, OTP codes and ICNs masked
+
+Options:
+  --allow ID[,ID…]     apps whose text is printed (any case; repeatable)
+  --allow-file PATH    more ids, one per line (# comments)
+  --once               print what is there now, then exit
+  --follow             keep watching (the default)
+  --since 2h|ISO-8601  at start, also print what is this recent (--once: only that)
+  --interval SECONDS   how often to look for changes (default 2)
+  --pretty             readable lines instead of JSON
+  --no-mac, --no-iphone
+  --db PATH            another Mac store (tests)
+  --remote PATH        another iPhone store (tests)
+  -h, --help
+"""
+
+func fail(_ msg: String) -> Never {
+    FileHandle.standardError.write("notif-watch: \(msg)\n".data(using: .utf8)!)
+    exit(2)
+}
+
+func parseSince(_ s: String) -> Date? {
+    let units: [Character: Double] = ["s": 1, "m": 60, "h": 3600, "d": 86400]
+    if let u = s.last, let mult = units[u], let n = Double(s.dropLast()), n >= 0 {
+        return Date().addingTimeInterval(-n * mult)
+    }
+    let iso = ISO8601DateFormatter()
+    if let d = iso.date(from: s) { return d }
+    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return iso.date(from: s)
+}
+
+func parseArgs(_ args: [String]) -> Options {
+    var o = Options()
+    var i = 0
+    func value() -> String {
+        i += 1
+        guard i < args.count else { fail("\(args[i - 1]) needs a value") }
+        return args[i]
+    }
+    func addAllow(_ list: String) {
+        for id in list.split(whereSeparator: { $0 == "," || $0.isWhitespace }) where !id.isEmpty {
+            o.allow.insert(id.lowercased())
+        }
+    }
+    while i < args.count {
+        let a = args[i]
+        switch a {
+        case "-h", "--help": print(usage); exit(0)
+        case "apps", "mask": o.command = a
+        case "--once": o.follow = false
+        case "--follow": o.follow = true
+        case "--pretty": o.pretty = true
+        case "--no-mac": o.mac = false
+        case "--no-iphone": o.iphone = false
+        case "--allow": addAllow(value())
+        case "--allow-file":
+            let path = value()
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { fail("can't read \(path)") }
+            for line in text.split(separator: "\n") {
+                addAllow(String(line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""))
+            }
+        case "--since":
+            let v = value()
+            guard let d = parseSince(v) else { fail("--since wants 90m, 2h, 1d or an ISO-8601 time, not \(v)") }
+            o.since = d
+        case "--interval":
+            let v = value()
+            guard let n = Double(v), n >= 0.05 else { fail("--interval wants seconds, at least 0.05, not \(v)") }
+            o.interval = n
+        case "--db": o.db = value()
+        case "--remote": o.remote = value()
+        default: fail("unknown argument \(a)\n\n\(usage)")
+        }
+        i += 1
+    }
+    return o
+}
+
+// MARK: - Masking
+
+/// OTP codes and VA ICNs, masked before anything is printed. Digit runs are masked
+/// only in text that talks about a code, so times, dates and amounts elsewhere stay.
+enum Mask {
+    static func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+    static let icn = re(#"\b\d{10}V\d{6}\b"#)
+    static let google = re(#"\bG-\d{4,8}\b"#)
+    static let webOTP = re(#"(?<![\w#])#\d{4,10}\b"#)  // "@example.com #123456"
+    static let keyword = re(
+        #"(?i)\b(?:codes?|passcodes?|otp|one[- ]?time|verif\w*|security|2fa|two[- ]factor|authenticat\w*|log ?in|sign[- ]?in|pins?|tokens?|password)\b"#)
+    static let alnum = re(#"(?i)\b(?:code|passcode|otp|pin)\b(?:\s+is)?[\s:]+(?=[a-z0-9-]*\d)([a-z0-9][a-z0-9-]{3,11})\b"#)
+    static let digits = re(#"(?<![\d$€£¥.,:/#-])(?:\d{2,4}(?:[ -]\d{2,4}){1,3}|\d{4,10})(?![\d:/]|[.,]\d)"#)
+
+    static func apply(_ s: String) -> String {
+        var t = replace(icn, s, "[ICN]")
+        t = replace(google, t, "[code]")
+        t = replace(webOTP, t, "#[code]")
+        guard keyword.firstMatch(in: t, range: NSRange(location: 0, length: (t as NSString).length)) != nil else { return t }
+        t = replaceGroup(alnum, 1, t, "[code]")
+        return replace(digits, t, "[code]")
+    }
+
+    static func replace(_ r: NSRegularExpression, _ s: String, _ with: String) -> String {
+        r.stringByReplacingMatches(
+            in: s, range: NSRange(location: 0, length: (s as NSString).length),
+            withTemplate: NSRegularExpression.escapedTemplate(for: with))
+    }
+
+    static func replaceGroup(_ r: NSRegularExpression, _ group: Int, _ s: String, _ with: String) -> String {
+        let ns = NSMutableString(string: s)
+        for m in r.matches(in: s, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let g = m.range(at: group)
+            if g.location != NSNotFound { ns.replaceCharacters(in: g, with: with) }
+        }
+        return ns as String
+    }
+}
+
+// MARK: - Keyed archives as plain plists
+
+/// Resolves an NSKeyedArchiver graph without NSKeyedUnarchiver: no classes are
+/// instantiated, so private classes (DNDClientEventDetails) need no framework.
+enum Archive {
+    typealias UIDGet = @convention(c) (AnyObject) -> UInt32
+    static let getter: UIDGet? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_CFKeyedArchiverUIDGetValue")
+        .map { unsafeBitCast($0, to: UIDGet.self) }
+
+    static func uid(_ v: Any) -> Int? {
+        let o = v as AnyObject
+        if o is NSString || o is NSNumber || o is NSDictionary || o is NSArray || o is NSData || o is NSDate { return nil }
+        let d = String(describing: o)
+        guard d.hasPrefix("<CFKeyedArchiverUID") else { return nil }
+        if let getter { return Int(getter(o)) }
+        guard let r = d.range(of: "value = ") else { return nil }
+        return Int(d[r.upperBound...].prefix(while: \.isNumber))
+    }
+
+    struct BadArchive: Error, CustomStringConvertible { var description: String }
+
+    static func decode(_ data: Data) throws -> Any? {
+        guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            let objects = plist["$objects"] as? [Any], let top = plist["$top"] as? [String: Any],
+            let root = top["root"] ?? top.values.first
+        else { throw BadArchive(description: "not a keyed archive") }
+
+        func resolve(_ value: Any, _ depth: Int) -> Any? {
+            guard depth < 32 else { return nil }
+            var v = value
+            if let i = uid(v) {
+                guard i >= 0, i < objects.count else { return nil }
+                v = objects[i]
+            }
+            if let s = v as? String { return s == "$null" ? nil : s }
+            guard let d = v as? [String: Any] else { return v }
+            guard let c = d["$class"], let ci = uid(c), ci < objects.count else { return d }
+            let cls = (objects[ci] as? [String: Any])?["$classname"] as? String ?? ""
+            if let keys = d["NS.keys"] as? [Any], let vals = d["NS.objects"] as? [Any] {
+                var out: [String: Any] = [:]
+                for (k, x) in zip(keys, vals) {
+                    if let key = resolve(k, depth + 1) as? String, let val = resolve(x, depth + 1) { out[key] = val }
+                }
+                return out
+            }
+            if let vals = d["NS.objects"] as? [Any] { return vals.compactMap { resolve($0, depth + 1) } }
+            if let s = d["NS.string"] as? String { return s }
+            if let t = d["NS.time"] as? Double { return Date(timeIntervalSinceReferenceDate: t) }
+            var out: [String: Any] = ["$class": cls]
+            for (k, x) in d where k != "$class" {
+                if let val = resolve(x, depth + 1) { out[k] = val }
+            }
+            return out
+        }
+        return resolve(root, 0)
+    }
+}
+
+// MARK: - Notifications
+
+struct Note {
+    var src: String
+    var app: String
+    var id: String
+    var title = ""
+    var subtitle = ""
+    var body = ""
+    var sender = ""
+    var thread = ""
+    var at: Date?
+
+    func masked() -> Note {
+        var n = self
+        n.title = String(Mask.apply(title).prefix(300))
+        n.subtitle = String(Mask.apply(subtitle).prefix(300))
+        n.body = String(Mask.apply(body).prefix(2000))
+        n.sender = String(Mask.apply(sender).prefix(120))
+        return n
+    }
+}
+
+/// One record's data blob from the Mac store.
+func macNote(_ data: Data, src n: Note) -> Note {
+    var n = n
+    guard let p = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return n }
+    let req = p["req"] as? [String: Any] ?? [:]
+    n.title = req["titl"] as? String ?? ""
+    n.subtitle = req["subt"] as? String ?? ""
+    n.body = req["body"] as? String ?? ""
+    n.thread = req["thre"] as? String ?? ""
+    if n.at == nil, let t = (req["date"] as? Double) ?? (p["date"] as? Double) { n.at = Date(timeIntervalSinceReferenceDate: t) }
+    return n
+}
+
+/// One entry of an iPhone app's DeliveredNotifications.plist.
+func iphoneNote(_ d: [String: Any], app: String) -> Note? {
+    guard let ident = d["AppNotificationIdentifier"] as? String, !ident.isEmpty else { return nil }
+    var n = Note(src: "iphone", app: app, id: "iphone:\(app):\(ident)")
+    n.title = d["AppNotificationTitle"] as? String ?? ""
+    n.subtitle = d["AppNotificationSubtitle"] as? String ?? ""
+    n.body = d["AppNotificationMessage"] as? String ?? ""
+    n.thread = d["SBSPushStoreNotificationThreadKey"] as? String ?? ""
+    n.sender = (d["CommunicationContextSender"] as? [String: Any])?["displayName"] as? String ?? ""
+    n.at = d["AppNotificationCreationDate"] as? Date
+    return n
+}
+
+let appNames: [String: String] = [
+    "com.tinyspeck.slackmacgap": "Slack", "com.tinyspeck.chatlyio": "Slack",
+    "com.apple.mail": "Mail", "com.apple.mobilemail": "Mail", "com.fastmail.fastmail": "Fastmail",
+    "com.microsoft.office.outlook": "Outlook", "com.microsoft.outlook": "Outlook",
+    "com.microsoft.skype.teams": "Teams", "com.microsoft.teams2": "Teams",
+    "com.apple.mobilephone": "Phone", "com.apple.ical": "Calendar", "com.apple.mobilecal": "Calendar",
+    "85c27nk92c.com.flexibits.fantastical2.mac.helper": "Fantastical", "com.flexibits.fantastical2.iphone": "Fantastical",
+    "com.apple.mobilesms": "Messages", "org.whispersystems.signal": "Signal", "org.whispersystems.signal-desktop": "Signal",
+]
+
+func appName(_ id: String) -> String {
+    if let n = appNames[id.lowercased()] { return n }
+    let last = id.split(separator: ".").last.map(String.init) ?? id
+    return last.prefix(1).uppercased() + last.dropFirst()
+}
+
+// MARK: - Output
+
+final class Output {
+    let pretty: Bool
+    init(pretty: Bool) { self.pretty = pretty }
+
+    static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = .current
+        return f
+    }()
+    static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    func write(_ line: String) {
+        fputs(line + "\n", stdout)
+        fflush(stdout)
+    }
+
+    static func quote(_ s: String) -> String {
+        var out = "\""
+        for u in s.unicodeScalars {
+            switch u {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case _ where u.value < 0x20 || u.value == 0x2028 || u.value == 0x2029: out += String(format: "\\u%04x", u.value)
+            default: out.unicodeScalars.append(u)
+            }
+        }
+        return out + "\""
+    }
+
+    /// Ordered keys; empty strings and nils left out.
+    static func json(_ pairs: [(String, Any?)]) -> String {
+        let parts: [String] = pairs.compactMap { key, value in
+            switch value {
+            case let s as String: return s.isEmpty ? nil : "\(quote(key)):\(quote(s))"
+            case let n as Int: return "\(quote(key)):\(n)"
+            case let b as Bool: return "\(quote(key)):\(b)"
+            default: return nil
+            }
+        }
+        return "{" + parts.joined(separator: ",") + "}"
+    }
+
+    func device(_ src: String) -> String { src == "iphone" ? "iPhone" : "Mac" }
+    func stamp(_ d: Date?) -> String { Output.clock.string(from: d ?? Date()) }
+    func firstLine(_ s: String) -> String {
+        String((s.split(whereSeparator: \.isNewline).first.map(String.init) ?? "").prefix(80))
+    }
+
+    func posted(_ n: Note) {
+        if pretty {
+            let head = [n.sender, n.title].filter { !$0.isEmpty }.joined(separator: " · ")
+            write("\(stamp(n.at)) + \(device(n.src)) · \(appName(n.app)) · \(head.isEmpty ? "(no title)" : head)")
+            let detail = firstLine(n.body.isEmpty ? n.subtitle : n.body)
+            if !detail.isEmpty { write("           \(detail)") }
+            return
+        }
+        write(Output.json([
+            ("ev", "posted"), ("src", n.src), ("app", n.app), ("id", n.id), ("title", n.title), ("subtitle", n.subtitle),
+            ("body", n.body), ("sender", n.sender), ("thread", n.thread), ("at", n.at.map(Output.iso.string(from:))),
+        ]))
+    }
+
+    func removed(_ n: Note) {
+        if pretty { return write("\(stamp(nil)) − \(device(n.src)) · \(appName(n.app)) · \(n.title.isEmpty ? "cleared" : n.title)") }
+        write(Output.json([("ev", "removed"), ("src", n.src), ("app", n.app), ("id", n.id)]))
+    }
+
+    func dropped(src: String, app: String, at: Date?) {
+        if pretty { return write("\(stamp(at)) ✕ \(device(src)) · \(appName(app)) · not on the list") }
+        write(Output.json([("ev", "dropped"), ("src", src), ("app", app), ("at", at.map(Output.iso.string(from:)))]))
+    }
+
+    func error(src: String, _ message: String) {
+        if pretty { return write("\(stamp(nil)) ! \(src) · \(message)") }
+        write(Output.json([("ev", "error"), ("src", src), ("message", message)]))
+    }
+
+    func ready(mac: String, iphone: String, allowed: Int) {
+        if pretty { return write("notif-watch · Mac \(mac) · iPhone \(iphone) · \(allowed) app\(allowed == 1 ? "" : "s") allowed") }
+        write(Output.json([("ev", "ready"), ("mac", mac), ("iphone", iphone), ("allowed", allowed)]))
+    }
+}
+
+// MARK: - Files
+
+/// Changes when the file does: mtime (ns), size, inode. "-" when it isn't there.
+func fileSig(_ path: String) -> String {
+    var st = stat()
+    guard stat(path, &st) == 0 else { return "-" }
+    return "\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec):\(st.st_size):\(st.st_ino)"
+}
+
+struct Failure: Error, CustomStringConvertible { var description: String }
+
+final class SQLite {
+    private var db: OpaquePointer?
+
+    init(path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else { throw Failure(description: "no database at \(path)") }
+        if sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+            defer { sqlite3_close(db) }
+            throw Failure(description: SQLite.hint(String(cString: sqlite3_errmsg(db))))
+        }
+        sqlite3_busy_timeout(db, 2000)
+    }
+
+    deinit { sqlite3_close(db) }
+
+    static func hint(_ msg: String) -> String {
+        msg.contains("authoriz") || msg.contains("unable to open") ? "\(msg) (Full Disk Access for the terminal?)" : msg
+    }
+
+    func each(_ sql: String, _ args: [Int64] = [], _ row: (OpaquePointer) -> Void) throws {
+        var st: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st else {
+            throw Failure(description: SQLite.hint(String(cString: sqlite3_errmsg(db))))
+        }
+        defer { sqlite3_finalize(st) }
+        for (i, v) in args.enumerated() { sqlite3_bind_int64(st, Int32(i + 1), v) }
+        while true {
+            let rc = sqlite3_step(st)
+            if rc == SQLITE_ROW { row(st) } else if rc == SQLITE_DONE { return } else {
+                throw Failure(description: SQLite.hint(String(cString: sqlite3_errmsg(db))))
+            }
+        }
+    }
+
+    static func text(_ st: OpaquePointer, _ i: Int32) -> String { sqlite3_column_text(st, i).map { String(cString: $0) } ?? "" }
+    static func date(_ st: OpaquePointer, _ i: Int32) -> Date? {
+        sqlite3_column_type(st, i) == SQLITE_NULL ? nil : Date(timeIntervalSinceReferenceDate: sqlite3_column_double(st, i))
+    }
+    static func blob(_ st: OpaquePointer, _ i: Int32) -> Data? {
+        guard let p = sqlite3_column_blob(st, i) else { return nil }
+        return Data(bytes: p, count: Int(sqlite3_column_bytes(st, i)))
+    }
+}
+
+// MARK: - Sources
+
+final class MacSource {
+    let o: Options
+    let out: Output
+    private var seen: [String: Note] = [:]  // every record, allowed or not; text only for allowed
+    private var primed = false
+    private var sig = ""
+    private var scannedAt = Date.distantPast
+    private var lastError: String?
+    var status: String { primed ? "ok" : "error" }
+
+    init(_ o: Options, _ out: Output) {
+        self.o = o
+        self.out = out
+    }
+
+    func poll() {
+        let s = fileSig(o.db) + "|" + fileSig(o.db + "-wal")
+        if primed && s == sig && Date().timeIntervalSince(scannedAt) < 30 { return }
+        do {
+            let db = try SQLite(path: o.db)
+            var rows: [(rec: Int64, id: String, app: String, at: Date?)] = []
+            try db.each(
+                "SELECT r.rec_id, hex(r.uuid), coalesce(a.identifier, ''), r.delivered_date FROM record r LEFT JOIN app a ON a.app_id = r.app_id ORDER BY r.rec_id"
+            ) { st in
+                let rec = sqlite3_column_int64(st, 0)
+                let uuid = SQLite.text(st, 1)
+                rows.append((rec, "mac:" + (uuid.isEmpty ? "rec\(rec)" : uuid.lowercased()), SQLite.text(st, 2), SQLite.date(st, 3)))
+            }
+            let first = !primed
+            var now: [String: Note] = [:]
+            for r in rows {
+                if let prev = seen[r.id] {
+                    now[r.id] = prev
+                    continue
+                }
+                var n = Note(src: "mac", app: r.app, id: r.id)
+                n.at = r.at
+                if first && !o.printsAtStart(r.at) {
+                    now[r.id] = n
+                    continue
+                }
+                if o.allows(r.app) {
+                    try db.each("SELECT data FROM record WHERE rec_id = ?", [r.rec]) { st in
+                        if let data = SQLite.blob(st, 0) { n = macNote(data, src: n) }
+                    }
+                    n = n.masked()
+                    out.posted(n)
+                } else {
+                    out.dropped(src: "mac", app: r.app, at: r.at)
+                }
+                now[r.id] = n
+            }
+            for (id, n) in seen.sorted(by: { $0.key < $1.key }) where now[id] == nil && o.allows(n.app) { out.removed(n) }
+            seen = now
+            primed = true
+            sig = s
+            scannedAt = Date()
+            lastError = nil
+        } catch {
+            report("\(error)")
+        }
+    }
+
+    private func report(_ msg: String) {
+        if msg != lastError { out.error(src: "mac", msg) }
+        lastError = msg
+    }
+}
+
+final class IPhoneSource {
+    let o: Options
+    let out: Output
+    private var folders: [String: String] = [:]  // app id → folder
+    private var librarySig = ""
+    private var fileSigs: [String: String] = [:]
+    private var seen: [String: [String: Note]] = [:]  // app → id → note
+    private var primed = false
+    private var lastError: String?
+    var status: String { primed ? "ok" : "error" }
+
+    init(_ o: Options, _ out: Output) {
+        self.o = o
+        self.out = out
+    }
+
+    static func loadLibrary(_ root: String) throws -> [String: String] {
+        let path = root + "/Library.plist"
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw Failure(description: "no \(path) (iPhone Mirroring not set up, or no Full Disk Access?)")
+        }
+        let lib = try Archive.decode(Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any] ?? [:]
+        // A folder name is one path component, never a way out of the store.
+        return lib.compactMapValues { v in
+            guard let f = v as? String, !f.isEmpty, !f.contains("/"), f != ".", f != ".." else { return nil }
+            return f
+        }
+    }
+
+    static func entries(_ path: String, app: String) throws -> [Note] {
+        guard FileManager.default.fileExists(atPath: path) else { return [] }
+        let root = try Archive.decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        return (root as? [Any] ?? []).compactMap { ($0 as? [String: Any]).flatMap { iphoneNote($0, app: app) } }
+    }
+
+    func poll() {
+        var problems: [String] = []
+        do {
+            let ls = fileSig(o.remote + "/Library.plist")
+            if ls != librarySig {
+                folders = try IPhoneSource.loadLibrary(o.remote)
+                librarySig = ls
+            }
+        } catch {
+            return report("\(error)")
+        }
+        let first = !primed
+        for (app, folder) in folders.sorted(by: { $0.key < $1.key }) where o.allows(app) {
+            let path = "\(o.remote)/\(folder)/DeliveredNotifications.plist"
+            let s = fileSig(path)
+            if s == fileSigs[app] { continue }
+            let list: [Note]
+            do {
+                list = try IPhoneSource.entries(path, app: app)
+            } catch {
+                problems.append("\(appName(app)): \(error)")
+                continue
+            }
+            let old = seen[app] ?? [:]
+            var now: [String: Note] = [:]
+            for n in list.sorted(by: { ($0.at ?? .distantPast) < ($1.at ?? .distantPast) }) {
+                let m = n.masked()
+                now[m.id] = m
+                if old[m.id] != nil || (first && !o.printsAtStart(m.at)) { continue }
+                out.posted(m)
+            }
+            for (id, n) in old.sorted(by: { $0.key < $1.key }) where now[id] == nil { out.removed(n) }
+            seen[app] = now
+            fileSigs[app] = s
+        }
+        primed = true
+        if problems.isEmpty { lastError = nil } else { report(problems.joined(separator: "; ")) }
+    }
+
+    private func report(_ msg: String) {
+        if msg != lastError { out.error(src: "iphone", msg) }
+        lastError = msg
+    }
+}
+
+// MARK: - Commands
+
+/// Which apps each store has, with counts, so the allowlist can be picked. Prints no text.
+func listApps(_ o: Options) {
+    var lines: [(String, Int, String)] = []
+    if o.mac {
+        do {
+            let db = try SQLite(path: o.db)
+            try db.each(
+                "SELECT a.identifier, count(r.rec_id) FROM app a JOIN record r ON r.app_id = a.app_id GROUP BY a.identifier ORDER BY 2 DESC"
+            ) { st in lines.append(("mac", Int(sqlite3_column_int64(st, 1)), SQLite.text(st, 0))) }
+        } catch { fputs("mac: \(error)\n", stderr) }
+    }
+    if o.iphone {
+        do {
+            for (app, folder) in try IPhoneSource.loadLibrary(o.remote) {
+                let n = (try? IPhoneSource.entries("\(o.remote)/\(folder)/DeliveredNotifications.plist", app: app).count) ?? 0
+                if n > 0 { lines.append(("iphone", n, app)) }
+            }
+        } catch { fputs("iphone: \(error)\n", stderr) }
+    }
+    for (src, n, app) in lines.sorted(by: { ($0.0, -$0.1, $0.2) < ($1.0, -$1.1, $1.2) }) {
+        let mark = o.allows(app) ? "✓" : " "
+        print("\(mark) \(src.padding(toLength: 6, withPad: " ", startingAt: 0)) \(String(n).leftPad(5))  \(app)  (\(appName(app)))")
+    }
+}
+
+extension String {
+    func leftPad(_ n: Int) -> String { count >= n ? self : String(repeating: " ", count: n - count) + self }
+}
+
+func watch(_ o: Options) -> Never {
+    let parent = getppid()  // before the first read, so a quick parent exit is still seen
+    let out = Output(pretty: o.pretty)
+    if o.allow.isEmpty { out.error(src: "allow", "no --allow: every app is dropped") }
+    let mac = o.mac ? MacSource(o, out) : nil
+    let phone = o.iphone ? IPhoneSource(o, out) : nil
+    mac?.poll()
+    phone?.poll()
+    out.ready(mac: mac?.status ?? "off", iphone: phone?.status ?? "off", allowed: o.allow.count)
+    guard o.follow else {
+        let ok = [mac?.status, phone?.status].contains("ok") || (mac == nil && phone == nil)
+        exit(ok ? 0 : 1)
+    }
+    while true {
+        Thread.sleep(forTimeInterval: o.interval)
+        if getppid() != parent { exit(0) }  // pi went away
+        mac?.poll()
+        phone?.poll()
+    }
+}
+
+let options = parseArgs(Array(CommandLine.arguments.dropFirst()))
+switch options.command {
+case "mask":
+    while let line = readLine(strippingNewline: false) { fputs(Mask.apply(line), stdout) }
+    fflush(stdout)
+case "apps":
+    listApps(options)
+default:
+    watch(options)
+}
