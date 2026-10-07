@@ -24,7 +24,8 @@
 //    "title":"…","subtitle":"…","body":"…","sender":"…","thread":"…","at":"2026-10-07T13:52:04-05:00"}
 //   {"ev":"removed","src":"iphone","app":"com.microsoft.Office.Outlook","id":"iphone:…"}
 //   {"ev":"dropped","src":"mac","app":"com.apple.MobileSMS","at":"…"}
-//   {"ev":"error","src":"mac","message":"…"}
+//   {"ev":"error","src":"mac","message":"…"}                    once per new problem
+//   {"ev":"ok","src":"mac"}                                      the problem is gone
 //   {"ev":"ready","mac":"ok","iphone":"ok","allowed":10}    after the first read
 //
 // --follow (the default) prints only what arrives after the first read, plus what
@@ -395,6 +396,11 @@ final class Output {
         write(Output.json([("ev", "error"), ("src", src), ("message", message)]))
     }
 
+    func ok(src: String) {
+        if pretty { return write("\(stamp(nil)) ✓ \(device(src)) · reading again") }
+        write(Output.json([("ev", "ok"), ("src", src)]))
+    }
+
     func ready(mac: String, iphone: String, allowed: Int) {
         if pretty { return write("notif-watch · Mac \(mac) · iPhone \(iphone) · \(allowed) app\(allowed == 1 ? "" : "s") allowed") }
         write(Output.json([("ev", "ready"), ("mac", mac), ("iphone", iphone), ("allowed", allowed)]))
@@ -514,6 +520,7 @@ final class MacSource {
             primed = true
             sig = s
             scannedAt = Date()
+            if lastError != nil { out.ok(src: "mac") }
             lastError = nil
         } catch {
             report("\(error)")
@@ -597,7 +604,9 @@ final class IPhoneSource {
             fileSigs[app] = s
         }
         primed = true
-        if problems.isEmpty { lastError = nil } else { report(problems.joined(separator: "; ")) }
+        if !problems.isEmpty { return report(problems.joined(separator: "; ")) }
+        if lastError != nil { out.ok(src: "iphone") }
+        lastError = nil
     }
 
     private func report(_ msg: String) {

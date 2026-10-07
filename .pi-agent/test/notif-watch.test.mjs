@@ -114,8 +114,8 @@ const APPS = { "com.apple.ical": 1, "com.apple.MobileSMS": 2, "com.tinyspeck.sla
 
 /** A Mac store with the real schema: app ids, and records whose data is a binary plist. */
 function macStore(dir) {
-	const db = path.join(dir, "db");
-	const sql = (s) => execFileSync("sqlite3", [db], { input: s });
+	const store = { db: path.join(dir, "db") };
+	const sql = (s) => execFileSync("sqlite3", [store.db], { input: s });
 	sql(`CREATE TABLE app (app_id INTEGER PRIMARY KEY, identifier VARCHAR, badge INTEGER NULL);
 CREATE TABLE record (rec_id INTEGER PRIMARY KEY, app_id INTEGER, uuid BLOB, data BLOB, request_date REAL, request_last_date REAL, delivered_date REAL, presented Bool, style INTEGER, snooze_fire_date REAL);
 ${Object.entries(APPS)
@@ -130,7 +130,15 @@ ${Object.entries(APPS)
 		sql(`INSERT INTO record (rec_id, app_id, uuid, data, delivered_date, presented, style) VALUES (${rec}, ${APPS[app]}, X'${uuid}', X'${hex}', ${macTime(at)}, 1, 1);`);
 		return `mac:${uuid}`;
 	};
-	return { db, add, remove: (rec) => sql(`DELETE FROM record WHERE rec_id = ${rec};`) };
+	return Object.assign(store, {
+		add,
+		remove: (rec) => sql(`DELETE FROM record WHERE rec_id = ${rec};`),
+		/** Swap the whole store into place at once, as a poll should see it. */
+		moveTo: (file) => {
+			fs.renameSync(store.db, file);
+			store.db = file;
+		},
+	});
 }
 
 /** An iPhone Mirroring store: Library.plist maps apps to folders of DeliveredNotifications.plist. */
@@ -363,6 +371,27 @@ test("--follow: prints what changes after the first read, plus what --since cove
 });
 
 // ── errors ──
+
+test("--follow: a store that comes back sends ok, and what it already held stays quiet", { skip }, async (t) => {
+	const dir = tmpDir(t);
+	const w = follow(t, ["--follow", "--interval", "0.1", "--no-iphone", "--db", path.join(dir, "db"), "--allow", "com.apple.ical"]);
+	await w.until((s) => s.some((e) => e.ev === "ready"));
+	assert.deepEqual(w.seen[0], { ev: "error", src: "mac", message: `no database at ${path.join(dir, "db")}` });
+	assert.deepEqual(w.seen[1], { ev: "ready", mac: "error", iphone: "off", allowed: 1 });
+	const stage = path.join(dir, "stage");
+	fs.mkdirSync(stage);
+	const mac = macStore(stage);
+	mac.add({ rec: 1, app: "com.apple.ical", title: "Standup", body: "in 5 minutes", at: ago(60_000) });
+	mac.moveTo(path.join(dir, "db"));
+	await w.until((s) => s.some((e) => e.ev === "ok"));
+	const later = mac.add({ rec: 2, app: "com.apple.ical", title: "Sync", body: "now", at: ago(0) });
+	await w.until((s) => s.some((e) => e.id === later));
+	assert.deepEqual(
+		w.seen.map((e) => e.ev),
+		["error", "ready", "ok", "posted"],
+		"one error, not one per poll; the first good read is the baseline",
+	);
+});
 
 test("a missing store is an error event; the other store still works", { skip }, (t) => {
 	const dir = tmpDir(t);
