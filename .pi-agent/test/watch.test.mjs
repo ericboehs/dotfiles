@@ -25,7 +25,6 @@ import watch, {
 	clip,
 	DIGEST_HEAD,
 	digestText,
-	estTokens,
 	FEED_CHANNEL,
 	FEED_WS,
 	feedAddress,
@@ -52,7 +51,6 @@ import watch, {
 	plainText,
 	POLL,
 	pollInterval,
-	PROMPT_MAX_TOKENS,
 	recapBlock,
 	recapMarker,
 	resolveIds,
@@ -72,6 +70,7 @@ import watch, {
 	widgetLines,
 	WORK_WORKSPACES,
 } from "../extensions/watch.ts";
+import { estTokens, PROMPT_MAX_TOKENS } from "../extensions/watch/models.ts";
 
 const ME = ["eric", "boehs"];
 const plain = { fg: (_c, s) => s };

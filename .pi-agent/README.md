@@ -194,8 +194,9 @@ block to its capture, so `/meeting recap` mid-meeting and the final recap
 rewrite the same block. Replays never write to the note.
 
 `/q3` researches Q3 in the background while you keep talking. It starts a
-separate `pi -p` process on the session's model (`PI_MEETING_RESEARCH_MODEL`
-overrides it) at medium thinking, with read-only tools. That process searches
+separate `pi -p` process at medium thinking, with read-only tools. It runs on
+the session's model when that's on VA Copilot, and on VA Copilot's Claude Opus
+5.5 otherwise (`PI_MEETING_RESEARCH_MODEL` overrides it, VA Copilot only). That process searches
 qmd, Slack, va.ghe.com, `~/Code` and the web. Nothing runs in the main session.
 Text after the number steers the search (`/q3 check the eMASS notes`), and `/q`
 alone opens a picker. Each run has three minutes and at most two run at once.
@@ -222,9 +223,14 @@ when a check is worth a call. A check runs on:
 - a flood of lines
 
 There is never more than one check per 15 seconds. Each check sends the
-transcript to a small model (`PI_MEETING_MODEL`, default Opencode Go's
-DeepSeek V4.1 Flash, so it's covered by the subscription). The system prompt
-holds the background:
+transcript to a small model (`PI_MEETING_MODEL`, default VA Copilot's Claude
+Haiku 5.5). Meetings are work text, so only VA Copilot models read them. A
+model from any other provider, whether from `PI_MEETING_MODEL`, `--model` or the
+session, is refused with a warning. With no VA Copilot model, or while a call
+fails, code rules carry on: being named or "any questions?" still shows in the
+widget (`! Lindsey Hattamer named you: "…"`), but no new questions appear. Each
+call stays under about 60k tokens by keeping less of the transcript's start.
+The system prompt holds the background:
 
 - `~/.pi/agent/meeting-context.md`, a few lines on who you are, kept local
   because this directory is published
@@ -232,8 +238,8 @@ holds the background:
 - `qmd search` hits for the meeting title
 
 The system prompt stays fixed and the transcript is append-only, so the
-provider can cache the prompt prefix. A replay of a 33-minute meeting cost
-five checks and a tenth of a cent.
+provider can cache the prompt prefix. A replay of a 33-minute meeting took
+five checks.
 
 New questions and suggested replies also go into the session as `meeting`
 messages sent with `triggerTurn: false`. They land in the transcript and in the
@@ -278,8 +284,9 @@ marks anything read. New items go to a small model (`PI_WATCH_SLACK_MODEL`,
 default Opencode Go's DeepSeek V4.1 Flash) that sorts each into needs you,
 context or noise with a short why. Work workspaces (`PI_WATCH_SLACK_WORK_WORKSPACES`,
 default `dsva`) go only to the work scout (`PI_WATCH_SLACK_WORK_MODEL`, default
-VA Copilot's `github-copilot/claude-haiku-5.5`). Their text, and waits from
-their conversations, never reach the default scout. When the work scout fails,
+VA Copilot's `github-copilot/claude-haiku-5.5`; a model from another provider
+is refused). Their text, and waits from their conversations, never reach the
+default scout. When the work scout fails,
 code rules sort them. Each scout call stays under about 60k tokens (VA Copilot
 caps prompts at 100k); a bigger batch waits for the next call. Code decides the
 rest: DMs, @-mentions and bot-feed asks addressed to you always need you.

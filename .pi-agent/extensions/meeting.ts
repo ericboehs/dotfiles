@@ -12,9 +12,16 @@
  *
  * Tails the live meeting-capture transcript (~/.local/share/meeting-capture/
  * *.jsonl, finished caption lines only) and, when enough new talk has piled up,
- * asks a small fast model — DeepSeek V4.1 Flash on the Opencode Go subscription
- * by default — for questions worth asking out loud. No model is polled on a
- * timer: the file is, and code decides when a check is worth a call.
+ * asks a small fast model (Claude Haiku 5.5 on VA Copilot) for questions worth
+ * asking out loud. No model is polled on a timer: the file is, and code decides
+ * when a check is worth a call.
+ *
+ * Meetings are work text, so only VA Copilot models read them (watch/models.ts):
+ * the scout, and /q research too. Any other model, from PI_MEETING_MODEL,
+ * --model or the session, is refused. With no VA Copilot model, or while a call
+ * fails, code rules carry on: being named and "any questions?" still show in
+ * the widget, but no new questions appear. Each scout call stays under
+ * PROMPT_MAX_TOKENS by keeping less of the transcript.
  *
  * Triggers: your name said by someone else, or "any questions?", fire after a
  * short pause; otherwise ~6 new lines plus a pause, 45s of unchecked talk, or a
@@ -55,7 +62,8 @@
  * Teams writes a caption only when it scrolls out of its ~3-line window, so the
  * transcript trails the room by a couple of utterances.
  *
- * Env: PI_MEETING_MODEL=provider/id[,provider/id…]  PI_MEETING_REASONING=off|low|…
+ * Env: PI_MEETING_MODEL=github-copilot/<id>[,…] (VA Copilot only)  PI_MEETING_REASONING=off|low|…
+ *      PI_MEETING_RESEARCH_MODEL=github-copilot/<id> (else the session model, if on VA Copilot)
  *      PI_MEETING_ME="First Last"  PI_MEETING_DIR  PI_MEETING_ABOUT=<file>
  *      PI_MEETING_QMD_COLLECTIONS=wiki,va-eert ("" disables)
  *      PI_MEETING_DAILY_DIR=~/Documents/Wiki/daily ("" disables the daily-note recap)
@@ -69,12 +77,11 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteItem, Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { estTokens, isWorkModel, modelSpecs, PROMPT_MAX_TOKENS, WORK_MODELS, WORK_RESEARCH_MODEL, workOnly } from "./watch/models.ts";
 
 // ── config ───────────────────────────────────────────────────────────────────
 
 const DIR = process.env.PI_MEETING_DIR || path.join(os.homedir(), ".local/share/meeting-capture");
-/** Flat-subscription models first; pay-per-token ones only by explicit opt-in. */
-export const DEFAULT_MODELS = ["opencode-go/deepseek-v4.1-flash", "opencode-go/glm-5.3-flash"];
 const REASONING = process.env.PI_MEETING_REASONING || "low";
 const QMD_COLLECTIONS = (process.env.PI_MEETING_QMD_COLLECTIONS ?? "wiki,va-eert")
 	.split(",")
@@ -386,14 +393,16 @@ export type PromptInput = {
 	cue: Cue;
 	me: string;
 	now: Date;
+	maxChars?: number; // transcript budget; MAX_TRANSCRIPT_CHARS when unset
 };
 
 /** Transcript first and append-only, so consecutive calls share a cacheable prefix. */
 export function buildUserPrompt(p: PromptInput): string {
 	let body = p.lines.join("\n");
-	if (body.length > MAX_TRANSCRIPT_CHARS) {
-		const cut = body.indexOf("\n", body.length - MAX_TRANSCRIPT_CHARS);
-		body = `[… earlier lines omitted …]\n${body.slice(cut + 1)}`;
+	const max = Math.max(0, p.maxChars ?? MAX_TRANSCRIPT_CHARS);
+	if (body.length > max) {
+		const cut = body.indexOf("\n", body.length - max);
+		body = `[… earlier lines omitted …]${cut < 0 ? "" : `\n${body.slice(cut + 1)}`}`;
 	}
 	const who = p.me || "the user";
 	const out = [
@@ -414,6 +423,38 @@ export function buildUserPrompt(p: PromptInput): string {
 	if (p.cue === "mention") out.push("", `${who} was just named in the new lines. Check whether someone is waiting on ${who}.`);
 	if (p.cue === "invite") out.push("", "Someone just invited questions. If one question is clearly the best, make sure it is open.");
 	return out.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n");
+}
+
+/**
+ * The user prompt, keeping less of the transcript's start until system + user
+ * fit under the cap. The newest lines are what the scout needs most.
+ */
+export function fitUserPrompt(system: string, p: PromptInput, cap = PROMPT_MAX_TOKENS): string {
+	let maxChars = Math.min(p.maxChars ?? MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_CHARS);
+	let user = buildUserPrompt({ ...p, maxChars });
+	for (let i = 0; i < 8 && maxChars > 0; i++) {
+		const over = estTokens(system) + estTokens(user) - cap;
+		if (over <= 0) break;
+		maxChars = Math.max(0, maxChars - over * 3 - 500);
+		user = buildUserPrompt({ ...p, maxChars });
+	}
+	return user;
+}
+
+/** What code says when a cue lands and no scout can: who named you, or who asked for questions. */
+export function ruleAlert(cue: Cue, line: { speaker: string; text: string } | undefined): string {
+	if (!cue) return "";
+	const who = line?.speaker || "Someone";
+	const text = (line?.text ?? "").replace(/\s+/g, " ").trim();
+	const said = text ? `: "${text.length > 140 ? `${text.slice(0, 139)}…` : text}"` : "";
+	return cue === "mention" ? `${who} named you${said}` : `${who} asked for questions${said}`;
+}
+
+/** /q research runs only on VA Copilot: PI_MEETING_RESEARCH_MODEL, else the session model, else WORK_RESEARCH_MODEL. */
+export function researchModel(configured: string, session: string): { model: string; refused: string } {
+	if (configured) return isWorkModel(configured) ? { model: configured, refused: "" } : { model: WORK_RESEARCH_MODEL, refused: configured };
+	if (session && isWorkModel(session)) return { model: session, refused: "" };
+	return { model: WORK_RESEARCH_MODEL, refused: session };
 }
 
 // ── files ────────────────────────────────────────────────────────────────────
@@ -656,6 +697,8 @@ export type WidgetView = {
 	reply: string;
 	replay: boolean;
 	endsAt: number; // when an ended call gives up on a reconnect (ms); 0 if not ended
+	alert?: string; // a cue said by code rules, when no scout could
+	rulesOnly?: boolean; // no VA Copilot model: cues only, no questions
 };
 
 export function humanElapsed(ms: number): string {
@@ -691,7 +734,7 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 		v.title,
 		v.startedMs ? humanElapsed(now - v.startedMs) : "",
 		v.phase === "ended" ? ended : v.topic,
-		`${v.checks} check${v.checks === 1 ? "" : "s"}${v.cost > 0 ? ` $${v.cost.toFixed(3)}` : ""}`,
+		v.rulesOnly ? "rules only" : `${v.checks} check${v.checks === 1 ? "" : "s"}${v.cost > 0 ? ` $${v.cost.toFixed(3)}` : ""}`,
 		v.busy ? "checking…" : "",
 		v.error ? `error: ${v.error}` : "",
 		"/meeting stop",
@@ -735,6 +778,9 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 	if (v.reply) {
 		for (const l of wrapTextWithAnsi(theme.fg("success", `↳ say: ${v.reply}`), inner).slice(0, 4)) lines.push(fit(`  ${l}`));
 	}
+	if (v.alert) {
+		for (const l of wrapTextWithAnsi(theme.fg("warning", `! ${v.alert}`), inner).slice(0, 3)) lines.push(fit(`  ${l}`));
+	}
 	return lines;
 }
 
@@ -763,6 +809,9 @@ type Meeting = {
 	topic: string;
 	reply: string;
 	replyAt: number;
+	cueLine?: { speaker: string; text: string }; // the line behind the pending cue
+	alert: string; // from code rules; shown like a reply
+	alertAt: number;
 	focus: string;
 	wake: boolean;
 	me: string;
@@ -968,6 +1017,7 @@ export default function (pi: ExtensionAPI) {
 		if (!force && now - m.lastRender < RENDER_MS) return;
 		m.lastRender = now;
 		if (m.reply && now - m.replyAt > REPLY_TTL_MS) m.reply = "";
+		if (m.alert && now - m.alertAt > REPLY_TTL_MS) m.alert = "";
 		const view: WidgetView = {
 			phase: m.phase,
 			title: m.title,
@@ -984,6 +1034,8 @@ export default function (pi: ExtensionAPI) {
 			reply: m.reply,
 			replay: !!m.replay,
 			endsAt: m.phase === "ended" && !m.replay ? m.endedAt + RECONNECT_MS : 0,
+			alert: m.alert,
+			rulesOnly: m.models.length === 0,
 		};
 		ctx.ui.setWidget(
 			WIDGET_KEY,
@@ -1019,12 +1071,14 @@ export default function (pi: ExtensionAPI) {
 		if (history || isMe(ev.speaker, m.meTokens)) return;
 		if (mentionsMe(ev.text, m.meTokens)) {
 			m.trig.cue = "mention";
+			m.cueLine = { speaker: ev.speaker, text: ev.text };
 			if (ctxRef?.hasUI && now - m.lastNotify > NOTIFY_GAP_MS) {
 				m.lastNotify = now;
 				ctxRef.ui.notify(`Meeting: ${ev.speaker}: ${ev.text.slice(0, 140)}`, "info");
 			}
 		} else if (!m.trig.cue && isInvite(ev.text)) {
 			m.trig.cue = "invite";
+			m.cueLine = { speaker: ev.speaker, text: ev.text };
 		}
 	}
 
@@ -1134,14 +1188,23 @@ export default function (pi: ExtensionAPI) {
 		const newFrom = m.sentUpTo;
 		const upTo = m.lines.length;
 		const cue = m.trig.cue;
+		const cueLine = m.cueLine;
 		const saved = { ...m.trig };
 		m.trig = { unsent: 0, firstUnsentAt: 0, lastLineAt: m.trig.lastLineAt, lastCallAt: Date.now(), cue: null };
+		if (m.models.length === 0) {
+			// Rules only: no model reads the meeting, but a cue still reaches Eric.
+			m.sentUpTo = upTo;
+			if (cue) raiseAlert(m, ruleAlert(cue, cueLine));
+			render(true);
+			return;
+		}
 		m.busy = true;
 		m.abort = new AbortController();
 		render(true);
 		try {
 			if (m.backgroundReady) await Promise.race([m.backgroundReady, new Promise((r) => setTimeout(r, BACKGROUND_WAIT_MS))]);
-			const user = buildUserPrompt({
+			const system = m.system || buildSystemPrompt(m.me, "", "");
+			const user = fitUserPrompt(system, {
 				title: m.title,
 				app: m.app,
 				people: m.people,
@@ -1154,7 +1217,6 @@ export default function (pi: ExtensionAPI) {
 				me: m.me,
 				now: new Date(),
 			});
-			const system = m.system || buildSystemPrompt(m.me, "", "");
 			let res: AssistantMessage | undefined;
 			const errors: string[] = [];
 			for (const model of m.models) {
@@ -1186,6 +1248,7 @@ export default function (pi: ExtensionAPI) {
 			const update = parseScoutReply(text);
 			if (!update) throw new Error(`unparseable reply: ${text.replace(/\s+/g, " ").slice(0, 60)}`);
 			m.error = "";
+			m.alert = ""; // the scout is back and has judged the cue itself
 			m.sentUpTo = upTo;
 			if (update.topic) m.topic = update.topic;
 			// Stamp with meeting time (the last line checked), not wall time.
@@ -1208,6 +1271,8 @@ export default function (pi: ExtensionAPI) {
 			m.trig.unsent += saved.unsent;
 			m.trig.firstUnsentAt = saved.firstUnsentAt || Date.now();
 			m.trig.cue = m.trig.cue ?? saved.cue;
+			// The scout is down: say the cue by rule now rather than wait for a retry.
+			if (cue) raiseAlert(m, ruleAlert(cue, cueLine));
 		} finally {
 			if (st === m) {
 				m.busy = false;
@@ -1215,6 +1280,12 @@ export default function (pi: ExtensionAPI) {
 				render(true);
 			}
 		}
+	}
+
+	function raiseAlert(m: Meeting, text: string) {
+		if (!text) return;
+		m.alert = text;
+		m.alertAt = Date.now();
 	}
 
 	function deliver(m: Meeting, added: Question[], closed: Question[], reply: string, cue: Cue, at: string) {
@@ -1264,7 +1335,8 @@ export default function (pi: ExtensionAPI) {
 		setDig(m, id, { state: "running", startedAt });
 		if (m === st && q.status === "open") m.shown = pickShown(m.shown, m.questions, [id], startedAt, [id]);
 		if (m === st) render(true);
-		const model = DIG_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "");
+		const picked = researchModel(DIG_MODEL, ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "");
+		const model = picked.model;
 		let tmpDir = "";
 		try {
 			const about = await fs.promises.readFile(ABOUT_FILE, "utf8").then(
@@ -1290,7 +1362,7 @@ export default function (pi: ExtensionAPI) {
 			const proc = spawn(inv.cmd, inv.args, { cwd: ctx.cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PI_SUBAGENT_CHILD: "1" } });
 			const run: DigRun = { m, id, proc, cancelled: false };
 			digRuns.add(run);
-			notify(`Researching Q${id}${model ? ` with ${model}` : ""}; the brief lands here within 3 min`);
+			notify(`Researching Q${id} with ${model}${picked.refused ? ` (${picked.refused} is not VA Copilot)` : ""}; the brief lands here within 3 min`);
 
 			let final = "";
 			let cost = 0;
@@ -1454,11 +1526,14 @@ export default function (pi: ExtensionAPI) {
 		if (st) return notify("Meeting copilot is already running. /meeting stop first.", "warning");
 
 		const registry = ctx.modelRegistry;
-		const specs = a.model ? [a.model] : (process.env.PI_MEETING_MODEL || "").split(/[\s,]+/).filter((s) => s.includes("/"));
-		const models = (specs.length ? specs : DEFAULT_MODELS)
+		const specs = a.model ? [a.model] : modelSpecs(process.env.PI_MEETING_MODEL);
+		const work = workOnly(specs.length ? specs : WORK_MODELS);
+		if (work.refused.length) notify(`Not VA Copilot, so never given meeting text: ${work.refused.join(", ")}`, "warning");
+		const models = work.ok
 			.map((spec) => registry.find(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1)))
 			.filter((m): m is Model<Api> => !!m && registry.hasConfiguredAuth(m));
-		if (models.length === 0) return notify(`No meeting model with credentials (${(specs.length ? specs : DEFAULT_MODELS).join(", ")})`, "error");
+		if (models.length === 0)
+			notify(`No VA Copilot scout with credentials (${work.ok.join(", ") || "none given"}); cues by rule only, no new questions`, "warning");
 
 		const me = process.env.PI_MEETING_ME || (await run("git", ["config", "--global", "--includes", "user.name"], 3000)).trim();
 		const names = await listNames();
@@ -1501,12 +1576,14 @@ export default function (pi: ExtensionAPI) {
 			topic: "",
 			reply: "",
 			replyAt: 0,
+			alert: "",
+			alertAt: 0,
 			focus: "",
 			wake: a.wake,
 			me,
 			meTokens: nameTokens(me),
 			models,
-			modelLabel: models.map((m) => m.name || m.id).join(" → "),
+			modelLabel: models.map((m) => m.name || m.id).join(" → ") || "rules only",
 			system: "",
 			sessionId: randomUUID(),
 			checks: 0,

@@ -27,7 +27,7 @@
  * the channel on the poll cadence, then each watched thread with new replies.
  * Watched threads: any post addressed to Eric, and any post by Eric's agent.
  *
- * A small model (meeting.ts DEFAULT_MODELS) sorts each new message into
+ * A small model (watch/models.ts PERSONAL_MODELS) sorts each new message into
  * needs / context / drop and writes an 8-word "why"; code decides the rest.
  * DMs, @-mentions, bot-feed asks and exact replies on an open wait always need you.
  * Work workspaces (dsva) go only to the work scout (VA Copilot's Claude Haiku 5.5):
@@ -71,8 +71,9 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteItem, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { DEFAULT_MODELS, isMe, mentionsMe, nameTokens, upsertRecap } from "./meeting.ts";
+import { isMe, mentionsMe, nameTokens, upsertRecap } from "./meeting.ts";
 import { APP_GROUPS, type AppGroup, allowList, appFor, appsText, DEFAULT_APPS, pickGroups } from "./watch/apps.ts";
+import { estTokens, modelSpecs, PERSONAL_MODELS, PROMPT_MAX_TOKENS, WORK_MODELS, workOnly } from "./watch/models.ts";
 import { type NotifEvent, type NotifHandle, type NotifStatus, notifProblem, notifSummary, type Posted, superviseNotifWatch } from "./watch/notif.ts";
 
 // ── config ───────────────────────────────────────────────────────────────────
@@ -88,9 +89,7 @@ export const WORK_WORKSPACES = (process.env.PI_WATCH_SLACK_WORK_WORKSPACES ?? "d
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
-const WORK_MODELS = (process.env.PI_WATCH_SLACK_WORK_MODEL || "github-copilot/claude-haiku-5.5").split(/[\s,]+/).filter((x) => x.includes("/"));
-/** VA Copilot caps prompts at 100k tokens; each scout call stays well under, by a conservative estimate. */
-export const PROMPT_MAX_TOKENS = 60_000;
+const WORK_SPECS = modelSpecs(process.env.PI_WATCH_SLACK_WORK_MODEL).length ? modelSpecs(process.env.PI_WATCH_SLACK_WORK_MODEL) : [...WORK_MODELS];
 /** The newest open waits a scout call sees; older ones still close by rule. */
 export const WAITS_SHOWN = 40;
 const DATA_DIR = process.env.PI_WATCH_SLACK_DIR || path.join(os.homedir(), ".local/share/watch-slack");
@@ -712,9 +711,6 @@ export function waitsFor(route: Route, waits: WaitItem[], work: readonly string[
 	return waits.filter((w) => w.state === "open" && (!w.where || routeOf(w.where.workspace, work) === route)).slice(-WAITS_SHOWN);
 }
 
-/** About 3 characters a token: high for English prose, so the cap holds for links, code and non-Latin text. */
-export const estTokens = (text: string) => Math.ceil(text.length / 3);
-
 /** The triage prompt, with the batch trimmed from the end until it fits; the rest waits for the next call. */
 export function fitTriage(
 	system: string,
@@ -1289,12 +1285,14 @@ export default function (pi: ExtensionAPI) {
 			list
 				.map((spec) => registry.find(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1)))
 				.filter((m): m is Model<Api> => !!m && registry.hasConfiguredAuth(m));
-		const specs = (process.env.PI_WATCH_SLACK_MODEL || "").split(/[\s,]+/).filter((x) => x.includes("/"));
-		const models = resolve(specs.length ? specs : DEFAULT_MODELS);
-		if (!models.length) notify(`No scout model with credentials (${(specs.length ? specs : DEFAULT_MODELS).join(", ")}); sorting by rule only`, "warning");
-		const workModels = WORK_WORKSPACES.length ? resolve(WORK_MODELS) : [];
+		const specs = modelSpecs(process.env.PI_WATCH_SLACK_MODEL);
+		const models = resolve(specs.length ? specs : [...PERSONAL_MODELS]);
+		if (!models.length) notify(`No scout model with credentials (${(specs.length ? specs : PERSONAL_MODELS).join(", ")}); sorting by rule only`, "warning");
+		const work = workOnly(WORK_SPECS);
+		if (WORK_WORKSPACES.length && work.refused.length) notify(`Not VA Copilot, so never given work text: ${work.refused.join(", ")}`, "warning");
+		const workModels = WORK_WORKSPACES.length ? resolve(work.ok) : [];
 		if (WORK_WORKSPACES.length && !workModels.length)
-			notify(`No work scout with credentials (${WORK_MODELS.join(", ")}); ${WORK_WORKSPACES.join(", ")} sorted by rule only`, "warning");
+			notify(`No work scout with credentials (${work.ok.join(", ") || "none on VA Copilot"}); ${WORK_WORKSPACES.join(", ")} sorted by rule only`, "warning");
 		const names = (ms: Model<Api>[]) => ms.map((m) => m.name || m.id).join(" → ") || "rules only";
 		const me = process.env.PI_WATCH_SLACK_ME || process.env.PI_MEETING_ME || (await run("git", ["config", "--global", "--includes", "user.name"], 3000)).out.trim();
 		let about = "";
