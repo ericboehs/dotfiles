@@ -630,10 +630,10 @@ async function callBackend(
 
 /**
  * The deep tier. Kept out of `search.order` on purpose, and not for its list
- * price — ~$0.004 undercuts Exa's $0.007. It is the only backend here with no
- * free monthly allowance, so in the fallback slot it would bill for searches
- * that exa and brave cover for nothing. A backend that can be fallen into is
- * one that gets spent on queries that did not need it.
+ * price — a measured ~$0.0012 is a sixth of Exa's $0.007. It is the only
+ * backend here with no free monthly allowance, so in the fallback slot it
+ * would bill for searches that exa and brave cover for nothing. A backend that
+ * can be fallen into is one that gets spent on queries that did not need it.
  */
 const DEEP_BACKEND = "perplexity" as const;
 
@@ -760,10 +760,12 @@ export const COST_PER_CALL: Record<SearchBackend, string> = {
   exa: "~$0.007 · $10 free/mo",
   firecrawl: "2 credits",
   codex: "subscription tokens",
-  // `fast` on gpt-5.6-luna, at the preset's median 1000 in / 500 out tokens,
-  // plus one web_search invocation. Checked against Perplexity's published
-  // rates; the Agent API replaced the old per-request Sonar fee this sat on.
-  perplexity: "~$0.004 · no free tier",
+  // Measured, not computed: two live `fast` calls on 2026-10-07 billed
+  // $0.00105 and $0.00119 in usage.cost. Nearly all of it is the $0.001
+  // search_web call — the preset's ~3,100-token prompt is cache-read and the
+  // answer short — so a longer answer moves it little. This is only the
+  // fallback: a probe that succeeds shows what it billed instead.
+  perplexity: "~$0.0012 · no free tier",
 };
 
 /** "1,930 of 2,000 left", or "1,930 left" when the allowance was not reported. */

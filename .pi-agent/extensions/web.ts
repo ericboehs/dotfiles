@@ -447,9 +447,10 @@ function pad(value: string, width: number): string {
 async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
   const includeAll = args[0]?.toLowerCase() === "all";
   const query = (includeAll ? args.slice(1) : args).join(" ").trim() || TEST_QUERY;
-  // codex needs the live model registry and perplexity bills ~$0.004 a call,
-  // so both wait for `test all` — same rule as Firecrawl and Safari in the
-  // fetch ladder. A diagnostic you hesitate to run is one you stop running.
+  // codex needs the live model registry and perplexity bills every call (no
+  // free tier, unlike the rest of the chain), so both wait for `test all` —
+  // same rule as Firecrawl and Safari in the fetch ladder. A diagnostic you
+  // hesitate to run is one you stop running.
   const backends = SEARCH_BACKENDS.filter((b) => includeAll || (b !== "codex" && b !== "perplexity"));
 
   const results = await probeBackends(query, [...backends], {

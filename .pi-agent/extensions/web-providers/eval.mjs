@@ -159,7 +159,8 @@ async function perplexity(q) {
   return [{ title: "answer", url: cites[0] ?? "", excerpt: answer }];
 }
 
-// Per-call money: ~$0.004 for the Agent API `fast` preset, metered for Octen.
+// Per-call money: ~$0.0012 for the Agent API `fast` preset (measured; no free
+// tier), metered for Octen.
 // Twenty calls per backend across both modes is real spend to re-derive a
 // number the cheap three already gave, so the candidates are opt-in — same
 // rule as `/web test all`. Run `node eval.mjs --paid` to include them.

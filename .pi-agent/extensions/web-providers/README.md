@@ -149,13 +149,24 @@ filter adds one.
 
 ### The price changed too
 
-`COST_PER_CALL` says ~$0.004, computed from Perplexity's published rates:
-1000 input tokens × $0.20/1M, 500 output × $1.20/1M, one `web_search`
-invocation × $0.0025. That is *below* Exa's $0.007 list price, not the order
-of magnitude above it this section originally claimed — which is exactly why
-list price is the wrong comparison. See the next section.
+`COST_PER_CALL` says ~$0.0012, and that figure is **measured**: two live
+`fast` calls on 2026-10-07 billed $0.00105 and $0.00119 in `usage.cost`.
+Nearly all of it is the $0.001 `search_web` call — the preset's ~3,100-token
+prompt is served from cache and a short answer adds almost no output cost.
 
-The old figure came from the leaderboard's "$62.30 per 1k tasks" column, which
+It used to say ~$0.004, computed from the rate card: 1000 input tokens ×
+$0.20/1M, 500 output × $1.20/1M, one search × $0.0025. That arithmetic was
+wrong by 3–4× without a single input being misread — the preset had moved to
+`gpt-6-luna`, the search price had dropped to $0.001, and a cache discount
+does not appear on a rate card at all. Trust the bill over sums on a price
+list; it is why the footer and `/web test` now show the billed figure.
+
+Either way it is a sixth of Exa's $0.007 list price, not the order of
+magnitude above it this section first claimed — which is exactly why list
+price is the wrong comparison. See [No free tier](#no-free-tier).
+
+That first claim, ~$0.062, came from the leaderboard's "$62.30 per 1k tasks"
+column, which
 is a different unit again — a benchmark task is many searches behind a
 reasoning model. It was never a per-call price, and reading it as one is the
 single easiest way to mis-plan this tier. Treat the leaderboard as a quality
@@ -178,8 +189,8 @@ from the first one. The other backends do not:
 So the chain answers roughly 4,400 searches a month before anything bills,
 and the cheap-looking comparison inverts once the allowance is counted. Put
 perplexity second and every Tavily failure that Exa would have answered for
-free costs $0.004 instead. That, not its list price, is what keeps it behind
-`hard`.
+free costs ~$0.0012 instead. Pennies, but the difference between no bill and
+a bill — and that, not its list price, is what keeps it behind `hard`.
 
 Two things moved this table on 2026-10-07 and are worth not re-learning.
 Exa's highlights are **not** billed as page contents: `costDollars` came back
@@ -493,8 +504,9 @@ unknown names are dropped on read.
 ```
 
 `perplexity` is not part of `/web search order` by default. Adding it there is
-allowed and is your call — it just makes it reachable by exhaustion too, which
-costs ~$0.004 a hit.
+allowed and is your call — it just makes it reachable by exhaustion too, and
+unlike every other backend in the chain it bills from the first hit (~$0.0012
+each).
 
 A partial `order` reprioritises rather than amputates: names you leave out keep
 working and move to the back.
@@ -508,8 +520,8 @@ resolution dominate, so expect the second run to be several times faster.
 
 Codex and Perplexity are skipped unless you ask for `/web test all`, for the
 same reason Firecrawl and Safari are skipped below: one needs the live model
-registry and the other bills ~$0.004 a call. A diagnostic you hesitate to run
-is one you stop running.
+registry and the other bills every call — it has no free tier. A diagnostic
+you hesitate to run is one you stop running.
 
 The table carries an `index` column from `SEARCH_INDEX` — the Artificial
 Analysis Search Index, where a provider publishes one. It is a dash for

@@ -33,7 +33,7 @@ test("a live count replaces the static allowance in the /web test cost cell", ()
 	assert.equal(costLabel({ backend: "brave", remaining: 0 }), "1 req · 0 left");
 	// No headers (failed probe, or a backend that never reports) keeps the plan.
 	assert.equal(costLabel({ backend: "brave" }), "1 req · 2,000 free/mo");
-	assert.equal(costLabel({ backend: "perplexity" }), "~$0.004 · no free tier");
+	assert.equal(costLabel({ backend: "perplexity" }), "~$0.0012 · no free tier");
 });
 
 test("a reported cost replaces the estimate, and the allowance half survives", () => {
