@@ -161,6 +161,14 @@ async function launchDirect(profileDir: string): Promise<BrowserState> {
 			"--no-first-run",
 			"--no-default-browser-check",
 			"--headless",
+			// macOS Chrome copies its whole app bundle into
+			// /var/folders/.../X/com.google.Chrome.code_sign_clone/ at launch.
+			// Headless Chrome often fails to delete that copy on exit. On Chrome 154,
+			// SIGTERM, CDP Browser.close and SIGKILL each left one behind in testing.
+			// Hundreds of leftover copies, each with a ~515 MB framework binary,
+			// kept SentinelOne busy on ~10 cores for an hour. The page can't see
+			// this flag, so the fingerprint is unchanged.
+			"--disable-features=MacAppCodeSignClone",
 			`--user-agent=${userAgentString()}`,
 			"about:blank",
 		],
@@ -192,21 +200,53 @@ async function getState(profileDir: string): Promise<BrowserState> {
 	return launching;
 }
 
+/**
+ * Ask a Chrome we launched to quit through CDP, so it flushes the profile
+ * (cookies, sensor state) the way a user quitting would. Send SIGTERM only if
+ * it is still running after the grace period.
+ *
+ * Playwright's browser.close() can't do this: for a connectOverCDP browser it
+ * only drops the websocket and leaves Chrome running.
+ */
+async function quitLaunchedChrome(current: BrowserState, graceMs = 5_000): Promise<void> {
+	const child = current.child;
+	if (!child || child.exitCode !== null || child.signalCode !== null) return;
+	const exited = new Promise<boolean>((resolve) => child.once("exit", () => resolve(true)));
+	try {
+		const cdp = await current.browser.newBrowserCDPSession();
+		await cdp.send("Browser.close");
+	} catch {
+		/* connection already gone (or closing raced the reply); the signal covers it */
+	}
+	// Keep this timer referenced. The child is unref()'d, so in a short-lived
+	// script (eval.ts, test.ts) nothing else would keep Node alive long enough
+	// to wait for the exit.
+	let timer: NodeJS.Timeout | undefined;
+	const timeout = new Promise<boolean>((resolve) => {
+		timer = setTimeout(() => resolve(false), graceMs);
+	});
+	const exitedInTime = await Promise.race([exited, timeout]);
+	clearTimeout(timer);
+	if (!exitedInTime && child.exitCode === null && child.signalCode === null) {
+		child.kill("SIGTERM");
+	}
+}
+
 export async function shutdownBrowser(): Promise<void> {
 	const current = state;
 	state = null;
 	if (!current) return;
-	try {
-		await current.browser.close();
-	} catch {
-		/* already gone */
-	}
 	// Only tear down what we started. A null child means we attached to a
 	// browser someone else launched, and killing its port record while it keeps
 	// running is what orphaned the profile in the first place: Chrome alive,
 	// holding the lock, with nothing left to say where its debugger is.
+	if (current.child) await quitLaunchedChrome(current);
+	try {
+		await current.browser.close(); // disconnect only; see quitLaunchedChrome
+	} catch {
+		/* already gone */
+	}
 	if (current.child) {
-		if (current.child.exitCode === null) current.child.kill("SIGTERM");
 		try {
 			unlinkSync(join(current.profileDir, PORT_FILE));
 		} catch {
