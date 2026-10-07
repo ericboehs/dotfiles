@@ -416,6 +416,24 @@ entirely otherwise.
 Tavily echoes the query verbatim and Exa returns no autoprompt string, so
 neither has anything to report; this is a Brave-only annotation today.
 
+### Who answered
+
+Every result ends with a footer naming the backend that produced it, the way
+`web_fetch` names its tier:
+
+```
+---
+[via brave · 1,929 of 2,000 left this month]
+```
+
+The text alone does not say whether it is ranked excerpts or a provider's
+written prose, and the two deserve different trust — so the footer says. It
+names the backend that *answered*, which after a failover is not the first one
+in the order. It is a report, not a choice: no parameter accepts a vendor, so
+the operator-owns-order invariant holds. Brave adds its monthly quota from
+`x-ratelimit-remaining`/`-limit`, the only backend that reports one on
+success; `/web test` shows the same live count in its cost column.
+
 ## Keys
 
 Resolved from the environment first, then `fnox get <NAME>` (macOS Keychain),

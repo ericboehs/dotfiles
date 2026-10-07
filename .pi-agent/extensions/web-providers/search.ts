@@ -37,6 +37,8 @@ export interface BackendResult {
   searchedAs?: string;
   /** Monthly requests still allowed. Brave is the only backend that reports this. */
   remaining?: number;
+  /** The monthly allowance `remaining` counts down from, when it is reported. */
+  limit?: number;
 }
 
 export interface SearchOptions {
@@ -160,10 +162,12 @@ function httpError(status: number, body: string): BackendError {
 }
 
 /**
- * Brave's `X-RateLimit-Remaining` is `per-second, monthly`. Monthly 0 is a
- * real value (spent), so distinguish it from a missing or unparseable header.
+ * Brave's `X-RateLimit-Remaining` and `X-RateLimit-Limit` are both
+ * `per-second, monthly` ("0, 1930" and "1, 2000"); this reads the monthly half
+ * of either. Monthly 0 is a real value (spent), so distinguish it from a
+ * missing or unparseable header.
  */
-export function parseBraveMonthlyRemaining(header: string | null): number | undefined {
+export function parseBraveMonthly(header: string | null): number | undefined {
   const parts = (header ?? "").split(",").map((s) => Number(s.trim()));
   const monthly = parts[1];
   return parts.length > 1 && Number.isFinite(monthly) ? monthly : undefined;
@@ -203,7 +207,7 @@ async function braveSearch(
   let res = await fetch(url, { headers, signal: timeout(signal) });
   if (res.status === 429) {
     // "0, 1985" -> per-second spent, monthly fine.
-    const monthlyLeft = parseBraveMonthlyRemaining(res.headers.get("x-ratelimit-remaining"));
+    const monthlyLeft = parseBraveMonthly(res.headers.get("x-ratelimit-remaining"));
     if (monthlyLeft === undefined || monthlyLeft > 0) {
       await new Promise((r) => setTimeout(r, 1100));
       res = await fetch(url, { headers, signal: timeout(signal) });
@@ -236,7 +240,12 @@ async function braveSearch(
   // which is not a change worth announcing.
   const altered = typeof data?.query?.altered === "string" ? data.query.altered.trim() : "";
   const searchedAs = altered && altered.toLowerCase() !== query.trim().toLowerCase() ? altered : undefined;
-  return { hits, searchedAs, remaining: parseBraveMonthlyRemaining(res.headers.get("x-ratelimit-remaining")) };
+  return {
+    hits,
+    searchedAs,
+    remaining: parseBraveMonthly(res.headers.get("x-ratelimit-remaining")),
+    limit: parseBraveMonthly(res.headers.get("x-ratelimit-limit")),
+  };
 }
 
 /* ---------------------------------------------------------------- tavily */
@@ -659,12 +668,14 @@ export async function runSearchChain(
     deps.onAttempt?.(`${backend}: ${query}`);
     try {
       const result = await callBackend(backend, query, opts, cfg, cred, deps.codex, signal);
-      let text = render(result, cfg.format, cfg.excerpts, linksOnly);
-      // Brave is the only backend that reports remaining quota on the search
-      // response. Tavily/Exa/Firecrawl only say when it's gone (402).
-      if (result.remaining !== undefined) {
-        text += `\n\n---\n[${result.remaining} remaining this month]`;
-      }
+      // The footer names who answered, the way web_fetch names its tier. Shape
+      // differs by backend (ranked excerpts vs. written prose) and so does how
+      // far to trust it, which the model cannot otherwise tell from the text.
+      // It reports; it does not invite a choice — there is no parameter that
+      // could act on it. Brave also adds its quota, the only backend that
+      // reports one on success; Tavily/Exa/Firecrawl only say when it's gone.
+      const left = result.remaining === undefined ? "" : ` · ${quotaLeft(result.remaining, result.limit)} this month`;
+      const text = `${render(result, cfg.format, cfg.excerpts, linksOnly)}\n\n---\n[via ${backend}${left}]`;
       return { text, backend, tried, excerpts: cfg.excerpts, searchedAs: result.searchedAs };
     } catch (e) {
       const err = e as Error;
@@ -711,6 +722,24 @@ export const COST_PER_CALL: Record<SearchBackend, string> = {
   perplexity: "~$0.004 · no free tier",
 };
 
+/** "1,930 of 2,000 left", or "1,930 left" when the allowance was not reported. */
+export function quotaLeft(remaining: number, limit?: number): string {
+  const n = (v: number) => v.toLocaleString("en-US");
+  return limit === undefined ? `${n(remaining)} left` : `${n(remaining)} of ${n(limit)} left`;
+}
+
+/**
+ * The /web test cost cell. Each label is `<per call> · <free allowance>`; when
+ * the probe came back with a live count, that replaces the allowance half, so
+ * Brave reads "1 req · 1,930 of 2,000 left" rather than the plan's ceiling. A
+ * failed probe has no headers to read and keeps the static label.
+ */
+export function costLabel(r: Pick<ProbeResult, "backend" | "remaining" | "limit">): string {
+  const label = COST_PER_CALL[r.backend];
+  if (r.remaining === undefined) return label;
+  return `${label.split(" · ")[0]} · ${quotaLeft(r.remaining, r.limit)}`;
+}
+
 /**
  * Artificial Analysis Search Index, for the `/web test` table — only the
  * providers that publish a row. It is a dash for everything else, and it is
@@ -736,6 +765,9 @@ export interface ProbeResult {
   chars: number;
   hits: number;
   detail?: string;
+  /** Live monthly quota, for backends that report it (Brave). */
+  remaining?: number;
+  limit?: number;
 }
 
 /**
@@ -782,6 +814,8 @@ export async function probeBackends(
         ms: Date.now() - t0,
         chars: text.length,
         hits: result.hits.length || (result.answer ? 1 : 0),
+        remaining: result.remaining,
+        limit: result.limit,
       });
     } catch (e) {
       if (signal?.aborted) throw e;

@@ -22,7 +22,7 @@ import {
   type SearchBackend,
   type WebConfig,
 } from "./web-providers/config.ts";
-import { cooloffForStatus, COST_PER_CALL, probeBackends, runSearchChain, SEARCH_INDEX } from "./web-providers/search.ts";
+import { cooloffForStatus, costLabel, probeBackends, runSearchChain, SEARCH_INDEX } from "./web-providers/search.ts";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 // Plain OpenAI API keys speak the same Responses API shape, just at the
@@ -465,7 +465,7 @@ async function runTest(args: string[], ctx: ExtensionContext): Promise<string> {
     const verdict = r.ok ? `${r.hits} hits` : "FAIL";
     const ms = r.ok ? String(r.ms) : r.ms ? String(r.ms) : "\u2013";
     lines.push(
-      `${pad(r.backend, 11)}${pad(r.state, 9)}${pad(verdict, 10)}${pad(ms, 7)}${pad(r.ok ? String(r.chars) : "\u2013", 8)}${pad(SEARCH_INDEX[r.backend] ?? "\u2013", 7)}${COST_PER_CALL[r.backend]}`,
+      `${pad(r.backend, 11)}${pad(r.state, 9)}${pad(verdict, 10)}${pad(ms, 7)}${pad(r.ok ? String(r.chars) : "\u2013", 8)}${pad(SEARCH_INDEX[r.backend] ?? "\u2013", 7)}${costLabel(r)}`,
     );
   }
 
@@ -705,7 +705,7 @@ export default function web(pi: ExtensionAPI): void {
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web. Returns ranked results with excerpts; some backends return prose instead. Backend order is operator-configured (/web).",
+      "Search the web. Returns ranked results with excerpts; some backends return prose instead. Backend order is operator-configured (/web). Result footer names the backend that answered.",
     parameters: Type.Object({
       query: Type.String({ description: "Natural-language search query" }),
       recency: Type.Optional(Type.String({ description: "Bias to recent sources: day, week, month, or year" })),
