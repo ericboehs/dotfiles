@@ -152,6 +152,17 @@ test("listSessions puts live sessions first and summarizes them", () => {
   }
 });
 
+
+test("prune keeps a fresh empty session folder", () => {
+  const { root } = tempRoot();
+  try {
+    mkdirSync(join(root, "empty1"));
+    assert.deepEqual(prune(root, 30), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("prune deletes only old sessions whose pi is gone", () => {
   const { root, mk } = tempRoot();
   try {
@@ -159,7 +170,10 @@ test("prune deletes only old sessions whose pi is gone", () => {
     mk("old-live", { pid: process.pid });
     mk("new-dead", { pid: 999999 });
     const past = new Date(Date.now() - 40 * 86_400_000);
-    for (const id of ["old-dead", "old-live"]) utimesSync(join(root, id, "meta.json"), past, past);
+    for (const id of ["old-dead", "old-live"]) {
+      utimesSync(join(root, id, "meta.json"), past, past);
+      utimesSync(join(root, id), past, past);
+    }
     assert.deepEqual(prune(root, 30), ["old-dead"]);
     assert.deepEqual(listSessions(root).map((s) => s.id).sort(), ["new-dead", "old-live"]);
   } finally {

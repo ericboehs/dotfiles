@@ -101,8 +101,11 @@ export function pidAlive(pid) {
 }
 
 function newestMtime(dir) {
+  // Start from the folder itself: an empty or half-written folder has no
+  // files, and 0 would read as "idle since 1970" and get pruned on sight.
   let newest = 0;
   try {
+    newest = statSync(dir).mtimeMs;
     for (const name of readdirSync(dir)) {
       try {
         newest = Math.max(newest, statSync(join(dir, name)).mtimeMs);
