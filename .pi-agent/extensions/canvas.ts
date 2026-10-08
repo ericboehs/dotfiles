@@ -199,6 +199,83 @@ export function findingLine(text: string, at = new Date().toISOString()): string
 }
 
 /** Display 1 from `wrangle displays`, as AppleScript bounds for its left half. */
+// ── activity: pi's own program states (OSC 7501), mirrored for the page ─────
+
+export type ActivityState = "working" | "blocked" | "done" | "error" | "idle";
+export type Activity = { state: ActivityState; message?: string };
+
+const firstLine = (text: unknown) => String(text ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) || "";
+
+/**
+ * Follows the same events and rules as pi 1.1.0's ProgramStatusReporter, so
+ * the page agrees with the terminal: `working` during a run or compaction,
+ * `blocked` while a dialog waits, then `done`, `error` or `idle` once the run
+ * settles. Messages are dialog titles and first error lines only, never
+ * prompts or model output.
+ */
+export class ActivityTracker {
+  private runActive = false;
+  private compacting = false;
+  private runResult: Activity = { state: "done" };
+  private resting: Activity = { state: "idle" };
+  private readonly dialogs: { kind: string; title: string }[] = [];
+
+  handle(event: { type: string; [k: string]: any }): void {
+    switch (event.type) {
+      case "agent_start":
+        this.runActive = true;
+        this.compacting = false;
+        this.runResult = { state: "done" };
+        break;
+      case "message_end": {
+        // The latest response decides, so a retried error gives way to its retry.
+        const m = event.message;
+        if (m?.role !== "assistant") return;
+        this.runResult = m.stopReason === "error" ? { state: "error", message: firstLine(m.errorMessage) } : { state: "done" };
+        break;
+      }
+      case "session_before_compact":
+        this.compacting = true;
+        break;
+      case "session_compact":
+        this.compacting = false;
+        if (!this.runActive && event.reason === "manual") this.resting = { state: "done" };
+        break;
+      case "session_compact_failed":
+        this.compacting = false;
+        if (this.runActive) {
+          if (event.aborted) this.runResult = { state: "idle" };
+          else if (event.errorMessage) this.runResult = { state: "error", message: firstLine(event.errorMessage) };
+        } else if (event.aborted) this.resting = { state: "idle" };
+        else if (event.reason === "manual") this.resting = { state: "error", message: firstLine(event.errorMessage) };
+        break;
+      case "agent_settled":
+        this.runActive = false;
+        this.compacting = false;
+        this.resting = event.aborted ? { state: "idle" } : this.runResult;
+        break;
+      case "ui_prompt_start":
+        this.dialogs.push({ kind: String(event.kind || ""), title: firstLine(event.title) });
+        break;
+      case "ui_prompt_end": {
+        const title = firstLine(event.title);
+        let i = this.dialogs.findLastIndex((d) => d.kind === String(event.kind || "") && d.title === title);
+        if (i < 0) i = this.dialogs.length - 1;
+        if (i >= 0) this.dialogs.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  current(): Activity {
+    const dialog = this.dialogs.at(-1);
+    if (dialog) return { state: "blocked", ...(dialog.title ? { message: dialog.title } : {}) };
+    if (this.compacting) return { state: "working", message: "Compacting context" };
+    if (this.runActive) return { state: "working" };
+    return this.resting;
+  }
+}
+
 export function leftHalfBounds(displays: string, index = 1): [number, number, number, number] | undefined {
   for (const line of displays.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+x=(-?\d+)\s+y=(-?\d+)\s+(\d+)x(\d+)/);
@@ -342,15 +419,31 @@ export default function canvas(pi: ExtensionAPI) {
   let sessionId = "";
   let statusOn = process.env.PI_CANVAS_STATUS !== "0";
   let inflight: AbortController | undefined;
+  const tracker = new ActivityTracker();
+  let lastActivity = "";
   let warned = false;
   let queue: Promise<unknown> = Promise.resolve();
 
   const dir = () => join(canvasRoot(), sessionId);
 
+  /** Write pi's current program state for the page, when it changed. */
+  function writeActivity(force = false) {
+    if (!sessionId || !existsSync(dir())) return;
+    const a = tracker.current();
+    const key = JSON.stringify(a);
+    if (!force && key === lastActivity) return;
+    lastActivity = key;
+    try {
+      writeAtomic(join(dir(), "activity.json"), JSON.stringify({ ...a, at: new Date().toISOString() }));
+    } catch {}
+  }
+
   /** Create the folder and meta.json on first write, never for idle sessions. */
   function ensureDir(ctx: ExtensionContext): string {
     const d = dir();
+    const fresh = !existsSync(join(d, "activity.json"));
     mkdirSync(d, { recursive: true });
+    if (fresh) writeActivity(true);
     const metaPath = join(d, "meta.json");
     const prev = readJson<Record<string, unknown>>(metaPath, {});
     const meta = {
@@ -417,9 +510,14 @@ export default function canvas(pi: ExtensionAPI) {
     }
   }
 
-  pi.on("session_start", (_e, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId();
-    if (existsSync(dir())) ensureDir(ctx);
+    if (existsSync(dir())) {
+      ensureDir(ctx);
+      // A reload keeps the session and whatever state it was in; any other
+      // start begins idle, as pi's own status does.
+      if (event.reason !== "reload") writeActivity(true);
+    }
     void ensureDaemon();
   });
 
@@ -427,8 +525,22 @@ export default function canvas(pi: ExtensionAPI) {
     if (sessionId && existsSync(dir())) ensureDir(ctx);
   });
 
+  const track = (event: { type: string }) => {
+    tracker.handle(event);
+    writeActivity();
+  };
+  pi.on("agent_start", track);
+  pi.on("message_end", track);
+  pi.on("session_before_compact", track);
+  pi.on("session_compact", track);
+  pi.on("session_compact_failed", track);
+  pi.on("ui_prompt_start", track);
+  pi.on("ui_prompt_end", track);
+
   pi.on("agent_settled", (event, ctx) => {
-    if (event.aborted || !statusOn || !ctx.hasUI || !sessionId) return;
+    track(event);
+    if (!ctx.hasUI || !sessionId) return;
+    if (event.aborted || !statusOn) return;
     void refreshStatus(ctx);
   });
 

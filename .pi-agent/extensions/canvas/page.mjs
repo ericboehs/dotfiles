@@ -3,8 +3,8 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 const CSS = `
-:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --code:#f3f0e8; --tint:#fbf3ec; }
-@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --code:#211f1d; --tint:#33291f; } }
+:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 #app { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
@@ -13,7 +13,9 @@ header.top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; m
 header.top h1 { font-size: 20px; margin: 0; }
 header.top .cwd { color: var(--dim); font-size: 13px; }
 header.top .back { margin-left: auto; font-size: 13px; }
-.dot { font-size: 12px; font-weight: 600; } .dot.on { color: var(--ok); } .dot.off { color: var(--dim); font-weight: 400; }
+.state { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.state.working { color: var(--ok); } .state.done { color: var(--warn); } .state.blocked { color: var(--accent); } .state.error { color: var(--bad); } .state.idle, .state.ended { color: var(--dim); font-weight: 400; }
+.state .msg { font-weight: 400; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
 .card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -32,6 +34,12 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .status .now { margin: 12px 0 16px; padding: 9px 12px; background: var(--tint); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; display: flex; gap: 10px; align-items: baseline; }
 .status .now .eyebrow { color: var(--accent); margin: 0; flex: none; }
 .pulse { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); align-self: center; }
+.pulse.working { background: var(--ok); animation: pulse 2s infinite; }
+.pulse.done { background: var(--warn); }
+.pulse.blocked { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.pulse.error { background: var(--bad); }
+.pulse.idle { background: transparent; border: 1.5px solid var(--dim); }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
 .status .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
 .status .col h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; color: var(--ink); }
 .status .col ul { list-style: none; margin: 0; padding: 0; }
@@ -66,11 +74,6 @@ iframe { display: block; width: 100%; border: 0; background: #fff; }
 iframe.plan { height: 82vh; }
 img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; }
 .findings { margin: 0; padding: 0; list-style: none; }
-.sessions .row { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 14px; border-bottom: 1px solid var(--soft); color: inherit; text-decoration: none; }
-.sessions .row:hover { background: var(--soft); }
-.sessions .row:last-child { border-bottom: 0; }
-.sessions .row small { color: var(--dim); }
-.sessions .now { grid-column: 1 / -1; color: var(--dim); font-size: 13px; }
 .findings li { display: grid; grid-template-columns: 76px 1fr auto; gap: 0 12px; align-items: start; padding: 7px 14px; border-top: 1px solid var(--soft); font-size: 13.5px; line-height: 1.45; }
 .findings li:first-child, .findings li.day + li { border-top: 0; }
 .findings li:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
@@ -83,6 +86,24 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 .findings li.more { display: block; padding: 8px 10px 0; border-top: 0; }
 .findings li.more .btn { opacity: 1; margin: 0; }
 .findings li.more:hover { background: none; }
+.sessions .row { display: grid; grid-template-columns: 1fr auto; gap: 0 16px; padding: 10px 14px 11px; border-top: 1px solid var(--soft); color: inherit; text-decoration: none; }
+.sessions .row:first-child { border-top: 0; }
+.sessions .row:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
+.sessions .row .main { min-width: 0; }
+.sessions .row .line1 { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.sessions .row .name { font-weight: 600; font-size: 14px; white-space: nowrap; }
+.sessions .row .cwd { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sessions .row .goal { margin-top: 2px; font-size: 13.5px; line-height: 1.4; }
+.sessions .row .goal.none { color: var(--dim); font-style: italic; }
+.sessions .row .nowline { margin-top: 3px; color: var(--dim); font-size: 12.5px; line-height: 1.4; display: flex; gap: 7px; align-items: baseline; }
+.sessions .row .nowline .eyebrow { margin: 0; flex: none; font-size: 9.5px; }
+.sessions .row .chips { margin-top: 6px; display: flex; gap: 5px; flex-wrap: wrap; }
+.chip { font-size: 11px; line-height: 1.6; padding: 0 7px; border-radius: 9px; background: var(--soft); color: var(--dim); white-space: nowrap; }
+.chip.open { background: color-mix(in srgb, var(--warn) 16%, var(--card)); color: var(--warn); font-weight: 600; }
+.chip.next { color: var(--accent); }
+.sessions .row .side { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; text-align: right; }
+.sessions .row .side time { color: var(--dim); font-size: 12px; }
+.sessions .row.ended .name, .sessions .row.ended .goal { color: color-mix(in srgb, var(--ink) 75%, var(--dim)); }
 .err { color: #c0392b; font-size: 13px; white-space: pre-wrap; }
 `;
 
@@ -272,9 +293,41 @@ async function sectionBody(id, sec) {
   }
 }
 
+/** pi's program state (OSC 7501) as the extension mirrored it, or ended. */
+function stateOf(s) {
+  return s.activity || (s.live ? "done" : "ended");
+}
+
+const STATE_LABEL = { working: "working", blocked: "needs input", done: "your turn", error: "failed", idle: "idle" };
+const STATE_TIP = {
+  working: "The agent is running a turn",
+  blocked: "A dialog in pi is waiting for you",
+  done: "The turn finished; pi is waiting for your reply",
+  error: "The run ended with an error",
+  idle: "Started or cancelled; nothing running",
+};
+/** States where the next move is yours. */
+const NEEDS_YOU = new Set(["blocked", "error", "done"]);
+
+function stateBadge(s) {
+  const st = stateOf(s);
+  if (st === "ended") {
+    const at = s.ended || s.meta?.ended;
+    return h("span", { class: "state ended" }, at ? `ended ${ago(at)}` : "not running");
+  }
+  const msg = s.activityMessage || "";
+  return h(
+    "span",
+    { class: `state ${st}`, title: [STATE_TIP[st], msg].filter(Boolean).join(": ") },
+    h("span", { class: `pulse ${st}` }),
+    STATE_LABEL[st] || st,
+    msg && (st === "blocked" || st === "error") ? h("span", { class: "msg" }, `· ${msg}`) : null,
+  );
+}
+
 const statusBy = (status) => `${status.model || "?"} · ${ago(status.at)}`;
 
-function statusCard(status) {
+function statusCard(status, state) {
   const title = h("h2", {}, h("span", { class: "title" }, "Status"));
   const card = h("section", { class: "card" }, title);
   const bd = h("div", { class: "bd status" });
@@ -285,7 +338,7 @@ function statusCard(status) {
   }
   title.append(h("span", { class: "meta" }, h("span", { class: "by" }, statusBy(status))));
   bd.append(h("div", { class: "goal" }, h("span", { class: "eyebrow" }, "Goal"), status.goal || "—"));
-  bd.append(h("div", { class: "now" }, h("span", { class: "pulse" }), h("span", { class: "eyebrow" }, "Now"), h("span", {}, status.now || "—")));
+  bd.append(h("div", { class: "now" }, h("span", { class: `pulse ${state}` }), h("span", { class: "eyebrow" }, "Now"), h("span", {}, status.now || "—")));
   const col = (kind, label, items) =>
     h(
       "div",
@@ -355,6 +408,7 @@ async function sessionView(id) {
   $app.replaceChildren(header, statusSlot, findingsSlot, sectionsSlot);
   const cards = new Map(); // section id → { at, el }
   let lastStatusAt;
+  let lastState;
   let lastFindings = -1;
 
   async function refresh() {
@@ -369,13 +423,14 @@ async function sessionView(id) {
     header.replaceChildren(
       h("h1", {}, name),
       h("span", { class: "cwd" }, tilde(state.meta.cwd)),
-      h("span", { class: `dot ${state.live ? "on" : "off"}` }, state.live ? "● live" : state.meta.ended ? `ended ${ago(state.meta.ended)}` : "not running"),
+      stateBadge(state),
       h("a", { class: "back", href: "/" }, "All sessions"),
     );
-    if (state.status?.at !== lastStatusAt || !statusSlot.firstChild) {
+    if (state.status?.at !== lastStatusAt || stateOf(state) !== lastState || !statusSlot.firstChild) {
       const changed = lastStatusAt !== undefined && state.status?.at !== lastStatusAt;
       lastStatusAt = state.status?.at;
-      const card = statusCard(state.status);
+      lastState = stateOf(state);
+      const card = statusCard(state.status, lastState);
       if (changed) card.classList.add("fresh");
       statusSlot.replaceChildren(card);
     } else {
@@ -419,9 +474,50 @@ async function sessionView(id) {
 
 async function indexView() {
   document.title = "Canvas";
-  const list = h("section", { class: "card sessions" });
+  const groups = h("div");
   const header = h("header", { class: "top" }, h("h1", {}, "Canvas"), h("span", { class: "cwd" }, ""));
-  $app.replaceChildren(header, list);
+  $app.replaceChildren(header, groups);
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  function row(s) {
+    const st = stateOf(s);
+    const endedAt = s.ended || (s.live ? undefined : new Date(s.updated).toISOString());
+    const updatedIso = new Date(s.updated).toISOString();
+    const chips = [
+      s.open ? h("span", { class: "chip open", title: "Open questions in the status" }, `${s.open} open`) : null,
+      s.next ? h("span", { class: "chip next" }, `${s.next} next`) : null,
+      s.done ? h("span", { class: "chip" }, `${s.done} done`) : null,
+      s.sections ? h("span", { class: "chip" }, plural(s.sections, "section")) : null,
+      s.findings ? h("span", { class: "chip" }, plural(s.findings, "finding")) : null,
+    ].filter(Boolean);
+    // Live rows say how long ago; ended rows sit under a day heading, so the
+    // clock time is enough.
+    const when = st === "ended" ? h("time", { datetime: endedAt, title: fullDate(endedAt) }, clock(new Date(endedAt))) : agoEl(updatedIso);
+    return h(
+      "a",
+      { class: `row ${st}`, href: `/s/${encodeURIComponent(s.id)}` },
+      h(
+        "div",
+        { class: "main" },
+        h("div", { class: "line1" }, h("span", { class: "name" }, s.name || s.id.slice(0, 8)), h("span", { class: "cwd" }, tilde(s.cwd))),
+        h("div", { class: `goal${s.goal ? "" : " none"}` }, s.goal || "No status yet"),
+        s.now && st !== "ended" ? h("div", { class: "nowline" }, h("span", { class: "eyebrow" }, "Now"), h("span", {}, s.now)) : null,
+        s.now && st === "ended" ? h("div", { class: "nowline" }, h("span", { class: "eyebrow" }, "Last"), h("span", {}, s.now)) : null,
+        chips.length ? h("div", { class: "chips" }, chips) : null,
+      ),
+      h("div", { class: "side" }, st === "ended" ? "" : stateBadge(s), when),
+    );
+  }
+
+  function group(title, sessions, extra) {
+    return h(
+      "section",
+      { class: "card sessions" },
+      h("h2", {}, h("span", { class: "title" }, title), h("span", { class: "n" }, String(sessions.length)), extra ? h("span", { class: "meta" }, extra) : null),
+      h("div", { class: "bd flush" }, sessions.map(row)),
+    );
+  }
 
   async function refresh() {
     let sessions;
@@ -430,21 +526,24 @@ async function indexView() {
     } catch {
       return;
     }
-    header.querySelector(".cwd").textContent = `${sessions.length} session${sessions.length === 1 ? "" : "s"}`;
-    if (!sessions.length) return list.replaceChildren(h("div", { class: "bd empty" }, "No sessions yet."));
-    list.replaceChildren(
-      ...sessions.map((s) =>
-        h(
-          "a",
-          { class: "row", href: `/s/${encodeURIComponent(s.id)}` },
-          h("b", {}, s.name || s.id.slice(0, 8)),
-          h("span", { class: `dot ${s.live ? "on" : "off"}` }, s.live ? "● live" : `ended ${ago(s.ended || s.updated)}`),
-          h("small", {}, [tilde(s.cwd), s.sections ? `${s.sections} section${s.sections === 1 ? "" : "s"}` : "", s.findings ? `${s.findings} finding${s.findings === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")),
-          h("small", {}, ago(s.updated)),
-          s.now || s.goal ? h("span", { class: "now" }, s.now || s.goal) : null,
-        ),
-      ),
-    );
+    const active = sessions.filter((s) => s.live);
+    const waiting = active.filter((s) => NEEDS_YOU.has(stateOf(s))).length;
+    header.querySelector(".cwd").textContent = [plural(sessions.length, "session"), waiting ? `${waiting} waiting on you` : ""].filter(Boolean).join(" · ");
+    if (!sessions.length) return groups.replaceChildren(h("section", { class: "card" }, h("div", { class: "bd empty" }, "No sessions yet. A session gets a page on its first status or section.")));
+    // The ones that need you first, most urgent first.
+    const rank = { blocked: 0, error: 1, done: 2, working: 3, idle: 4 };
+    active.sort((a, b) => (rank[stateOf(a)] ?? 5) - (rank[stateOf(b)] ?? 5) || b.updated - a.updated);
+    const out = [];
+    if (active.length) out.push(group("Active", active));
+    const byDay = new Map();
+    for (const s of sessions.filter((x) => !x.live).sort((a, b) => Date.parse(b.ended || 0) - Date.parse(a.ended || 0) || b.updated - a.updated)) {
+      const d = new Date(s.ended || s.updated);
+      const key = dayLabel(d);
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(s);
+    }
+    for (const [day, list] of byDay) out.push(group(day, list));
+    groups.replaceChildren(...out);
   }
 
   await refresh();

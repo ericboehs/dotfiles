@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { findingLine, isSectionId, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, findingLine, isSectionId, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -135,7 +135,7 @@ test("listSessions puts live sessions first and summarizes them", () => {
   try {
     mk("dead1", { name: "old", pid: 999999, ended: "2026-01-01T00:00:00Z" });
     mk("live1", { name: "now", pid: process.pid }, {
-      "status.json": JSON.stringify({ goal: "g", now: "n" }),
+      "status.json": JSON.stringify({ goal: "g", now: "n", open: ["a", "b"], done: ["c"] }),
       "sections.json": JSON.stringify([{ id: "a", file: "a.md" }]),
       "findings.md": "- [t] x\n",
     });
@@ -145,6 +145,8 @@ test("listSessions puts live sessions first and summarizes them", () => {
     assert.equal(list[0].live, true);
     assert.equal(list[0].sections, 1);
     assert.equal(list[0].findings, 1);
+    assert.deepEqual([list[0].open, list[0].next, list[0].done], [2, 0, 1]);
+    assert.deepEqual([list[1].open, list[1].next, list[1].done], [0, 0, 0]);
     assert.equal(list[1].live, false);
     assert.equal(sessionState(root, "live1").status.goal, "g");
   } finally {
@@ -152,6 +154,56 @@ test("listSessions puts live sessions first and summarizes them", () => {
   }
 });
 
+test("daemon reports pi's program state, done for unknown, ended when pi is gone", () => {
+  const { root, mk } = tempRoot();
+  try {
+    mk("busy", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "working" }) });
+    mk("ask", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "blocked", message: "Allow bash?" }) });
+    mk("legacy", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "waiting" }) });
+    mk("old", { pid: process.pid }); // written before activity.json existed
+    mk("gone", { pid: 999999 }, { "activity.json": JSON.stringify({ state: "working", message: "x" }) });
+    assert.equal(sessionState(root, "busy").activity, "working");
+    assert.deepEqual([sessionState(root, "ask").activity, sessionState(root, "ask").activityMessage], ["blocked", "Allow bash?"]);
+    assert.equal(sessionState(root, "legacy").activity, "done");
+    assert.equal(sessionState(root, "old").activity, "done");
+    assert.deepEqual([sessionState(root, "gone").activity, sessionState(root, "gone").activityMessage], ["ended", ""]);
+    assert.equal(listSessions(root).find((s) => s.id === "ask").activityMessage, "Allow bash?");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ActivityTracker follows pi's program status rules", () => {
+  const t = new ActivityTracker();
+  const run = (...events) => {
+    for (const e of events) t.handle(typeof e === "string" ? { type: e } : e);
+    return t.current();
+  };
+  const reply = (extra = {}) => ({ type: "message_end", message: { role: "assistant", stopReason: "stop", ...extra } });
+  assert.deepEqual(t.current(), { state: "idle" }, "starts idle");
+  assert.deepEqual(run("agent_start"), { state: "working" });
+  assert.deepEqual(run({ type: "message_end", message: { role: "user" } }), { state: "working" }, "user messages do not decide");
+  assert.deepEqual(run(reply(), { type: "agent_settled", aborted: false }), { state: "done" });
+
+  // A dialog blocks over everything, the newest one wins, and closing restores.
+  assert.deepEqual(run("agent_start", { type: "ui_prompt_start", kind: "confirm", title: "Allow bash?\nrm -rf x" }), { state: "blocked", message: "Allow bash?" });
+  assert.deepEqual(run({ type: "ui_prompt_start", kind: "select", title: "Pick" }), { state: "blocked", message: "Pick" });
+  assert.deepEqual(run({ type: "ui_prompt_end", kind: "select", title: "Pick" }), { state: "blocked", message: "Allow bash?" });
+  assert.deepEqual(run({ type: "ui_prompt_end", kind: "confirm", title: "Allow bash?\nrm -rf x" }), { state: "working" });
+
+  // An error is replaced by a successful retry; a final error sticks.
+  assert.deepEqual(run(reply({ stopReason: "error", errorMessage: "server_busy\ndetails" }), reply(), { type: "agent_settled" }), { state: "done" });
+  assert.deepEqual(run("agent_start", reply({ stopReason: "error", errorMessage: "\n  quota exceeded\nmore" }), { type: "agent_settled" }), { state: "error", message: "quota exceeded" });
+
+  // Cancelling settles idle.
+  assert.deepEqual(run("agent_start", { type: "agent_settled", aborted: true }), { state: "idle" });
+
+  // Compaction is working; a manual one outside a run ends done, a failed one error.
+  assert.deepEqual(run({ type: "session_before_compact", reason: "manual" }), { state: "working", message: "Compacting context" });
+  assert.deepEqual(run({ type: "session_compact", reason: "manual" }), { state: "done" });
+  assert.deepEqual(run({ type: "session_before_compact", reason: "manual" }, { type: "session_compact_failed", reason: "manual", aborted: false, errorMessage: "too big" }), { state: "error", message: "too big" });
+  assert.deepEqual(run({ type: "session_before_compact", reason: "manual" }, { type: "session_compact_failed", reason: "manual", aborted: true }), { state: "idle" });
+});
 
 test("prune keeps a fresh empty session folder", () => {
   const { root } = tempRoot();

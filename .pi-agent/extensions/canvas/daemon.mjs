@@ -125,6 +125,8 @@ export function parseFindings(text) {
   return out;
 }
 
+const ACTIVITY_STATES = new Set(["working", "blocked", "done", "error", "idle"]);
+
 export function sessionState(root, id) {
   const dir = join(root, id);
   const meta = readJson(join(dir, "meta.json"), { id });
@@ -135,7 +137,13 @@ export function sessionState(root, id) {
     findings = parseFindings(readFileSync(join(dir, "findings.md"), "utf8"));
   } catch {}
   const live = !meta.ended && pidAlive(meta.pid);
-  return { meta: { ...meta, id }, live, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
+  // pi's program state (working, blocked, done, error, idle), written by
+  // canvas.ts. Only meaningful while the pi process is alive; anything
+  // unknown, including the older "waiting", reads as done.
+  const act = readJson(join(dir, "activity.json"), null);
+  const activity = !live ? "ended" : ACTIVITY_STATES.has(act?.state) ? act.state : "done";
+  const activityMessage = live && typeof act?.message === "string" ? act.message.slice(0, 200) : "";
+  return { meta: { ...meta, id }, live, activity, activityMessage, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
 }
 
 export function listSessions(root) {
@@ -156,11 +164,16 @@ export function listSessions(root) {
       name: s.meta.name || "",
       cwd: s.meta.cwd || "",
       live: s.live,
+      activity: s.activity,
+      activityMessage: s.activityMessage,
       started: s.meta.started,
       ended: s.meta.ended,
       updated: s.updated,
       now: s.status?.now || "",
       goal: s.status?.goal || "",
+      open: Array.isArray(s.status?.open) ? s.status.open.length : 0,
+      next: Array.isArray(s.status?.next) ? s.status.next.length : 0,
+      done: Array.isArray(s.status?.done) ? s.status.done.length : 0,
       sections: s.sections.length,
       findings: s.findings.length,
     });
