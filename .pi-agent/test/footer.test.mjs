@@ -121,26 +121,57 @@ async function mount(overrides = {}) {
 
   const previousEntry = process.argv[1];
   const previousExecPath = process.execPath;
+  const previousPath = process.env.PATH;
+  const previousNoAutoBundle = process.env.PI_NO_AUTO_BUNDLE;
   if (overrides.updateInstalled) {
     const root = mkdtempSync(path.join(tmpdir(), "footer-pi-version-"));
-    if (overrides.updateInstalled.missingEntry) {
-      process.argv[1] = path.join(root, "removed", "dist", "bundle.mjs");
-      process.execPath = path.join(root, "bin", "node");
-      const pkg = path.join(
-        root,
-        "lib",
-        "node_modules",
-        "@earendil-works",
-        "pi-coding-agent",
-        "package.json",
-      );
+    const { to, layout = "argv" } = overrides.updateInstalled;
+    // An update would otherwise spawn the real ~/bin/pi-bundle.
+    process.env.PI_NO_AUTO_BUNDLE = "1";
+    // No real pi or mise: only what each layout puts on PATH (git stays reachable).
+    const isolatedPath = (...dirs) => [...dirs, "/usr/bin", "/bin"].join(":");
+    const pkgJson = (version) => JSON.stringify({ name: "@earendil-works/pi-coding-agent", version });
+    // mise's aube layout: node_modules/.bin/pi is a shim script beside a
+    // node_modules/@earendil-works/pi-coding-agent package.
+    const aubeInstall = (version) => {
+      const modules = path.join(root, version, "node_modules");
+      const bin = path.join(modules, ".bin", "pi");
+      const pkg = path.join(modules, "@earendil-works", "pi-coding-agent", "package.json");
+      mkdirSync(path.dirname(bin), { recursive: true });
       mkdirSync(path.dirname(pkg), { recursive: true });
-      writeFileSync(pkg, JSON.stringify({ version: overrides.updateInstalled.to }));
+      writeFileSync(bin, "#!/bin/sh\n", { mode: 0o755 });
+      writeFileSync(pkg, pkgJson(version));
+      return bin;
+    };
+    process.argv[1] = path.join(root, "removed", "dist", "bundle", "cli.js");
+    if (layout === "path") {
+      process.env.PATH = isolatedPath(path.dirname(aubeInstall(to)));
+    } else if (layout === "mise") {
+      // The process's own PATH still names its old versioned install first;
+      // only mise knows the pin moved on.
+      const oldBin = aubeInstall("0.0.1");
+      const newBin = aubeInstall(to);
+      const miseDir = path.join(root, "mise-bin");
+      mkdirSync(miseDir, { recursive: true });
+      writeFileSync(
+        path.join(miseDir, "mise"),
+        `#!/bin/sh\n[ "$1 $2" = "which pi" ] && echo ${JSON.stringify(newBin)}\n`,
+        { mode: 0o755 },
+      );
+      process.env.PATH = isolatedPath(path.dirname(oldBin), miseDir);
+    } else if (layout === "node-prefix") {
+      process.env.PATH = isolatedPath();
+      process.execPath = path.join(root, "bin", "node");
+      const pkg = path.join(root, "lib", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
+      mkdirSync(path.dirname(pkg), { recursive: true });
+      writeFileSync(pkg, pkgJson(to));
     } else {
-      const entry = path.join(root, "dist", "cli.js");
+      // pi started by path: walk up from dist/bundle/cli.js to the package.
+      process.env.PATH = isolatedPath();
+      const entry = path.join(root, "dist", "bundle", "cli.js");
       mkdirSync(path.dirname(entry), { recursive: true });
       writeFileSync(entry, "");
-      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: overrides.updateInstalled.to }));
+      writeFileSync(path.join(root, "package.json"), pkgJson(to));
       process.argv[1] = entry;
     }
   }
@@ -150,6 +181,11 @@ async function mount(overrides = {}) {
   } finally {
     process.argv[1] = previousEntry;
     process.execPath = previousExecPath;
+    if (overrides.updateInstalled) {
+      process.env.PATH = previousPath;
+      if (previousNoAutoBundle === undefined) delete process.env.PI_NO_AUTO_BUNDLE;
+      else process.env.PI_NO_AUTO_BUNDLE = previousNoAutoBundle;
+    }
   }
 
   const component = factory(
@@ -728,10 +764,23 @@ test("session name is right-aligned and statuses split inline vs status row", as
   assert.equal(main.length, 120);
 });
 
+for (const [layout, why] of [
+  ["mise", "mise knows the pin moved even though this process's PATH names its old install"],
+  ["path", "without mise, the first pi on PATH is the active install"],
+  ["node-prefix", "an npm-global install beside node, with no pi on PATH"],
+  ["argv", "a pi started by path, found by walking up from dist/bundle/cli.js"],
+]) {
+  test(`update notice resolves the installed version: ${layout} (${why})`, async () => {
+    const ui = await mount({ updateInstalled: { to: "99.0.0", layout } });
+    await ui.settled(80);
+    const widget = ui.widgets.find(({ key }) => key === "footer-update")?.content({ requestRender: () => {} });
+    assert.match(strip(widget.render(80)[0]), new RegExp(`→ v99\\.0\\.0 · Restart to update$`));
+  });
+}
+
 test("update notice shows both versions in a right-aligned widget above the prompt", async () => {
-  // Updates can remove the exact bundle argv[1] names while the old process
-  // still runs, so exercise the node-prefix fallback used after /reload.
-  const ui = await mount({ updateInstalled: { to: "99.0.0", missingEntry: true } });
+  // The running process's entrypoint may be gone; the active pi on PATH still answers.
+  const ui = await mount({ updateInstalled: { to: "99.0.0", layout: "path" } });
   const [main] = await ui.settled(80);
   const widgetFactory = ui.widgets.find(({ key }) => key === "footer-update")?.content;
   const widget = widgetFactory({ requestRender: () => {} });

@@ -38,8 +38,8 @@
  *   peer session name, and the extension-status row.
  */
 
-import { spawn } from "node:child_process";
-import { appendFile, readFile, realpath, writeFile, access, stat, constants } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { appendFile, readFile, readlink, realpath, writeFile, access, stat, lstat, constants } from "node:fs/promises";
 import { homedir, loadavg } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -716,41 +716,152 @@ function bootLogPath(): string {
   return join(agentDir(), BOOT_LOG_FILE);
 }
 
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+const MISE_WHICH_TIMEOUT_MS = 3_000;
+
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every executable `name` on PATH, in PATH order. */
+async function whichAll(name: string): Promise<string[]> {
+  const dirs = (process.env.PATH ?? "").split(":").filter(Boolean);
+  const hits: string[] = [];
+  for (const dir of dirs) {
+    const candidate = join(dir, name);
+    if (await isExecutable(candidate)) hits.push(candidate);
+  }
+  return hits;
+}
+
 /**
- * pi's package.json, resolved fresh on every call. Prefer argv[1] while its
- * entrypoint still exists; an update can remove the old bundle out from under
- * a running process, so fall back to the global package beside node itself.
+ * The mise binary, if any: a `mise` on PATH, else the target of a mise shim
+ * (shims are symlinks to the mise binary itself).
+ */
+async function miseBinary(piBins: string[]): Promise<string | null> {
+  const [onPath] = await whichAll("mise");
+  if (onPath) return onPath;
+  for (const bin of piBins) {
+    try {
+      if (!(await lstat(bin)).isSymbolicLink()) continue;
+      if (basename(await readlink(bin)) === "mise") return await realpath(bin);
+    } catch {
+      // Dangling or unreadable link: try the next one.
+    }
+  }
+  return null;
+}
+
+function miseWhichPi(mise: string): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      mise,
+      ["which", "pi"],
+      { cwd: process.cwd(), timeout: MISE_WHICH_TIMEOUT_MS },
+      (error, stdout) => resolve(error ? "" : String(stdout).trim()),
+    );
+  });
+}
+
+/**
+ * The `pi` a fresh launch from this cwd would run — not the one this process
+ * is running. Asking mise comes first: mise installs each version in its own
+ * directory and `mise activate` bakes that versioned bin dir into PATH, so a
+ * long-running process's own PATH still points at its old install. Without
+ * mise, the first `pi` on PATH is the answer.
+ */
+async function activePiBin(): Promise<string | null> {
+  const piBins = await whichAll("pi");
+  const mise = await miseBinary(piBins);
+  if (mise) {
+    const resolved = await miseWhichPi(mise);
+    if (resolved) return resolved;
+  }
+  for (const bin of piBins) {
+    try {
+      // Skip mise shims; asking mise already failed, and running one is not an option.
+      if ((await lstat(bin)).isSymbolicLink() && basename(await readlink(bin)) === "mise") continue;
+    } catch {
+      continue;
+    }
+    return bin;
+  }
+  return null;
+}
+
+async function isPiPackageJson(file: string): Promise<boolean> {
+  try {
+    const pkg: unknown = JSON.parse(await readFile(file, "utf8"));
+    return (pkg as { name?: unknown } | null)?.name === PI_PACKAGE_NAME;
+  } catch {
+    return false;
+  }
+}
+
+/** Walk up from a file inside pi's package to its package.json. */
+async function packageJsonAbove(file: string): Promise<string | null> {
+  let dir = dirname(file);
+  for (let i = 0; i < 6 && dir !== dirname(dir); i++, dir = dirname(dir)) {
+    const candidate = join(dir, "package.json");
+    if (await isPiPackageJson(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * pi's package.json for a bin path. Handles the npm-global layout (bin is a
+ * symlink into the package), mise's aube layout (bin is a generated shim script
+ * in node_modules/.bin beside a node_modules/@earendil-works/pi-coding-agent
+ * link), and a bin repointed at bin/pi-launch.
+ */
+async function packageJsonForBin(bin: string): Promise<string | null> {
+  const binDir = dirname(bin);
+  const candidates = [
+    join(binDir, "..", "@earendil-works", "pi-coding-agent", "package.json"),
+    join(binDir, "..", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "package.json"),
+  ];
+  for (const candidate of candidates) {
+    if (await isPiPackageJson(candidate)) return await realpath(candidate);
+  }
+  try {
+    return await packageJsonAbove(await realpath(bin));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The active install's package.json, resolved fresh on every call through the
+ * `pi` a new launch would run (see activePiBin). Falls back to the running
+ * entrypoint (argv[1]), then an npm-global install beside node, when no pi bin
+ * resolves (e.g. a pi started by path).
+ *
+ * argv[1] is dist/bundle/cli.js since pi ships its own bundle, so walk up to
+ * the package rather than assuming a fixed depth.
  */
 async function piPackageJsonPath(): Promise<string | null> {
-  const candidates: string[] = [];
+  const bin = await activePiBin();
+  if (bin) {
+    const found = await packageJsonForBin(bin);
+    if (found) return found;
+  }
   try {
     const entry = process.argv[1];
     if (entry) {
-      const resolved = await realpath(entry);
-      candidates.push(join(dirname(dirname(resolved)), "package.json"));
+      const found = await packageJsonAbove(await realpath(entry));
+      if (found) return found;
     }
   } catch {
     // The update may have removed the running process's old entrypoint.
   }
-  candidates.push(
-    join(
-      dirname(dirname(process.execPath)),
-      "lib",
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
-      "package.json",
-    ),
-  );
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.R_OK);
-      return candidate;
-    } catch {
-      // Try the next installation layout.
-    }
-  }
-  return null;
+  // Last resort: an npm-global install beside node itself, with no pi on PATH.
+  const global = join(dirname(dirname(process.execPath)), "lib", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
+  return (await isPiPackageJson(global)) ? global : null;
 }
 
 /** pi's own version, for correlating a regression with an upgrade. */
@@ -790,6 +901,9 @@ async function bundleIsStale(): Promise<boolean> {
   try {
     const pkgJson = await piPackageJsonPath();
     if (!pkgJson) return false;
+    // Since pi 0.85 upstream ships dist/bundle/cli.js and pi-bundle builds
+    // nothing when it exists, so a missing dist/bundle.mjs is expected, not stale.
+    if (await stat(join(dirname(pkgJson), "dist", "bundle", "cli.js")).then(() => true, () => false)) return false;
     const bundle = join(dirname(pkgJson), "dist", "bundle.mjs");
     const [pkgStat, bundleStat] = await Promise.all([
       stat(pkgJson),
@@ -863,7 +977,8 @@ async function recordBoot(ms: number, cwd: string): Promise<void> {
   const line = `${JSON.stringify({
     t: new Date(now).toISOString(),
     ms,
-    v: await piVersion(),
+    // The version this process booted, not whatever is installed by now.
+    v: RUNNING_PI_VERSION || (await piVersion()),
     cwd,
     // Both are for reading the log later, not for anything at runtime: they are
     // what separates "this build got slower" from "this launch was unlucky".
