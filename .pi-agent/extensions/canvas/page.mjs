@@ -12,7 +12,17 @@ a { color: var(--accent); }
 header.top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 header.top h1 { font-size: 20px; margin: 0; }
 header.top .cwd { color: var(--dim); font-size: 13px; }
-header.top .back { margin-left: auto; font-size: 13px; }
+header.top .back { font-size: 13px; }
+header.top .tools { margin-left: auto; display: flex; gap: 2px; align-items: baseline; }
+header.top .tools .back { margin-left: 8px; }
+.card > h2 { cursor: pointer; user-select: none; }
+.chev { flex: none; width: 18px; height: 18px; margin: 0 -4px 0 -4px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--dim); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.chev::before { content: ""; width: 5px; height: 5px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-1px) rotate(45deg); transition: transform .15s; }
+.chev:hover, .card > h2:hover .chev { color: var(--ink); }
+.card.collapsed .chev::before { transform: translateX(-1px) rotate(-45deg); }
+.card.collapsed > :not(h2) { display: none; }
+.card.collapsed > h2 { border-bottom: 0; }
+.card.unseen > h2 .title::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
 .state { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .state.working { color: var(--ok); } .state.done { color: var(--warn); } .state.blocked { color: var(--accent); } .state.error { color: var(--bad); } .state.idle, .state.ended { color: var(--dim); font-weight: 400; }
 .state .msg { font-weight: 400; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
@@ -334,6 +344,75 @@ function stateBadge(s) {
 
 const statusBy = (status) => `${status.model || "?"} · ${ago(status.at)}`;
 
+// ── collapsing ───────────────────────────────────────────────────────────────
+// Collapsed cards are remembered per session in localStorage. A collapsed
+// section's body is not rendered until it is opened, so mermaid and frames
+// lay out at their real size.
+
+let collapsed = new Set();
+let collapsedKey = "";
+
+function loadCollapsed(sid) {
+  collapsedKey = `canvas:collapsed:${sid}`;
+  try {
+    collapsed = new Set(JSON.parse(localStorage.getItem(collapsedKey) || "[]"));
+  } catch {
+    collapsed = new Set();
+  }
+}
+
+function saveCollapsed() {
+  try {
+    localStorage.setItem(collapsedKey, JSON.stringify([...collapsed]));
+  } catch {}
+}
+
+/** Make a card's header toggle it. onOpen runs the first time its body shows. */
+function collapsible(card, key, onOpen) {
+  const head = card.querySelector(":scope > h2");
+  const chev = h("button", { class: "chev", type: "button" });
+  head.prepend(chev);
+  card.dataset.key = key;
+  let opened = false;
+  card.setCollapsed = (shut, remember = true) => {
+    card.classList.toggle("collapsed", shut);
+    chev.setAttribute("aria-expanded", String(!shut));
+    chev.setAttribute("aria-label", shut ? "Expand" : "Collapse");
+    chev.title = shut ? "Expand" : "Collapse";
+    if (remember) {
+      if (shut) collapsed.add(key);
+      else collapsed.delete(key);
+      saveCollapsed();
+    }
+    if (shut) return;
+    card.classList.remove("unseen");
+    if (!opened) {
+      opened = true;
+      onOpen?.();
+    }
+  };
+  head.addEventListener("click", (e) => {
+    if (e.target.closest("a, button, input") && !e.target.closest(".chev")) return;
+    if (String(getSelection?.() || "")) return; // selecting title text, not toggling
+    card.setCollapsed(!card.classList.contains("collapsed"));
+  });
+  card.setCollapsed(collapsed.has(key), false);
+  return card;
+}
+
+/** Status and Findings stay on top. Sections follow, newest change first, and
+ *  the automatic widgets sit at the bottom so they do not jump up every turn. */
+const WIDGETS = ["auto-screenshots", "auto-files"];
+function sortSections(list) {
+  const w = (s) => WIDGETS.indexOf(s.id);
+  return [...list].sort((a, b) => {
+    const wa = w(a);
+    const wb = w(b);
+    if (wa >= 0 || wb >= 0) return (wa < 0 ? -1 : wa) - (wb < 0 ? -1 : wb) || (wa < 0 ? String(b.at).localeCompare(String(a.at)) : 0);
+    return String(b.at).localeCompare(String(a.at));
+  });
+}
+
 function statusCard(status, state) {
   const title = h("h2", {}, h("span", { class: "title" }, "Status"));
   const card = h("section", { class: "card" }, title);
@@ -341,7 +420,7 @@ function statusCard(status, state) {
   card.append(bd);
   if (!status) {
     bd.append(h("div", { class: "empty" }, "No status yet. It appears after the next turn with tool calls."));
-    return card;
+    return collapsible(card, "_status");
   }
   title.append(h("span", { class: "meta" }, h("span", { class: "by" }, statusBy(status))));
   bd.append(h("div", { class: "goal" }, h("span", { class: "eyebrow" }, "Goal"), status.goal || "—"));
@@ -354,7 +433,7 @@ function statusCard(status, state) {
       items?.length ? h("ul", {}, items.map((i) => h("li", {}, i))) : h("div", { class: "none" }, "—"),
     );
   bd.append(h("div", { class: "cols" }, col("next", "Next", status.next), col("open", "Open", status.open), col("done", "Done", status.done)));
-  return card;
+  return collapsible(card, "_status");
 }
 
 const FINDINGS_SHOWN = 8;
@@ -396,7 +475,7 @@ function findingsCard(findings, showAll = false) {
       ),
     );
   }
-  return card;
+  return collapsible(card, "_findings");
 }
 
 const rawUrl = (id, sec, bust = true) =>
@@ -415,11 +494,12 @@ function sectionCard(id, sec) {
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
   const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), meta), bd);
-  sectionBody(id, sec).then(
-    (body) => bd.replaceChildren(body),
-    (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
+  return collapsible(el, sec.id, () =>
+    sectionBody(id, sec).then(
+      (body) => bd.replaceChildren(body),
+      (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
+    ),
   );
-  return el;
 }
 
 // ── session view ─────────────────────────────────────────────────────────────
@@ -430,6 +510,7 @@ async function sessionView(id) {
   const sectionsSlot = h("div");
   const findingsSlot = h("div");
   $app.replaceChildren(header, statusSlot, findingsSlot, sectionsSlot);
+  loadCollapsed(id);
   const cards = new Map(); // section id → { at, el }
   let lastStatusAt;
   let lastState;
@@ -448,7 +529,13 @@ async function sessionView(id) {
       h("h1", {}, name),
       h("span", { class: "cwd" }, tilde(state.meta.cwd)),
       stateBadge(state),
-      h("a", { class: "back", href: "/" }, "All sessions"),
+      h(
+        "span",
+        { class: "tools" },
+        h("button", { class: "btn", type: "button", onclick: () => setAll(true) }, "Collapse all"),
+        h("button", { class: "btn", type: "button", onclick: () => setAll(false) }, "Expand all"),
+        h("a", { class: "back", href: "/" }, "All sessions"),
+      ),
     );
     if (state.status?.at !== lastStatusAt || stateOf(state) !== lastState || !statusSlot.firstChild) {
       const changed = lastStatusAt !== undefined && state.status?.at !== lastStatusAt;
@@ -456,6 +543,7 @@ async function sessionView(id) {
       lastState = stateOf(state);
       const card = statusCard(state.status, lastState);
       if (changed) card.classList.add("fresh");
+      if (changed && card.classList.contains("collapsed")) card.classList.add("unseen");
       statusSlot.replaceChildren(card);
     } else {
       // Keep the "12s ago" honest without a rebuild.
@@ -463,29 +551,42 @@ async function sessionView(id) {
       if (by && state.status) by.textContent = statusBy(state.status);
     }
 
-    const sections = [...state.sections].sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || String(a.at).localeCompare(String(b.at)));
+    const sections = sortSections(state.sections);
     const keep = new Set(sections.map((s) => s.id));
     for (const [sid, c] of cards) if (!keep.has(sid)) (c.el.remove(), cards.delete(sid));
-    for (const sec of sections) {
+    sectionsSlot.querySelector(":scope > p.empty")?.remove();
+    sections.forEach((sec, i) => {
       let c = cards.get(sec.id);
       if (!c || c.at !== sec.at) {
         const el = sectionCard(id, sec);
         if (c) {
           el.classList.add("fresh");
+          if (el.classList.contains("collapsed")) el.classList.add("unseen");
           c.el.replaceWith(el);
         }
         c = { at: sec.at, el };
         cards.set(sec.id, c);
       }
-      sectionsSlot.append(c.el); // re-append keeps order without re-creating
-    }
-    if (!sections.length && !sectionsSlot.firstChild) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
-    else sectionsSlot.querySelector(":scope > p.empty")?.remove();
+      // Move a card only when its place changed: moving a frame reloads it.
+      const here = sectionsSlot.children[i];
+      if (here !== c.el) sectionsSlot.insertBefore(c.el, here || null);
+    });
+    if (!sections.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
 
     if (state.findings.length !== lastFindings) {
+      const grew = lastFindings >= 0 && state.findings.length > lastFindings;
       lastFindings = state.findings.length;
-      findingsSlot.replaceChildren(findingsCard(state.findings) || "");
+      const card = findingsCard(state.findings);
+      if (card && grew) {
+        card.classList.add("fresh");
+        if (card.classList.contains("collapsed")) card.classList.add("unseen");
+      }
+      findingsSlot.replaceChildren(card || "");
     }
+  }
+
+  function setAll(shut) {
+    for (const card of $app.querySelectorAll(".card[data-key]")) card.setCollapsed?.(shut);
   }
 
   await refresh();

@@ -281,7 +281,8 @@ export function openTodos(text: string): string[] {
     .map((l) => oneLine(l.slice(2), 140));
 }
 
-export type Section = { id: string; title: string; kind: string; file: string; order: number; at: string; by?: "auto" };
+/** The page sorts sections by `at`, newest first; `order` is only in old files. */
+export type Section = { id: string; title: string; kind: string; file: string; at: string; by?: "auto"; order?: number };
 
 export function upsertSection(list: Section[], sec: Section): Section[] {
   const out = list.filter((s) => s.id !== sec.id);
@@ -574,7 +575,7 @@ export default function canvas(pi: ExtensionAPI) {
   };
 
   /** Add or replace a markdown section; skips identical rewrites so the page does not flash. */
-  function putMarkdown(d: string, sec: { id: string; title: string; body: string; order: number; by?: "auto" }): boolean {
+  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto" }): boolean {
     const listPath = join(d, "sections.json");
     const list = readJson<Section[]>(listPath, []);
     const old = list.find((x) => x.id === sec.id);
@@ -584,7 +585,7 @@ export default function canvas(pi: ExtensionAPI) {
     } catch {}
     if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
     writeAtomic(join(d, file), sec.body);
-    const entry: Section = { id: sec.id, title: sec.title, kind: "markdown", file, order: old?.order ?? sec.order, at: new Date().toISOString(), ...(sec.by ? { by: sec.by } : {}) };
+    const entry: Section = { id: sec.id, title: sec.title, kind: "markdown", file, at: new Date().toISOString(), ...(sec.by ? { by: sec.by } : {}) };
     writeAtomic(listPath, JSON.stringify(upsertSection(list, entry), null, 2));
     return true;
   }
@@ -605,7 +606,7 @@ export default function canvas(pi: ExtensionAPI) {
     // and never echo one under another id.
     if (taken && taken.by !== "auto") return;
     if (current.some((x) => x.by !== "auto" && norm(x.title) === norm(extras.section!.title))) return;
-    putMarkdown(d, { id: extras.section.id, title: extras.section.title, body: extras.section.markdown, order: 300, by: "auto" });
+    putMarkdown(d, { id: extras.section.id, title: extras.section.title, body: extras.section.markdown, by: "auto" });
     const list = readJson<Section[]>(listPath, []);
     const auto = list.filter((x) => x.by === "auto" && !WIDGETS.has(x.id)).sort((a, b) => b.at.localeCompare(a.at));
     const drop = new Set(auto.slice(AUTO_SECTIONS_KEPT).map((x) => x.id));
@@ -633,7 +634,7 @@ export default function canvas(pi: ExtensionAPI) {
       const path = join(d, "auto-files.json");
       const files = tallyFiles(readJson<Record<string, FileStat>>(path, {}), ops, ctx.cwd);
       writeAtomic(path, JSON.stringify(files, null, 2));
-      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd), order: 900, by: "auto" });
+      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd), by: "auto" });
     }
     if (images.length) {
       const path = join(d, "auto-shots.json");
@@ -650,7 +651,7 @@ export default function canvas(pi: ExtensionAPI) {
       for (const x of shots.slice(SHOTS_KEPT)) rmSync(join(d, x.file), { force: true });
       shots = shots.slice(0, SHOTS_KEPT);
       writeAtomic(path, JSON.stringify(shots, null, 2));
-      putMarkdown(d, { id: "auto-screenshots", title: "Screenshots", body: shotsMarkdown(shots, sessionId), order: 850, by: "auto" });
+      putMarkdown(d, { id: "auto-screenshots", title: "Screenshots", body: shotsMarkdown(shots, sessionId), by: "auto" });
     }
   }
 
@@ -811,7 +812,6 @@ export default function canvas(pi: ExtensionAPI) {
       kind: Type.Union(KINDS.map((k) => Type.Literal(k)), { description: "Section kind" }),
       body: Type.Optional(Type.String({ description: "Markdown, HTML, mermaid source or finding text" })),
       path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, or image. Relative to the cwd." })),
-      order: Type.Optional(Type.Number({ description: "Lower sorts higher. Default 100." })),
       remove: Type.Optional(Type.Boolean({ description: "Delete the section with this id" })),
     }),
     executionMode: "sequential",
@@ -872,7 +872,7 @@ export default function canvas(pi: ExtensionAPI) {
           writeAtomic(join(d, file), body);
         }
 
-        const sec: Section = { id, title: params.title || old?.title || id, kind: params.kind, file, order: params.order ?? old?.order ?? 100, at: new Date().toISOString() };
+        const sec: Section = { id, title: params.title || old?.title || id, kind: params.kind, file, at: new Date().toISOString() };
         list = upsertSection(list, sec);
         writeAtomic(listPath, JSON.stringify(list, null, 2));
         return {
