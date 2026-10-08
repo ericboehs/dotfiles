@@ -417,10 +417,7 @@ export default function canvas(pi: ExtensionAPI) {
 
   pi.on("session_start", (_e, ctx) => {
     sessionId = ctx.sessionManager.getSessionId();
-    if (existsSync(dir())) {
-      ensureDir(ctx);
-      if (ctx.hasUI) ctx.ui.setStatus("canvas", `canvas ${pageUrl(sessionId).replace("http://", "")}`);
-    }
+    if (existsSync(dir())) ensureDir(ctx);
     void ensureDaemon();
   });
 
@@ -464,7 +461,6 @@ export default function canvas(pi: ExtensionAPI) {
         return;
       }
       ensureDir(ctx);
-      ctx.ui.setStatus("canvas", `canvas ${url.replace("http://", "")}`);
       if (!(await ensureDaemon())) {
         ctx.ui.notify(`canvas: daemon did not start; see ${join(canvasRoot(), ".daemon.log")}`, "error");
         return;
@@ -506,7 +502,6 @@ export default function canvas(pi: ExtensionAPI) {
         const d = ensureDir(ctx);
         const url = pageUrl(sessionId);
         void ensureDaemon();
-        if (ctx.hasUI) ctx.ui.setStatus("canvas", `canvas ${url.replace("http://", "")}`);
 
         if (params.kind === "finding") {
           const text = String(params.body || params.title || "").trim();
