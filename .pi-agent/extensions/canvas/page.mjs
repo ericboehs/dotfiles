@@ -78,6 +78,13 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 .findings li:first-child, .findings li.day + li { border-top: 0; }
 .findings li:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
 .findings li time { color: var(--dim); font-size: 12px; text-align: right; padding-top: 1px; }
+.findings li .when { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.tag.auto { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.gallery figure { margin: 0; min-width: 0; }
+.gallery img { display: block; width: 100%; height: 150px; object-fit: cover; object-position: top left; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); }
+.gallery a:hover img { border-color: var(--accent); }
+.gallery figcaption { margin-top: 4px; font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .findings li .btn { opacity: 0; margin: -3px -6px -3px 0; }
 .findings li:hover .btn, .findings li .btn:focus-visible, .findings li .btn.ok { opacity: 1; }
 @media (hover: none) { .findings li .btn { opacity: 1; } }
@@ -375,7 +382,18 @@ function findingsCard(findings, showAll = false) {
     if (day && day !== lastDay) list.append(h("li", { class: "day" }, day));
     lastDay = day || lastDay;
     list.append(
-      h("li", {}, h("time", { datetime: f.at, title: fullDate(f.at) }, valid ? clock(d) : f.at || ""), renderMarkdown(f.text), copyButton(() => f.text)),
+      h(
+        "li",
+        {},
+        h(
+          "span",
+          { class: "when" },
+          h("time", { datetime: f.at, title: fullDate(f.at) }, valid ? clock(d) : f.at || ""),
+          f.by === "auto" ? h("span", { class: "tag auto", title: "Written by the status model" }, "auto") : null,
+        ),
+        renderMarkdown(f.text),
+        copyButton(() => f.text),
+      ),
     );
   }
   return card;
@@ -385,7 +403,13 @@ const rawUrl = (id, sec, bust = true) =>
   `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(sec.file)}${bust ? `?v=${encodeURIComponent(sec.at || "")}` : ""}`;
 
 function sectionCard(id, sec) {
-  const meta = h("span", { class: "meta" }, h("span", { class: "tag" }, sec.kind), agoEl(sec.at));
+  const meta = h(
+    "span",
+    { class: "meta" },
+    sec.by === "auto" ? h("span", { class: "tag auto", title: "Kept up to date automatically" }, "auto") : null,
+    h("span", { class: "tag" }, sec.kind),
+    agoEl(sec.at),
+  );
   if (sec.kind === "markdown" || sec.kind === "mermaid") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";

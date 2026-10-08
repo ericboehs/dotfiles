@@ -118,8 +118,9 @@ function newestMtime(dir) {
 export function parseFindings(text) {
   const out = [];
   for (const line of String(text || "").split("\n")) {
-    const m = line.match(/^- \[([^\]]+)\] (.*)$/);
-    if (m) out.push({ at: m[1], text: m[2] });
+    // "- [<iso>] text", or "- [<iso> · auto] text" for ones the status model wrote.
+    const m = line.match(/^- \[([^\]\s]+)(?: · (\w+))?\] (.*)$/);
+    if (m) out.push({ at: m[1], ...(m[2] ? { by: m[2] } : {}), text: m[3] });
     else if (line.startsWith("  ") && out.length) out[out.length - 1].text += "\n" + line.slice(2);
   }
   return out;

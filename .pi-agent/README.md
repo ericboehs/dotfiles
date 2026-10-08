@@ -727,7 +727,17 @@ updates through server-sent events with no reload.
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`, and
   `finding` (one append-only line in the findings log). `/html-plan` now puts
-  its packed page here instead of opening Safari.
+  its packed page here instead of opening Safari. The tool's guidelines tell
+  the main agent to use it without being asked: a finding for each confirmed
+  root cause, gotcha or decision, and a section for tables, diagrams and
+  command lists.
+- **Auto content.** The same Haiku call may add up to two findings and one
+  `auto-*` section per turn. Findings are tagged `auto` and deduplicated.
+  Haiku's section is skipped when the agent wrote one that turn, and only the
+  newest six are kept. After every turn the page also updates a **Files
+  changed** table (paths and edit counts from tool calls) and a
+  **Screenshots** gallery of the last 12 images the agent `read`, copied into
+  the session folder. `PI_CANVAS_AUTO=0` turns all of this off.
 - **Opening it.** Safari never opens by itself. `/canvas` opens this session's
   page on display 1, left half, or focuses the tab if it is already open.
   `/canvas url` prints the address, `/canvas status` forces a status run, and

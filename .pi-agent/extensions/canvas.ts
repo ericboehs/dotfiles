@@ -8,6 +8,9 @@
  *   block (goal, now, done, open, next) from a digest of that turn. In-process
  *   modelRegistry.complete(), the same pattern as auto-session-name.ts; the
  *   main model does nothing.
+ * - The same Haiku call may add up to two findings and one auto- section per
+ *   turn. After every turn the page also gets a Files changed table and a
+ *   Screenshots gallery of images the agent read, with no model involved.
  * - The `canvas` tool lets the main agent add or replace sections: markdown,
  *   html, html-plan, image, mermaid, and append-only findings.
  * - Safari never opens by itself. `/canvas` opens or focuses this session's
@@ -15,7 +18,8 @@
  *
  * Env: PI_CANVAS=0 disables everything; PI_CANVAS_STATUS=0 keeps the tool but
  * stops status runs; PI_CANVAS_MODEL=provider/id overrides the status model;
- * PI_CANVAS_PORT / PI_CANVAS_ROOT move the daemon. Subagent children
+ * PI_CANVAS_AUTO=0 stops the auto findings, sections, Files changed and
+ * Screenshots widgets; PI_CANVAS_PORT / PI_CANVAS_ROOT move the daemon. Subagent children
  * (PI_SUBAGENT_CHILD=1) skip the canvas.
  */
 
@@ -52,6 +56,12 @@ export type Turn = {
   user: string;
   tools: { name: string; arg: string; error: boolean }[];
   files: string[];
+  /** Every successful edit or write, in order, for the Files changed widget. */
+  ops?: { tool: "edit" | "write"; path: string }[];
+  /** Image files the agent read this turn (screenshots it looked at). */
+  images?: string[];
+  /** Sections the main agent added or replaced with the canvas tool this turn. */
+  canvasSections?: number;
   reply: string;
 };
 
@@ -87,7 +97,7 @@ export function lastTurn(branch: unknown[]): Turn {
       break;
     }
   }
-  const turn: Turn = { user: "", tools: [], files: [], reply: "" };
+  const turn: Turn = { user: "", tools: [], files: [], ops: [], images: [], reply: "" };
   if (start < 0) return turn;
   turn.user = textOf(entries[start]?.message?.content);
   const files = new Set<string>();
@@ -105,8 +115,14 @@ export function lastTurn(branch: unknown[]): Turn {
       if (p?.type !== "toolCall" || !p.name) continue;
       const a = p.arguments ?? {};
       const arg = a.command ?? a.path ?? a.query ?? a.url ?? a.pattern ?? a.id ?? a.op ?? "";
-      turn.tools.push({ name: p.name, arg: oneLine(arg, 160), error: Boolean(p.id && errored.has(p.id)) });
-      if ((p.name === "edit" || p.name === "write") && typeof a.path === "string") files.add(a.path);
+      const failed = Boolean(p.id && errored.has(p.id));
+      turn.tools.push({ name: p.name, arg: oneLine(arg, 160), error: failed });
+      if ((p.name === "edit" || p.name === "write") && typeof a.path === "string") {
+        files.add(a.path);
+        if (!failed) turn.ops!.push({ tool: p.name, path: a.path });
+      }
+      if (p.name === "read" && !failed && typeof a.path === "string" && IMAGE_EXT.has(extname(a.path).toLowerCase()) && !turn.images!.includes(a.path)) turn.images!.push(a.path);
+      if (p.name === "canvas" && !failed && a.kind !== "finding" && !a.remove) turn.canvasSections = (turn.canvasSections ?? 0) + 1;
     }
   }
   turn.files = [...files];
@@ -129,7 +145,11 @@ export function worthStatus(turn: Turn): boolean {
   return turn.tools.length > 0 || turn.reply.length >= 400;
 }
 
-export function turnDigest(turn: Turn, prev: Status | null, extra: { name?: string; cwd?: string; todo?: string[] } = {}): string {
+export function turnDigest(
+  turn: Turn,
+  prev: Status | null,
+  extra: { name?: string; cwd?: string; todo?: string[]; findings?: string[]; sections?: { id: string; title: string; by?: string }[] } = {},
+): string {
   const lines: string[] = [];
   lines.push(`Previous status: ${prev ? JSON.stringify({ goal: prev.goal, now: prev.now, done: prev.done, open: prev.open, next: prev.next }) : "none"}`);
   if (extra.name || extra.cwd) lines.push(`Session: ${extra.name || "(unnamed)"} in ${extra.cwd || "?"}`);
@@ -140,21 +160,97 @@ export function turnDigest(turn: Turn, prev: Status | null, extra: { name?: stri
   }
   if (turn.files.length) lines.push("", `Files changed: ${turn.files.slice(0, 20).join(", ")}`);
   if (extra.todo?.length) lines.push("", "Open tasks:", ...extra.todo.slice(0, 10).map((t) => `- ${t}`));
-  lines.push("", `Agent's final reply:\n${turn.reply.slice(0, 2500)}`);
+  lines.push("", "Recent findings (do not repeat these):", ...(extra.findings?.length ? extra.findings.slice(-12).map((f) => `- ${oneLine(f, 200)}`) : ["- none"]));
+  lines.push("", "Sections on the page:", ...(extra.sections?.length ? extra.sections.map((x) => `- ${x.id}: ${x.title}${x.by === "auto" ? " (yours)" : " (agent's)"}`) : ["- none"]));
+  lines.push("", `Agent's final reply:\n${turn.reply.slice(0, 4000)}`);
   return lines.join("\n");
 }
 
 export const STATUS_PROMPT = [
-  "You keep a terse status panel for a coding-agent session.",
+  "You keep a coding-agent session's live web page: a terse status panel, a findings log and reference sections.",
   "Given the previous status and the latest turn, reply with JSON only, no prose and no code fence:",
-  '{"goal": string, "now": string, "done": string[], "open": string[], "next": string[]}',
+  '{"goal": string, "now": string, "done": string[], "open": string[], "next": string[], "findings": string[], "section": null | {"id": string, "title": string, "markdown": string}}',
   "goal: the overall objective of the session in at most 15 words. Keep the previous goal unless the user clearly changed direction.",
   "now: what the agent just finished or is waiting on, at most 15 words.",
   "done: completed items, newest first, at most 6, merged with the previous list. Each at most 12 words.",
   "open: questions or decisions waiting on the user, at most 4. Drop ones that were answered.",
   "next: at most 3 likely next actions.",
-  "Plain text, no markdown. Never include secrets, tokens, passwords or keys.",
+  "findings: 0 to 2 durable facts learned this turn that someone resuming the work later would need: a root cause, a gotcha, a non-obvious constraint, an API fact, or a decision and its reason. Not progress reports, not plans. Each at most 30 words; `code` allowed. Skip anything already in Recent findings. Usually empty.",
+  "section: when the turn produced reference material worth keeping in view, such as a comparison or table, a state or option matrix, a set of commands, or a short design summary, return it as GitHub markdown (tables and ```mermaid fences allowed), at most 2500 characters, with a short title and a lowercase-slug id. To revise one of your own sections, reuse its id. Never copy an agent's section. Otherwise null; most turns are null.",
+  "Plain text in status fields, no markdown. Never include secrets, tokens, passwords or keys anywhere.",
 ].join("\n");
+
+export type Extras = { findings: string[]; section: { id: string; title: string; markdown: string } | null };
+
+/** The findings and section a status reply may carry. Section ids get an auto- prefix. */
+export function parseExtras(text: string): Extras {
+  const out: Extras = { findings: [], section: null };
+  const raw = String(text || "").replace(/^```(?:json)?\s*|\s*```$/g, "");
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return out;
+  let v: Record<string, unknown>;
+  try {
+    v = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return out;
+  }
+  if (Array.isArray(v.findings)) out.findings = v.findings.filter((f) => typeof f === "string" && f.trim()).slice(0, 2).map((f) => oneLine(f, 400));
+  const sec = v.section as Record<string, unknown> | null;
+  if (sec && typeof sec === "object" && typeof sec.markdown === "string" && sec.markdown.trim()) {
+    const slug = String(sec.id || sec.title || "notes").toLowerCase().replace(/^auto-/, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50) || "notes";
+    out.section = { id: `auto-${slug}`, title: oneLine(sec.title || slug, 80), markdown: sec.markdown.slice(0, 6000) };
+  }
+  return out;
+}
+
+const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/** New findings that are not already in the log, compared loosely. */
+export function newFindings(candidates: string[], existing: string[]): string[] {
+  const seen = new Set(existing.map(norm));
+  const out: string[] = [];
+  for (const c of candidates) {
+    const n = norm(c);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    out.push(c);
+  }
+  return out;
+}
+
+export type FileStat = { edits: number; writes: number; at: string };
+
+/** Fold this turn's edits and writes into the running per-file tally. */
+export function tallyFiles(prev: Record<string, FileStat>, ops: { tool: "edit" | "write"; path: string }[], cwd: string, at = new Date().toISOString()) {
+  const next = { ...prev };
+  for (const op of ops) {
+    const abs = isAbsolute(op.path) ? op.path : resolve(cwd, op.path);
+    const cur = next[abs] ?? { edits: 0, writes: 0, at };
+    next[abs] = { edits: cur.edits + (op.tool === "edit" ? 1 : 0), writes: cur.writes + (op.tool === "write" ? 1 : 0), at };
+  }
+  return next;
+}
+
+const clockTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+export function filesMarkdown(files: Record<string, FileStat>, cwd: string, max = 40): string {
+  const home = homedir();
+  const rows = Object.entries(files).sort((a, b) => b[1].at.localeCompare(a[1].at));
+  const show = (abs: string) => (abs.startsWith(`${cwd}/`) ? abs.slice(cwd.length + 1) : abs.startsWith(`${home}/`) ? `~/${abs.slice(home.length + 1)}` : abs);
+  const what = (f: FileStat) => [f.writes ? (f.writes === 1 ? "written" : `written ${f.writes}×`) : "", f.edits ? `${f.edits} edit${f.edits === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+  const lines = ["| File | Changes | Last |", "|---|---|---|", ...rows.slice(0, max).map(([abs, f]) => `| \`${show(abs).replace(/\|/g, "\\|")}\` | ${what(f)} | ${clockTime(f.at)} |`)];
+  if (rows.length > max) lines.push("", `…and ${rows.length - max} more`);
+  return lines.join("\n");
+}
+
+export type Shot = { file: string; name: string; at: string };
+
+export function shotsMarkdown(shots: Shot[], sessionId: string): string {
+  const src = (f: string) => `/s/${encodeURIComponent(sessionId)}/f/${encodeURIComponent(f)}`;
+  const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  return `<div class="gallery">${shots.map((x) => `<figure><a href="${src(x.file)}"><img src="${src(x.file)}" alt="${esc(x.name)}" loading="lazy"></a><figcaption>${esc(x.name)} · ${clockTime(x.at)}</figcaption></figure>`).join("")}</div>`;
+}
 
 export function parseStatus(text: string): Status | null {
   const raw = String(text || "").replace(/^```(?:json)?\s*|\s*```$/g, "");
@@ -185,7 +281,7 @@ export function openTodos(text: string): string[] {
     .map((l) => oneLine(l.slice(2), 140));
 }
 
-export type Section = { id: string; title: string; kind: string; file: string; order: number; at: string };
+export type Section = { id: string; title: string; kind: string; file: string; order: number; at: string; by?: "auto" };
 
 export function upsertSection(list: Section[], sec: Section): Section[] {
   const out = list.filter((s) => s.id !== sec.id);
@@ -193,9 +289,20 @@ export function upsertSection(list: Section[], sec: Section): Section[] {
   return out;
 }
 
-export function findingLine(text: string, at = new Date().toISOString()): string {
+/** The text of each finding in findings.md, without timestamps. */
+export function findingTexts(md: string): string[] {
+  const out: string[] = [];
+  for (const line of String(md || "").split("\n")) {
+    const m = line.match(/^- \[[^\]]+\] (.*)$/);
+    if (m) out.push(m[1] ?? "");
+    else if (line.startsWith("  ") && out.length) out[out.length - 1] += ` ${line.trim()}`;
+  }
+  return out;
+}
+
+export function findingLine(text: string, at = new Date().toISOString(), by?: "auto"): string {
   const [first, ...rest] = String(text).trim().split("\n");
-  return `- [${at}] ${first}${rest.map((l) => `\n  ${l}`).join("")}\n`;
+  return `- [${at}${by ? ` · ${by}` : ""}] ${first}${rest.map((l) => `\n  ${l}`).join("")}\n`;
 }
 
 /** Display 1 from `wrangle displays`, as AppleScript bounds for its left half. */
@@ -418,6 +525,7 @@ export default function canvas(pi: ExtensionAPI) {
 
   let sessionId = "";
   let statusOn = process.env.PI_CANVAS_STATUS !== "0";
+  const autoOn = process.env.PI_CANVAS_AUTO !== "0";
   let inflight: AbortController | undefined;
   const tracker = new ActivityTracker();
   let lastActivity = "";
@@ -465,6 +573,87 @@ export default function canvas(pi: ExtensionAPI) {
     return next;
   };
 
+  /** Add or replace a markdown section; skips identical rewrites so the page does not flash. */
+  function putMarkdown(d: string, sec: { id: string; title: string; body: string; order: number; by?: "auto" }): boolean {
+    const listPath = join(d, "sections.json");
+    const list = readJson<Section[]>(listPath, []);
+    const old = list.find((x) => x.id === sec.id);
+    const file = `${sec.id}.md`;
+    try {
+      if (old && old.file === file && old.title === sec.title && readFileSync(join(d, file), "utf8") === sec.body) return false;
+    } catch {}
+    if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
+    writeAtomic(join(d, file), sec.body);
+    const entry: Section = { id: sec.id, title: sec.title, kind: "markdown", file, order: old?.order ?? sec.order, at: new Date().toISOString(), ...(sec.by ? { by: sec.by } : {}) };
+    writeAtomic(listPath, JSON.stringify(upsertSection(list, entry), null, 2));
+    return true;
+  }
+
+  const AUTO_SECTIONS_KEPT = 6;
+  const WIDGETS = new Set(["auto-files", "auto-screenshots"]);
+
+  /** Record Haiku's findings and section, then trim old auto sections. */
+  function applyExtras(d: string, extras: Extras, known: string[], agentWroteSection: boolean) {
+    for (const f of newFindings(extras.findings, known)) appendFileSync(join(d, "findings.md"), findingLine(f, new Date().toISOString(), "auto"));
+    // When the main agent already put this turn's material on the page, a
+    // Haiku section would only repeat it.
+    if (!extras.section || agentWroteSection) return;
+    const listPath = join(d, "sections.json");
+    const current = readJson<Section[]>(listPath, []);
+    const taken = current.find((x) => x.id === extras.section!.id);
+    // Never overwrite a section the main agent wrote, even under an auto- id,
+    // and never echo one under another id.
+    if (taken && taken.by !== "auto") return;
+    if (current.some((x) => x.by !== "auto" && norm(x.title) === norm(extras.section!.title))) return;
+    putMarkdown(d, { id: extras.section.id, title: extras.section.title, body: extras.section.markdown, order: 300, by: "auto" });
+    const list = readJson<Section[]>(listPath, []);
+    const auto = list.filter((x) => x.by === "auto" && !WIDGETS.has(x.id)).sort((a, b) => b.at.localeCompare(a.at));
+    const drop = new Set(auto.slice(AUTO_SECTIONS_KEPT).map((x) => x.id));
+    if (!drop.size) return;
+    for (const x of list) if (drop.has(x.id)) rmSync(join(d, x.file), { force: true });
+    writeAtomic(listPath, JSON.stringify(list.filter((x) => !drop.has(x.id)), null, 2));
+  }
+
+  const SHOTS_KEPT = 12;
+
+  /** Files changed and Screenshots: plain bookkeeping from the turn's tool calls. */
+  function updateWidgets(ctx: ExtensionContext, turn: Turn) {
+    const ops = turn.ops ?? [];
+    const images = (turn.images ?? []).map((p) => (isAbsolute(p) ? p : resolve(ctx.cwd, p))).filter((p) => {
+      try {
+        const st = statSync(p);
+        return st.isFile() && st.size <= MAX_FILE;
+      } catch {
+        return false;
+      }
+    });
+    if (!ops.length && !images.length) return;
+    const d = ensureDir(ctx);
+    if (ops.length) {
+      const path = join(d, "auto-files.json");
+      const files = tallyFiles(readJson<Record<string, FileStat>>(path, {}), ops, ctx.cwd);
+      writeAtomic(path, JSON.stringify(files, null, 2));
+      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd), order: 900, by: "auto" });
+    }
+    if (images.length) {
+      const path = join(d, "auto-shots.json");
+      let shots = readJson<Shot[]>(path, []);
+      for (const src of images) {
+        const ext = extname(src).toLowerCase().replace(".jpeg", ".jpg");
+        const file = `shot-${createHash("sha1").update(src).update(String(statSync(src).mtimeMs)).digest("hex").slice(0, 12)}${ext}`;
+        if (!existsSync(join(d, file))) {
+          copyFileSync(src, join(d, `${file}.tmp`));
+          renameSync(join(d, `${file}.tmp`), join(d, file));
+        }
+        shots = [{ file, name: basename(src), at: new Date().toISOString() }, ...shots.filter((x) => x.file !== file)];
+      }
+      for (const x of shots.slice(SHOTS_KEPT)) rmSync(join(d, x.file), { force: true });
+      shots = shots.slice(0, SHOTS_KEPT);
+      writeAtomic(path, JSON.stringify(shots, null, 2));
+      putMarkdown(d, { id: "auto-screenshots", title: "Screenshots", body: shotsMarkdown(shots, sessionId), order: 850, by: "auto" });
+    }
+  }
+
   async function refreshStatus(ctx: ExtensionContext, force = false): Promise<string> {
     const turn = lastTurn(ctx.sessionManager.getBranch() || []);
     if (!force && !worthStatus(turn)) return "skipped: short turn";
@@ -482,7 +671,14 @@ export default function canvas(pi: ExtensionAPI) {
     try {
       todo = openTodos(readFileSync(join(ctx.cwd, ".pi", "TODO.md"), "utf8"));
     } catch {}
-    const digest = turnDigest(turn, prev, { name: pi.getSessionName(), cwd: ctx.cwd, todo });
+    let known: string[] = [];
+    try {
+      known = findingTexts(readFileSync(join(d, "findings.md"), "utf8"));
+    } catch {}
+    const sections = readJson<Section[]>(join(d, "sections.json"), [])
+      .filter((x) => !WIDGETS.has(x.id))
+      .map((x) => ({ id: x.id, title: x.title, by: x.by }));
+    const digest = turnDigest(turn, prev, { name: pi.getSessionName(), cwd: ctx.cwd, todo, ...(autoOn ? { findings: known, sections } : {}) });
 
     inflight?.abort();
     const ac = new AbortController();
@@ -492,7 +688,7 @@ export default function canvas(pi: ExtensionAPI) {
       const res = await reg.complete(
         model,
         { systemPrompt: STATUS_PROMPT, messages: [{ role: "user", content: digest }] },
-        { maxTokens: 700, cacheRetention: "none", signal: ac.signal, sessionId: randomUUID(), samplingParams: { enable_thinking: false, thinking: { type: "disabled" } } },
+        { maxTokens: autoOn ? 2000 : 700, cacheRetention: "none", signal: ac.signal, sessionId: randomUUID(), samplingParams: { enable_thinking: false, thinking: { type: "disabled" } } },
       );
       if (ac.signal.aborted) return "aborted";
       if (res?.stopReason === "error" || res?.stopReason === "aborted") return `error: ${res.errorMessage || res.stopReason}`;
@@ -501,6 +697,7 @@ export default function canvas(pi: ExtensionAPI) {
       // The session may have switched while Haiku ran.
       if (basename(d) !== sessionId) return "stale";
       writeAtomic(join(d, "status.json"), JSON.stringify({ ...status, model: STATUS_MODEL.split("/").pop(), at: new Date().toISOString(), runs: (prev?.runs ?? 0) + 1 }, null, 2));
+      if (autoOn) await serial(() => applyExtras(d, parseExtras(textOf(res?.content)), known, (turn.canvasSections ?? 0) > 0));
       return "updated";
     } catch (e) {
       return `error: ${(e as Error).message}`;
@@ -540,6 +737,10 @@ export default function canvas(pi: ExtensionAPI) {
   pi.on("agent_settled", (event, ctx) => {
     track(event);
     if (!ctx.hasUI || !sessionId) return;
+    if (autoOn) {
+      const turn = lastTurn(ctx.sessionManager.getBranch() || []);
+      void serial(() => updateWidgets(ctx, turn)).catch(() => {});
+    }
     if (event.aborted || !statusOn) return;
     void refreshStatus(ctx);
   });
@@ -596,9 +797,12 @@ export default function canvas(pi: ExtensionAPI) {
       "Use remove: true to delete a section. Returns the page URL; it does not open a browser.",
     promptSnippet: "canvas: put tables, diagrams, plans, screenshots and findings on this session's live web page",
     promptGuidelines: [
-      "Use canvas for output too wide or long for the terminal: tables over about 6 rows, diagrams, plans, screenshots, comparisons. Still give a short answer in chat.",
-      "Use one stable id per topic and replace it as the work changes. Do not stack old versions.",
-      "Record a durable fact, decision or gotcha as kind 'finding'.",
+      "The user keeps the canvas open beside the terminal and expects it to grow as you work. Use canvas proactively, without being asked.",
+      "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
+      "When a reply would contain a table, an option or state matrix, a diagram, a plan or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
+      "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
+      "After verifying UI work with screenshots, add the one that shows the result as an image section.",
+      "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Haiku notes); leave them alone.",
       "Never put secrets, tokens or passwords on the canvas.",
     ],
     parameters: Type.Object({

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, findingLine, isSectionId, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, filesMarkdown, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -54,7 +54,82 @@ test("lastTurn reads the newest user prompt, tools, files and final reply", () =
 });
 
 test("lastTurn on an empty branch is empty", () => {
-  assert.deepEqual(lastTurn([]), { user: "", tools: [], files: [], reply: "" });
+  assert.deepEqual(lastTurn([]), { user: "", tools: [], files: [], ops: [], images: [], reply: "" });
+});
+
+test("lastTurn collects successful edits and writes, and images the agent read", () => {
+  const t = lastTurn([
+    msg("user", "fix it"),
+    msg("assistant", [
+      { type: "toolCall", id: "e1", name: "edit", arguments: { path: "a.ts", edits: [] } },
+      { type: "toolCall", id: "e2", name: "edit", arguments: { path: "a.ts", edits: [] } },
+      { type: "toolCall", id: "e3", name: "edit", arguments: { path: "bad.ts", edits: [] } },
+      { type: "toolCall", id: "w1", name: "write", arguments: { path: "b.md" } },
+      { type: "toolCall", id: "r1", name: "read", arguments: { path: "/tmp/shot.PNG" } },
+      { type: "toolCall", id: "r2", name: "read", arguments: { path: "/tmp/shot.PNG" } },
+      { type: "toolCall", id: "r3", name: "read", arguments: { path: "notes.md" } },
+      { type: "toolCall", id: "r4", name: "read", arguments: { path: "/tmp/gone.png" } },
+      { type: "toolCall", id: "k1", name: "canvas", arguments: { kind: "finding", body: "x" } },
+      { type: "toolCall", id: "k2", name: "canvas", arguments: { kind: "markdown", id: "t", body: "x" } },
+      { type: "toolCall", id: "k3", name: "canvas", arguments: { kind: "markdown", id: "t", remove: true } },
+    ]),
+    msg("toolResult", [{ type: "text", text: "no match" }], { toolCallId: "e3", isError: true }),
+    msg("toolResult", [{ type: "text", text: "ENOENT" }], { toolCallId: "r4", isError: true }),
+  ]);
+  assert.deepEqual(t.ops, [
+    { tool: "edit", path: "a.ts" },
+    { tool: "edit", path: "a.ts" },
+    { tool: "write", path: "b.md" },
+  ]);
+  assert.deepEqual(t.images, ["/tmp/shot.PNG"]);
+  assert.equal(t.canvasSections, 1);
+});
+
+test("parseExtras keeps up to two findings and an auto- prefixed section", () => {
+  const reply = JSON.stringify({
+    goal: "g",
+    findings: ["root cause: x", "", 42, "gotcha: y", "third"],
+    section: { id: "Auto-State Matrix!", title: "States", markdown: "| a | b |\n|---|---|" },
+  });
+  const x = parseExtras(`\`\`\`json\n${reply}\n\`\`\``);
+  assert.deepEqual(x.findings, ["root cause: x", "gotcha: y"]);
+  assert.deepEqual(x.section, { id: "auto-state-matrix", title: "States", markdown: "| a | b |\n|---|---|" });
+  assert.deepEqual(parseExtras('{"goal":"g","findings":[],"section":null}'), { findings: [], section: null });
+  assert.deepEqual(parseExtras('{"section":{"title":"Commands","markdown":"  "}}').section, null);
+  assert.equal(parseExtras('{"section":{"title":"Run These","markdown":"x"}}').section.id, "auto-run-these");
+  assert.deepEqual(parseExtras("not json"), { findings: [], section: null });
+});
+
+test("newFindings drops ones already logged, loosely", () => {
+  assert.deepEqual(newFindings(["The `ui_prompt_start` event fires.", "New fact", "new fact!"], ["the ui_prompt_start event fires"]), ["New fact"]);
+});
+
+test("findingTexts and findingLine with a source", () => {
+  const md = findingLine("one\ntwo", "2026-10-07T00:00:00.000Z", "auto") + findingLine("three", "2026-10-07T01:00:00.000Z");
+  assert.ok(md.startsWith("- [2026-10-07T00:00:00.000Z · auto] one"));
+  assert.deepEqual(findingTexts(md), ["one two", "three"]);
+  assert.deepEqual(parseFindings(md), [
+    { at: "2026-10-07T00:00:00.000Z", by: "auto", text: "one\ntwo" },
+    { at: "2026-10-07T01:00:00.000Z", text: "three" },
+  ]);
+});
+
+test("tallyFiles and filesMarkdown keep a running table, newest first", () => {
+  let files = tallyFiles({}, [{ tool: "write", path: "src/a.ts" }, { tool: "edit", path: "src/a.ts" }], "/repo", "2026-10-07T10:00:00.000Z");
+  files = tallyFiles(files, [{ tool: "edit", path: "/repo/b|c.md" }, { tool: "edit", path: "/elsewhere/x" }], "/repo", "2026-10-07T11:00:00.000Z");
+  assert.deepEqual(files["/repo/src/a.ts"], { edits: 1, writes: 1, at: "2026-10-07T10:00:00.000Z" });
+  const md = filesMarkdown(files, "/repo");
+  const rows = md.split("\n").slice(2);
+  assert.equal(rows.length, 3);
+  assert.match(rows[0], /^\| `b\\\|c\.md` \| 1 edit \|/);
+  assert.match(rows[1], /^\| `\/elsewhere\/x` \| 1 edit \|/);
+  assert.match(rows[2], /^\| `src\/a\.ts` \| written, 1 edit \|/);
+  assert.match(filesMarkdown(files, "/repo", 1), /…and 2 more$/);
+});
+
+test("shotsMarkdown links each copied image and escapes names", () => {
+  const md = shotsMarkdown([{ file: "shot-abc.png", name: 'a"<b>.png', at: "2026-10-07T10:00:00.000Z" }], "sess-1");
+  assert.match(md, /^<div class="gallery"><figure><a href="\/s\/sess-1\/f\/shot-abc\.png"><img src="\/s\/sess-1\/f\/shot-abc\.png" alt="a&quot;&lt;b&gt;\.png"/);
 });
 
 test("short tool-free turns do not trigger a status run", () => {
