@@ -175,7 +175,7 @@ three most worth asking right now:
 ```
 
 ```text
-/meeting start [filter|path] [--wake] [--model provider/id] [--replay [speed]]
+/meeting start [filter|path] [--model provider/id] [--replay [speed]]
 /meeting ask | focus <text> | list | recap | stop      /meeting alone shows status
 /q3 [what to look for]                                 research one question (/q to pick)
 ```
@@ -244,9 +244,9 @@ five checks.
 New questions and suggested replies also go into the session as `meeting`
 messages sent with `triggerTurn: false`. They land in the transcript and in the
 main model's context, but the main model doesn't start a turn. Ask it "what
-should I say?" and it already has them, plus the transcript path. `--wake` is
-the one exception: when someone names you and the scout has a reply, the main
-model is woken to draft one.
+should I say?" and it already has them, plus the transcript path. The old
+`--wake` flag is gone: a meeting never starts a turn. Meeting prep moved to the
+watcher (see Proactive, below).
 
 Teams writes a caption only when it scrolls out of its ~3-line window, so the
 copilot runs a couple of utterances behind the room.
@@ -269,6 +269,7 @@ waiting on, and closes a wait when its answer lands:
 /watch list | clear N|all | since 9am | digest | recap | apps
 /watch wait Lindsey Hattamer: Platform analysis [slack link]
 /watch waits [close|drop|reopen Wn]
+/watch do N | wakes | quiet <person> [3d] | loud <person>
 ```
 
 `/watch-slack` still works, as an alias.
@@ -335,6 +336,58 @@ ln -sf "$PWD/bin/notif-watch" /tmp/notif-watch.swift && swiftc -O /tmp/notif-wat
 ```
 
 It needs Full Disk Access for the Mac store, granted to the terminal pi runs in.
+
+### Proactive
+
+Code, not the model, picks how loud each item gets:
+
+| Level | Shows as | When |
+|---|---|---|
+| widget | a line | everything that needs you |
+| nudge | a toast | urgent words in a DM, 3 pings in 30 minutes, a VIP DM, a missed call |
+| offer | `✦ … /watch do N` | the scout thinks a draft or a look would help |
+| held | `⏸ … /watch do N` | an act that a gate stopped |
+| act | a `watch` turn | only the three rules below |
+
+The watcher starts a turn on its own in only three cases. **Prep** fires 10
+minutes before a timed event on a work calendar (`PI_WATCH_PREP_SOURCES`,
+default `Oddball (Work)`) with 2 or more attendees, unless you declined it or
+its title matches `PI_WATCH_PREP_SKIP` (standup, focus, OOO and similar).
+**Away** fires after 20 minutes of HID idle time (`ioreg`,
+`PI_WATCH_AWAY_MIN`) and drafts replies to open draft offers, one turn per
+workspace. **Urgent** fires on an urgent DM, or an urgent @-mention from a VIP
+(`PI_WATCH_VIP`, default `Alex Teal`), once per conversation per day.
+
+Every act passes these gates in order. If a gate fails, the act is held or
+becomes an offer:
+
+1. no live `/meeting`
+2. work hours (`PI_WATCH_ACT_HOURS`, default `8-17`, weekdays)
+3. pi idle, with no queued message and an empty editor
+4. no typing in the last 2 minutes (prep and urgent only)
+5. the budget (`PI_WATCH_ACTS`, default `12/15`: 12 a day)
+6. the gap: at most one act every 15 minutes (prep skips this)
+
+Work items (`dsva`, Outlook, Teams, work meetings) offer or act only when the
+session model is on VA Copilot. On any other model they stay widget lines
+(urgent ones still nudge), and `/watch do` refuses them, because the turn would
+send work text to that model.
+
+A turn gets `read`, `watch_lookup` and `web_search`. While it runs, a
+`tool_call` hook blocks every other tool, including bash, edits and
+`web_fetch`, until pi settles. The active tool list never changes, so the
+prompt cache holds. `watch_lookup` runs `qmd search` or `slk search` without a
+shell, limited to the item's workspace. Message text goes inside an
+`<untrusted>` block below the rules. The prompt says it never posts or sends
+anything. The turn only drafts, and you send.
+
+`/watch do N` runs an offer or a held act yourself, and it doesn't count
+against the budget. After 3 offers in a row from one person go untaken, that
+person goes quiet for 7 days. `/watch quiet` and `/watch loud` set this by
+hand. `/watch wakes` lists today's nudges, offers, held acts and acts, with
+the reason for each. Decisions, the budget, quiet and loud live in
+`~/.local/share/watch-slack/policy.json` (mode 600). Quiet and loud carry over
+to the next day.
 
 ## Footer
 

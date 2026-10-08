@@ -354,11 +354,12 @@ test("filename stamps use local time", () => {
 // ── args ──
 
 test("parses subcommands, flags and targets", () => {
-	assert.deepEqual(parseArgs(""), { sub: "status", target: "", rest: "", wake: false });
+	assert.deepEqual(parseArgs(""), { sub: "status", target: "", rest: "" });
 	assert.equal(parseArgs("stop").sub, "stop");
-	assert.deepEqual(parseArgs("focus push for a cutover date"), { sub: "focus", target: "", rest: "push for a cutover date", wake: false });
+	assert.deepEqual(parseArgs("focus push for a cutover date"), { sub: "focus", target: "", rest: "push for a cutover date" });
 	const a = parseArgs("start eert --wake --model inco/deepseek-v4.1-flash:fast --replay 20");
-	assert.deepEqual([a.sub, a.target, a.wake, a.model, a.replay], ["start", "eert", true, "inco/deepseek-v4.1-flash:fast", 20]);
+	assert.deepEqual([a.sub, a.target, a.removed, a.model, a.replay], ["start", "eert", "--wake", "inco/deepseek-v4.1-flash:fast", 20], "--wake is gone: noted, never part of the filter");
+	assert.equal("wake" in a, false);
 	assert.equal(parseArgs("start --replay").replay, 10);
 	assert.equal(parseArgs("start --replay eert").target, "eert");
 	assert.equal(parseArgs("eert").sub, "start", "a bare filter means start");

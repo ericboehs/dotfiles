@@ -11,6 +11,10 @@
  *   /watch digest                send the context digest now
  *   /watch recap                 post the recap and update the daily note
  *   /watch apps                  which notifications are watched, with counts
+ *   /watch do <N>                run offer N from the widget (a turn with read tools only)
+ *   /watch wakes                 today's nudges, offers and acts, each with its rule or gate
+ *   /watch quiet <who> [Nd]      no offers or acts for that person (7 days by default)
+ *   /watch loud <who>            a VIP: DMs nudge, and urgent can act
  *   /watch                       status
  *
  * /watch-slack is an alias, from before notifications.
@@ -40,6 +44,18 @@
  * before it prints. A Slack banner wakes an early Slack read. Other
  * notifications are counted, in memory only, until routing lands.
  *
+ * Proactive help (watch/policy.ts, watch/act.ts, watch/prep.ts): the scout may
+ * propose an offer on a needs item ("draft" or "look"), shown in the widget
+ * until Eric types /watch do N. Rules make nudges (a toast): urgent words, 3
+ * pings in 30 minutes, a VIP, a missed call. The watcher starts a turn by
+ * itself in three cases only: a prep brief 10 minutes before a work meeting
+ * (from ical), drafts after 20 minutes away from the Mac, and urgent pings.
+ * Code gates each one: no meeting, work hours, Eric idle and not typing, the
+ * budget (PI_WATCH_ACTS), and the route (a work item acts only in a VA Copilot
+ * session). A watch turn can use read, watch_lookup and web_search only; a
+ * tool_call guard blocks the rest until pi settles. Three offers from one
+ * person left untaken quiet their offers for 7 days.
+ *
  * Output:
  *   widget above the editor   the top 3 "needs you" items. An item clears when slk
  *                             stops listing it unread, or Eric posts there later
@@ -61,6 +77,9 @@
  *      PI_WATCH_SLACK_HOURS=7-18 (work hours; slower polls outside them and on weekends)
  *      PI_WATCH_APPS=slack,mail,work,calls,msgs ("" or "off": no notifications)
  *      PI_WATCH_NOTIF_BIN=notif-watch
+ *      PI_WATCH_ACTS=12/15 (self-started turns each day / minutes between)  PI_WATCH_ACT_HOURS=8-17
+ *      PI_WATCH_VIP="Alex Teal"  PI_WATCH_AWAY_MIN=20  PI_WATCH_PREP=on|off
+ *      PI_WATCH_PREP_SOURCES="Oddball (Work)"  PI_WATCH_PREP_SKIP=standup,stand-up,lunch,focus,hold,ooo,out of office
  */
 
 import { type ChildProcess, execFile } from "node:child_process";
@@ -73,8 +92,41 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-c
 import { type AutocompleteItem, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { isMe, mentionsMe, nameTokens, upsertRecap } from "./meeting.ts";
 import { APP_GROUPS, type AppGroup, allowList, appFor, appsText, DEFAULT_APPS, pickGroups } from "./watch/apps.ts";
-import { estTokens, modelSpecs, PERSONAL_MODELS, PROMPT_MAX_TOKENS, WORK_MODELS, workOnly } from "./watch/models.ts";
+import { estTokens, isWorkModel, modelSpecs, PERSONAL_MODELS, PROMPT_MAX_TOKENS, WORK_MODELS, workOnly } from "./watch/models.ts";
 import { type NotifEvent, type NotifHandle, type NotifStatus, notifProblem, notifSummary, type Posted, superviseNotifWatch } from "./watch/notif.ts";
+import { actGuard, actPrompt, registerLookup } from "./watch/act.ts";
+import {
+	awayCases,
+	type Candidate,
+	candLabel,
+	decide,
+	isMissedCall,
+	isQuiet,
+	type Level,
+	type Meeting,
+	markFired,
+	noteIgnored,
+	noteTaken,
+	nudgeOf,
+	offerCase,
+	type OfferKind,
+	parseBudget,
+	parseHidIdle,
+	parsePersonArgs,
+	type PolicyState,
+	type PolicyView,
+	prepCase,
+	pushLog,
+	recordAct,
+	rollPolicy,
+	routeOk,
+	setLoud,
+	setQuiet,
+	urgentCase,
+	wakesText,
+	workHoursAt,
+} from "./watch/policy.ts";
+import { icalTime, PREP_SKIP_WORDS, PREP_SOURCES, parseAgenda, skipPattern, workCalendarIds } from "./watch/prep.ts";
 
 // ── config ───────────────────────────────────────────────────────────────────
 
@@ -135,6 +187,20 @@ const NOTIF_BIN = process.env.PI_WATCH_NOTIF_BIN || "notif-watch";
 export const WAKE_GAP_MS = 60_000;
 /** Notifications held in memory (on screen now, allowed apps only), newest kept. */
 const NOTIFS_KEPT = 300;
+/** Self-started turns: 12 each day, 1 each 15 minutes (prep skips the gap). */
+export const BUDGET = parseBudget(process.env.PI_WATCH_ACTS);
+const [ACT_START, ACT_END] = (process.env.PI_WATCH_ACT_HOURS || "8-17").split("-").map(Number);
+const VIPS = (process.env.PI_WATCH_VIP ?? "Alex Teal")
+	.split(",")
+	.map((s) => s.trim())
+	.filter(Boolean);
+const AWAY_SEC = (Number(process.env.PI_WATCH_AWAY_MIN) || 20) * 60;
+const PREP_ON = !/^(off|0|false|no)$/i.test(process.env.PI_WATCH_PREP ?? "on");
+const PREP_SRC = process.env.PI_WATCH_PREP_SOURCES ? process.env.PI_WATCH_PREP_SOURCES.split(",").map((s) => s.trim()) : PREP_SOURCES;
+const PREP_SKIP = skipPattern(process.env.PI_WATCH_PREP_SKIP !== undefined ? process.env.PI_WATCH_PREP_SKIP.split(",") : PREP_SKIP_WORDS);
+/** ical reads: the next half hour, each 5 minutes. */
+const AGENDA_MS = 5 * 60_000;
+const AGENDA_AHEAD_MS = 30 * 60_000;
 /** VA Integration Control Number. */
 export const ICN = /\b\d{10}V\d{6}\b/g;
 
@@ -490,6 +556,9 @@ export interface LedgerEntry {
 	readKeys: string[]; // unread markers that keep it open (see unreadKeys())
 	wasUnread: boolean;
 	forced?: boolean; // needs by rule, whatever the scout says
+	offer?: OfferKind; // the scout thinks Eric's agent can help: /watch do N
+	offerWhy?: string; // what the agent would do, 8 words
+	nudge?: string; // the rule that toasted it (policy.ts nudgeOf)
 	parent?: string; // thread parent text: for the scout only, never written
 }
 export type Item = LedgerEntry;
@@ -596,7 +665,7 @@ export const defaultBucket = (k: Kind): Bucket => (k === "dm" || k === "group" |
 
 // ── scout ────────────────────────────────────────────────────────────────────
 
-export type Triage = { id: string; bucket: Bucket; why: string; closesWait?: string; due?: string };
+export type Triage = { id: string; bucket: Bucket; why: string; closesWait?: string; due?: string; offer?: OfferKind; offerWhy?: string };
 export type WaitGuess = { id: string; who: string; what: string };
 
 /** Every balanced JSON object or array in free text, in order (strings and escapes respected). */
@@ -647,12 +716,16 @@ export function parseTriage(text: string): { items: Triage[]; waits: WaitGuess[]
 			const bucket: Bucket = b.startsWith("need") ? "needs" : b.startsWith("drop") ? "drop" : "context";
 			const closes = s(o.closesWait, 8).toUpperCase();
 			const due = s(o.due, 10);
+			const offer = s(o.offer, 10).toLowerCase();
+			const offerWhy = s(o.offerWhy, 80);
 			return {
 				id,
 				bucket,
 				why: s(o.why, 80),
 				...(/^W\d+$/.test(closes) ? { closesWait: closes } : {}),
 				...(/^\d{4}-\d\d-\d\d$/.test(due) ? { due } : {}),
+				// An offer only on a needs item: the scout can't make context or noise loud.
+				...(bucket === "needs" && (offer === "draft" || offer === "look") ? { offer: offer as OfferKind, ...(offerWhy ? { offerWhy } : {}) } : {}),
 			};
 		})
 		.filter((t): t is Triage => !!t);
@@ -679,10 +752,12 @@ export function buildTriageSystem(me: string, about: string): string {
 		`"why": at most 8 words: what it is, or what ${who} must do. E.g. "Lindsey sent the Platform analysis", "Teal asks for postmortem time". Never include ICNs, SSNs, VASI IDs, VA system names or other personal data; quote at most 3 words.`,
 		`"closesWait": the id of an open wait (W1, W2, …) that this item answers, only when it is clearly the same person and topic; otherwise leave it out.`,
 		`"due": YYYY-MM-DD when the item gives ${who} a deadline; otherwise leave it out.`,
+		`"offer": only on a "needs" item. "draft" when ${who}'s notes, Slack or code can answer it; "look" when it names a doc, PR or ticket worth opening. Otherwise leave it out.`,
+		`"offerWhy": with "offer", at most 8 words: what ${who}'s agent would do, e.g. "draft a reply with the doc link".`,
 		"",
 		`Items of kind "mine" are ${who}'s own posts. Don't put them in "items". If one asks a specific, named person (or their agent) for something ${who} will wait on — information, a file, a review, a decision, an answer — add it to "waits" with "who" (that person's name as written in the post or after "DM with"; never a user id, never "someone") and "what" (at most 6 words). A "*Ask for Name:*" post by ${who}'s agent is such an ask. Thanks, status updates, answers and questions to a whole channel are not.`,
 		"",
-		'Reply with JSON only, no prose and no code fence: {"items": [{"id": "m1", "bucket": "needs", "why": "...", "closesWait": "W2", "due": "2026-10-08"}], "waits": [{"id": "p1", "who": "Lindsey Hattamer", "what": "Platform analysis"}]}',
+		'Reply with JSON only, no prose and no code fence: {"items": [{"id": "m1", "bucket": "needs", "why": "...", "closesWait": "W2", "due": "2026-10-08", "offer": "draft", "offerWhy": "..."}], "waits": [{"id": "p1", "who": "Lindsey Hattamer", "what": "Platform analysis"}]}',
 		about ? `\n<about>\n${about.trim()}\n</about>` : "",
 	].join("\n");
 }
@@ -920,8 +995,8 @@ export function sinceText(entries: LedgerEntry[], waits: WaitItem[], from: Date,
 
 // ── args ─────────────────────────────────────────────────────────────────────
 
-export type Sub = "status" | "start" | "stop" | "list" | "waits" | "wait" | "since" | "digest" | "recap" | "clear" | "apps";
-const SUBS: Sub[] = ["start", "stop", "list", "waits", "wait", "since", "digest", "recap", "clear", "apps", "status"];
+export type Sub = "status" | "start" | "stop" | "list" | "waits" | "wait" | "since" | "digest" | "recap" | "clear" | "apps" | "do" | "wakes" | "quiet" | "loud";
+const SUBS: Sub[] = ["start", "stop", "list", "waits", "wait", "since", "digest", "recap", "clear", "apps", "do", "wakes", "quiet", "loud", "status"];
 
 export function parseArgs(raw: string): { sub: Sub; rest: string; unknown?: string } {
 	const t = raw.trim();
@@ -951,6 +1026,9 @@ export function parseWaitsAction(rest: string): { action: "close" | "drop" | "re
 
 // ── widget ───────────────────────────────────────────────────────────────────
 
+/** An offer or held act in the widget, under the first of its items shown (or on its own: prep). */
+export type Tag = { n: number; level: "offer" | "held"; text: string; keys: string[] };
+
 export type WidgetView = {
 	needs: Item[]; // open, best first
 	cleared: Item[]; // cleared needs, newest first (expanded view only)
@@ -965,6 +1043,7 @@ export type WidgetView = {
 	expanded: boolean;
 	started: boolean; // first poll done
 	notif?: string; // a notif-watch problem, "" when fine
+	tags?: Tag[]; // numbered for /watch do N
 };
 
 const firstName = (name: string) => stripTag(name).split(/\s+/)[0] || name;
@@ -992,9 +1071,14 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 							: theme.fg("accent", "↳");
 	const dot = v.error ? theme.fg("warning", "✕") : v.busy ? theme.fg("accent", "◐") : theme.fg("accent", "●");
 	const n = v.needs.length;
+	const tags = v.tags ?? [];
+	const offers = tags.filter((t) => t.level === "offer").length;
+	const heldActs = tags.length - offers;
 	const head = [
 		"watch",
 		!v.started ? "first read…" : n ? `${n} need${n === 1 ? "s" : ""} you` : "nothing needs you",
+		offers ? `${offers} offer${offers === 1 ? "" : "s"}` : "",
+		heldActs ? `${heldActs} held` : "",
 		v.openWaits ? `${v.openWaits} wait${v.openWaits === 1 ? "" : "s"}` : "",
 		v.lastPollAt ? clock12(new Date(v.lastPollAt)) : "",
 		v.mode !== "active" ? v.mode : "",
@@ -1006,21 +1090,43 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 	const row = (i: Item, num?: number) =>
 		fit(`  ${num ? dim(`${num} `) : ""}${icon(i)} ${itemLabel(i, v.expanded)} ${dim(age(now - tsDate(i.ts).getTime()))}`);
 	const maybeRow = (w: WaitItem) => fit(`  ${theme.fg("warning", "?")} ${w.id} ${w.who} · ${w.what} ${dim(`maybe answered · /watch waits close ${w.id}`)}`);
+	const tagLine = (t: Tag, indent: string) =>
+		fit(`${indent}${t.level === "offer" ? theme.fg("warning", `✦ ${t.text}`) : dim(`⏸ ${t.text}`)} ${dim(`· /watch do ${t.n}`)}`);
+	/** Each tag under the first of its items in `rows`; the rest go on their own lines. */
+	const placeTags = (rows: Item[]) => {
+		const under = new Map<string, Tag[]>();
+		const rest: Tag[] = [];
+		for (const t of tags) {
+			const at = rows.find((r) => t.keys.includes(r.key));
+			if (at) under.set(at.key, [...(under.get(at.key) ?? []), t]);
+			else rest.push(t);
+		}
+		return { under, rest };
+	};
 	if (v.expanded) {
 		const shown = v.needs.slice(0, EXPANDED_ROWS);
+		const { under, rest } = placeTags(shown);
 		shown.forEach((i, k) => {
 			lines.push(row(i, k + 1));
 			if (i.text) lines.push(fit(dim(`      “${i.text}”`)));
+			for (const t of under.get(i.key) ?? []) lines.push(tagLine(t, "      "));
 		});
+		for (const t of rest) lines.push(tagLine(t, "  "));
 		if (v.needs.length > shown.length) lines.push(fit(dim(`  +${v.needs.length - shown.length} more · /watch since`)));
 		for (const w of v.maybes) lines.push(maybeRow(w));
 		for (const i of v.cleared.slice(0, 5)) lines.push(fit(dim(`  ✓ ${itemLabel(i)} · ${i.clearedBy ?? "cleared"}`)));
 		lines.push(fit(dim(v.needs.length ? "  /watch clear N · /watch list to collapse" : "  /watch list to collapse")));
 		return lines;
 	}
-	for (const i of v.needs.slice(0, SHOWN)) lines.push(row(i));
+	const shown = v.needs.slice(0, SHOWN);
+	const { under, rest } = placeTags(shown);
+	for (const i of shown) {
+		lines.push(row(i));
+		for (const t of under.get(i.key) ?? []) lines.push(tagLine(t, "    "));
+	}
+	for (const t of rest.slice(0, SHOWN)) lines.push(tagLine(t, "  "));
 	for (const w of v.maybes.slice(0, Math.max(0, SHOWN - n))) lines.push(maybeRow(w));
-	if (n > SHOWN) lines.push(fit(dim(`  +${n - SHOWN} more · /watch list`)));
+	if (n > SHOWN || rest.length > SHOWN) lines.push(fit(dim(`  +${Math.max(0, n - SHOWN) + Math.max(0, rest.length - SHOWN)} more · /watch list`)));
 	return lines;
 }
 
@@ -1077,6 +1183,12 @@ type Watch = {
 	notifs: Map<string, Posted & { key: string }>; // on screen now, by id; memory only. key: "group:route"
 	notifSeen: Record<string, number>; // "group:route" → posted since start
 	notifDropped: number;
+	policy: PolicyState; // ~/.local/share/watch-slack/policy.json
+	agenda: Meeting[]; // work meetings in the next half hour (prep.ts)
+	agendaAt: number;
+	workCals?: Set<string>; // ical calendar ids on a work account
+	offers: { c: Candidate; level: "offer" | "held"; why: string }[]; // numbered for /watch do N
+	levels: Map<string, Level>; // last logged level for each candidate
 };
 
 type Persisted = Pick<Watch, "waits" | "nextWait" | "droppedSigs" | "watched" | "feedSince" | "feedLastAt" | "noteCache" | "lastDigestAt"> & {
@@ -1103,6 +1215,15 @@ function slkCache(kind: "users" | "channels", ws: string): Record<string, string
 const ledgerPath = (day: string) => path.join(DATA_DIR, `${day}.jsonl`);
 const statePath = (day: string) => path.join(DATA_DIR, `${day}.state.json`);
 const LOCK = path.join(DATA_DIR, "watch-slack.lock");
+/** Offers, acts, quiet and loud: one file, so quiet and loud outlive the day. */
+const POLICY_FILE = path.join(DATA_DIR, "policy.json");
+const loadPolicy = (day = dayKey()): PolicyState => {
+	try {
+		return rollPolicy(JSON.parse(fs.readFileSync(POLICY_FILE, "utf8")) as Partial<PolicyState>, day);
+	} catch {
+		return rollPolicy(undefined, day);
+	}
+};
 const dayStart = (day: string) => new Date(`${day}T00:00:00`).getTime();
 
 function writePrivate(file: string, data: string, append = false) {
@@ -1161,6 +1282,8 @@ export default function (pi: ExtensionAPI) {
 			children.add(child);
 		});
 	const slk = (args: string[]) => run("slk", args);
+	const guard = actGuard(pi);
+	registerLookup(pi, guard, run);
 	const feedRead = (args: string[]) => run("eert-bot-feed", ["read", FEED_CHANNEL, ...args, "--json"]);
 
 	const notify = (msg: string, level: "info" | "warning" | "error" = "info") => {
@@ -1178,6 +1301,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("input", () => {
 		const idleFor = Date.now() - lastActive;
 		lastActive = Date.now();
+		guard.settleIfIdle(ctxRef?.isIdle() ?? false);
 		// Back after a while: read now instead of at the slow cadence.
 		if (s && idleFor > POLL.idleAfterMs && Date.now() - s.lastPollAt > POLL.activeMs) {
 			s.nextPollAt = 0;
@@ -1249,6 +1373,7 @@ export default function (pi: ExtensionAPI) {
 		};
 		try {
 			writePrivate(statePath(w.day), JSON.stringify(p, null, 1));
+			writePrivate(POLICY_FILE, JSON.stringify(w.policy, null, 1));
 			w.dirty = false;
 		} catch (e) {
 			w.error = clip(`state: ${(e as Error).message}`, 100);
@@ -1360,6 +1485,11 @@ export default function (pi: ExtensionAPI) {
 			notifs: new Map(),
 			notifSeen: {},
 			notifDropped: 0,
+			policy: loadPolicy(day),
+			agenda: [],
+			agendaAt: 0,
+			offers: [],
+			levels: new Map(),
 		};
 		pi.events.emit("meeting:query", {});
 		timer = setInterval(() => void loop(), LOOP_MS);
@@ -1432,6 +1562,14 @@ export default function (pi: ExtensionAPI) {
 			w.notifs.set(e.id, { ...e, key });
 			if (w.notifs.size > NOTIFS_KEPT) w.notifs.delete(w.notifs.keys().next().value!);
 			if (app.route === "wake" && app.group === "slack") wakeSlack(w);
+			// A missed call is a nudge by rule: a toast, no model. Never one from before the watcher started.
+			const at = Date.parse(e.at);
+			if (isMissedCall(app.name, e.title, e.body) && w.started && (!Number.isFinite(at) || Date.now() - at < 10 * 60_000)) {
+				const who = clip(`${e.title} ${e.body}`.replace(/\s+/g, " ").trim(), 70);
+				notify(`watch · missed call · ${who}`, "warning");
+				pushLog(w.policy, { at: localIso(), key: `call:${e.id}`, level: "nudge", why: "missed call", who, what: `call · ${clip(who, 30)}` });
+				w.dirty = true;
+			}
 		} else if (e.ev === "removed") {
 			w.notifs.delete(e.id);
 		} else if (e.ev === "dropped") {
@@ -1522,6 +1660,15 @@ export default function (pi: ExtensionAPI) {
 			expanded: w.expanded,
 			started: w.started,
 			notif: notifProblem(w.notifStatus),
+			tags: w.offers.map((x, k) => ({
+				n: k + 1,
+				level: x.level,
+				text:
+					x.level === "offer"
+						? `${x.c.case ? candLabel(x.c) : (x.c.offer?.why ?? x.c.what)}${x.why.startsWith("gate:") ? ` (${x.why.slice(6)})` : ""}`
+						: `${candLabel(x.c)} held · ${x.why.replace(/^gate: /, "")}`,
+				keys: x.c.items.map((i) => i.key),
+			})),
 		};
 		ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({ render: (width: number) => widgetLines(view, theme, width), invalidate() {} }), {
 			placement: "aboveEditor",
@@ -2023,6 +2170,7 @@ export default function (pi: ExtensionAPI) {
 				bucket: item.forced ? "needs" : (t?.bucket ?? defaultBucket(item.kind)),
 				why: t?.why || kindWhy(item),
 				...(t?.due ? { due: t.due } : {}),
+				...(t?.offer && (item.forced || t.bucket === "needs") ? { offer: t.offer, ...(t.offerWhy ? { offerWhy: t.offerWhy } : {}) } : {}),
 			};
 			if (t?.closesWait && !next.closesWait) {
 				const wait = shown.find((x) => x.id === t.closesWait && x.state === "open" && !x.maybeBy);
@@ -2035,6 +2183,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			done.push(next);
 		}
+		// Nudges are code's call: urgent words, 3 pings in 30 minutes, a VIP.
+		const recent = [...w.items.values(), ...done];
+		const vip = isVip(w);
+		for (const it of done) if (it.bucket === "needs" && it.state === "open" && !it.nudge) it.nudge = nudgeOf(it, recent, vip) || undefined;
 		update(w, done);
 		for (const g of parsed?.waits ?? []) {
 			const post = pids.find((p) => p.id === g.id)?.post;
@@ -2059,7 +2211,14 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 		const urgent = done.filter((i) => i.bucket === "needs" && i.state === "open");
-		if (urgent.length && w.started && Date.now() - w.lastNotify > NOTIFY_GAP_MS) {
+		const nudged = urgent.filter((i) => i.nudge);
+		if (nudged.length && w.started) {
+			w.lastNotify = Date.now();
+			const top = nudged[0]!;
+			notify(`watch · ${top.nudge} · ${itemLabel(top)}${nudged.length > 1 ? ` (+${nudged.length - 1})` : ""}`, "warning");
+			for (const i of nudged) pushLog(w.policy, { at: localIso(), key: i.key, level: "nudge", why: i.nudge!, who: i.from, what: `${firstName(i.from)} · ${clip(i.why, 30)}` });
+			w.dirty = true;
+		} else if (urgent.length && w.started && Date.now() - w.lastNotify > NOTIFY_GAP_MS) {
 			w.lastNotify = Date.now();
 			const top = needsList(urgent)[0]!;
 			notify(`Slack: ${urgent.length} new need${urgent.length === 1 ? "s" : ""} you · ${itemLabel(top)}`);
@@ -2096,6 +2255,145 @@ export default function (pi: ExtensionAPI) {
 		return true;
 	}
 
+	// ── proactive help (watch/policy.ts) ──
+
+	const sessionWork = () => {
+		const m = ctxRef?.model;
+		return !!m && isWorkModel(`${m.provider}/${m.id}`);
+	};
+	const isVip = (w: Watch) => (who: string) => [...VIPS, ...w.policy.loud].some((v) => sameWho(v, who));
+
+	function policyView(w: Watch, now = Date.now()): PolicyView {
+		const ctx = ctxRef;
+		let editorText = false;
+		try {
+			editorText = ctx?.mode === "tui" && !!ctx.ui.getEditorText().trim();
+		} catch {
+			// no editor in this mode
+		}
+		return {
+			now,
+			nowIso: localIso(new Date(now)),
+			meeting: meetingActive,
+			workHours: workHoursAt(new Date(now), Number.isFinite(ACT_START) ? ACT_START : 8, Number.isFinite(ACT_END) ? ACT_END : 17),
+			idle: ctx?.isIdle() ?? false,
+			pending: ctx?.hasPendingMessages() ?? false,
+			editorText,
+			lastInputAt: lastActive,
+			sessionWork: sessionWork(),
+			actsToday: w.policy.acts.length,
+			lastActAt: w.policy.lastActAt,
+			perDay: BUDGET.perDay,
+			gapMs: BUDGET.gapMs,
+			quiet: (who) => isQuiet(w.policy, who, now),
+		};
+	}
+
+	/** Work meetings in the next half hour, from ical. No ical, or no work calendar: no prep. */
+	async function refreshAgenda(w: Watch, now: number) {
+		w.agendaAt = now;
+		if (!w.workCals) {
+			const r = await run("ical", ["calendars", "-o", "json"], 10_000);
+			if (!r.ok) return void (w.agenda = []);
+			w.workCals = workCalendarIds(r.out, PREP_SRC);
+		}
+		if (!w.workCals.size) return void (w.agenda = []);
+		const r = await run("ical", ["list", "-f", icalTime(now), "-t", icalTime(now + AGENDA_AHEAD_MS), "-o", "json"], 10_000);
+		if (s !== w) return;
+		w.agenda = r.ok ? parseAgenda(r.out, w.workCals, (x) => isMe(x, w.meTokens), PREP_SKIP) : [];
+	}
+
+	/** Candidates from rules and the scout, each decided and gated; at most one act a loop. */
+	async function proact(w: Watch) {
+		if (!ctxRef || !w.started) return;
+		const now = Date.now();
+		if (PREP_ON && now - w.agendaAt >= AGENDA_MS) await refreshAgenda(w, now);
+		if (s !== w) return;
+		const p = w.policy;
+		const fired = new Set(p.fired);
+		const needs = needsList(w.items.values());
+		const cands: Candidate[] = [];
+		const add = (c: Candidate | null) => c && !cands.some((x) => x.key === c.key) && cands.push(c);
+		for (const m of w.agenda) add(prepCase(m, now, fired, WORK_WORKSPACES[0] ?? null));
+		for (const i of needs) add(urgentCase(i, needs, routeOf(i.workspace), fired, now));
+		if (needs.some((i) => i.offer === "draft" && !fired.has(i.key))) {
+			const idle = parseHidIdle((await run("ioreg", ["-c", "IOHIDSystem", "-d", "4", "-r", "-k", "HIDIdleTime"], 5000)).out) ?? 0;
+			if (s !== w) return;
+			for (const c of awayCases(needs, idle, fired, (ws) => routeOf(ws), AWAY_SEC)) add(c);
+		}
+		// An item in an act candidate shows that, not its own offer.
+		const inAct = new Set(cands.flatMap((c) => c.items.map((i) => i.key)));
+		for (const i of needs) if (!inAct.has(i.key)) add(offerCase(i, routeOf(i.workspace), fired, now));
+
+		const v = policyView(w, now);
+		const list: Watch["offers"] = [];
+		for (const c of cands) {
+			let d = decide(c, v);
+			if (d.level === "act" && guard.armed()) d = { ...d, level: "held", why: "gate: a watch turn is running" };
+			if (w.levels.get(c.key) !== d.level) {
+				w.levels.set(c.key, d.level);
+				pushLog(p, d);
+				w.dirty = true;
+			}
+			if (d.level === "act") {
+				startAct(w, c, "rule");
+				v.idle = false; // the rest wait for this turn
+				v.actsToday = p.acts.length;
+				v.lastActAt = now;
+			} else if (d.level === "offer" || d.level === "held") list.push({ c, level: d.level, why: d.why });
+		}
+		const keys = new Set(cands.map((c) => c.key));
+		for (const k of [...w.levels.keys()]) if (!keys.has(k)) w.levels.delete(k);
+		// An offer that went away untaken (cleared, answered, 4 hours old, meeting began) counts against its person.
+		for (const [key, who] of Object.entries(p.offered)) {
+			if (keys.has(key) || inAct.has(key) || p.fired.includes(key)) continue;
+			delete p.offered[key];
+			w.dirty = true;
+			if (isQuiet(p, who, now)) continue;
+			pushLog(p, { at: v.nowIso, key, level: "widget", why: "offer ignored", who, what: clip(who, 40) });
+			const until = noteIgnored(p, who, now);
+			if (until) notify(`watch · 3 offers for ${who} ignored. No offers until ${until.slice(0, 10)} · /watch loud "${who}" undoes`);
+		}
+		for (const x of list) {
+			if (x.level !== "offer" || (x.c.case && x.c.case !== "prep") || x.c.key in p.offered) continue;
+			p.offered[x.c.key] = x.c.who;
+			w.dirty = true;
+		}
+		w.offers = list;
+	}
+
+	/** Start a watch turn: read tools only until pi settles. "rule" acts count against the budget. */
+	function startAct(w: Watch, c: Candidate, by: "rule" | "you") {
+		const p = w.policy;
+		const now = Date.now();
+		if (by === "rule") recordAct(p, c, now, localIso(new Date(now)));
+		else {
+			noteTaken(p, c.who);
+			pushLog(p, { at: localIso(new Date(now)), key: c.key, level: "act", why: "you: /watch do", who: c.who, what: candLabel(c) });
+		}
+		markFired(p, c);
+		w.levels.set(c.key, "act");
+		w.offers = w.offers.filter((x) => x.c.key !== c.key);
+		const people = [...c.items.map((i) => i.from), ...(c.meeting?.who ?? [])];
+		const waits = w.waits.filter((x) => x.state === "open" && people.some((who) => sameWho(x.who, who))).map((x) => `${x.id} ${x.who} · ${x.what}`);
+		const items = c.items.map((i) => w.items.get(i.key)).filter((i): i is Item => !!i);
+		guard.arm(c.key, c.workspace);
+		pi.sendMessage(
+			{
+				customType: MSG_TYPE,
+				content: actPrompt(c, { me: w.me, ...(by === "rule" ? { act: { n: p.acts.length, perDay: BUDGET.perDay } } : {}), waits }),
+				display: true,
+				details: { kind: "act", case: c.case ?? c.offer?.kind, key: c.key, by },
+			},
+			{ triggerTurn: true },
+		);
+		// The turn has the text: the digest needn't send it again.
+		update(w, items.filter((i) => !i.sentToAgent).map((i) => ({ ...i, sentToAgent: true })));
+		w.dirty = true;
+		saveState(w);
+		render();
+	}
+
 	// ── loop ──
 
 	function rollDay(w: Watch) {
@@ -2112,6 +2410,9 @@ export default function (pi: ExtensionAPI) {
 		w.mineSeen = new Set();
 		w.feedMine = [];
 		w.startedAt = Date.now();
+		w.policy = rollPolicy(w.policy, today);
+		w.offers = [];
+		w.levels.clear();
 		w.dirty = true;
 	}
 
@@ -2144,6 +2445,8 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (s !== w) return;
 			update(w, applyClearing(w.items.values(), w.unread, w.loaded, [...w.mine, ...w.feedMine]));
+			await proact(w);
+			if (s !== w) return;
 			digest({ quiet: true });
 			saveState(w);
 		} catch (e) {
@@ -2172,6 +2475,7 @@ export default function (pi: ExtensionAPI) {
 			`${w.items.size} seen today`,
 			`${w.modelLabel}${w.cost ? ` $${w.cost.toFixed(4)}` : ""}`,
 			w.groups.length ? `notifications: ${notifSummary(w.notifStatus)}, ${w.notifs.size} on screen` : "notifications: off",
+			`acts ${w.policy.acts.length} of ${BUDGET.perDay} today${w.offers.length ? `, ${w.offers.length} offered` : ""}${guard.armed() ? ", a watch turn is running" : ""}`,
 			meetingActive ? "meeting: digests held" : "",
 			w.error ? `error: ${w.error}` : "",
 		]
@@ -2209,6 +2513,10 @@ export default function (pi: ExtensionAPI) {
 				{ value: "digest", label: "digest", description: "Send the context digest now" },
 				{ value: "recap", label: "recap", description: "Post the recap and update the daily note" },
 				{ value: "apps", label: "apps", description: "Which notifications are watched, and where each goes" },
+				{ value: "do ", label: "do", description: "Run offer N from the widget: a turn with read tools only" },
+				{ value: "wakes", label: "wakes", description: "Today's nudges, offers and acts, with the rule or gate for each" },
+				{ value: "quiet ", label: "quiet", description: 'No offers or acts for someone: quiet "Dana Ruiz" 3d' },
+				{ value: "loud ", label: "loud", description: 'Make someone a VIP: loud "Lindsey Hattamer"' },
 				{ value: "stop", label: "stop", description: "Stop watching and write the recap" },
 			].filter((i) => i.value.startsWith(prefix)),
 		handler: async (raw, ctx) => {
@@ -2314,6 +2622,36 @@ export default function (pi: ExtensionAPI) {
 				}
 				case "apps":
 					return post(appsView(w), "apps");
+				case "do": {
+					if (!w) return notify("The watcher isn't running.", "warning");
+					const x = w.offers[Number(a.rest) - 1];
+					if (!x) return notify(w.offers.length ? `Usage: /watch do N (1-${w.offers.length}, from the widget)` : "Nothing offered right now.", "warning");
+					if (!ctx.isIdle() || guard.armed()) return notify("pi is busy. /watch do it again when this turn ends.", "warning");
+					if (!routeOk(x.c.route, sessionWork())) return notify("Work text runs only on a VA Copilot model. Switch models, then /watch do it again.", "warning");
+					return startAct(w, x.c, "you");
+				}
+				case "wakes":
+					return post(wakesText(w?.policy ?? loadPolicy(), BUDGET), "wakes");
+				case "quiet":
+				case "loud": {
+					const who = parsePersonArgs(a.rest);
+					if (!who) return notify(a.sub === "quiet" ? 'Usage: /watch quiet "Dana Ruiz" [3d]' : 'Usage: /watch loud "Lindsey Hattamer"', "warning");
+					const p = w?.policy ?? loadPolicy();
+					let msg: string;
+					if (a.sub === "quiet") {
+						const until = setQuiet(p, who.who, who.days);
+						p.loud = p.loud.filter((x) => !sameWho(x, who.who));
+						msg = `No offers or acts for ${who.who} until ${new Date(until).toDateString()}.`;
+					} else {
+						setLoud(p, who.who);
+						msg = `${who.who}: DMs nudge, and urgent can act.`;
+					}
+					if (w) {
+						w.dirty = true;
+						saveState(w);
+					} else writePrivate(POLICY_FILE, JSON.stringify(p, null, 1));
+					return notify(msg);
+				}
 			}
 		},
 	};

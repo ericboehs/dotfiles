@@ -1,7 +1,7 @@
 /**
  * meeting.ts — live meeting copilot.
  *
- *   /meeting start [filter|path] [--wake] [--model provider/id] [--replay [speed]]
+ *   /meeting start [filter|path] [--model provider/id] [--replay [speed]]
  *   /meeting ask            check right now
  *   /meeting focus <text>   what you want out of this meeting (fed to the scout)
  *   /meeting list           every question in the widget (again to collapse)
@@ -36,9 +36,9 @@
  *                             added or a reply suggested, sent with
  *                             triggerTurn:false — it lands in the transcript and
  *                             the main model's context without starting a turn,
- *                             so the big model only runs when you ask it to
- *   --wake                    the one exception: when you're named and the scout
- *                             has a reply, wake the main model to draft an answer
+ *                             so the big model only runs when you ask it to.
+ *                             No exceptions: the old --wake flag is gone (the
+ *                             scout already writes the reply)
  *   recap                     at the end, every question as still open, answered
  *                             or asked: posted to the session and upserted as a
  *                             ### block at the end of "## Meetings" in the daily
@@ -650,9 +650,9 @@ export type Args = {
 	sub: "status" | "start" | "stop" | "ask" | "focus" | "list" | "recap";
 	target: string;
 	rest: string;
-	wake: boolean;
 	replay?: number;
 	model?: string;
+	removed?: string; // a flag that no longer exists, to say so
 };
 
 export function parseArgs(raw: string): Args {
@@ -662,13 +662,13 @@ export function parseArgs(raw: string): Args {
 	const word = first === "expand" ? "list" : first;
 	const sub = (known as readonly string[]).includes(word) ? (word as Args["sub"]) : trimmed ? "start" : "status";
 	const rest = sub === "start" && first !== "start" ? trimmed : trimmed.slice(first.length).trim();
-	const out: Args = { sub, target: "", rest, wake: false };
+	const out: Args = { sub, target: "", rest };
 	if (sub !== "start") return out;
 	const tokens = rest.split(/\s+/).filter(Boolean);
 	const target: string[] = [];
 	for (let i = 0; i < tokens.length; i++) {
 		const t = tokens[i]!;
-		if (t === "--wake") out.wake = true;
+		if (t === "--wake") out.removed = t;
 		else if (t === "--model") out.model = tokens[++i];
 		else if (t === "--replay") {
 			const n = Number(tokens[i + 1]);
@@ -813,7 +813,6 @@ type Meeting = {
 	alert: string; // from code rules; shown like a reply
 	alertAt: number;
 	focus: string;
-	wake: boolean;
 	me: string;
 	meTokens: string[];
 	models: Model<Api>[];
@@ -1263,7 +1262,7 @@ export default function (pi: ExtensionAPI) {
 				m.reply = update.reply;
 				m.replyAt = now;
 			}
-			deliver(m, applied.added, applied.closed, update.reply, cue, at);
+			deliver(m, applied.added, applied.closed, update.reply, at);
 		} catch (e) {
 			if (st !== m) return;
 			m.error = String((e as Error)?.message ?? e).slice(0, 120);
@@ -1288,7 +1287,7 @@ export default function (pi: ExtensionAPI) {
 		m.alertAt = Date.now();
 	}
 
-	function deliver(m: Meeting, added: Question[], closed: Question[], reply: string, cue: Cue, at: string) {
+	function deliver(m: Meeting, added: Question[], closed: Question[], reply: string, at: string) {
 		// Close-only changes stay in the widget (and the recap); the session hears about new things.
 		if (added.length === 0 && !reply) return;
 		const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -1296,11 +1295,9 @@ export default function (pi: ExtensionAPI) {
 		for (const q of added) lines.push(`+ Q${q.id} ${q.q}${q.why ? ` (${q.why})` : ""}`);
 		for (const q of closed) lines.push(`✓ Q${q.id} ${short(q.q, 80)}${q.note ? ` → ${q.note}` : ` (${q.status})`}`);
 		if (reply) lines.push(`↳ suggested reply: ${reply}`);
-		const wake = m.wake && cue === "mention" && !!reply;
-		if (wake) lines.push(`${m.me || "The user"} was just addressed in the meeting. Reply with 2-3 sentences ${m.me || "they"} could say now; no tools.`);
 		pi.sendMessage(
 			{ customType: MSG_TYPE, content: lines.join("\n"), display: true, details: { kind: "update", added, closed, reply } },
-			wake ? { triggerTurn: true, deliverAs: "followUp" } : { triggerTurn: false },
+			{ triggerTurn: false },
 		);
 	}
 
@@ -1579,7 +1576,6 @@ export default function (pi: ExtensionAPI) {
 			alert: "",
 			alertAt: 0,
 			focus: "",
-			wake: a.wake,
 			me,
 			meTokens: nameTokens(me),
 			models,
@@ -1642,7 +1638,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Live meeting copilot: suggested questions from the meeting-capture transcript",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] =>
 			[
-				{ value: "start", label: "start", description: "Attach to the live meeting, or wait for one: [filter|path] [--wake] [--replay N]" },
+				{ value: "start", label: "start", description: "Attach to the live meeting, or wait for one: [filter|path] [--replay N]" },
 				{ value: "ask", label: "ask", description: "Check for questions right now" },
 				{ value: "list", label: "list", description: "Show every question in the widget (again to collapse)" },
 				{ value: "recap", label: "recap", description: "Post the recap so far and update the daily note" },
@@ -1657,6 +1653,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			switch (a.sub) {
 				case "start":
+					if (a.removed) notify(`${a.removed} was removed: the suggested reply is in the widget and the session message`);
 					return start(a, ctx);
 				case "stop":
 					return st ? finish("/meeting stop") : void notify("Meeting copilot isn't running");
@@ -1677,7 +1674,7 @@ export default function (pi: ExtensionAPI) {
 					if (!st) return void notify("Meeting copilot isn't running. /meeting start", "warning");
 					return void postRecap(st, `Meeting copilot recap so far · ${st.title} · ${st.checks} checks`);
 				default: {
-					if (!st) return void notify("Meeting copilot is off. /meeting start [filter] [--wake] [--replay N]");
+					if (!st) return void notify("Meeting copilot is off. /meeting start [filter] [--replay N]");
 					const where = st.file ? path.basename(st.file) : `waiting${st.filter ? ` for "${st.filter}"` : ""}`;
 					const open = st.questions.filter((q) => q.status === "open").length;
 					return void notify(

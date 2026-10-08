@@ -321,6 +321,19 @@ test("parses the scout's triage reply tolerantly", () => {
 	assert.equal(parseTriage('{"items": [oops'), null);
 });
 
+test("an offer survives only on a needs item, and only draft or look", () => {
+	const t = parseTriage(
+		'{"items":[{"id":"m1","bucket":"needs","why":"ATO date?","offer":"Draft","offerWhy":"draft  from the ATO notes"},{"id":"m2","bucket":"context","why":"x","offer":"draft"},{"id":"m3","bucket":"needs","why":"y","offer":"send"},{"id":"m4","bucket":"needs","why":"z","offer":"look"}]}',
+	);
+	assert.deepEqual(t.items[0], { id: "m1", bucket: "needs", why: "ATO date?", offer: "draft", offerWhy: "draft from the ATO notes" });
+	assert.equal(t.items[1].offer, undefined, "context can't carry an offer");
+	assert.equal(t.items[2].offer, undefined, "only draft or look");
+	assert.deepEqual(t.items[3], { id: "m4", bucket: "needs", why: "z", offer: "look" });
+	const sys = buildTriageSystem("Eric Boehs", "");
+	assert.match(sys, /"offer": only on a "needs" item/);
+	assert.match(sys, /"offer": "draft", "offerWhy"/);
+});
+
 test("finds the scout's JSON past echoed instructions, drafts and trailing prose", () => {
 	const reply = 'JSON only. Ensure valid JSON. {"waits": [{"id": "t1"]} oops\nFinal: {"waits": [{"id": "t2", "who": "Jeffrey Ness", "what": "AD form"}]} done {not json}';
 	assert.deepEqual(parseTriage(reply).waits, [{ id: "t2", who: "Jeffrey Ness", what: "AD form" }]);
@@ -607,6 +620,24 @@ test("widget: top 3 needs, then a +N more line", () => {
 	for (const l of widgetLines(view({ needs, error: "dsva unread: token expired" }), plain, 40, now)) assert.ok(visibleWidth(l) <= 40);
 });
 
+test("widget: offers sit under their item; prep and held acts get their own line", () => {
+	const now = Date.parse("2026-10-06T13:20:00-05:00");
+	const needs = [item({ key: "a", why: "ATO date?" }), item({ key: "b", kind: "mention", where: "#eert", why: "review?" })];
+	const tags = [
+		{ n: 1, level: "offer", text: "draft from the ATO notes", keys: ["a"] },
+		{ n: 2, level: "held", text: "prep · Platform Sync 11:00 held · in a meeting", keys: [] },
+	];
+	const lines = widgetLines(view({ needs, tags }), plain, 120, now);
+	assert.equal(lines[0], "● watch · 2 need you · 1 offer · 1 held · 1:14 PM");
+	assert.match(lines[1], /ATO date\?/);
+	assert.equal(lines[2], "    ✦ draft from the ATO notes · /watch do 1");
+	assert.match(lines[3], /review\?/);
+	assert.equal(lines[4], "  ⏸ prep · Platform Sync 11:00 held · in a meeting · /watch do 2");
+	assert.equal(lines.length, 5);
+	const open = widgetLines(view({ needs, tags, expanded: true }), plain, 120, now);
+	assert.equal(open[3], "      ✦ draft from the ATO notes · /watch do 1", "list mode: under the item's quoted text");
+});
+
 test("widget: list mode numbers every item and shows maybes and cleared", () => {
 	const needs = [item({ why: "sent the checklist" })];
 	const lines = widgetLines(
@@ -642,10 +673,17 @@ test("registers /watch, the /watch-slack alias and renderers, without starting a
 		events: { on: () => {}, emit: () => {} },
 		registerCommand: (name, def) => (commands[name] = def),
 		registerMessageRenderer: (type) => renderers.push(type),
+		registerTool: (t) => tools.push(t),
 		sendMessage: (m) => sent.push(m),
 	};
+	const tools = [];
 	watch(fake);
 	assert.deepEqual(Object.keys(commands).sort(), ["watch", "watch-slack"]);
+	assert.deepEqual(tools.map((t) => t.name), ["watch_lookup"]);
+	assert.equal(tools[0].annotations.readOnlyHint, true);
+	assert.ok(handlers.tool_call && handlers.agent_settled && handlers.agent_start, "the act guard listens");
+	assert.equal(handlers.tool_call({ toolName: "bash" }), undefined, "no watch turn: every tool runs");
+	assert.deepEqual(commands.watch.getArgumentCompletions("w").map((i) => i.value), ["waits", "wait ", "wakes"]);
 	assert.deepEqual(renderers.sort(), ["watch", "watch-slack"], "messages from before the rename still render");
 	assert.equal(commands["watch-slack"].description, "Alias of /watch");
 	assert.equal(commands["watch-slack"].handler, commands.watch.handler);
