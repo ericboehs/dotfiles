@@ -738,12 +738,13 @@ updates through server-sent events with no reload.
   changed** table (paths and edit counts from tool calls) and a
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
   the session folder. `PI_CANVAS_AUTO=0` turns all of this off.
-- **Layout.** Status and Findings stay on top. Sections follow, newest change
-  first, and the Files changed and Screenshots widgets stay at the bottom so
-  they do not jump up every turn. Click a card's header to collapse it. Each
-  browser remembers this per session, and Collapse all / Expand all sit in the
-  page header. A collapsed section isn't rendered until it's opened, and it
-  shows a dot when it changes while collapsed.
+- **Layout.** Status and Findings stay on top, and findings read newest first.
+  Sections follow, newest change first. Click a card's header to collapse it.
+  Each browser remembers that choice per session, and Collapse all / Expand all
+  sit in the page header. A section nobody has opened or collapsed starts
+  collapsed once its last change is over an hour old. A collapsed section isn't
+  rendered until it's opened, and it shows a dot when it changes while
+  collapsed.
 - **Opening it.** Safari never opens by itself. `/canvas` opens this session's
   page on display 1, left half, or focuses the tab if it is already open.
   `/canvas url` prints the address, `/canvas status` forces a status run, and

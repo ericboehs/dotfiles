@@ -345,30 +345,44 @@ function stateBadge(s) {
 const statusBy = (status) => `${status.model || "?"} · ${ago(status.at)}`;
 
 // ── collapsing ───────────────────────────────────────────────────────────────
-// Collapsed cards are remembered per session in localStorage. A collapsed
-// section's body is not rendered until it is opened, so mermaid and frames
-// lay out at their real size.
+// Opening or collapsing a card is a choice remembered per session in
+// localStorage. Without one, a section last changed over an hour ago starts
+// collapsed. That is decided when the card renders, so nothing folds up while
+// it is being read. A collapsed section's body is not rendered until it is
+// opened, so mermaid and frames lay out at their real size.
 
-let collapsed = new Set();
-let collapsedKey = "";
+const FOLD_AFTER_MS = 60 * 60 * 1000;
+let choices = {}; // card key → "open" | "shut"
+let choicesKey = "";
 
-function loadCollapsed(sid) {
-  collapsedKey = `canvas:collapsed:${sid}`;
+function loadChoices(sid) {
+  choicesKey = `canvas:fold:${sid}`;
   try {
-    collapsed = new Set(JSON.parse(localStorage.getItem(collapsedKey) || "[]"));
+    const saved = JSON.parse(localStorage.getItem(choicesKey) || "null");
+    // Before choices there was only a list of collapsed keys.
+    const legacy = JSON.parse(localStorage.getItem(`canvas:collapsed:${sid}`) || "[]");
+    choices = saved && typeof saved === "object" ? saved : Object.fromEntries(legacy.map((k) => [k, "shut"]));
   } catch {
-    collapsed = new Set();
+    choices = {};
   }
 }
 
-function saveCollapsed() {
+function saveChoices() {
   try {
-    localStorage.setItem(collapsedKey, JSON.stringify([...collapsed]));
+    localStorage.setItem(choicesKey, JSON.stringify(choices));
   } catch {}
 }
 
-/** Make a card's header toggle it. onOpen runs the first time its body shows. */
-function collapsible(card, key, onOpen) {
+/** Shut by the reader's choice, else by age when the card has one. */
+function startsShut(key, at) {
+  if (choices[key]) return choices[key] === "shut";
+  const t = Date.parse(at || "");
+  return Number.isFinite(t) && Date.now() - t > FOLD_AFTER_MS;
+}
+
+/** Make a card's header toggle it. onOpen runs the first time its body shows;
+ *  at, when given, lets an old card start collapsed. */
+function collapsible(card, key, onOpen, at) {
   const head = card.querySelector(":scope > h2");
   const chev = h("button", { class: "chev", type: "button" });
   head.prepend(chev);
@@ -380,9 +394,8 @@ function collapsible(card, key, onOpen) {
     chev.setAttribute("aria-label", shut ? "Expand" : "Collapse");
     chev.title = shut ? "Expand" : "Collapse";
     if (remember) {
-      if (shut) collapsed.add(key);
-      else collapsed.delete(key);
-      saveCollapsed();
+      choices[key] = shut ? "shut" : "open";
+      saveChoices();
     }
     if (shut) return;
     card.classList.remove("unseen");
@@ -396,21 +409,13 @@ function collapsible(card, key, onOpen) {
     if (String(getSelection?.() || "")) return; // selecting title text, not toggling
     card.setCollapsed(!card.classList.contains("collapsed"));
   });
-  card.setCollapsed(collapsed.has(key), false);
+  card.setCollapsed(startsShut(key, at), false);
   return card;
 }
 
-/** Status and Findings stay on top. Sections follow, newest change first, and
- *  the automatic widgets sit at the bottom so they do not jump up every turn. */
-const WIDGETS = ["auto-screenshots", "auto-files"];
+/** Status and Findings stay on top. Sections follow, newest change first. */
 function sortSections(list) {
-  const w = (s) => WIDGETS.indexOf(s.id);
-  return [...list].sort((a, b) => {
-    const wa = w(a);
-    const wb = w(b);
-    if (wa >= 0 || wb >= 0) return (wa < 0 ? -1 : wa) - (wb < 0 ? -1 : wb) || (wa < 0 ? String(b.at).localeCompare(String(a.at)) : 0);
-    return String(b.at).localeCompare(String(a.at));
-  });
+  return [...list].sort((a, b) => String(b.at).localeCompare(String(a.at)));
 }
 
 function statusCard(status, state) {
@@ -497,11 +502,15 @@ function sectionCard(id, sec) {
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
   const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), meta), bd);
-  return collapsible(el, sec.id, () =>
-    sectionBody(id, sec).then(
-      (body) => bd.replaceChildren(body),
-      (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
-    ),
+  return collapsible(
+    el,
+    sec.id,
+    () =>
+      sectionBody(id, sec).then(
+        (body) => bd.replaceChildren(body),
+        (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
+      ),
+    sec.at,
   );
 }
 
@@ -513,7 +522,7 @@ async function sessionView(id) {
   const sectionsSlot = h("div");
   const findingsSlot = h("div");
   $app.replaceChildren(header, statusSlot, findingsSlot, sectionsSlot);
-  loadCollapsed(id);
+  loadChoices(id);
   const cards = new Map(); // section id → { at, el }
   let lastStatusAt;
   let lastState;
