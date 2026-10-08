@@ -100,7 +100,7 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 @media (hover: none) { .findings li .btn { opacity: 1; } }
 .findings li.day { display: block; padding: 10px 14px 4px; border-top: 0; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
 .findings li.day:hover { background: none; }
-.findings li.more { display: block; padding: 8px 10px 0; border-top: 0; }
+.findings li.more { display: block; padding: 4px 10px 8px; }
 .findings li.more .btn { opacity: 1; margin: 0; }
 .findings li.more:hover { background: none; }
 .sessions .row { display: grid; grid-template-columns: 1fr auto; gap: 0 16px; padding: 10px 14px 11px; border-top: 1px solid var(--soft); color: inherit; text-decoration: none; }
@@ -447,14 +447,11 @@ function findingsCard(findings, showAll = false) {
     h("h2", {}, h("span", { class: "title" }, "Findings"), h("span", { class: "n" }, String(findings.length)), h("span", { class: "meta" }, copyButton(() => findings.map((f) => `- ${f.text}`).join("\n"), "Copy all"))),
     h("div", { class: "bd flush" }, list),
   );
-  const hidden = showAll ? 0 : Math.max(0, findings.length - FINDINGS_SHOWN);
-  if (hidden) {
-    const more = h("button", { class: "btn", type: "button" }, `Show ${hidden} earlier`);
-    more.addEventListener("click", () => card.replaceWith(findingsCard(findings, true)));
-    list.append(h("li", { class: "more" }, more));
-  }
+  // Newest first. findings.md is append-only, so file order is time order.
+  const newest = [...findings].reverse();
+  const shown = showAll ? newest : newest.slice(0, FINDINGS_SHOWN);
   let lastDay = "";
-  for (const f of findings.slice(hidden)) {
+  for (const f of shown) {
     const d = new Date(f.at);
     const valid = !Number.isNaN(d.getTime());
     const day = valid ? dayLabel(d) : "";
@@ -474,6 +471,12 @@ function findingsCard(findings, showAll = false) {
         copyButton(() => f.text),
       ),
     );
+  }
+  const hidden = newest.length - shown.length;
+  if (hidden) {
+    const more = h("button", { class: "btn", type: "button" }, `Show ${hidden} older`);
+    more.addEventListener("click", () => card.replaceWith(findingsCard(findings, true)));
+    list.append(h("li", { class: "more" }, more));
   }
   return collapsible(card, "_findings");
 }
