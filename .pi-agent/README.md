@@ -275,16 +275,16 @@ waiting on, and closes a wait when its answer lands:
 `/watch-slack` still works, as an alias.
 
 It never starts on its own, and only one session can run it at a time (a lock
-in `~/.local/share/watch-slack`; `--force` takes over a live one). It reads
+in `~/.local/share/watch`; `--force` takes over a live one). It reads
 Slack every 3 minutes while you're active, every 10 after 30 idle minutes, and
-every 15 outside `PI_WATCH_SLACK_HOURS` (default `7-18`, weekdays). Each read
+every 15 outside `PI_WATCH_HOURS` (default `7-18`, weekdays). Each read
 runs `slk unread`, `slk activity` and `slk sent --mine` per workspace
-(`PI_WATCH_SLACK_WORKSPACES`, default `oddball,dsva,boehs`). The bot feed goes
+(`PI_WATCH_WORKSPACES`, default `oddball,dsva,boehs`). The bot feed goes
 through `eert-bot-feed`, at most once a minute. Nothing it runs posts, reacts or
-marks anything read. New items go to a small model (`PI_WATCH_SLACK_MODEL`,
+marks anything read. New items go to a small model (`PI_WATCH_MODEL`,
 default Opencode Go's DeepSeek V4.1 Flash) that sorts each into needs you,
-context or noise with a short why. Work workspaces (`PI_WATCH_SLACK_WORK_WORKSPACES`,
-default `dsva`) go only to the work scout (`PI_WATCH_SLACK_WORK_MODEL`, default
+context or noise with a short why. Work workspaces (`PI_WATCH_WORK_WORKSPACES`,
+default `dsva`) go only to the work scout (`PI_WATCH_WORK_MODEL`, default
 VA Copilot's `github-copilot/claude-haiku-5.5`; a model from another provider
 is refused). Their text, and waits from their conversations, never reach the
 default scout. When the work scout fails,
@@ -308,9 +308,17 @@ Every 15 minutes with something new, a digest goes into the session as a
 instructions. During a live `/meeting`, digests wait until it ends. On stop, a
 recap goes into today's daily note as a `###` block at the end of `## Notes`,
 and `/watch recap` rewrites the same block.
-Every item lands in `~/.local/share/watch-slack/YYYY-MM-DD.jsonl` (mode 600),
-so `/watch since 9am` works after a restart. The folder, the lock and the
-`PI_WATCH_SLACK_*` settings kept their names through the rename.
+Every item lands in `~/.local/share/watch/YYYY-MM-DD.jsonl` (mode 600),
+so `/watch since 9am` works after a restart.
+
+The first `/watch start` after the rename moves `~/.local/share/watch-slack`
+to `~/.local/share/watch`. It moves the folder only when the new one doesn't
+exist yet and no live watcher holds the old folder. A symlink stays at the old
+path. The lock is written as both `watch.lock` and `watch-slack.lock`, so a
+session still on older code sees the live watcher and won't start a second
+one. Every `PI_WATCH_X` setting also reads its old name, `PI_WATCH_SLACK_X`.
+If the new name is set, it wins, even when empty. The recap's hidden marker
+keeps its old name, so today's block is found and rewritten, not duplicated.
 
 Notifications come from `bin/notif-watch`, a Swift script that the watcher
 starts with `--follow` and stops with itself. It reads the Mac notification
@@ -387,7 +395,7 @@ against the budget. After 3 offers in a row from one person go untaken, that
 person goes quiet for 7 days. `/watch quiet` and `/watch loud` set this by
 hand. `/watch wakes` lists today's nudges, offers, held acts and acts, with
 the reason for each. Decisions, the budget, quiet and loud live in
-`~/.local/share/watch-slack/policy.json` (mode 600). Quiet and loud carry over
+`~/.local/share/watch/policy.json` (mode 600). Quiet and loud carry over
 to the next day.
 
 ## Footer

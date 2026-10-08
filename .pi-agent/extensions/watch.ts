@@ -62,19 +62,21 @@
  *   digest                    every 15 min, only with new items, as a `watch`
  *                             message with triggerTurn:false. Held while meeting.ts
  *                             reports a meeting ("meeting:state"), flushed after
- *   ledger                    ~/.local/share/watch-slack/YYYY-MM-DD.jsonl (mode 600),
+ *   ledger                    ~/.local/share/watch/YYYY-MM-DD.jsonl (mode 600),
  *                             one line per change, text clipped to 500 chars, ICNs masked
- *   daily note                one "### … Slack · watch-slack" block at the end of
+ *   daily note                one "### … Slack · watch" block at the end of
  *                             "## Notes", rewritten on /watch recap, stop and shutdown
  *
  * Slack text is untrusted data: the digest says so, and the scout is told so.
  * In-session only: no launchd, and nothing keeps running after the session ends.
  *
- * Env: PI_WATCH_SLACK_WORKSPACES=oddball,dsva,boehs  PI_WATCH_SLACK_MODEL=provider/id[,…]
- *      PI_WATCH_SLACK_WORK_WORKSPACES=dsva  PI_WATCH_SLACK_WORK_MODEL=github-copilot/claude-haiku-5.5[,…]
- *      PI_WATCH_SLACK_REASONING=low  PI_WATCH_SLACK_ME="First Last"  PI_WATCH_SLACK_DIR
- *      PI_WATCH_SLACK_DAILY_DIR (falls back to PI_MEETING_DAILY_DIR; "" disables the note)
- *      PI_WATCH_SLACK_HOURS=7-18 (work hours; slower polls outside them and on weekends)
+ * Env (each PI_WATCH_X below also reads its old PI_WATCH_SLACK_X name):
+ *      PI_WATCH_WORKSPACES=oddball,dsva,boehs  PI_WATCH_MODEL=provider/id[,…]
+ *      PI_WATCH_WORK_WORKSPACES=dsva  PI_WATCH_WORK_MODEL=github-copilot/claude-haiku-5.5[,…]
+ *      PI_WATCH_REASONING=low  PI_WATCH_ME="First Last"  PI_WATCH_ABOUT=path
+ *      PI_WATCH_DIR (default ~/.local/share/watch; ~/.local/share/watch-slack moves there once)
+ *      PI_WATCH_DAILY_DIR (falls back to PI_MEETING_DAILY_DIR; "" disables the note)
+ *      PI_WATCH_HOURS=7-18 (work hours; slower polls outside them and on weekends)
  *      PI_WATCH_APPS=slack,mail,work,calls,msgs ("" or "off": no notifications)
  *      PI_WATCH_NOTIF_BIN=notif-watch
  *      PI_WATCH_ACTS=12/15 (self-started turns each day / minutes between)  PI_WATCH_ACT_HOURS=8-17
@@ -131,28 +133,32 @@ import { icalTime, PREP_SKIP_WORDS, PREP_SOURCES, parseAgenda, skipPattern, work
 
 // ── config ───────────────────────────────────────────────────────────────────
 
-export const WORKSPACES = (process.env.PI_WATCH_SLACK_WORKSPACES || "oddball,dsva,boehs")
+/** PI_WATCH_X, or its name from before the rename, PI_WATCH_SLACK_X. A set new name wins, even "". */
+export const envOf = (name: string, env: NodeJS.ProcessEnv = process.env) => env[`PI_WATCH_${name}`] ?? env[`PI_WATCH_SLACK_${name}`];
+
+export const WORKSPACES = (envOf("WORKSPACES") || "oddball,dsva,boehs")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
 export const FEED_CHANNEL = "C0C6HKPMFCG";
 export const FEED_WS = "oddball";
 /** Workspaces whose text goes only to WORK_MODELS, never the default scout. */
-export const WORK_WORKSPACES = (process.env.PI_WATCH_SLACK_WORK_WORKSPACES ?? "dsva")
+export const WORK_WORKSPACES = (envOf("WORK_WORKSPACES") ?? "dsva")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
-const WORK_SPECS = modelSpecs(process.env.PI_WATCH_SLACK_WORK_MODEL).length ? modelSpecs(process.env.PI_WATCH_SLACK_WORK_MODEL) : [...WORK_MODELS];
+const WORK_SPECS = modelSpecs(envOf("WORK_MODEL")).length ? modelSpecs(envOf("WORK_MODEL")) : [...WORK_MODELS];
 /** The newest open waits a scout call sees; older ones still close by rule. */
 export const WAITS_SHOWN = 40;
-const DATA_DIR = process.env.PI_WATCH_SLACK_DIR || path.join(os.homedir(), ".local/share/watch-slack");
-const DAILY_DIR =
-	process.env.PI_WATCH_SLACK_DAILY_DIR ?? process.env.PI_MEETING_DAILY_DIR ?? path.join(os.homedir(), "Documents/Wiki/daily");
+const DATA_DIR = envOf("DIR") || path.join(os.homedir(), ".local/share/watch");
+/** The folder from before the rename; moved to DATA_DIR on the first /watch start. */
+const OLD_DATA_DIR = envOf("DIR") ? null : path.join(os.homedir(), ".local/share/watch-slack");
+const DAILY_DIR = envOf("DAILY_DIR") ?? process.env.PI_MEETING_DAILY_DIR ?? path.join(os.homedir(), "Documents/Wiki/daily");
 const NOTE_HEADING = "## Notes";
 const ABOUT_FILE =
-	process.env.PI_WATCH_SLACK_ABOUT || process.env.PI_MEETING_ABOUT || path.join(os.homedir(), ".pi/agent/meeting-context.md");
-const REASONING = process.env.PI_WATCH_SLACK_REASONING || "low";
-const [START_HOUR, END_HOUR] = (process.env.PI_WATCH_SLACK_HOURS || "7-18").split("-").map(Number);
+	envOf("ABOUT") || process.env.PI_MEETING_ABOUT || path.join(os.homedir(), ".pi/agent/meeting-context.md");
+const REASONING = envOf("REASONING") || "low";
+const [START_HOUR, END_HOUR] = (envOf("HOURS") || "7-18").split("-").map(Number);
 
 export const POLL = {
 	activeMs: 3 * 60_000,
@@ -919,6 +925,7 @@ export function digestText(items: Item[], closed: WaitItem[], now: Date, ledger 
 	return lines.join("\n");
 }
 
+/** Kept from before the rename: a new marker wouldn't find today's block and would write a second one. */
 export const recapMarker = (day: string) => `<!-- watch-slack:${day} -->`;
 
 export type RecapInput = { day: string; from: string; to: string; items: Item[]; waits: WaitItem[]; ledger: string };
@@ -936,7 +943,7 @@ export function recapBlock(r: RecapInput): string {
 	const sent = r.items.filter((i) => i.sentToAgent).length;
 	const span = [r.from, r.to].filter(Boolean).join("–");
 	const out = [
-		`### ${span ? `${span} ` : ""}Slack · watch-slack`,
+		`### ${span ? `${span} ` : ""}Slack · watch`,
 		recapMarker(r.day),
 		`${r.items.length} seen · ${needs.length} needed you, ${stillOpen} still open · ${closed.length} wait${closed.length === 1 ? "" : "s"} closed, ${open.length} open · ${sent} sent to the agent · ledger \`${r.ledger}\``,
 	];
@@ -1184,7 +1191,7 @@ type Watch = {
 	notifs: Map<string, Posted & { key: string }>; // on screen now, by id; memory only. key: "group:route"
 	notifSeen: Record<string, number>; // "group:route" → posted since start
 	notifDropped: number;
-	policy: PolicyState; // ~/.local/share/watch-slack/policy.json
+	policy: PolicyState; // ~/.local/share/watch/policy.json
 	agenda: Meeting[]; // work meetings in the next half hour (prep.ts)
 	agendaAt: number;
 	workCals?: Set<string>; // ical calendar ids on a work account
@@ -1215,7 +1222,10 @@ function slkCache(kind: "users" | "channels", ws: string): Record<string, string
 }
 const ledgerPath = (day: string) => path.join(DATA_DIR, `${day}.jsonl`);
 const statePath = (day: string) => path.join(DATA_DIR, `${day}.state.json`);
-const LOCK = path.join(DATA_DIR, "watch-slack.lock");
+const LOCK = path.join(DATA_DIR, "watch.lock");
+/** The lock's name before the rename. Written too, so a session on older code sees a live watcher. */
+const OLD_LOCK_NAME = "watch-slack.lock";
+const LOCKS = [LOCK, path.join(DATA_DIR, OLD_LOCK_NAME)];
 /** Offers, acts, quiet and loud: one file, so quiet and loud outlive the day. */
 const POLICY_FILE = path.join(DATA_DIR, "policy.json");
 const loadPolicy = (day = dayKey()): PolicyState => {
@@ -1248,6 +1258,40 @@ function loadDay(day: string): { items: Map<string, Item>; state: Partial<Persis
 		// nothing yet today
 	}
 	return { items, state };
+}
+
+/** The pid in a lock file, if another instance wrote it and that process lives. */
+export function lockPid(file: string, isLive: (pid: number) => boolean, instance = ""): number | undefined {
+	try {
+		const l = JSON.parse(fs.readFileSync(file, "utf8")) as { pid: number; instance: string };
+		return l.instance !== instance && Number.isInteger(l.pid) && isLive(l.pid) ? l.pid : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export type Migration = { state: "moved" } | { state: "busy"; pid: number } | { state: "none" };
+
+/**
+ * Moves the folder from before the rename to its new path, once: only when the
+ * new one doesn't exist yet and no live watcher holds the old lock. A symlink
+ * stays at the old path, so a session on older code reads, writes and locks
+ * the same files.
+ */
+export function migrateDataDir(from: string, to: string, isLive: (pid: number) => boolean): Migration {
+	let st: fs.Stats;
+	try {
+		st = fs.lstatSync(from);
+	} catch {
+		return { state: "none" };
+	}
+	if (!st.isDirectory() || fs.existsSync(to)) return { state: "none" };
+	const pid = lockPid(path.join(from, OLD_LOCK_NAME), isLive);
+	if (pid) return { state: "busy", pid };
+	fs.mkdirSync(path.dirname(to), { recursive: true });
+	fs.renameSync(from, to);
+	fs.symlinkSync(to, from);
+	return { state: "moved" };
 }
 
 const alive = (pid: number) => {
@@ -1384,19 +1428,20 @@ export default function (pi: ExtensionAPI) {
 	// ── one watcher per machine ──
 
 	function lockHolder(): number | undefined {
-		try {
-			const l = JSON.parse(fs.readFileSync(LOCK, "utf8")) as { pid: number; instance: string };
-			return l.instance !== instance && alive(l.pid) ? l.pid : undefined;
-		} catch {
-			return undefined;
+		for (const f of LOCKS) {
+			const pid = lockPid(f, alive, instance);
+			if (pid) return pid;
 		}
+		return undefined;
 	}
 	function dropLock() {
-		try {
-			const l = JSON.parse(fs.readFileSync(LOCK, "utf8")) as { instance: string };
-			if (l.instance === instance) fs.rmSync(LOCK, { force: true });
-		} catch {
-			// gone already
+		for (const f of LOCKS) {
+			try {
+				const l = JSON.parse(fs.readFileSync(f, "utf8")) as { instance: string };
+				if (l.instance === instance) fs.rmSync(f, { force: true });
+			} catch {
+				// gone already
+			}
 		}
 	}
 
@@ -1404,6 +1449,13 @@ export default function (pi: ExtensionAPI) {
 
 	async function start(ctx: ExtensionContext, force: boolean) {
 		if (s) return notify("The watcher is already running. /watch stop first.", "warning");
+		const moved = OLD_DATA_DIR ? migrateDataDir(OLD_DATA_DIR, DATA_DIR, alive) : ({ state: "none" } as Migration);
+		if (moved.state === "busy")
+			return notify(
+				`A pi session on older code (pid ${moved.pid}) is watching from ${tilde(OLD_DATA_DIR!)}. /watch stop there (or /reload it), then /watch start here.`,
+				"warning",
+			);
+		if (moved.state === "moved") notify(`Moved ${tilde(OLD_DATA_DIR!)} to ${tilde(DATA_DIR)}; a link stays at the old path.`, "info");
 		const holder = lockHolder();
 		if (holder && !force) return notify(`Another pi session (pid ${holder}) is watching. /watch start --force takes over.`, "warning");
 		const registry = ctx.modelRegistry;
@@ -1411,7 +1463,7 @@ export default function (pi: ExtensionAPI) {
 			list
 				.map((spec) => registry.find(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1)))
 				.filter((m): m is Model<Api> => !!m && registry.hasConfiguredAuth(m));
-		const specs = modelSpecs(process.env.PI_WATCH_SLACK_MODEL);
+		const specs = modelSpecs(envOf("MODEL"));
 		const models = resolve(specs.length ? specs : [...PERSONAL_MODELS]);
 		if (!models.length) notify(`No scout model with credentials (${(specs.length ? specs : PERSONAL_MODELS).join(", ")}); sorting by rule only`, "warning");
 		const work = workOnly(WORK_SPECS);
@@ -1420,7 +1472,7 @@ export default function (pi: ExtensionAPI) {
 		if (WORK_WORKSPACES.length && !workModels.length)
 			notify(`No work scout with credentials (${work.ok.join(", ") || "none on VA Copilot"}); ${WORK_WORKSPACES.join(", ")} sorted by rule only`, "warning");
 		const names = (ms: Model<Api>[]) => ms.map((m) => m.name || m.id).join(" → ") || "rules only";
-		const me = process.env.PI_WATCH_SLACK_ME || process.env.PI_MEETING_ME || (await run("git", ["config", "--global", "--includes", "user.name"], 3000)).out.trim();
+		const me = envOf("ME") || process.env.PI_MEETING_ME || (await run("git", ["config", "--global", "--includes", "user.name"], 3000)).out.trim();
 		let about = "";
 		try {
 			about = fs.readFileSync(ABOUT_FILE, "utf8").slice(0, 4000);
@@ -1436,7 +1488,7 @@ export default function (pi: ExtensionAPI) {
 			y.setDate(y.getDate() - 1);
 			waits = (loadDay(dayKey(y)).state.waits ?? []).filter((x) => x.state === "open" && x.source !== "note");
 		}
-		writePrivate(LOCK, JSON.stringify({ pid: process.pid, instance, startedAt: localIso() }));
+		for (const f of LOCKS) writePrivate(f, JSON.stringify({ pid: process.pid, instance, startedAt: localIso() }));
 		s = {
 			day,
 			items,
@@ -1476,7 +1528,7 @@ export default function (pi: ExtensionAPI) {
 			system: buildTriageSystem(me, about),
 			me,
 			meTokens: nameTokens(me),
-			sessionId: `watch-slack-${randomUUID()}`,
+			sessionId: `watch-${randomUUID()}`,
 			abort: new AbortController(),
 			cost: 0,
 			checks: 0,

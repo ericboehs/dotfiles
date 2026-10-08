@@ -9,6 +9,9 @@
  */
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -25,6 +28,7 @@ import watch, {
 	clip,
 	DIGEST_HEAD,
 	digestText,
+	envOf,
 	FEED_CHANNEL,
 	FEED_WS,
 	feedAddress,
@@ -32,9 +36,11 @@ import watch, {
 	isMine,
 	itemKey,
 	jsonValues,
+	lockPid,
 	ledgerLatest,
 	maskIcn,
 	matchWait,
+	migrateDataDir,
 	needsList,
 	noteTodos,
 	parseActivity,
@@ -499,7 +505,7 @@ test("the recap block has clauses, not message bodies, and upserts into ## Notes
 	];
 	const block = recapBlock({ day: "2026-10-06", from: "08:02", to: "17:30", items, waits, ledger: "~/l.jsonl" });
 	const lines = block.split("\n");
-	assert.equal(lines[0], "### 08:02–17:30 Slack · watch-slack");
+	assert.equal(lines[0], "### 08:02–17:30 Slack · watch");
 	assert.equal(lines[1], recapMarker("2026-10-06"));
 	assert.match(lines[2], /^3 seen · 2 needed you, 1 still open · 1 wait closed, 2 open · 1 sent to the agent/);
 	assert.match(block, /Lindsey Hattamer: Lindsey sent the checklist \(closes W1\) \(cleared, read\)/);
@@ -661,6 +667,49 @@ test("a Slack banner brings the next read forward, at most once a minute", () =>
 	assert.equal(wakePollAt(now, now - 20_000, now + 2 * 60_000), now - 20_000 + WAKE_GAP_MS, "a read 20s ago: a minute after it");
 	assert.equal(wakePollAt(now, now - 20_000, now + 10_000), null, "already due sooner");
 	assert.equal(wakePollAt(now, 0, 0), null, "first read pending: already due");
+});
+
+test("settings: PI_WATCH_X, then the old PI_WATCH_SLACK_X; a set new name wins, even empty", () => {
+	assert.equal(envOf("ME", { PI_WATCH_ME: "A", PI_WATCH_SLACK_ME: "B" }), "A");
+	assert.equal(envOf("ME", { PI_WATCH_SLACK_ME: "B" }), "B");
+	assert.equal(envOf("DAILY_DIR", { PI_WATCH_DAILY_DIR: "", PI_WATCH_SLACK_DAILY_DIR: "/x" }), "", '"" still turns the note off');
+	assert.equal(envOf("ME", {}), undefined);
+});
+
+test("data folder: moves once from watch-slack, leaves a link, and waits on a live old watcher", (t) => {
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "watch-dir-"));
+	t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+	const from = path.join(home, "watch-slack");
+	const to = path.join(home, "watch");
+	assert.deepEqual(migrateDataDir(from, to, () => true), { state: "none" }, "nothing to move");
+	fs.mkdirSync(from);
+	fs.writeFileSync(path.join(from, "2026-10-07.jsonl"), "{}\n");
+	fs.writeFileSync(path.join(from, "watch-slack.lock"), JSON.stringify({ pid: 4242, instance: "old" }));
+	assert.deepEqual(migrateDataDir(from, to, (pid) => pid === 4242), { state: "busy", pid: 4242 });
+	assert.ok(!fs.existsSync(to), "a live old watcher keeps its folder");
+	assert.deepEqual(migrateDataDir(from, to, () => false), { state: "moved" }, "a stale lock doesn't block");
+	assert.equal(fs.readFileSync(path.join(to, "2026-10-07.jsonl"), "utf8"), "{}\n");
+	assert.ok(fs.lstatSync(from).isSymbolicLink());
+	assert.equal(fs.readlinkSync(from), to);
+	assert.equal(fs.readFileSync(path.join(from, "2026-10-07.jsonl"), "utf8"), "{}\n", "old code still finds its files");
+	assert.deepEqual(migrateDataDir(from, to, () => false), { state: "none" }, "once");
+	const both = path.join(home, "both");
+	fs.mkdirSync(both);
+	assert.deepEqual(migrateDataDir(both, to, () => false), { state: "none" }, "never over an existing folder");
+	assert.ok(fs.lstatSync(both).isDirectory());
+});
+
+test("locks: a live pid from another instance; ours, dead or broken ones don't count", (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-lock-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const f = path.join(dir, "watch.lock");
+	assert.equal(lockPid(f, () => true), undefined, "no file");
+	fs.writeFileSync(f, JSON.stringify({ pid: 7, instance: "a" }));
+	assert.equal(lockPid(f, () => true, "b"), 7);
+	assert.equal(lockPid(f, () => true, "a"), undefined, "our own");
+	assert.equal(lockPid(f, () => false, "b"), undefined, "dead");
+	fs.writeFileSync(f, "{");
+	assert.equal(lockPid(f, () => true, "b"), undefined);
 });
 
 test("registers /watch, the /watch-slack alias and renderers, without starting anything", async () => {

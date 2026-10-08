@@ -52,11 +52,11 @@ test("one loop: prep acts with a guarded turn, the urgent draft waits, /watch do
 	const env = {
 		PATH: `${fakeBins(dir)}:${process.env.PATH}`,
 		FAKE_NOW: String(NOW),
-		PI_WATCH_SLACK_DIR: path.join(dir, "data"),
-		PI_WATCH_SLACK_DAILY_DIR: "",
-		PI_WATCH_SLACK_ABOUT: path.join(dir, "none.md"),
-		PI_WATCH_SLACK_ME: "Eric Boehs",
-		PI_WATCH_SLACK_WORKSPACES: "oddball,dsva",
+		PI_WATCH_DIR: path.join(dir, "data"),
+		PI_WATCH_DAILY_DIR: "",
+		PI_WATCH_ABOUT: path.join(dir, "none.md"),
+		PI_WATCH_SLACK_ME: "Eric Boehs", // an old name still works
+		PI_WATCH_WORKSPACES: "oddball,dsva",
 		PI_WATCH_APPS: "off",
 		PI_WATCH_ACTS: "12/15",
 		XDG_CACHE_HOME: path.join(dir, "cache"),
@@ -173,9 +173,15 @@ test("one loop: prep acts with a guarded turn, the urgent draft waits, /watch do
 	assert.ok(policy.fired.includes(`prep:E1:${new Date(NOW + 5 * 60_000).toISOString()}`));
 	assert.ok(policy.fired.includes("urgent:oddball:D1:"));
 	assert.equal(fs.statSync(path.join(dir, "data", "policy.json")).mode & 0o777, 0o600);
+	for (const lock of ["watch.lock", "watch-slack.lock"]) {
+		const l = JSON.parse(fs.readFileSync(path.join(dir, "data", lock), "utf8"));
+		assert.equal(l.pid, process.pid, `${lock}: both names, so older code sees the watcher`);
+	}
 
 	await commands.watch.handler('quiet "Kim Lee" 2d', ctx);
 	assert.match(notes.at(-1), /No offers or acts for Kim Lee until/);
 	await commands.watch.handler('loud "Kim Lee"', ctx);
 	assert.match(notes.at(-1), /Kim Lee: DMs nudge, and urgent can act/);
+	await commands.watch.handler("stop", ctx);
+	for (const lock of ["watch.lock", "watch-slack.lock"]) assert.ok(!fs.existsSync(path.join(dir, "data", lock)), `stop drops ${lock}`);
 });
