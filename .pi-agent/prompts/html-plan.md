@@ -28,7 +28,8 @@ node ~/.pi/agent/html-plan/runtime/pack.mjs .pi/plans/<slug>.html --root "$PWD"
 
 - Link `htmlplan.css` and `htmlplan.js` by name, as the skill shows. Pack finds them next to itself.
 - The packed file inlines source. Do not commit `.pi/plans/` unless I ask.
-- Open the packed file with `open`. If that opens Safari, park it with `wrangle open` on display 1, left side, instead of leaving it on the main display.
+- Put the packed page on this session's canvas: call the `canvas` tool with `kind: "html-plan"`, `id: "plan-<slug>"`, a short `title` and `path: ".pi/plans/<slug>.packed.html"`. Give me the page URL it returns. Do not open a browser; I open it with `/canvas`.
+- If the `canvas` tool is not available, open the packed file with `open`. If that opens Safari, park the window on display 1, left half, instead of leaving it on the main display.
 
 ## Step 3 — Hand it over and stop
 

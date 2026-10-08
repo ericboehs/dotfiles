@@ -57,10 +57,10 @@ extensions/herdr-agent-state.ts
 # aborts the entire launch when an extension's import cannot resolve.
 !extensions/*/
 !extensions/*/*.ts
-# The one .mjs in here. pi does not import it — it is the scoring harness for
-# the search chain, run by hand before a backend change. The numbers in
-# web-providers/README.md came out of it, and a host that cannot re-run them
-# can only take them on trust.
+# .mjs files pi does not import: the search-chain scoring harness
+# (web-providers/eval.mjs, run by hand before a backend change; the numbers in
+# web-providers/README.md came out of it) and the canvas daemon and browser
+# page (canvas/daemon.mjs, canvas/page.mjs, spawned and served by canvas.ts).
 !extensions/*/*.mjs
 
 # Extension tooling (not linked into ~/.pi/agent — see tsconfig.json).

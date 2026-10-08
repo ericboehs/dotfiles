@@ -612,6 +612,57 @@ available locally; it never starts/resumes an agent or submits a prompt.
 node --test .pi-agent/test/web-chat.test.mjs
 ```
 
+## Session canvas
+
+`extensions/canvas.ts` gives each pi session a live local web page for output
+that is too wide or long for the terminal. One shared daemon
+(`extensions/canvas/daemon.mjs`) serves `http://127.0.0.1:8790`: an index of
+sessions at `/`, and one page per session at `/s/<session-id>`. The page
+updates through server-sent events with no reload.
+
+- **Status.** After each settled turn that ran tools, Claude Haiku 5.5 on
+  Copilot rewrites the status block (goal, now, done, open, next) from a
+  digest of that turn and the previous status. It is an in-process
+  `modelRegistry.complete()` call, the same pattern as `auto-session-name.ts`.
+  The main model does nothing, and a new turn aborts a run still in progress.
+  Each run uses one Copilot premium request; tool-free short replies skip it.
+- **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
+  (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
+  its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`, and
+  `finding` (one append-only line in the findings log). `/html-plan` now puts
+  its packed page here instead of opening Safari.
+- **Opening it.** Safari never opens by itself. `/canvas` opens this session's
+  page on display 1, left half, or focuses the tab if it is already open.
+  `/canvas url` prints the address, `/canvas status` forces a status run, and
+  `/canvas off` / `on` pauses status runs for this process.
+
+Files live in `~/.pi/canvas/<session-id>/` (`meta.json`, `status.json`,
+`sections.json`, section bodies, `findings.md`). A session gets a folder only
+on its first status or section. The daemon deletes folders idle for 30 days
+whose pi process is gone (`PI_CANVAS_RETAIN_DAYS`).
+
+The daemon is spawned detached on `session_start` when none answers
+`/health`. Its version is a hash of `daemon.mjs` and `page.mjs` on disk, so
+after an edit the next pi to start replaces it. Logs go to
+`~/.pi/canvas/.daemon.log`. Browser libraries (marked, DOMPurify, mermaid) are
+fetched once from jsdelivr, checked against the sha256 pins in `daemon.mjs`,
+and cached in `~/.pi/canvas/.vendor`; mermaid alone is 5.5 MB, too heavy to
+commit here.
+
+Loopback only. The daemon answers only 127.0.0.1 with a loopback `Host`
+header, which stops DNS rebinding, and it serves nothing but reads. Section
+HTML runs same-origin (html-plan needs `localStorage`) under a CSP with
+`connect-src 'none'`. Other local processes are trusted. The page can hold
+anything the session saw; it is not a redaction layer.
+
+`PI_CANVAS=0` disables everything, `PI_CANVAS_STATUS=0` keeps the tool without
+status runs, and `PI_CANVAS_MODEL=provider/id` changes the status model.
+Subagent children skip the canvas.
+
+```sh
+node --test .pi-agent/test/canvas.test.mjs
+```
+
 ## Inline images
 
 `extensions/image-preview.ts` makes `read` show pictures inline under tmux. pi
