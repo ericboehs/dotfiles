@@ -360,7 +360,9 @@ export default function canvas(pi: ExtensionAPI) {
       pid: process.pid,
       started: (prev.started as string) || new Date().toISOString(),
     };
-    if (JSON.stringify({ ...prev, ended: undefined }) !== JSON.stringify(meta)) writeAtomic(metaPath, JSON.stringify(meta, null, 2));
+    // Compare against prev as stored: a stale "ended" from an earlier
+    // shutdown must count as a change, so the page shows live again.
+    if (JSON.stringify(prev) !== JSON.stringify(meta)) writeAtomic(metaPath, JSON.stringify(meta, null, 2));
     return d;
   }
 
@@ -430,10 +432,11 @@ export default function canvas(pi: ExtensionAPI) {
     void refreshStatus(ctx);
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (event) => {
     inflight?.abort();
     inflight = undefined;
-    if (!sessionId) return;
+    // /reload keeps the same session in the same process; it is not an end.
+    if (!sessionId || event.reason === "reload") return;
     const metaPath = join(dir(), "meta.json");
     if (!existsSync(metaPath)) return;
     try {
