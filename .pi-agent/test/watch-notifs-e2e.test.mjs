@@ -98,6 +98,7 @@ test("notifications become items: routed by app, one per message, cleared when g
 		events: { on: () => {}, emit: () => {} },
 		registerCommand: (name, def) => (commands[name] = def),
 		registerMessageRenderer: () => {},
+		registerShortcut: () => {},
 		registerTool: () => {},
 		sendMessage: () => {},
 	};

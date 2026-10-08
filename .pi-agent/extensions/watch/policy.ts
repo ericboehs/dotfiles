@@ -66,6 +66,8 @@ export type PolicyState = {
 	ignored: Record<string, number>; // person → offers ignored in a row
 	quiet: Record<string, string>; // person → until (local ISO)
 	loud: string[]; // VIPs added with /watch loud
+	mutes: Mute[]; // items that match are "drop" before the scout; kept across days
+	nextMute: number;
 	log: Decision[]; // today's level changes, for /watch wakes
 };
 
@@ -254,14 +256,87 @@ export function awayIdleSec(hidSec: number | null, lastInputAt: number, now: num
 
 // ── state ────────────────────────────────────────────────────────────────────
 
-export const newPolicy = (day: string): PolicyState => ({ day, acts: [], lastActAt: 0, fired: [], offered: {}, ignored: {}, quiet: {}, loud: [], log: [] });
+export const newPolicy = (day: string): PolicyState => ({
+	day,
+	acts: [],
+	lastActAt: 0,
+	fired: [],
+	offered: {},
+	ignored: {},
+	quiet: {},
+	loud: [],
+	mutes: [],
+	nextMute: 1,
+	log: [],
+});
 
-/** Loaded or new: a new day drops acts, fired, offered and log; expired quiet ends. */
+/** Loaded or new: a new day drops acts, fired, offered and log; expired quiet and mutes end. */
 export function rollPolicy(p: Partial<PolicyState> | undefined, day: string, now = Date.now()): PolicyState {
 	const base = { ...newPolicy(day), ...(p ?? {}) };
 	const quiet = Object.fromEntries(Object.entries(base.quiet).filter(([, until]) => Date.parse(until) > now));
-	if (base.day === day) return { ...base, quiet };
-	return { ...newPolicy(day), ignored: base.ignored, quiet, loud: base.loud };
+	const mutes = base.mutes.filter((m) => !m.until || Date.parse(m.until) > now);
+	if (base.day === day) return { ...base, quiet, mutes };
+	return { ...newPolicy(day), ignored: base.ignored, quiet, loud: base.loud, mutes, nextMute: base.nextMute };
+}
+
+// ── mutes ────────────────────────────────────────────────────────────────────
+
+/** A rule from /watch mute or the picker. Every field set must match. */
+export type Mute = {
+	id: string; // M1, M2, …
+	from?: string; // the sender, as the item shows it
+	text?: string; // a word or phrase in the text, any case
+	app?: string; // one app, device or workspace: "Outlook", "dsva", "iPhone"
+	until?: string; // local ISO; none: until /watch unmute
+	hits: number; // items dropped
+};
+type Mutable = { from: string; text: string; where: string; channel: string; workspace: string };
+
+const has = (hay: string, needle: string) => hay.toLowerCase().includes(needle.toLowerCase());
+/** The first rule that matches the item, or undefined. A rule with no from or text matches nothing. */
+export function muteFor(i: Mutable, mutes: readonly Mute[], now = Date.now()): Mute | undefined {
+	return mutes.find(
+		(m) =>
+			(m.from || m.text) &&
+			(!m.until || Date.parse(m.until) > now) &&
+			(!m.from || personKey(m.from) === personKey(i.from)) &&
+			(!m.text || has(i.text, m.text)) &&
+			(!m.app || [i.where, i.channel, i.workspace].some((x) => has(x, m.app!))),
+	);
+}
+
+/** Add a rule; the same rule again only moves its end. */
+export function addMute(p: PolicyState, m: Omit<Mute, "id" | "hits">): Mute {
+	const same = p.mutes.find((x) => (x.from ?? "") === (m.from ?? "") && (x.text ?? "") === (m.text ?? "") && (x.app ?? "") === (m.app ?? ""));
+	if (same) {
+		if (m.until) same.until = m.until;
+		else delete same.until;
+		return same;
+	}
+	const rule: Mute = { id: `M${p.nextMute++}`, ...m, hits: 0 };
+	p.mutes.push(rule);
+	return rule;
+}
+
+export function removeMute(p: PolicyState, id: string): Mute | undefined {
+	const k = p.mutes.findIndex((m) => m.id.toLowerCase() === id.toLowerCase());
+	return k < 0 ? undefined : p.mutes.splice(k, 1)[0];
+}
+
+export const muteLabel = (m: Pick<Mute, "from" | "text" | "app">) =>
+	[m.from ? `from "${m.from}"` : "", m.text ? `text "${m.text}"` : "", m.app ? `in ${m.app}` : ""].filter(Boolean).join(" ");
+
+/** /watch rules */
+export function rulesText(p: PolicyState, now = Date.now()): string {
+	const lines = ["watch · rules"];
+	const live = p.mutes.filter((m) => !m.until || Date.parse(m.until) > now);
+	for (const m of live) lines.push(`${m.id.padEnd(4)} mute ${muteLabel(m)}${m.until ? ` until ${m.until.slice(0, 16).replace("T", " ")}` : ""} · ${m.hits} dropped`);
+	if (!live.length) lines.push("  (no mutes: m in the picker, or /watch mute from \"Name\")");
+	const quiet = Object.entries(p.quiet).filter(([, u]) => Date.parse(u) > now);
+	if (quiet.length) lines.push(`quiet: ${quiet.map(([k, u]) => `${k} until ${u.slice(0, 10)}`).join(", ")}`);
+	if (p.loud.length) lines.push(`loud: ${p.loud.join(", ")}`);
+	lines.push("/watch unmute M1 removes a rule.");
+	return lines.join("\n");
 }
 
 export function pushLog(p: PolicyState, d: Decision) {

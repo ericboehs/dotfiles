@@ -265,11 +265,12 @@ waiting on, and closes a wait when its answer lands:
 ```
 
 ```text
-/watch start [--force] | stop                     /watch alone shows status
+/watch start [--force] | stop | status           /watch alone (or ctrl+shift+w) opens the picker
 /watch list | clear N|all | since 9am | digest | recap | apps
 /watch wait Lindsey Hattamer: Platform analysis [slack link]
 /watch waits [close|drop|reopen Wn]
 /watch do N | wakes | quiet <person> [3d] | loud <person>
+/watch mute from "Name" [in Outlook] [for 7d] | mute text "phrase" | unmute Mn | rules
 ```
 
 `/watch-slack` still works, as an alias.
@@ -290,7 +291,11 @@ is refused). Their text, and waits from their conversations, never reach the
 default scout. When the work scout fails,
 code rules sort them. Each scout call stays under about 60k tokens (VA Copilot
 caps prompts at 100k); a bigger batch waits for the next call. Code decides the
-rest: DMs, @-mentions and bot-feed asks addressed to you always need you.
+rest: a DM from a VIP or with an urgent word, a wait reply, a missed call and a
+bot-feed ask addressed to you always need you. Any other DM is the scout's
+call. It sees how often you answered each sender over the last 7 days
+("Kim Lee: answered 2 of 9", counts only, never text), so a hello or a thanks
+from someone you seldom answer stays context.
 
 Waits come from three places:
 
@@ -396,6 +401,33 @@ hand. `/watch wakes` lists today's nudges, offers, held acts and acts, with
 the reason for each. Decisions, the budget, quiet and loud live in
 `~/.local/share/watch/policy.json` (mode 600). Quiet and loud carry over
 to the next day.
+
+### Acting on the list
+
+`ctrl+shift+w` or a bare `/watch` opens the picker: the needs rows, newest
+first, with one key per verb.
+
+| Key | Does |
+|---|---|
+| Enter | the row's default: ask when the scout offered, else open when there's a link, else done |
+| `o` | a link to the Slack message, or to a ServiceNow ticket the text names (`PI_WATCH_SNOW_URL`); clickable in the picker (OSC 8) and copied (OSC 52), since `open` would run on the wrong Mac over SSH |
+| `a` | ask the agent about any row: the scout's offer, else a draft or a look, with the act's read-only tools |
+| `d` | done |
+| `s` | snooze for 1 hour, 3 hours, tomorrow 8 AM or Monday 8 AM; a snooze outlives midnight and restarts |
+| `m` | mute the sender in that app, for 7 days, or everywhere |
+| `w` | turn the row into a wait on its sender |
+| `u` | undo the last done, snooze, mute or wait |
+
+Messages from one person in one conversation, each within 10 minutes of
+another, are one row (`×3`), in the widget, the picker and `/watch clear N`.
+A mute is a rule in `policy.json` that carries over days: matching items land
+in the ledger as noise with the rule's id, before any scout sees them.
+`/watch rules` lists the rules with their hit counts.
+
+The `watch_items` tool does the same from chat ("snooze the Outlook ones till
+Monday"): list, done, snooze and wait run at once, and a mute asks you first.
+It works only in a turn you typed, never in a watch turn or one started by an
+agent-link or bg message, so text inside an item can't drive it.
 
 ## Footer
 

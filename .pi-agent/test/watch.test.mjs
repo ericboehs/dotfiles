@@ -612,7 +612,7 @@ test("widget: top 3 needs, then a +N more line", () => {
 		item({ key: "2", kind: "feed-ask", channel: FEED_CHANNEL, where: "#eert-bot-feed", from: "Alex Teal [EERT Comms]", agent: true, why: "Ask for Eric: iFAMS draft" }),
 		item({ key: "3", kind: "mention", where: "#eert-team-sync", from: "Alex Teal", why: "postmortem time?" }),
 		item({ key: "4", kind: "dm", why: "one more" }),
-		item({ key: "5", kind: "dm", why: "and another" }),
+		item({ key: "5", kind: "dm", from: "Dana Ruiz", why: "and another" }),
 	]);
 	const lines = widgetLines(view({ needs, openWaits: 2 }), plain, 120, now);
 	assert.equal(lines[0], "● watch · 5 need you · 2 waits · 1:14 PM");
@@ -626,7 +626,7 @@ test("widget: top 3 needs, then a +N more line", () => {
 
 test("widget: offers sit under their item; prep and held acts get their own line", () => {
 	const now = Date.parse("2026-10-06T13:20:00-05:00");
-	const needs = [item({ key: "a", why: "ATO date?" }), item({ key: "b", kind: "mention", where: "#eert", why: "review?" })];
+	const needs = [item({ key: "a", why: "ATO date?" }), item({ key: "b", kind: "mention", channel: "C0EERT", where: "#eert", why: "review?" })];
 	const tags = [
 		{ n: 1, level: "offer", text: "draft from the ATO notes", keys: ["a"] },
 		{ n: 2, level: "held", text: "prep · Platform Sync 11:00 held · in a meeting", keys: [] },
@@ -691,12 +691,15 @@ test("registers /watch, the /watch-slack alias and renderers, without starting a
 		registerCommand: (name, def) => (commands[name] = def),
 		registerMessageRenderer: (type) => renderers.push(type),
 		registerTool: (t) => tools.push(t),
+		registerShortcut: (key, def) => (shortcuts[key] = def),
 		sendMessage: (m) => sent.push(m),
 	};
 	const tools = [];
+	const shortcuts = {};
 	watch(fake);
 	assert.deepEqual(Object.keys(commands).sort(), ["watch", "watch-slack"]);
-	assert.deepEqual(tools.map((t) => t.name), ["watch_lookup"]);
+	assert.deepEqual(Object.keys(shortcuts), ["ctrl+shift+w"]);
+	assert.deepEqual(tools.map((t) => t.name), ["watch_lookup", "watch_items"]);
 	assert.equal(tools[0].annotations.readOnlyHint, true);
 	assert.ok(handlers.tool_call && handlers.agent_settled && handlers.agent_start, "the act guard listens");
 	assert.equal(handlers.tool_call({ toolName: "bash" }), undefined, "no watch turn: every tool runs");
@@ -704,7 +707,7 @@ test("registers /watch, the /watch-slack alias and renderers, without starting a
 	assert.deepEqual(renderers.sort(), ["watch", "watch-slack"], "messages from before the rename still render");
 	assert.equal(commands["watch-slack"].description, "Alias of /watch");
 	assert.equal(commands["watch-slack"].handler, commands.watch.handler);
-	assert.deepEqual(commands.watch.getArgumentCompletions("st").map((i) => i.value), ["start", "stop"]);
+	assert.deepEqual(commands.watch.getArgumentCompletions("st").map((i) => i.value), ["start", "status", "stop"]);
 	assert.deepEqual(commands.watch.getArgumentCompletions("ap").map((i) => i.value), ["apps"]);
 	const notes = [];
 	const ctx = { hasUI: true, mode: "print", ui: { notify: (m) => notes.push(m) } };

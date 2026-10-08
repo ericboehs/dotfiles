@@ -79,6 +79,7 @@ test("one loop: prep acts with a guarded turn, the urgent draft waits, /watch do
 		events: { on: () => {}, emit: () => {} },
 		registerCommand: (name, def) => (commands[name] = def),
 		registerMessageRenderer: () => {},
+		registerShortcut: () => {},
 		registerTool: (tool) => tools.push(tool),
 		sendMessage: (m, opts) => sent.push({ ...m, opts }),
 	};
@@ -166,7 +167,7 @@ test("one loop: prep acts with a guarded turn, the urgent draft waits, /watch do
 	assert.match(wakes, /nudge Kim · ATO date\? +urgent/);
 	assert.match(wakes, /act {3}urgent · Kim · ATO date\? +you: \/watch do/);
 	assert.match(wakes, /acts 1 of 12 today · next act after 10:18/);
-	await commands.watch.handler("", ctx);
+	await commands.watch.handler("status", ctx);
 	assert.match(notes.at(-1), /acts 1 of 12 today/);
 	const policy = JSON.parse(fs.readFileSync(path.join(dir, "data", "policy.json"), "utf8"));
 	assert.equal(policy.acts.length, 1);
