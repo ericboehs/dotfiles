@@ -353,8 +353,9 @@ The watcher starts a turn on its own in only three cases. **Prep** fires 10
 minutes before a timed event on a work calendar (`PI_WATCH_PREP_SOURCES`,
 default `Oddball (Work)`) with 2 or more attendees, unless you declined it or
 its title matches `PI_WATCH_PREP_SKIP` (standup, focus, OOO and similar).
-**Away** fires after 20 minutes of HID idle time (`ioreg`,
-`PI_WATCH_AWAY_MIN`) and drafts replies to open draft offers, one turn per
+**Away** fires after 20 minutes away (`PI_WATCH_AWAY_MIN`): the smaller of
+the Mac's HID idle time (`ioreg`) and the time since your last pi input, since
+typing over SSH never moves the HID clock. It drafts replies to open draft offers, one turn per
 workspace. **Urgent** fires on an urgent DM, or an urgent @-mention from a VIP
 (`PI_WATCH_VIP`, default `Alex Teal`), once per conversation per day.
 

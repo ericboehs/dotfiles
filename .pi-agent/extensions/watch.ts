@@ -97,6 +97,7 @@ import { type NotifEvent, type NotifHandle, type NotifStatus, notifProblem, noti
 import { actGuard, actPrompt, registerLookup } from "./watch/act.ts";
 import {
 	awayCases,
+	awayIdleSec,
 	type Candidate,
 	candLabel,
 	decide,
@@ -2317,7 +2318,8 @@ export default function (pi: ExtensionAPI) {
 		for (const m of w.agenda) add(prepCase(m, now, fired, WORK_WORKSPACES[0] ?? null));
 		for (const i of needs) add(urgentCase(i, needs, routeOf(i.workspace), fired, now));
 		if (needs.some((i) => i.offer === "draft" && !fired.has(i.key))) {
-			const idle = parseHidIdle((await run("ioreg", ["-c", "IOHIDSystem", "-d", "4", "-r", "-k", "HIDIdleTime"], 5000)).out) ?? 0;
+			const hid = parseHidIdle((await run("ioreg", ["-c", "IOHIDSystem", "-d", "4", "-r", "-k", "HIDIdleTime"], 5000)).out);
+			const idle = awayIdleSec(hid, lastActive, Date.now());
 			if (s !== w) return;
 			for (const c of awayCases(needs, idle, fired, (ws) => routeOf(ws), AWAY_SEC)) add(c);
 		}

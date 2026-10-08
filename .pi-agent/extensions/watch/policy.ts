@@ -227,6 +227,17 @@ export function parseHidIdle(out: string): number | null {
 	return Number.isFinite(ns) && /HIDIdleTime/.test(out) ? ns / 1e9 : null;
 }
 
+/**
+ * Seconds Eric has been away: the smaller of the Mac's HID idle time and the
+ * time since his last pi input. Over SSH (or from another Mac) typing in pi
+ * never touches this Mac's HID clock, so HID alone says "away" while he types.
+ * An unreadable HID clock counts as 0: never away on a guess.
+ */
+export function awayIdleSec(hidSec: number | null, lastInputAt: number, now: number): number {
+	if (hidSec === null) return 0;
+	return Math.max(0, Math.min(hidSec, (now - lastInputAt) / 1000));
+}
+
 // ── state ────────────────────────────────────────────────────────────────────
 
 export const newPolicy = (day: string): PolicyState => ({ day, acts: [], lastActAt: 0, fired: [], offered: {}, ignored: {}, quiet: {}, loud: [], log: [] });

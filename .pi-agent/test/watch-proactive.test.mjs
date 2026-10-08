@@ -170,7 +170,7 @@ test("one loop: prep acts with a guarded turn, the urgent draft waits, /watch do
 	assert.match(notes.at(-1), /acts 1 of 12 today/);
 	const policy = JSON.parse(fs.readFileSync(path.join(dir, "data", "policy.json"), "utf8"));
 	assert.equal(policy.acts.length, 1);
-	assert.ok(policy.fired.includes("prep:E1:" + new Date(NOW + 5 * 60_000).toISOString().slice(0, 10)));
+	assert.ok(policy.fired.includes(`prep:E1:${new Date(NOW + 5 * 60_000).toISOString()}`));
 	assert.ok(policy.fired.includes("urgent:oddball:D1:"));
 	assert.equal(fs.statSync(path.join(dir, "data", "policy.json")).mode & 0o777, 0o600);
 

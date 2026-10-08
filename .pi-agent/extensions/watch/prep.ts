@@ -69,7 +69,9 @@ export function parseAgenda(raw: string, workIds: ReadonlySet<string>, isMe: (na
 		.filter((e) => (e.attendees ?? []).length >= 2 && !skip.test(e.title))
 		.filter((e) => !(e.attendees ?? []).some((a) => declined(a) && (isMe(a.name ?? "") || isMe(a.email ?? ""))))
 		.map((e) => ({
-			key: `prep:${e.id}:${e.start_date.slice(0, 10)}`, // one each meeting and day
+			// One each occurrence: a copy on a second work calendar shares the id
+			// and start; two runs of one recurring meeting in a day don't.
+			key: `prep:${e.id}:${e.start_date}`,
 			id: e.id,
 			title: e.title.replace(/\s+/g, " ").trim().slice(0, 80),
 			start: e.start_date,

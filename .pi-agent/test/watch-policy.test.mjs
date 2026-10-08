@@ -12,6 +12,7 @@ import test from "node:test";
 
 import {
 	awayCases,
+	awayIdleSec,
 	decide,
 	gate,
 	isMissedCall,
@@ -150,6 +151,13 @@ test("away: after 20 minutes idle, one candidate each workspace for the open dra
 	assert.equal(two.who, "Kim, Ben");
 	assert.equal(two.what, "2 questions");
 	assert.equal(decide(two, view()).what, "away · 2 questions", "decisions name the case once");
+});
+
+test("away time: HID idle, capped by the last pi input (pi over SSH never moves the HID clock)", () => {
+	assert.equal(awayIdleSec(17_294, NOW - 30_000, NOW), 30, "typing over SSH: not away");
+	assert.equal(awayIdleSec(25 * 60, NOW - 3600_000, NOW), 25 * 60, "at the Mac but not in pi: HID decides");
+	assert.equal(awayIdleSec(null, NOW - 3600_000, NOW), 0, "no HID reading: never away on a guess");
+	assert.equal(awayIdleSec(60, NOW + 5_000, NOW), 0);
 });
 
 test("prep: a work meeting 10 minutes out or less, once each meeting and day", () => {
@@ -298,8 +306,10 @@ test("agenda: timed work events with 2+ attendees, not declined, canceled or ski
 	]);
 	const ms = parseAgenda(raw, work, isMe);
 	assert.deepEqual(ms.map((m) => m.id), ["E1", "E8"]);
-	assert.deepEqual(ms[0], { key: "prep:E1:2026-10-06", id: "E1", title: "Platform Sync", start: "2026-10-06T19:10:00Z", who: ["Person 0", "Person 1"] });
+	assert.deepEqual(ms[0], { key: "prep:E1:2026-10-06T19:10:00Z", id: "E1", title: "Platform Sync", start: "2026-10-06T19:10:00Z", who: ["Person 0", "Person 1"] });
 	assert.deepEqual(ms[1].who, ["Person 0", "Person 1"], "Eric is not among the people to brief on");
+	const twice = parseAgenda(JSON.stringify([ev({}), ev({ start_date: "2026-10-06T21:10:00Z" }), ev({ calendar_id: "W1", attendees: [] })]), work, isMe);
+	assert.deepEqual(twice.map((m) => m.key), ["prep:E1:2026-10-06T19:10:00Z", "prep:E1:2026-10-06T21:10:00Z"], "two runs in a day: two briefs");
 	assert.deepEqual(parseAgenda("[{]", work, isMe), []);
 	assert.deepEqual(parseAgenda(JSON.stringify([ev({ title: "Focus time" })]), work, isMe, skipPattern([])).length, 1, "an empty skip list skips nothing");
 	assert.ok(skipPattern(["out of office"]).test("Out of Office"));
