@@ -311,14 +311,8 @@ and `/watch recap` rewrites the same block.
 Every item lands in `~/.local/share/watch/YYYY-MM-DD.jsonl` (mode 600),
 so `/watch since 9am` works after a restart.
 
-The first `/watch start` after the rename moves `~/.local/share/watch-slack`
-to `~/.local/share/watch`. It moves the folder only when the new one doesn't
-exist yet and no live watcher holds the old folder. A symlink stays at the old
-path. The lock is written as both `watch.lock` and `watch-slack.lock`, so a
-session still on older code sees the live watcher and won't start a second
-one. Every `PI_WATCH_X` setting also reads its old name, `PI_WATCH_SLACK_X`.
-If the new name is set, it wins, even when empty. The recap's hidden marker
-keeps its old name, so today's block is found and rewritten, not duplicated.
+The recap's hidden marker still says `watch-slack`, so blocks from before the
+rename are found and rewritten, not duplicated.
 
 Notifications come from `bin/notif-watch`, a Swift script that the watcher
 starts with `--follow` and stops with itself. It reads the Mac notification

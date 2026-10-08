@@ -28,7 +28,6 @@ import watch, {
 	clip,
 	DIGEST_HEAD,
 	digestText,
-	envOf,
 	FEED_CHANNEL,
 	FEED_WS,
 	feedAddress,
@@ -40,7 +39,6 @@ import watch, {
 	ledgerLatest,
 	maskIcn,
 	matchWait,
-	migrateDataDir,
 	needsList,
 	noteTodos,
 	parseActivity,
@@ -667,36 +665,6 @@ test("a Slack banner brings the next read forward, at most once a minute", () =>
 	assert.equal(wakePollAt(now, now - 20_000, now + 2 * 60_000), now - 20_000 + WAKE_GAP_MS, "a read 20s ago: a minute after it");
 	assert.equal(wakePollAt(now, now - 20_000, now + 10_000), null, "already due sooner");
 	assert.equal(wakePollAt(now, 0, 0), null, "first read pending: already due");
-});
-
-test("settings: PI_WATCH_X, then the old PI_WATCH_SLACK_X; a set new name wins, even empty", () => {
-	assert.equal(envOf("ME", { PI_WATCH_ME: "A", PI_WATCH_SLACK_ME: "B" }), "A");
-	assert.equal(envOf("ME", { PI_WATCH_SLACK_ME: "B" }), "B");
-	assert.equal(envOf("DAILY_DIR", { PI_WATCH_DAILY_DIR: "", PI_WATCH_SLACK_DAILY_DIR: "/x" }), "", '"" still turns the note off');
-	assert.equal(envOf("ME", {}), undefined);
-});
-
-test("data folder: moves once from watch-slack, leaves a link, and waits on a live old watcher", (t) => {
-	const home = fs.mkdtempSync(path.join(os.tmpdir(), "watch-dir-"));
-	t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-	const from = path.join(home, "watch-slack");
-	const to = path.join(home, "watch");
-	assert.deepEqual(migrateDataDir(from, to, () => true), { state: "none" }, "nothing to move");
-	fs.mkdirSync(from);
-	fs.writeFileSync(path.join(from, "2026-10-07.jsonl"), "{}\n");
-	fs.writeFileSync(path.join(from, "watch-slack.lock"), JSON.stringify({ pid: 4242, instance: "old" }));
-	assert.deepEqual(migrateDataDir(from, to, (pid) => pid === 4242), { state: "busy", pid: 4242 });
-	assert.ok(!fs.existsSync(to), "a live old watcher keeps its folder");
-	assert.deepEqual(migrateDataDir(from, to, () => false), { state: "moved" }, "a stale lock doesn't block");
-	assert.equal(fs.readFileSync(path.join(to, "2026-10-07.jsonl"), "utf8"), "{}\n");
-	assert.ok(fs.lstatSync(from).isSymbolicLink());
-	assert.equal(fs.readlinkSync(from), to);
-	assert.equal(fs.readFileSync(path.join(from, "2026-10-07.jsonl"), "utf8"), "{}\n", "old code still finds its files");
-	assert.deepEqual(migrateDataDir(from, to, () => false), { state: "none" }, "once");
-	const both = path.join(home, "both");
-	fs.mkdirSync(both);
-	assert.deepEqual(migrateDataDir(both, to, () => false), { state: "none" }, "never over an existing folder");
-	assert.ok(fs.lstatSync(both).isDirectory());
 });
 
 test("locks: a live pid from another instance; ours, dead or broken ones don't count", (t) => {
