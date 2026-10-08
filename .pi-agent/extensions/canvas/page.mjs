@@ -3,8 +3,8 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 const CSS = `
-:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --code:#f3f0e8; }
-@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --code:#211f1d; } }
+:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --code:#f3f0e8; --tint:#fbf3ec; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --code:#211f1d; --tint:#33291f; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 #app { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
@@ -15,10 +15,6 @@ header.top .cwd { color: var(--dim); font-size: 13px; }
 header.top .back { margin-left: auto; font-size: 13px; }
 .dot { font-size: 12px; font-weight: 600; } .dot.on { color: var(--ok); } .dot.off { color: var(--dim); font-weight: 400; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
-.status { display: grid; grid-template-columns: 64px 1fr; gap: 4px 12px; }
-.status .k { color: var(--dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; padding-top: 2px; }
-.status ul { margin: 0; padding-left: 18px; }
-.status .by { grid-column: 1 / -1; text-align: right; color: var(--dim); font-size: 11.5px; }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
 .card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card > h2 .meta { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; display: flex; gap: 6px; align-items: center; flex: none; padding-right: 4px; }
@@ -31,6 +27,23 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .btn:hover { color: var(--ink); background: var(--soft); border-color: var(--line); }
 .btn.ok { color: var(--ok); }
 .btn.bad { color: #c0392b; }
+.status .goal { font-size: 17px; font-weight: 600; line-height: 1.35; letter-spacing: -.01em; }
+.eyebrow { display: block; color: var(--dim); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 2px; }
+.status .now { margin: 12px 0 16px; padding: 9px 12px; background: var(--tint); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; display: flex; gap: 10px; align-items: baseline; }
+.status .now .eyebrow { color: var(--accent); margin: 0; flex: none; }
+.pulse { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); align-self: center; }
+.status .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
+.status .col h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; color: var(--ink); }
+.status .col ul { list-style: none; margin: 0; padding: 0; }
+.status .col li { position: relative; padding: 3px 0 3px 20px; font-size: 13.5px; line-height: 1.4; }
+.status .col li::before { position: absolute; left: 0; top: 3px; width: 14px; text-align: center; font-weight: 700; }
+.status .col.done li { color: var(--dim); }
+.status .col.done li::before { content: "✓"; color: var(--ok); }
+.status .col.open li::before { content: "?"; color: var(--warn); }
+.status .col.next li::before { content: "→"; color: var(--accent); }
+.status .col .none { color: var(--dim); font-size: 13px; padding-left: 20px; }
+.card.fresh { animation: fresh 1.6s ease-out; }
+@keyframes fresh { from { box-shadow: 0 0 0 2px var(--accent); } to { box-shadow: 0 0 0 2px transparent; } }
 .empty { color: var(--dim); font-style: italic; }
 .md :first-child { margin-top: 0; } .md :last-child { margin-bottom: 0; }
 .md table { border-collapse: collapse; width: 100%; font-size: 13.5px; display: block; overflow-x: auto; }
@@ -259,23 +272,28 @@ async function sectionBody(id, sec) {
   }
 }
 
+const statusBy = (status) => `${status.model || "?"} · ${ago(status.at)}`;
+
 function statusCard(status) {
-  const card = h("section", { class: "card" }, h("h2", {}, "Status"));
-  const bd = h("div", { class: "bd" });
+  const title = h("h2", {}, h("span", { class: "title" }, "Status"));
+  const card = h("section", { class: "card" }, title);
+  const bd = h("div", { class: "bd status" });
   card.append(bd);
   if (!status) {
     bd.append(h("div", { class: "empty" }, "No status yet. It appears after the next turn with tool calls."));
     return card;
   }
-  const grid = h("div", { class: "status" });
-  const list = (items) => (items?.length ? h("ul", {}, items.map((i) => h("li", {}, i))) : h("span", { class: "empty" }, "—"));
-  grid.append(h("span", { class: "k" }, "Goal"), h("span", {}, status.goal || "—"));
-  grid.append(h("span", { class: "k" }, "Now"), h("span", {}, status.now || "—"));
-  grid.append(h("span", { class: "k" }, "Done"), list(status.done));
-  grid.append(h("span", { class: "k" }, "Open"), list(status.open));
-  grid.append(h("span", { class: "k" }, "Next"), list(status.next));
-  grid.append(h("span", { class: "by" }, `status · ${status.model || "?"} · ${ago(status.at)}`));
-  bd.append(grid);
+  title.append(h("span", { class: "meta" }, h("span", { class: "by" }, statusBy(status))));
+  bd.append(h("div", { class: "goal" }, h("span", { class: "eyebrow" }, "Goal"), status.goal || "—"));
+  bd.append(h("div", { class: "now" }, h("span", { class: "pulse" }), h("span", { class: "eyebrow" }, "Now"), h("span", {}, status.now || "—")));
+  const col = (kind, label, items) =>
+    h(
+      "div",
+      { class: `col ${kind}` },
+      h("h3", {}, label, h("span", { class: "n" }, String(items?.length || 0))),
+      items?.length ? h("ul", {}, items.map((i) => h("li", {}, i))) : h("div", { class: "none" }, "—"),
+    );
+  bd.append(h("div", { class: "cols" }, col("next", "Next", status.next), col("open", "Open", status.open), col("done", "Done", status.done)));
   return card;
 }
 
@@ -355,12 +373,15 @@ async function sessionView(id) {
       h("a", { class: "back", href: "/" }, "All sessions"),
     );
     if (state.status?.at !== lastStatusAt || !statusSlot.firstChild) {
+      const changed = lastStatusAt !== undefined && state.status?.at !== lastStatusAt;
       lastStatusAt = state.status?.at;
-      statusSlot.replaceChildren(statusCard(state.status));
+      const card = statusCard(state.status);
+      if (changed) card.classList.add("fresh");
+      statusSlot.replaceChildren(card);
     } else {
       // Keep the "12s ago" honest without a rebuild.
       const by = statusSlot.querySelector(".by");
-      if (by && state.status) by.textContent = `status · ${state.status.model || "?"} · ${ago(state.status.at)}`;
+      if (by && state.status) by.textContent = statusBy(state.status);
     }
 
     const sections = [...state.sections].sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || String(a.at).localeCompare(String(b.at)));
@@ -370,7 +391,10 @@ async function sessionView(id) {
       let c = cards.get(sec.id);
       if (!c || c.at !== sec.at) {
         const el = sectionCard(id, sec);
-        if (c) c.el.replaceWith(el);
+        if (c) {
+          el.classList.add("fresh");
+          c.el.replaceWith(el);
+        }
         c = { at: sec.at, el };
         cards.set(sec.id, c);
       }
