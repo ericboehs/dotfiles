@@ -138,8 +138,8 @@ test("away: after 20 minutes idle, one candidate each workspace for the open dra
 		item({ key: "d", offer: "look" }),
 		item({ key: "e", offer: "draft", kind: "thread" }),
 	];
-	assert.deepEqual(awayCases(needs, 19 * 60, new Set(), routeOf), []);
-	const cs = awayCases(needs, 21 * 60, new Set(["b"]), routeOf);
+	assert.deepEqual(awayCases(needs, 19 * 60, new Set(), (i) => routeOf(i.workspace)), []);
+	const cs = awayCases(needs, 21 * 60, new Set(["b"]), (i) => routeOf(i.workspace));
 	assert.deepEqual(
 		cs.map((c) => [c.key, c.route, c.workspace, c.who, c.what]),
 		[
@@ -147,7 +147,7 @@ test("away: after 20 minutes idle, one candidate each workspace for the open dra
 			["away:c", "work", "dsva", "Kim Lee", "1 question"],
 		],
 	);
-	const two = awayCases(needs.slice(0, 2), 30 * 60, new Set(), routeOf)[0];
+	const two = awayCases(needs.slice(0, 2), 30 * 60, new Set(), (i) => routeOf(i.workspace))[0];
 	assert.equal(two.who, "Kim, Ben");
 	assert.equal(two.what, "2 questions");
 	assert.equal(decide(two, view()).what, "away · 2 questions", "decisions name the case once");
@@ -175,7 +175,7 @@ test("prep: a work meeting 10 minutes out or less, once each meeting and day", (
 // ── decide ──
 
 const offer = () => offerCase(item({ offer: "draft" }), "personal", new Set(), NOW);
-const away = (over = {}) => ({ ...awayCases([item({ offer: "draft" })], 1800, new Set(), routeOf)[0], ...over });
+const away = (over = {}) => ({ ...awayCases([item({ offer: "draft" })], 1800, new Set(), (i) => routeOf(i.workspace))[0], ...over });
 const prep = () => prepCase({ key: "prep:E1:d", id: "E1", title: "Platform Sync", start: new Date(NOW + 5 * 60_000).toISOString(), who: [] }, NOW, new Set(), "dsva");
 
 test("decide: the scout can only offer; quiet and the route come first", () => {

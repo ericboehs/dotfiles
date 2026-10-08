@@ -86,7 +86,8 @@ export type PolicyView = {
 	quiet: (who: string) => boolean;
 };
 
-export const DIRECT = new Set(["dm", "group", "mention"]);
+/** Kinds aimed at Eric: Slack DMs and @-mentions, and text messages (Messages, Signal). */
+export const DIRECT = new Set(["dm", "group", "mention", "text"]);
 export const URGENT = /\b(urgent|asap|blocker|blocking|emergency)\b/i;
 /** Nudges that also make an urgent act candidate. */
 export const ACTING_NUDGES = new Set(["urgent", "3 pings in 30 min"]);
@@ -102,7 +103,11 @@ export const IGNORED_MAX = 3;
 export const QUIET_DAYS = 7;
 const LOG_KEPT = 200;
 
-const KIND_WORD: Record<string, string> = { dm: "DM", group: "group DM", mention: "@-mention" };
+const KIND_WORD: Record<string, string> = { dm: "DM", group: "group DM", mention: "@-mention", text: "text" };
+/** A notification item has no Slack workspace: its "workspace" is the device. */
+const isNotif = (i: Pick<PItem, "key">) => i.key.startsWith("notif:");
+/** The Slack workspace watch_lookup may search for an item; null for a notification. */
+export const slackWsOf = (i: Pick<PItem, "key" | "workspace">) => (isNotif(i) ? null : i.workspace);
 const firstName = (name: string) => name.replace(/\[[^\]]*\]/g, " ").trim().split(/\s+/)[0] || name;
 export const personKey = (who: string) => who.toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -112,7 +117,7 @@ export const personKey = (who: string) => who.toLowerCase().replace(/\s+/g, " ")
 export function nudgeOf(i: PItem, recent: readonly PItem[], isVip: (who: string) => boolean): string {
 	if (!DIRECT.has(i.kind)) return "";
 	const vip = isVip(i.from);
-	if (URGENT.test(i.text) && (vip || i.kind === "dm")) return "urgent";
+	if (URGENT.test(i.text) && (vip || i.kind === "dm" || i.kind === "text")) return "urgent";
 	const t = Number(i.ts);
 	const same = new Set(recent.filter((r) => r.from === i.from && DIRECT.has(r.kind) && Math.abs(Number(r.ts) - t) <= PING_WINDOW_S).map((r) => r.key));
 	same.add(i.key);
@@ -136,29 +141,38 @@ export function offerCase(i: PItem, route: Route, fired: ReadonlySet<string>, no
 	if (!i.offer || i.state !== "open" || i.bucket !== "needs" || fired.has(i.key)) return null;
 	if (now - Number(i.ts) * 1000 > OFFER_TTL_MS) return null;
 	const why = i.offerWhy || (i.offer === "draft" ? "draft a reply" : "find what it names");
-	return { key: i.key, offer: { kind: i.offer, why }, items: [i], route, who: i.from, what: `${firstName(i.from)} · ${i.why || why}`, workspace: i.workspace };
+	return { key: i.key, offer: { kind: i.offer, why }, items: [i], route, who: i.from, what: `${firstName(i.from)} · ${i.why || why}`, workspace: slackWsOf(i) };
 }
 
 /** An urgent nudge: one turn for the conversation, with every open ping in it. Not for a backlog item over 4 hours old. */
 export function urgentCase(i: PItem, related: readonly PItem[], route: Route, fired: ReadonlySet<string>, now: number): Candidate | null {
 	if (!i.nudge || !ACTING_NUDGES.has(i.nudge) || i.state !== "open" || now - Number(i.ts) * 1000 > OFFER_TTL_MS) return null;
-	const key = `urgent:${i.workspace}:${i.channel}:${i.threadTs ?? ""}`;
+	// A text's "channel" is the app, so its conversation is the sender.
+	const key = isNotif(i) ? `urgent:${i.channel}:${personKey(i.from)}` : `urgent:${i.workspace}:${i.channel}:${i.threadTs ?? ""}`;
 	if (fired.has(key)) return null;
 	const items = [i, ...related.filter((r) => r.key !== i.key && r.from === i.from && r.state === "open")];
-	return { key, case: "urgent", nudge: i.nudge, items, route, who: i.from, what: `${firstName(i.from)} · ${i.why || i.nudge}`, workspace: i.workspace };
+	return { key, case: "urgent", nudge: i.nudge, items, route, who: i.from, what: `${firstName(i.from)} · ${i.why || i.nudge}`, workspace: slackWsOf(i) };
 }
 
 /** Away from the Mac: one candidate each workspace for all open questions, not one turn each. */
-export function awayCases(needs: readonly PItem[], idleSec: number, fired: ReadonlySet<string>, routeOf: (ws: string) => Route, awaySec = AWAY_SEC): Candidate[] {
+export function awayCases(needs: readonly PItem[], idleSec: number, fired: ReadonlySet<string>, routeOf: (i: PItem) => Route, awaySec = AWAY_SEC): Candidate[] {
 	if (idleSec < awaySec) return [];
 	const qs = needs.filter((i) => i.state === "open" && DIRECT.has(i.kind) && i.offer === "draft" && !fired.has(i.key));
-	const byWs = new Map<string, PItem[]>();
-	for (const i of qs) byWs.set(i.workspace, [...(byWs.get(i.workspace) ?? []), i]);
-	return [...byWs].map(([ws, items]) => ({
+	// One turn per Slack workspace; texts make one more, on their own route.
+	const groups = new Map<string, { route: Route; ws: string | null; items: PItem[] }>();
+	for (const i of qs) {
+		const ws = slackWsOf(i);
+		const route = routeOf(i);
+		const k = `${route}:${ws ?? ""}`;
+		const g = groups.get(k) ?? { route, ws, items: [] };
+		g.items.push(i);
+		groups.set(k, g);
+	}
+	return [...groups.values()].map(({ route, ws, items }) => ({
 		key: `away:${items.map((i) => i.key).join(",")}`,
 		case: "away" as const,
 		items,
-		route: routeOf(ws),
+		route,
 		who: whoOf(items),
 		what: `${items.length} question${items.length === 1 ? "" : "s"}`,
 		workspace: ws,

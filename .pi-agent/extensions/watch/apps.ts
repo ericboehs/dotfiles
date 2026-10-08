@@ -7,7 +7,7 @@
  * reaches pi. Groups follow Eric's answers on the watch-all plan:
  *
  *   slack  Slack, Mac and iPhone        wake: an early slk read, no text kept
- *   mail   Mail, Fastmail               wake: an early mail read
+ *   mail   Mail, Fastmail               wake: an early mail read (counted until watch/mail.ts)
  *   work   Outlook, Teams               the work scout (VA Copilot), rules if it fails
  *   calls  Phone, FaceTime              rules: a missed call needs Eric
  *          Calendar, Fantastical        the work scout: work meetings live there
@@ -108,9 +108,13 @@ export const ROUTE_LABEL: Record<AppRoute, string> = {
 	personal: "personal scout",
 };
 
-/** What each route does today; the rest are counted until routing lands. */
+/** What each route does; a route not here is counted only. */
 export const ROUTE_DOES: Record<string, string> = {
 	"slack:wake": "an early Slack read",
+	"work:work": "items",
+	"calls:rules": "missed calls need you",
+	"calls:work": "items",
+	"msgs:personal": "items",
 };
 
 export type AppsView = {
@@ -139,6 +143,6 @@ export function appsText(v: AppsView, all: readonly AppGroup[] = APP_GROUPS): st
 		}
 	}
 	lines.push(`✕   —               every other app: dropped in notif-watch${v.dropped ? `, ${v.dropped} this session` : ""}`);
-	lines.push("Only Slack banners act today. The rest are counted until routing lands. PI_WATCH_APPS picks groups.");
+	lines.push("Mail banners are counted until the mail reader lands. A removed notification clears its item. PI_WATCH_APPS picks groups.");
 	return lines.join("\n");
 }

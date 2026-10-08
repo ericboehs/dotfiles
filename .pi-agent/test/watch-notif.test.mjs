@@ -77,8 +77,10 @@ test("/watch apps: a row per group and route with counts, groups off marked, nev
 	const lines = text.split("\n");
 	assert.equal(lines[0], "watch · apps · notifications: Mac ok · iPhone ok");
 	assert.match(text, /^✓ {3}wake {12}Slack \(Mac, iPhone\) → an early Slack read +3 +1$/m);
-	assert.match(text, /^✓ {3}rules {11}Phone, FaceTime \(Mac, iPhone\) +1 +0$/m);
-	assert.match(text, /^✓ {3}work scout {6}Calendar, Fantastical \(Mac, iPhone\) +0 +0$/m);
+	assert.match(text, /^✓ {3}rules {11}Phone, FaceTime \(Mac, iPhone\) → missed calls need you +1 +0$/m);
+	assert.match(text, /^✓ {3}work scout {6}Calendar, Fantastical \(Mac, iPhone\) → items +0 +0$/m);
+	assert.match(text, /^✓ {3}work scout {6}Outlook, Teams \(Mac, iPhone\) → items +0 +0$/m);
+	assert.match(text, /Mail banners are counted until the mail reader lands/);
 	assert.match(text, /^✕ {3}— +Mail, Fastmail \(Mac, iPhone\)$/m, "off: no counts");
 	assert.match(text, /^✕ {3}— +Messages, Signal/m);
 	assert.match(text, /dropped in notif-watch, 12 this session/);

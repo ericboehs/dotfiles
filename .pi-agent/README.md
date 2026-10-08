@@ -323,13 +323,18 @@ OTP codes and ICNs. Groups (`PI_WATCH_APPS`, default all):
 | Group | Apps | Goes to |
 |---|---|---|
 | `slack` | Slack | an early Slack read; the text comes from `slk` |
-| `mail` | Mail, Fastmail | an early mail read |
-| `work` | Outlook, Teams | the work scout; rules if it fails |
-| `calls` | Phone, FaceTime / Calendar, Fantastical | rules / the work scout |
-| `msgs` | Messages, Signal | the default scout |
+| `mail` | Mail, Fastmail | counted for now; a mail reader comes next |
+| `work` | Outlook, Teams | items for the work scout; rules if it fails |
+| `calls` | Phone, FaceTime / Calendar, Fantastical | a missed call needs you (rules, no model) / items for the work scout |
+| `msgs` | Messages, Signal | items for the personal scout |
 
-Today only Slack banners act. They bring the next read forward, at most once a
-minute. Other notifications are counted in memory until routing lands;
+A Slack banner brings the next read forward, at most once a minute. Texts,
+Outlook and Teams messages, missed calls and calendar alerts become items, `◇`
+in the widget, sorted by a loop 10 seconds after they land. The same message on
+the Mac and the iPhone is one item, and it clears once you read it on either
+one: when its notification goes away. Each start replays the last 24 hours of
+notifications, so a restart clears only what's really gone and adds nothing
+twice. A fresh missed call toasts. An urgent text nudges like a DM.
 `/watch apps` shows the counts. If notif-watch is missing or keeps failing, the
 widget says so and Slack carries on. Build it once per Mac:
 
