@@ -262,6 +262,17 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	lines = widget(undefined, theme).render(200);
 	assert.match(lines[0], /^● watch · 1 needs you/, lines.join("\n"));
 
+	// A click on the widget opens the picker on that line's row; a press (a drag's start) does nothing.
+	const comp = widget(undefined, theme);
+	const shown = comp.render(200); // expanded: header, Kim's row, her quote
+	assert.match(shown[1], /Kim/);
+	const before = renders.length;
+	assert.equal(comp.handleMouse({ type: "press", button: "left", x: 4, y: 2 }), undefined);
+	keys.push("q");
+	assert.deepEqual(comp.handleMouse({ type: "click", button: "left", x: 4, y: 2 }), { handled: true });
+	await until(() => renders.length === before + 1);
+	assert.match(renders.at(-1), /\n❯ 1 ✉ Kim Lee/);
+
 	// /watch rules and unmute.
 	await commands.watch.handler("unmute M2", ctx);
 	assert.match(notes.at(-1), /Removed M2 · from "Pat Doe"/);

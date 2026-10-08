@@ -18,7 +18,7 @@
  *   /watch mute from "X" [in App] [for 7d] | text "phrase"   drop matching items before the scout
  *   /watch unmute <Mn> | rules   remove a mute; list mutes, quiet and loud
  *   /watch status                one status line
- *   /watch  (ctrl+shift+w)       the picker: open, ask agent, done, snooze, mute, wait, undo
+ *   /watch  (ctrl+shift+w, or click the widget)   the picker: open, ask agent, done, snooze, mute, wait, undo
  *                                (watch/actions.ts); watch_items does the same from chat,
  *                                only in a turn Eric typed, a mute only after a confirm
  *
@@ -1169,7 +1169,8 @@ export function itemLabel(i: Item, full = false): string {
 	return `${full ? i.from : firstName(i.from)} (${i.where}) ${why}`;
 }
 
-export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: number, now = Date.now()): string[] {
+/** The widget's lines. rowOf, when given, gets the picker row for each line that belongs to one (for clicks). */
+export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: number, now = Date.now(), rowOf: (number | undefined)[] = []): string[] {
 	const dim = (s: string) => theme.fg("dim", s);
 	const fit = (s: string) => truncateToWidth(s, width);
 	const icon = (i: Item) => {
@@ -1218,23 +1219,27 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 		const shown = rows.slice(0, EXPANDED_ROWS);
 		const { under, rest } = placeTags(shown);
 		shown.forEach((r, k) => {
+			const from = lines.length;
 			lines.push(row(r, k + 1));
 			if (r.lead.text) lines.push(fit(dim(`      “${r.lead.text}”`)));
 			for (const t of under.get(r.lead.key) ?? []) lines.push(tagLine(t, "      "));
+			for (let l = from; l < lines.length; l++) rowOf[l] = k;
 		});
 		for (const t of rest) lines.push(tagLine(t, "  "));
 		if (rows.length > shown.length) lines.push(fit(dim(`  +${rows.length - shown.length} more · /watch since`)));
 		for (const w of v.maybes) lines.push(maybeRow(w));
 		for (const i of v.cleared.slice(0, 5)) lines.push(fit(dim(`  ✓ ${itemLabel(i)} · ${i.clearedBy ?? "cleared"}`)));
-		lines.push(fit(dim(n ? "  ctrl+shift+w to act · /watch clear N · /watch list to collapse" : "  /watch list to collapse")));
+		lines.push(fit(dim(n ? "  click or ctrl+shift+w to act · /watch clear N · /watch list to collapse" : "  /watch list to collapse")));
 		return lines;
 	}
 	const shown = rows.slice(0, SHOWN);
 	const { under, rest } = placeTags(shown);
-	for (const r of shown) {
+	shown.forEach((r, k) => {
+		const from = lines.length;
 		lines.push(row(r));
 		for (const t of under.get(r.lead.key) ?? []) lines.push(tagLine(t, "    "));
-	}
+		for (let l = from; l < lines.length; l++) rowOf[l] = k;
+	});
 	for (const t of rest.slice(0, SHOWN)) lines.push(tagLine(t, "  "));
 	for (const w of v.maybes.slice(0, Math.max(0, SHOWN - n))) lines.push(maybeRow(w));
 	if (n > SHOWN || rest.length > SHOWN) lines.push(fit(dim(`  +${Math.max(0, n - SHOWN) + Math.max(0, rest.length - SHOWN)} more · /watch list`)));
@@ -1916,9 +1921,27 @@ export default function (pi: ExtensionAPI) {
 				keys: x.c.items.map((i) => i.key),
 			})),
 		};
-		ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({ render: (width: number) => widgetLines(view, theme, width), invalidate() {} }), {
-			placement: "aboveEditor",
-		});
+		ctx.ui.setWidget(
+			WIDGET_KEY,
+			(_tui, theme) => {
+				// Click-only (not press or drag), so transcript drag-select still works, like stash and next-steps.
+				let rowOf: (number | undefined)[] = [];
+				return {
+					render: (width: number) => {
+						rowOf = [];
+						return widgetLines(view, theme, width, Date.now(), rowOf);
+					},
+					invalidate() {},
+					handleMouse(e: { type: string; button: string; y: number }) {
+						if (e.type !== "click" || e.button !== "left") return undefined;
+						const live = ctxRef;
+						if (live) void openPicker(live, rowOf[e.y] ?? 0).catch((err: unknown) => notify(`watch: ${(err as Error)?.message ?? err}`, "error"));
+						return { handled: true };
+					},
+				};
+			},
+			{ placement: "aboveEditor" },
+		);
 	}
 
 	// ── waits ──
@@ -2832,11 +2855,11 @@ export default function (pi: ExtensionAPI) {
 		return muteWith(w, spec);
 	}
 
-	async function openPicker(ctx: ExtensionContext) {
+	async function openPicker(ctx: ExtensionContext, first = 0) {
 		if (pickerOpen || !ctx.hasUI) return;
 		if (!s) return notify("The watcher isn't running. /watch start", "warning");
 		pickerOpen = true;
-		let selected = 0;
+		let selected = first;
 		let flash = "";
 		try {
 			for (;;) {

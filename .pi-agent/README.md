@@ -404,8 +404,9 @@ to the next day.
 
 ### Acting on the list
 
-`ctrl+shift+w` or a bare `/watch` opens the picker: the needs rows, newest
-first, with one key per verb.
+`ctrl+shift+w`, a bare `/watch`, or a click on the widget opens the picker:
+the needs rows, newest first, with one key per verb. A click on an item's
+line opens it on that row.
 
 | Key | Does |
 |---|---|

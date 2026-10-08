@@ -25,7 +25,7 @@ import {
 	snoozeEnd,
 } from "../extensions/watch/actions.ts";
 import { addMute, muteFor, muteLabel, newPolicy, removeMute, rollPolicy, rulesText } from "../extensions/watch/policy.ts";
-import { buildTriageUser, carryOver, needsList, senderLines, senderStats } from "../extensions/watch.ts";
+import { buildTriageUser, carryOver, needsList, senderLines, senderStats, widgetLines } from "../extensions/watch.ts";
 
 const T = 1791302400; // 2026-10-06 ~09:00 CDT
 function item(over = {}) {
@@ -294,4 +294,17 @@ test("iconOf: the widget's marks", () => {
 		[item({ closesWait: "W1" }), item({ maybeWait: "W1" }), item({ kind: "feed-ask" }), item({ kind: "mention" }), item(), text({ kind: "call" }), text(), item({ kind: "thread" })].map((i) => iconOf(i).ch).join(""),
 		"✓?!@✉◇◇↳",
 	);
+});
+
+test("widgetLines maps each line to its picker row, for clicks", () => {
+	const needs = [item({ ts: String(T + 60), why: "a" }), item({ ts: String(T), channel: "D2", from: "Pat Doe", why: "b" })];
+	const view = { needs, cleared: [], maybes: [], openWaits: 0, lastPollAt: 0, busy: false, error: "", mode: "active", meeting: false, held: 0, expanded: false, started: true };
+	const tags = [{ n: 1, level: "offer", text: "draft", keys: [needs[0].key] }];
+	const rowOf = [];
+	const lines = widgetLines({ ...view, tags }, theme, 120, T * 1000, rowOf);
+	assert.equal(lines.length, 4);
+	assert.deepEqual([...rowOf], [undefined, 0, 0, 1], "header: none; an offer line belongs to its item");
+	const open = [];
+	widgetLines({ ...view, expanded: true }, theme, 120, T * 1000, open);
+	assert.deepEqual([...open].slice(0, 5), [undefined, 0, 0, 1, 1], "expanded: each row and its quote");
 });
