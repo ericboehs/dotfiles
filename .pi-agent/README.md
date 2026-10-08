@@ -419,7 +419,8 @@ open waits too.
 | `s` | snooze for 1 hour, 3 hours, tomorrow 8 AM or Monday 8 AM; a snooze outlives midnight and restarts |
 | `m` | mute the sender in that app, for 7 days, or everywhere |
 | `w` | turn the row into a wait on its sender |
-| `u` | undo the last done, snooze, mute or wait |
+| `u` | undo the last done, snooze, mute or wait, or a wait's close, drop or reopen |
+| Tab | to "Waiting on" and back. There, `c` closes a wait, `x` drops it, `r` reopens one closed in the last day; Enter closes an open one or reopens a closed one |
 
 Messages from one person in one conversation, each within 10 minutes of
 another, are one row (`×3`), in the widget, the picker and `/watch clear N`.

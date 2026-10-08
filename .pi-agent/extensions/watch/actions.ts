@@ -133,7 +133,12 @@ export function iconOf(i: { closesWait?: string; maybeWait?: string; kind: strin
 // ── the picker ───────────────────────────────────────────────────────────────
 
 export type PickerRow = { icon: string; label: string; age: string; count: number; verb: Verb };
-export type PickerResult = { verb: Verb; row: number };
+export type WaitVerb = "close" | "drop" | "reopen";
+/** A row verb on needs row `row`, or a wait verb on wait `row` (zone "waits"). */
+export type PickerResult = { verb: Verb; row: number; zone?: "rows" | "waits" } | { verb: WaitVerb; row: number; zone: "waits" };
+export const isWaitVerb = (v: string): v is WaitVerb => v === "close" || v === "drop" || v === "reopen";
+/** One line under "Waiting on": open (maybe answered or not) or closed in the last day. */
+export type PickerWait = { line: string; state: "open" | "maybe" | "closed" };
 type Deps = {
 	tui: { requestRender(): void };
 	theme: { fg(color: string, text: string): string };
@@ -142,27 +147,45 @@ type Deps = {
 	selected: number;
 	flash: string; // the last result, shown under the list (may hold an OSC 8 link)
 	canUndo: boolean;
-	waits?: string[]; // open waits, shown under the rows ("W1 Dana Ruiz · the RITM status 2h")
+	waits?: PickerWait[]; // under the rows ("W1 Dana Ruiz · the RITM status 2h"); Tab moves there
+	zone?: "rows" | "waits"; // where the selection starts
 	done: (r: PickerResult | undefined) => void;
 };
 
 const KEY_VERB: Record<string, Verb> = { o: "open", a: "ask", d: "done", s: "snooze", m: "mute", w: "wait" };
 const VERB_WORD: Record<Verb, string> = { open: "open", ask: "ask agent", done: "done", snooze: "snooze", mute: "mute", wait: "wait", undo: "undo" };
+const KEY_WAIT: Record<string, WaitVerb> = { c: "close", x: "drop", r: "reopen" };
+/** What c, x, r and Enter can do to a wait in each state. */
+const WAIT_CAN: Record<PickerWait["state"], WaitVerb[]> = { open: ["close", "drop"], maybe: ["close", "drop"], closed: ["reopen", "drop"] };
 
-/** The list: ↑↓ or j/k to move, a key for each verb, Enter for the row's default. */
+/** The list: ↑↓ or j/k to move, a key for each verb, Enter for the row's default; Tab to the waits and back. */
 export class PickerPanel {
 	private readonly d: Deps;
 	private sel: number;
+	private zone: "rows" | "waits";
 
 	constructor(d: Deps) {
 		this.d = d;
-		this.sel = Math.max(0, Math.min(d.selected, d.rows.length - 1));
+		const waits = d.waits ?? [];
+		this.zone = (d.zone === "waits" && waits.length) || (!d.rows.length && waits.length) ? "waits" : "rows";
+		this.sel = Math.max(0, Math.min(d.selected, (this.zone === "waits" ? waits.length : d.rows.length) - 1));
 	}
 
 	handleInput(data: string): void {
-		const n = this.d.rows.length;
 		if (matchesKey(data, "escape") || data === "q") return this.d.done(undefined);
-		if (data === "u" && this.d.canUndo) return this.d.done({ verb: "undo", row: this.sel });
+		if (data === "u" && this.d.canUndo) return this.d.done({ verb: "undo", row: this.sel, zone: this.zone });
+		const waits = this.d.waits ?? [];
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+			const other = this.zone === "rows" ? waits.length : this.d.rows.length;
+			if (other) {
+				this.zone = this.zone === "rows" ? "waits" : "rows";
+				this.sel = 0;
+				this.d.tui.requestRender();
+			}
+			return;
+		}
+		if (this.zone === "waits") return this.waitInput(data, waits);
+		const n = this.d.rows.length;
 		if (!n) return;
 		if (matchesKey(data, "up") || data === "k") this.sel = (this.sel - 1 + n) % n;
 		else if (matchesKey(data, "down") || data === "j") this.sel = (this.sel + 1) % n;
@@ -172,8 +195,23 @@ export class PickerPanel {
 		this.d.tui.requestRender();
 	}
 
-	/** Lines of the last render that hold row k. */
+	private waitInput(data: string, waits: PickerWait[]): void {
+		const n = waits.length;
+		const cur = waits[this.sel];
+		if (!cur) return;
+		if (matchesKey(data, "up") || data === "k") this.sel = (this.sel - 1 + n) % n;
+		else if (matchesKey(data, "down") || data === "j") this.sel = (this.sel + 1) % n;
+		else if (matchesKey(data, "enter")) return this.d.done({ verb: WAIT_CAN[cur.state][0]!, row: this.sel, zone: "waits" });
+		else if (KEY_WAIT[data]) {
+			if (WAIT_CAN[cur.state].includes(KEY_WAIT[data]!)) return this.d.done({ verb: KEY_WAIT[data]!, row: this.sel, zone: "waits" });
+			return; // r on an open wait, c on a closed one
+		}
+		this.d.tui.requestRender();
+	}
+
+	/** Lines of the last render that hold row k, and wait k. */
 	private rowLine: number[] = [];
+	private waitLine: number[] = [];
 
 	/**
 	 * Click-only, so drag-select still works: a row selects it, the selected row
@@ -185,10 +223,14 @@ export class PickerPanel {
 			this.d.done(undefined);
 			return { handled: true };
 		}
-		const k = this.rowLine.indexOf(e.y);
-		if (k < 0) return undefined;
-		if (k === this.sel) this.d.done(undefined);
+		const r = this.rowLine.indexOf(e.y);
+		const wt = this.waitLine.indexOf(e.y);
+		const zone = r >= 0 ? "rows" : wt >= 0 ? "waits" : undefined;
+		if (!zone) return undefined;
+		const k = zone === "rows" ? r : wt;
+		if (zone === this.zone && k === this.sel) this.d.done(undefined);
 		else {
+			this.zone = zone;
 			this.sel = k;
 			this.d.tui.requestRender();
 		}
@@ -210,21 +252,33 @@ export class PickerPanel {
 			const head = `${k + 1} ${r.icon} `;
 			const room = Math.max(10, width - 4 - visibleWidth(head) - visibleWidth(count) - visibleWidth(tail));
 			const line = `${head}${truncateToWidth(r.label, room)}${count}${tail}`;
-			out.push(truncateToWidth(k === this.sel ? `${theme.fg("accent", "❯")} ${line}` : `  ${line}`, width));
+			out.push(truncateToWidth(this.zone === "rows" && k === this.sel ? `${theme.fg("accent", "❯")} ${line}` : `  ${line}`, width));
 		});
 		const waits = this.d.waits ?? [];
-		if (waits.length) out.push("", truncateToWidth(dim("Waiting on"), width), ...waits.map((w) => truncateToWidth(`  ${theme.fg("warning", "⧗")} ${w}`, width)));
+		this.waitLine = [];
+		if (waits.length) {
+			out.push("", truncateToWidth(dim(`Waiting on${this.zone === "rows" ? " · tab" : ""}`), width));
+			waits.forEach((w, k) => {
+				this.waitLine[k] = out.length;
+				const mark = w.state === "closed" ? theme.fg("success", "✓") : theme.fg("warning", "⧗");
+				const body = w.state === "closed" ? dim(w.line) : w.state === "maybe" ? `${w.line} ${theme.fg("warning", "· maybe answered")}` : w.line;
+				const sel = this.zone === "waits" && k === this.sel;
+				out.push(truncateToWidth(`${sel ? theme.fg("accent", "❯") : " "} ${mark} ${body}`, width));
+			});
+		}
 		if (this.d.flash) out.push("", truncateToWidth(`  ${this.d.flash}`, width));
-		const cur = rows[this.sel];
-		out.push(
-			"",
-			truncateToWidth(
-				dim(
-					`${cur ? `enter ${VERB_WORD[cur.verb]} · ` : ""}o open · a ask agent · d done · s snooze · m mute · w wait${this.d.canUndo ? " · u undo" : ""} · esc or click to close`,
-				),
-				width,
-			),
-		);
+		const undo = this.d.canUndo ? " · u undo" : "";
+		let keys: string;
+		if (this.zone === "waits") {
+			const cur = waits[this.sel];
+			const can = cur ? WAIT_CAN[cur.state] : [];
+			const word: Record<WaitVerb, string> = { close: "c close", drop: "x drop", reopen: "r reopen" };
+			keys = `${can[0] ? `enter ${can[0]} · ` : ""}${can.map((v) => word[v]).join(" · ")}${undo} · tab back · esc or click to close`;
+		} else {
+			const cur = rows[this.sel];
+			keys = `${cur ? `enter ${VERB_WORD[cur.verb]} · ` : ""}o open · a ask agent · d done · s snooze · m mute · w wait${undo} · esc or click to close`;
+		}
+		out.push("", truncateToWidth(dim(keys), width));
 		return out;
 	}
 }

@@ -18,7 +18,8 @@
  *   /watch mute from "X" [in App] [for 7d] | text "phrase"   drop matching items before the scout
  *   /watch unmute <Mn> | rules   remove a mute; list mutes, quiet and loud
  *   /watch status                one status line
- *   /watch  (ctrl+shift+w, or click the widget)   the picker: open, ask agent, done, snooze, mute, wait, undo
+ *   /watch  (ctrl+shift+w, or click the widget)   the picker: open, ask agent, done, snooze, mute, wait, undo;
+ *                                Tab to the waits: c close, x drop, r reopen
  *                                (watch/actions.ts); watch_items does the same from chat,
  *                                only in a turn Eric typed, a mute only after a confirm
  *
@@ -113,17 +114,20 @@ import {
 	defaultVerb,
 	iconOf,
 	isSnoozed,
+	isWaitVerb,
 	linkOf,
 	osc8,
 	parseMuteArgs,
 	type PickerResult,
 	PickerPanel,
 	type PickerRow,
+	type PickerWait,
 	type Row,
 	SNOOZES,
 	snoozeEnd,
 	TICKET,
 	type Verb,
+	type WaitVerb,
 } from "./watch/actions.ts";
 import {
 	awayCases,
@@ -1965,6 +1969,44 @@ export default function (pi: ExtensionAPI) {
 		w.dirty = true;
 	}
 
+	/**
+	 * Close, drop or reopen a wait (/watch waits and the picker). Returns the
+	 * message and an undo that puts the wait, and the item a "maybe" pointed
+	 * at, back as they were.
+	 */
+	function waitAct(w: Watch, wait: WaitItem, action: WaitVerb): { msg: string; undo: () => void } {
+		const snap = { ...wait };
+		const idx = w.waits.indexOf(wait);
+		const by = wait.maybeBy ? w.items.get(wait.maybeBy) : undefined;
+		let msg: string;
+		if (action === "close") {
+			closeWait(w, wait, by);
+			if (by) update(w, [{ ...by, closesWait: wait.id, maybeWait: undefined }]);
+			msg = `${wait.id} closed · ${wait.what} (${wait.who})${by ? ` → ${wait.closedVia}` : ""}`;
+		} else if (action === "drop") {
+			w.waits = w.waits.filter((x) => x !== wait);
+			w.droppedSigs.push(wait.sig);
+			if (by) update(w, [{ ...by, maybeWait: undefined }]);
+			msg = `${wait.id} dropped · ${wait.what} (${wait.who})`;
+		} else {
+			Object.assign(wait, { state: "open", closedAt: undefined, closedBy: undefined, closedVia: undefined, maybeBy: undefined });
+			msg = `${wait.id} open again · ${wait.what} (${wait.who})`;
+		}
+		w.dirty = true;
+		const undo = () => {
+			for (const k of Object.keys(wait)) delete (wait as unknown as Record<string, unknown>)[k];
+			Object.assign(wait, snap);
+			if (action === "drop") {
+				w.waits.splice(Math.min(idx, w.waits.length), 0, wait);
+				const at = w.droppedSigs.lastIndexOf(wait.sig);
+				if (at >= 0) w.droppedSigs.splice(at, 1);
+			}
+			if (by) update(w, [by]);
+			w.dirty = true;
+		};
+		return { msg, undo };
+	}
+
 	function addWait(w: Watch, x: Omit<WaitItem, "id" | "state" | "sig"> & { sig?: string }): WaitItem | undefined {
 		const sig = x.sig ?? waitSig(x.who, x.what);
 		if (w.droppedSigs.includes(sig)) return undefined;
@@ -2749,16 +2791,27 @@ export default function (pi: ExtensionAPI) {
 	let pickerOpen = false;
 	/** Closes the open picker, from a second click on the widget. */
 	let closePicker: (() => void) | undefined;
-	/** The items as they were before the last done, snooze, mute or wait: u puts them back. */
-	let lastChange: Item[] = [];
+	/** Puts back the last done, snooze, mute, wait, or wait close, drop or reopen (u). */
+	let undoLast: (() => string) | undefined;
+	let undoWait = false; // the last change was to a wait
+	const itemsBack = (w: Watch, back: Item[]) => () => {
+		update(w, back);
+		return `Back · ${back.length} item${back.length === 1 ? "" : "s"}`;
+	};
 
 	const pickRows = (w: Watch) => bursts(needsList(w.items.values()));
+	/** Under "Waiting on": open waits, then ones closed in the last day (so r can reopen a mistake). */
+	const pickWaits = (w: Watch) => {
+		const since = Date.now() - 86_400_000;
+		return [...w.waits.filter((x) => x.state === "open"), ...w.waits.filter((x) => x.state === "closed" && (Date.parse(x.closedAt ?? "") || 0) >= since)];
+	};
 	const rowLabel = (r: Row<Item>) => `${itemLabel(r.lead)}${r.items.length > 1 ? ` ×${r.items.length}` : ""}`;
 
 	/** Change every item in a row (a burst is one decision), keeping the old states for undo. */
 	function changeRow(w: Watch, r: Row<Item>, patch: Partial<Item>) {
 		const now = r.items.map((i) => w.items.get(i.key) ?? i);
-		lastChange = now;
+		undoLast = itemsBack(w, now);
+		undoWait = false;
 		update(w, now.map((i) => ({ ...i, ...patch })));
 		w.dirty = true;
 		saveState(w);
@@ -2783,7 +2836,8 @@ export default function (pi: ExtensionAPI) {
 	function muteWith(w: Watch, spec: { from?: string; text?: string; app?: string; until?: string }): string {
 		const rule = addMute(w.policy, spec);
 		const hit = [...w.items.values()].filter((i) => i.state === "open" && !i.mutedBy && muteFor(i, [rule]));
-		lastChange = hit;
+		undoLast = itemsBack(w, hit);
+		undoWait = false;
 		update(
 			w,
 			hit.map((i) => ({ ...i, ...clearPatch("muted"), mutedBy: rule.id })),
@@ -2810,14 +2864,14 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function undo(w: Watch): string {
-		if (!lastChange.length) return "Nothing to undo.";
-		const back = lastChange;
-		lastChange = [];
-		update(w, back);
+		const fn = undoLast;
+		undoLast = undefined;
+		if (!fn) return "Nothing to undo.";
+		const msg = fn();
 		w.dirty = true;
 		saveState(w);
 		render();
-		return `Back · ${back.length} item${back.length === 1 ? "" : "s"}`;
+		return msg;
 	}
 
 	/** Ask the agent about any row: the scout's offer when there is one, else a read-only look. */
@@ -2872,6 +2926,7 @@ export default function (pi: ExtensionAPI) {
 		if (!s) return notify("The watcher isn't running. /watch start", "warning");
 		pickerOpen = true;
 		let selected = first;
+		let zone: "rows" | "waits" = "rows";
 		let flash = "";
 		try {
 			for (;;) {
@@ -2889,20 +2944,37 @@ export default function (pi: ExtensionAPI) {
 					};
 				});
 				const title = `watch · ${rows.length ? `${rows.length} need${rows.length === 1 ? "s" : ""} you` : "nothing needs you"}`;
-				const waits = w.waits.filter((x) => x.state === "open").map((x) => waitLine(x));
+				const shownWaits = pickWaits(w);
+				const waits: PickerWait[] = shownWaits.map((x) => ({ line: waitLine(x), state: x.state === "closed" ? "closed" : x.maybeBy ? "maybe" : "open" }));
 				const res = await ctx.ui.custom<PickerResult | undefined>((tui, theme, _kb, done) => {
 					closePicker = () => done(undefined);
-					return new PickerPanel({ tui, theme, title, rows: view, selected, flash, canUndo: lastChange.length > 0, waits, done }) as never;
+					return new PickerPanel({ tui, theme, title, rows: view, selected, flash, canUndo: !!undoLast, waits, zone, done }) as never;
 				});
 				closePicker = undefined;
 				if (!res || s !== w) return;
 				selected = res.row;
-				const r = rows[res.row];
+				zone = res.zone === "waits" ? "waits" : "rows";
 				flash = "";
 				if (res.verb === "undo") {
+					if (undoWait) zone = "waits"; // a dropped wait comes back selected
 					flash = undo(w);
 					continue;
 				}
+				if (isWaitVerb(res.verb)) {
+					const wait = shownWaits[res.row];
+					if (!wait) continue;
+					const done = waitAct(w, wait, res.verb);
+					undoLast = () => {
+						done.undo();
+						return `Back · ${wait.id}`;
+					};
+					undoWait = true;
+					saveState(w);
+					render();
+					flash = done.msg;
+					continue;
+				}
+				const r = rows[res.row];
 				if (!r) continue;
 				const verb: Verb = res.verb;
 				if (verb === "open") flash = openRow(r);
@@ -3105,22 +3177,7 @@ export default function (pi: ExtensionAPI) {
 					if (!act) return notify("Usage: /watch waits close|drop|reopen W2", "warning");
 					const wait = w.waits.find((x) => x.id === act.id);
 					if (!wait) return notify(`No wait ${act.id}`, "warning");
-					if (act.action === "close") {
-						const by = wait.maybeBy ? w.items.get(wait.maybeBy) : undefined;
-						closeWait(w, wait, by);
-						if (by) update(w, [{ ...by, closesWait: wait.id, maybeWait: undefined }]);
-						notify(`${wait.id} closed · ${wait.what} (${wait.who})${by ? ` → ${wait.closedVia}` : ""}`);
-					} else if (act.action === "drop") {
-						w.waits = w.waits.filter((x) => x !== wait);
-						w.droppedSigs.push(wait.sig);
-						const by = wait.maybeBy ? w.items.get(wait.maybeBy) : undefined;
-						if (by) update(w, [{ ...by, maybeWait: undefined }]);
-						notify(`${wait.id} dropped · ${wait.what} (${wait.who})`);
-					} else {
-						Object.assign(wait, { state: "open", closedAt: undefined, closedBy: undefined, closedVia: undefined, maybeBy: undefined });
-						notify(`${wait.id} open again · ${wait.what} (${wait.who})`);
-					}
-					w.dirty = true;
+					notify(waitAct(w, wait, act.action).msg);
 					saveState(w);
 					return render();
 				}

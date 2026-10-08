@@ -277,7 +277,7 @@ test("picker: j/k and arrows wrap, digits jump, Enter is the default, letters ar
 	({ p, out } = panel(rows, { canUndo: true, flash: "Cleared · Kim" }));
 	assert.ok(p.render(80).includes("  Cleared · Kim"));
 	p.handleInput("u");
-	assert.deepEqual(out.result, { verb: "undo", row: 0 });
+	assert.deepEqual(out.result, { verb: "undo", row: 0, zone: "rows" });
 	({ p, out } = panel(rows));
 	p.handleInput("\x1b");
 	assert.equal(out.result, undefined);
@@ -310,9 +310,9 @@ test("widgetLines maps each line to its picker row, for clicks", () => {
 });
 
 test("picker: a click selects a row, the selected row or the title again closes; open waits under the rows", () => {
-	let { p, out } = panel(rows, { waits: ["W1 Dana Ruiz · the RITM status 2h"] });
+	let { p, out } = panel(rows, { waits: [{ line: "W1 Dana Ruiz · the RITM status 2h", state: "open" }] });
 	const lines = p.render(80);
-	assert.deepEqual(lines.slice(4, 7), ["", "Waiting on", "  ⧗ W1 Dana Ruiz · the RITM status 2h"]);
+	assert.deepEqual(lines.slice(4, 7), ["", "Waiting on · tab", "  ⧗ W1 Dana Ruiz · the RITM status 2h"]);
 	assert.match(p.render(140).at(-1), /esc or click to close$/);
 	assert.equal(p.handleMouse({ type: "press", button: "left", y: 3 }), undefined, "a press is a drag's start");
 	assert.equal(p.handleMouse({ type: "click", button: "left", y: 5 }), undefined, "not a row");
@@ -337,4 +337,55 @@ test("widget: the expanded view lists open waits; a maybe shows once", () => {
 	assert.equal(lines.filter((l) => l.includes("W2")).length, 1);
 	assert.ok(lines.includes("  ⧗ W1 Dana Ruiz · the RITM status 2h"), lines.join("\n"));
 	assert.ok(!widgetLines({ ...view, expanded: false }, theme, 120, now).some((l) => l.includes("W1")), "collapsed: the count only");
+});
+
+test("picker waits: tab in and out; c, x, r only where they make sense; enter closes or reopens; a click selects", () => {
+	const waits = [
+		{ line: "W1 Dana Ruiz · the RITM status 2h", state: "open" },
+		{ line: "W2 Pat Doe · badge form 1h", state: "maybe" },
+		{ line: "W3 Lee Kim · the slides 3h", state: "closed" },
+	];
+	let { p, out } = panel(rows, { waits });
+	p.handleInput("\t");
+	let lines = p.render(140);
+	assert.match(lines[0], /watch/);
+	assert.match(lines[2], /^ {2}1 /, "no row selected while in the waits");
+	assert.equal(lines[5], "Waiting on");
+	assert.equal(lines[6], "❯ ⧗ W1 Dana Ruiz · the RITM status 2h");
+	assert.equal(lines[7], "  ⧗ W2 Pat Doe · badge form 1h · maybe answered");
+	assert.equal(lines[8], "  ✓ W3 Lee Kim · the slides 3h");
+	assert.match(lines.at(-1), /^enter close · c close · x drop · tab back · esc or click to close$/);
+	for (const k of ["o", "d", "s", "1"]) p.handleInput(k);
+	assert.equal(out.result, "open", "row keys do nothing in the waits");
+	p.handleInput("r");
+	assert.equal(out.result, "open", "r on an open wait does nothing");
+	p.handleInput("k"); // wraps to W3
+	assert.match(p.render(140).at(-1), /^enter reopen · r reopen · x drop/);
+	p.handleInput("c");
+	assert.equal(out.result, "open", "c on a closed wait does nothing");
+	p.handleInput("\r");
+	assert.deepEqual(out.result, { verb: "reopen", row: 2, zone: "waits" });
+	({ p, out } = panel(rows, { waits, zone: "waits", selected: 1 }));
+	p.handleInput("x");
+	assert.deepEqual(out.result, { verb: "drop", row: 1, zone: "waits" }, "the zone and row carry over a reopen");
+	({ p, out } = panel(rows, { waits, zone: "waits", selected: 1, canUndo: true }));
+	p.handleInput("u");
+	assert.deepEqual(out.result, { verb: "undo", row: 1, zone: "waits" }, "undo stays in the waits");
+	({ p, out } = panel(rows, { waits }));
+	p.handleInput("\t");
+	p.handleInput("\t");
+	p.handleInput("d");
+	assert.deepEqual(out.result, { verb: "done", row: 0 }, "tab back to the rows");
+	({ p, out } = panel(rows, { waits }));
+	p.render(140);
+	p.handleMouse({ type: "click", button: "left", y: 7 });
+	assert.match(p.render(140)[7], /^❯ ⧗ W2/, "a click on a wait selects it");
+	p.handleMouse({ type: "click", button: "left", y: 7 });
+	assert.equal(out.result, undefined, "again closes");
+	({ p, out } = panel([], { waits }));
+	p.handleInput("c");
+	assert.deepEqual(out.result, { verb: "close", row: 0, zone: "waits" }, "no rows: the selection starts in the waits");
+	({ p, out } = panel(rows));
+	p.handleInput("\t");
+	assert.match(p.render(140)[2], /^❯ 1/, "no waits: tab stays put");
 });

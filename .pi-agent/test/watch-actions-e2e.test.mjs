@@ -274,7 +274,7 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	assert.deepEqual(comp.handleMouse({ type: "click", button: "left", x: 4, y: 2 }), { handled: true });
 	await until(() => renders.length === before + 1);
 	assert.match(renders.at(-1), /\n❯ 1 ✉ Kim Lee/);
-	assert.match(renders.at(-1), /Waiting on\n {2}⧗ W1 Dana Ruiz · the RITM status/, "the picker lists open waits");
+	assert.match(renders.at(-1), /Waiting on · tab\n {2}⧗ W1 Dana Ruiz · the RITM status/, "the picker lists open waits");
 	assert.ok(shown.some((l) => /⧗ W1 Dana Ruiz · the RITM status/.test(l)), "so does the expanded widget");
 
 	// Clicked again while it's open: the same click closes it.
@@ -287,6 +287,25 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	comp.handleMouse({ type: "click", button: "left", x: 4, y: 1 });
 	await until(() => renders.length === before + 3);
 	assert.equal(keys.length, 0, "closed, so the next click opened a new picker");
+
+	// Tab into the waits: c closes W1, u reopens it, x drops it, u brings it back, c then r.
+	const at = renders.length;
+	keys.push("\t", "c", "u", "x", "u", "c", "r");
+	await commands.watch.handler("", ctx);
+	const wr = renders.slice(at);
+	assert.equal(wr.length, 7, wr.join("\n---\n"));
+	assert.match(wr[1], /W1 closed · the RITM status \(Dana Ruiz\)/);
+	assert.match(wr[1], /❯ ✓ W1 Dana Ruiz/, "a closed wait stays listed, selected, so r can reopen it");
+	assert.match(wr[1], /enter reopen · r reopen · x drop · u undo · tab back/);
+	assert.match(wr[2], /❯ ⧗ W1 Dana Ruiz[\s\S]*Back · W1/);
+	assert.match(wr[2], /enter close · c close · x drop/);
+	assert.match(wr[3], /W1 dropped · the RITM status/);
+	assert.doesNotMatch(wr[3], /Waiting on/);
+	assert.match(wr[4], /❯ ⧗ W1 Dana Ruiz[\s\S]*Back · W1/, "an undone drop comes back selected");
+	assert.match(wr[6], /W1 open again · the RITM status/);
+	const st = JSON.parse(fs.readFileSync(path.join(dataDir, `${dayOf(NOW)}.state.json`), "utf8"));
+	assert.deepEqual(st.waits.map((x) => [x.id, x.state]), [["W1", "open"]]);
+	assert.deepEqual(st.droppedSigs, [], "the undo took the drop back");
 
 	// /watch rules and unmute.
 	await commands.watch.handler("unmute M2", ctx);
