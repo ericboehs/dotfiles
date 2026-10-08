@@ -405,8 +405,10 @@ to the next day.
 ### Acting on the list
 
 `ctrl+shift+w`, a bare `/watch`, or a click on the widget opens the picker:
-the needs rows, newest first, with one key per verb. A click on an item's
-line opens it on that row.
+the needs rows, newest first, with one key per verb, and your open waits
+under them. A click on an item's line opens it on that row; clicking that row
+(or the widget) again closes it. The expanded widget (`/watch list`) lists
+open waits too.
 
 | Key | Does |
 |---|---|

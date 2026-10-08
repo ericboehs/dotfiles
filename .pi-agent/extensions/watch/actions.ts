@@ -142,6 +142,7 @@ type Deps = {
 	selected: number;
 	flash: string; // the last result, shown under the list (may hold an OSC 8 link)
 	canUndo: boolean;
+	waits?: string[]; // open waits, shown under the rows ("W1 Dana Ruiz · the RITM status 2h")
 	done: (r: PickerResult | undefined) => void;
 };
 
@@ -171,6 +172,29 @@ export class PickerPanel {
 		this.d.tui.requestRender();
 	}
 
+	/** Lines of the last render that hold row k. */
+	private rowLine: number[] = [];
+
+	/**
+	 * Click-only, so drag-select still works: a row selects it, the selected row
+	 * again or the title closes the picker (the same click that opened it).
+	 */
+	handleMouse(e: { type: string; button: string; y: number }): { handled: boolean } | undefined {
+		if (e.type !== "click" || e.button !== "left") return undefined;
+		if (e.y === 0) {
+			this.d.done(undefined);
+			return { handled: true };
+		}
+		const k = this.rowLine.indexOf(e.y);
+		if (k < 0) return undefined;
+		if (k === this.sel) this.d.done(undefined);
+		else {
+			this.sel = k;
+			this.d.tui.requestRender();
+		}
+		return { handled: true };
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -178,7 +202,9 @@ export class PickerPanel {
 		const dim = (s: string) => theme.fg("dim", s);
 		const out = [truncateToWidth(theme.fg("accent", this.d.title), width), ""];
 		if (!rows.length) out.push(dim("  Nothing needs you."));
+		this.rowLine = [];
 		rows.forEach((r, k) => {
+			this.rowLine[k] = out.length;
 			const count = r.count > 1 ? ` ${theme.fg("warning", `×${r.count}`)}` : "";
 			const tail = ` ${dim(r.age)}`;
 			const head = `${k + 1} ${r.icon} `;
@@ -186,13 +212,15 @@ export class PickerPanel {
 			const line = `${head}${truncateToWidth(r.label, room)}${count}${tail}`;
 			out.push(truncateToWidth(k === this.sel ? `${theme.fg("accent", "❯")} ${line}` : `  ${line}`, width));
 		});
+		const waits = this.d.waits ?? [];
+		if (waits.length) out.push("", truncateToWidth(dim("Waiting on"), width), ...waits.map((w) => truncateToWidth(`  ${theme.fg("warning", "⧗")} ${w}`, width)));
 		if (this.d.flash) out.push("", truncateToWidth(`  ${this.d.flash}`, width));
 		const cur = rows[this.sel];
 		out.push(
 			"",
 			truncateToWidth(
 				dim(
-					`${cur ? `enter ${VERB_WORD[cur.verb]} · ` : ""}o open · a ask agent · d done · s snooze · m mute · w wait${this.d.canUndo ? " · u undo" : ""} · esc close`,
+					`${cur ? `enter ${VERB_WORD[cur.verb]} · ` : ""}o open · a ask agent · d done · s snooze · m mute · w wait${this.d.canUndo ? " · u undo" : ""} · esc or click to close`,
 				),
 				width,
 			),

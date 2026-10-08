@@ -25,7 +25,7 @@ import {
 	snoozeEnd,
 } from "../extensions/watch/actions.ts";
 import { addMute, muteFor, muteLabel, newPolicy, removeMute, rollPolicy, rulesText } from "../extensions/watch/policy.ts";
-import { buildTriageUser, carryOver, needsList, senderLines, senderStats, widgetLines } from "../extensions/watch.ts";
+import { buildTriageUser, carryOver, needsList, senderLines, senderStats, waitLine, widgetLines } from "../extensions/watch.ts";
 
 const T = 1791302400; // 2026-10-06 ~09:00 CDT
 function item(over = {}) {
@@ -307,4 +307,34 @@ test("widgetLines maps each line to its picker row, for clicks", () => {
 	const open = [];
 	widgetLines({ ...view, expanded: true }, theme, 120, T * 1000, open);
 	assert.deepEqual([...open].slice(0, 5), [undefined, 0, 0, 1, 1], "expanded: each row and its quote");
+});
+
+test("picker: a click selects a row, the selected row or the title again closes; open waits under the rows", () => {
+	let { p, out } = panel(rows, { waits: ["W1 Dana Ruiz · the RITM status 2h"] });
+	const lines = p.render(80);
+	assert.deepEqual(lines.slice(4, 7), ["", "Waiting on", "  ⧗ W1 Dana Ruiz · the RITM status 2h"]);
+	assert.match(p.render(140).at(-1), /esc or click to close$/);
+	assert.equal(p.handleMouse({ type: "press", button: "left", y: 3 }), undefined, "a press is a drag's start");
+	assert.equal(p.handleMouse({ type: "click", button: "left", y: 5 }), undefined, "not a row");
+	assert.deepEqual(p.handleMouse({ type: "click", button: "left", y: 3 }), { handled: true });
+	assert.match(p.render(80)[3], /^❯ 2/);
+	assert.equal(out.result, "open");
+	p.handleMouse({ type: "click", button: "left", y: 3 });
+	assert.equal(out.result, undefined, "the selected row again closes");
+	({ p, out } = panel(rows));
+	p.render(80);
+	p.handleMouse({ type: "click", button: "left", y: 0 });
+	assert.equal(out.result, undefined, "the title closes");
+});
+
+test("widget: the expanded view lists open waits; a maybe shows once", () => {
+	const now = Date.parse("2026-10-06T12:00:00-05:00");
+	const w1 = { id: "W1", who: "Dana Ruiz", what: "the RITM status", since: "2026-10-06T10:00:00-05:00", source: "command", state: "open", sig: "a" };
+	const w2 = { ...w1, id: "W2", who: "Pat Doe", what: "badge form", sig: "b", maybeBy: "k" };
+	assert.equal(waitLine(w1, now), "W1 Dana Ruiz · the RITM status 2h");
+	const view = { needs: [], cleared: [], maybes: [w2], openWaits: 2, waitList: [w1, w2], lastPollAt: 0, busy: false, error: "", mode: "active", meeting: false, held: 0, expanded: true, started: true };
+	const lines = widgetLines(view, theme, 120, now);
+	assert.equal(lines.filter((l) => l.includes("W2")).length, 1);
+	assert.ok(lines.includes("  ⧗ W1 Dana Ruiz · the RITM status 2h"), lines.join("\n"));
+	assert.ok(!widgetLines({ ...view, expanded: false }, theme, 120, now).some((l) => l.includes("W1")), "collapsed: the count only");
 });

@@ -22,7 +22,8 @@ import test from "node:test";
 const NOW = new Date(2026, 9, 6, 10, 0).getTime(); // a Tuesday, 10:00 local
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(cond, ms = 20_000) {
-	for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) if (cond()) return;
+	// performance.now(): Date is mocked here, and a frozen clock would wait forever.
+	for (const end = performance.now() + ms; performance.now() < end; await sleep(50)) if (cond()) return;
 	assert.fail("timed out");
 }
 const pad = (n) => String(n).padStart(2, "0");
@@ -176,6 +177,7 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 						resolve(r);
 					});
 					renders.push(panel.render(160).join("\n"));
+					if (keys[0] === "stay") return void keys.shift(); // left open, for a click to close
 					while (!closed) panel.handleInput(keys.length ? keys.shift() : "q");
 				}),
 		},
@@ -272,6 +274,19 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	assert.deepEqual(comp.handleMouse({ type: "click", button: "left", x: 4, y: 2 }), { handled: true });
 	await until(() => renders.length === before + 1);
 	assert.match(renders.at(-1), /\n❯ 1 ✉ Kim Lee/);
+	assert.match(renders.at(-1), /Waiting on\n {2}⧗ W1 Dana Ruiz · the RITM status/, "the picker lists open waits");
+	assert.ok(shown.some((l) => /⧗ W1 Dana Ruiz · the RITM status/.test(l)), "so does the expanded widget");
+
+	// Clicked again while it's open: the same click closes it.
+	keys.push("stay");
+	comp.handleMouse({ type: "click", button: "left", x: 4, y: 1 });
+	await until(() => renders.length === before + 2);
+	comp.handleMouse({ type: "click", button: "left", x: 4, y: 1 });
+	await sleep(20); // the picker's await resumes
+	keys.push("q");
+	comp.handleMouse({ type: "click", button: "left", x: 4, y: 1 });
+	await until(() => renders.length === before + 3);
+	assert.equal(keys.length, 0, "closed, so the next click opened a new picker");
 
 	// /watch rules and unmute.
 	await commands.watch.handler("unmute M2", ctx);

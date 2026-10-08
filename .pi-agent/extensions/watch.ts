@@ -1159,6 +1159,7 @@ export type WidgetView = {
 	notif?: string; // a notif-watch problem, "" when fine
 	tags?: Tag[]; // numbered for /watch do N
 	snoozed?: number; // open needs hidden until their snooze ends
+	waitList?: WaitItem[]; // open waits, listed when expanded
 };
 
 const firstName = (name: string) => stripTag(name).split(/\s+/)[0] || name;
@@ -1168,6 +1169,10 @@ export function itemLabel(i: Item, full = false): string {
 	if (i.channel === FEED_CHANNEL) return full ? `bot feed · ${fromLabel(i)} · ${why}` : `bot feed · ${why}`;
 	return `${full ? i.from : firstName(i.from)} (${i.where}) ${why}`;
 }
+
+/** "⧗ W1 Dana Ruiz · the RITM status 2h": an open wait, in the expanded widget and the picker. */
+export const waitLine = (w: WaitItem, now = Date.now()) => `${w.id} ${w.who} · ${w.what} ${age(now - Date.parse(w.since))}`;
+const waitRow = (w: WaitItem, theme: Pick<Theme, "fg">, now: number) => `  ${theme.fg("warning", "⧗")} ${theme.fg("dim", waitLine(w, now))}`;
 
 /** The widget's lines. rowOf, when given, gets the picker row for each line that belongs to one (for clicks). */
 export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: number, now = Date.now(), rowOf: (number | undefined)[] = []): string[] {
@@ -1228,6 +1233,7 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 		for (const t of rest) lines.push(tagLine(t, "  "));
 		if (rows.length > shown.length) lines.push(fit(dim(`  +${rows.length - shown.length} more · /watch since`)));
 		for (const w of v.maybes) lines.push(maybeRow(w));
+		for (const w of (v.waitList ?? []).filter((x) => !v.maybes.includes(x))) lines.push(fit(waitRow(w, theme, now)));
 		for (const i of v.cleared.slice(0, 5)) lines.push(fit(dim(`  ✓ ${itemLabel(i)} · ${i.clearedBy ?? "cleared"}`)));
 		lines.push(fit(dim(n ? "  click or ctrl+shift+w to act · /watch clear N · /watch list to collapse" : "  /watch list to collapse")));
 		return lines;
@@ -1901,6 +1907,7 @@ export default function (pi: ExtensionAPI) {
 			cleared: [...w.items.values()].filter((i) => i.bucket === "needs" && i.state === "cleared").sort((a, b) => byTs(b.ts, a.ts)),
 			maybes: w.waits.filter((x) => x.state === "open" && x.maybeBy && !needs.some((i) => i.maybeWait === x.id)),
 			openWaits: w.waits.filter((x) => x.state === "open").length,
+			waitList: w.waits.filter((x) => x.state === "open"),
 			lastPollAt: w.lastPollAt,
 			busy: w.busy,
 			error: w.error,
@@ -1934,6 +1941,10 @@ export default function (pi: ExtensionAPI) {
 					invalidate() {},
 					handleMouse(e: { type: string; button: string; y: number }) {
 						if (e.type !== "click" || e.button !== "left") return undefined;
+						if (closePicker) {
+							closePicker(); // the click that opened it closes it
+							return { handled: true };
+						}
 						const live = ctxRef;
 						if (live) void openPicker(live, rowOf[e.y] ?? 0).catch((err: unknown) => notify(`watch: ${(err as Error)?.message ?? err}`, "error"));
 						return { handled: true };
@@ -2737,6 +2748,8 @@ export default function (pi: ExtensionAPI) {
 	// ── acting on the list: the picker (ctrl+shift+w, a bare /watch) and watch_items ──
 
 	let pickerOpen = false;
+	/** Closes the open picker, from a second click on the widget. */
+	let closePicker: (() => void) | undefined;
 	/** The items as they were before the last done, snooze, mute or wait: u puts them back. */
 	let lastChange: Item[] = [];
 
@@ -2877,9 +2890,12 @@ export default function (pi: ExtensionAPI) {
 					};
 				});
 				const title = `watch · ${rows.length ? `${rows.length} need${rows.length === 1 ? "s" : ""} you` : "nothing needs you"}`;
-				const res = await ctx.ui.custom<PickerResult | undefined>(
-					(tui, theme, _kb, done) => new PickerPanel({ tui, theme, title, rows: view, selected, flash, canUndo: lastChange.length > 0, done }) as never,
-				);
+				const waits = w.waits.filter((x) => x.state === "open").map((x) => waitLine(x));
+				const res = await ctx.ui.custom<PickerResult | undefined>((tui, theme, _kb, done) => {
+					closePicker = () => done(undefined);
+					return new PickerPanel({ tui, theme, title, rows: view, selected, flash, canUndo: lastChange.length > 0, waits, done }) as never;
+				});
+				closePicker = undefined;
 				if (!res || s !== w) return;
 				selected = res.row;
 				const r = rows[res.row];
@@ -2907,6 +2923,7 @@ export default function (pi: ExtensionAPI) {
 			}
 		} finally {
 			pickerOpen = false;
+			closePicker = undefined;
 		}
 	}
 
