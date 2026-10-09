@@ -15,7 +15,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { ActivityTracker, checkChart, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
+import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -477,6 +477,18 @@ test("clipTarget clips the real file for a copy, a named copy for a diff, else t
   }
 });
 
+test("withKit puts the kit and frame script at the top of the head, unless the page opts out", () => {
+  const css = ":root{--x:1}";
+  const full = withKit("<!doctype html><html><head><title>t</title></head><body>b</body></html>", css);
+  assert.match(full, /^<!doctype html><html><head><style id="canvas-kit">\n:root\{--x:1\}<\/style>\n<script>[\s\S]+<\/script>\n<title>t<\/title>/);
+  assert.match(withKit("<html lang=en><body>b</body></html>", css), /^<html lang=en><style id="canvas-kit">/);
+  assert.match(withKit("<!DOCTYPE html>\n<div>x</div>", css), /^<!DOCTYPE html><style id="canvas-kit">/, "never before the doctype");
+  assert.match(withKit("<div>x</div>", css), /^<!doctype html>\n<style id="canvas-kit">[\s\S]*<div>x<\/div>$/, "a fragment gets a doctype");
+  const off = withKit('<head><meta name="canvas-kit" content="off"></head>', css);
+  assert.doesNotMatch(off, /canvas-kit">/);
+  assert.match(off, /<script>[\s\S]*canvasFrame/, "the frame script stays, so the frame still sizes");
+});
+
 test("checkChart accepts good specs and explains bad ones", () => {
   const ok = (s) => assert.equal(checkChart(JSON.stringify(s)), "");
   ok({ type: "bar", labels: ["a", "b"], series: [{ name: "x", data: [1, null] }] });
@@ -499,9 +511,11 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
   mk("s1", { name: "test", pid: process.pid }, {
     "sections.json": JSON.stringify([
       { id: "a", kind: "html", file: "a.html", order: 1, at: "t" },
+      { id: "p", kind: "html-plan", file: "p.html", order: 2, at: "t" },
       { id: "c", kind: "chart", file: "c.chart", order: 3, at: "t" },
     ]),
     "a.html": "<p>hi</p>",
+    "p.html": "<!doctype html><p>plan</p>",
     "c.chart": '{"type":"bar","labels":["a"],"series":[{"data":[1]}]}',
     "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
     "cur-0123abcd.txt": "<script>alert(1)</script>",
@@ -528,8 +542,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.equal(state.meta.name, "test");
     assert.equal(state.sections[0].id, "a");
     const sec = await get(port, "/s/s1/f/a.html");
-    assert.equal(sec.body, "<p>hi</p>");
+    assert.match(sec.body, /^<!doctype html>\n<style id="canvas-kit">[\s\S]*--c1:[\s\S]*<\/style>\n<script>[\s\S]*canvasFrame[\s\S]*<\/script>\n<p>hi<\/p>$/, "html sections get the kit and frame script");
     assert.match(sec.headers["content-security-policy"], /connect-src 'none'/);
+    assert.equal((await get(port, "/s/s1/f/p.html")).body, "<!doctype html><p>plan</p>", "html-plan is served as is");
     const chart = await get(port, "/s/s1/f/c.chart");
     assert.equal(chart.headers["content-type"], "application/json; charset=utf-8");
     assert.equal(JSON.parse(chart.body).type, "bar");
@@ -546,6 +561,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     // request here gets through to clippy, so the clipboard stays untouched.)
     assert.equal((await post(port, "/s/s1/clip", { file: "a.html" }, {})).status, 403, "needs the page's header");
     assert.equal((await post(port, "/s/s1/clip", { file: "a.html" }, { "x-canvas-clip": "1", origin: "https://evil.example" })).status, 403, "foreign origin");
+    assert.equal((await post(port, "/s/s1/clip", { file: "a.html" }, { "x-canvas-clip": "1", origin: "null" })).status, 403, "an opaque-origin html frame");
     assert.equal((await post(port, "/s/s1/clip", { file: "base-0123abcd" }, { "x-canvas-clip": "1" })).status, 404, "bases are never clipped");
     assert.equal((await post(port, "/s/s1/clip", { file: "../s1/meta.json" }, { "x-canvas-clip": "1" })).status, 404);
     assert.equal((await post(port, "/s/s1/f/a.html", {}, { "x-canvas-clip": "1" })).status, 405, "everything else stays read-only");

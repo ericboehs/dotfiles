@@ -1,0 +1,78 @@
+/* The canvas design kit: put into every html section so agent-made pages
+   match the canvas in light and dark. Element rules sit in :where(), so any
+   style of the page's own wins. A page opts out with
+   <meta name="canvas-kit" content="off">. */
+:root {
+  color-scheme: light dark;
+  --bg: #f7f5f0; --card: #fff; --ink: #1c1b19; --dim: #8a8578; --line: #e6e1d6; --soft: #f0ece3; --code: #f3f0e8;
+  --accent: #b4541f; --ok: #1f7a52; --warn: #a86a00; --bad: #c0392b;
+  --c1: #3b7dd8; --c2: #e0703a; --c3: #2f9e72; --c4: #c4475b; --c5: #8a63c9; --c6: #b8901c; --c7: #2e9bb0; --c8: #8c8577;
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1e1c; --card: #282725; --ink: #ecebe7; --dim: #9a958a; --line: #3a3834; --soft: #312f2c; --code: #211f1d;
+    --accent: #e08a5a; --ok: #5cc495; --warn: #e2b257; --bad: #ef6f5e;
+    --c1: #6ea3ec; --c2: #f08f5c; --c3: #4fc493; --c4: #e36a7c; --c5: #a888e0; --c6: #e0bd4a; --c7: #5cc3d3; --c8: #a8a194;
+  }
+}
+
+:where(*, *::before, *::after) { box-sizing: border-box; }
+:where(html) { background: var(--card); color: var(--ink); font: 14px/1.5 var(--font); -webkit-text-size-adjust: 100%; }
+:where(body) { margin: 0; padding: 14px 16px; }
+:where(h1, h2, h3, h4) { margin: 1.1em 0 0.45em; line-height: 1.25; }
+:where(h1) { font-size: 20px; } :where(h2) { font-size: 17px; } :where(h3) { font-size: 15px; } :where(h4) { font-size: 14px; }
+:where(p, ul, ol, table, pre, figure) { margin: 0 0 0.8em; }
+:where(body > :first-child) { margin-top: 0; }
+:where(a) { color: var(--accent); }
+:where(code, kbd, samp, pre) { font-family: var(--mono); font-size: 12.5px; }
+:where(code) { background: var(--code); padding: 1px 4px; border-radius: 4px; }
+:where(pre) { background: var(--code); padding: 10px 12px; border-radius: var(--radius); overflow-x: auto; }
+:where(pre code) { background: none; padding: 0; }
+:where(hr) { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+:where(small) { color: var(--dim); }
+
+:where(table) { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+:where(th, td) { border-bottom: 1px solid var(--soft); padding: 5px 8px; text-align: left; vertical-align: top; }
+:where(th) { border-bottom-color: var(--line); font-weight: 600; }
+:where(td.num, th.num) { text-align: right; font-variant-numeric: tabular-nums; }
+
+:where(button, .k-btn) {
+  font: 500 13px/1 var(--font); color: var(--ink); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+:where(button:hover, .k-btn:hover) { background: var(--soft); }
+:where(button:disabled) { opacity: 0.5; cursor: default; }
+:where(button.primary, .k-btn.primary) { background: var(--accent); border-color: var(--accent); color: var(--card); }
+:where(button.primary:hover, .k-btn.primary:hover) { filter: brightness(1.08); background: var(--accent); }
+:where(input:not([type=range], [type=checkbox], [type=radio], [type=color]), select, textarea) {
+  font: 13.5px/1.3 var(--font); color: var(--ink); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0;
+}
+:where(input, select, textarea):focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
+:where(input[type=range], input[type=checkbox], input[type=radio], progress) { accent-color: var(--accent); }
+:where(input[type=range]) { width: 100%; }
+:where(output) { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* Layout and pieces */
+.k-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.k-col { display: flex; flex-direction: column; gap: 10px; }
+.k-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; }
+.k-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.k-card > :last-child { margin-bottom: 0; }
+.k-stat { display: flex; flex-direction: column; gap: 2px; }
+.k-stat > b, .k-stat > strong { font-size: 24px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.k-stat > span { color: var(--dim); font-size: 12.5px; }
+.k-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--dim); }
+.k-field > :is(input, select, textarea, output) { color: var(--ink); }
+.k-muted { color: var(--dim); }
+.k-mono { font-family: var(--mono); }
+.k-tag { display: inline-block; font-size: 11.5px; line-height: 1; padding: 3px 7px; border-radius: 999px; background: var(--soft); color: var(--dim); }
+.k-ok { color: var(--ok); } .k-warn { color: var(--warn); } .k-bad { color: var(--bad); } .k-accent { color: var(--accent); }
+.k-tag.k-ok { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.k-tag.k-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.k-tag.k-bad { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.k-bar { height: 8px; border-radius: 999px; background: var(--soft); overflow: hidden; }
+.k-bar > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }

@@ -63,6 +63,8 @@ extensions/herdr-agent-state.ts
 # web-providers/README.md came out of it) and the canvas daemon and browser
 # page (canvas/daemon.mjs, canvas/page.mjs, spawned and served by canvas.ts).
 !extensions/*/*.mjs
+# The design kit the canvas daemon puts into html sections (read per request).
+!extensions/canvas/kit.css
 
 # Extension tooling (not linked into ~/.pi/agent — see tsconfig.json).
 # node_modules/ is symlinks to the global pi, created by bin/pi-ext-check.

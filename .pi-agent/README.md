@@ -726,7 +726,19 @@ updates through server-sent events with no reload.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
-  `diff`, and `finding` (one append-only line in the findings log). A `diff`
+  `chart`, `diff`, and `finding` (one append-only line in the findings log).
+  The tool's guidelines tell the agent to pick the lightest kind that fits:
+  markdown for tables, chart for numbers, mermaid for flows, html only for
+  something to interact with. `html` sections get the **design kit**
+  (`canvas/kit.css`, put in by the daemon): the page's colours as CSS
+  variables in light and dark, styled buttons, inputs, sliders and tables,
+  and `k-` classes for rows, grids, cards, stats, fields, tags and bars, so an
+  agent-made calculator matches the page with almost no CSS. A page opts out
+  with `<meta name="canvas-kit" content="off">`. A `chart` is a small JSON
+  spec (`bar` grouped, stacked or horizontal, `line`, `area`, `scatter`,
+  `pie`, `donut`; labels, series, axis label, unit and prefix), checked by
+  the tool and drawn by the page as SVG in the page's colours, with legends
+  and hover values. A `diff`
   takes a unified patch in `body` or `path`, or `ref` (default `HEAD`; a
   commit, a `a..b` range, or `staged`), `paths` and `repo`, and the extension
   runs `git diff` itself. Untracked files named in `paths` show as new, and
@@ -794,8 +806,13 @@ and cached in `~/.pi/canvas/.vendor`; mermaid alone is 5.5 MB, too heavy to
 commit here.
 
 Loopback only. The daemon answers only 127.0.0.1 with a loopback `Host`
-header, which stops DNS rebinding, and it serves nothing but reads. Section
-HTML runs same-origin (html-plan needs `localStorage`) under a CSP with
+header, which stops DNS rebinding. It serves reads plus one write: Clippy's
+`POST /s/<id>/clip`, which needs the page's own header and origin and only
+copies that session's files. `html` sections run in an opaque-origin frame
+(no `allow-same-origin`): they can't touch the page or call the daemon, and
+a small script the daemon adds reports their height and stands in an
+in-memory `localStorage`. `html-plan` still runs same-origin, because its
+runtime keeps answers in `localStorage`. Both have a CSP with
 `connect-src 'none'`. Other local processes are trusted. The page can hold
 anything the session saw; it is not a redaction layer.
 

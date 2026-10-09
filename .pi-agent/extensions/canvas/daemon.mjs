@@ -59,8 +59,10 @@ const TYPES = {
   ".svg": "image/svg+xml",
 };
 
-// Section HTML runs same-origin (html-plan needs localStorage and reads its own
-// height), so the boundary is this CSP: no fetch/XHR/WebSocket anywhere, and
+// html sections run in an opaque-origin frame (no allow-same-origin), so they
+// can't reach the page or the daemon's routes. html-plan still runs
+// same-origin: its runtime keeps answers in localStorage. For both, the
+// boundary is also this CSP: no fetch/XHR/WebSocket anywhere, and
 // scripts only inline, from here, or from the two CDNs the /artifact pipeline
 // allows. Fonts and styles may load over https.
 export const SECTION_CSP = [
@@ -275,6 +277,34 @@ function publish(key, data) {
   for (const res of clients.get(key) || []) res.write(`event: changed\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+// ── html sections: the design kit and the frame script ─────────────────────────
+// The frame is cross-origin to the page, so the page can't measure it: this
+// script posts the content's height instead. It also stands in an in-memory
+// localStorage, which an opaque origin doesn't have, so pages that use it
+// still run (state lasts until reload).
+const FRAME_JS = `(function(){
+function mem(){var m=new Map();return{getItem:function(k){k=String(k);return m.has(k)?m.get(k):null},setItem:function(k,v){m.set(String(k),String(v))},removeItem:function(k){m.delete(String(k))},clear:function(){m.clear()},key:function(i){var a=Array.from(m.keys());return i<a.length?a[i]:null},get length(){return m.size}}}
+try{window.localStorage}catch(e){try{Object.defineProperty(window,"localStorage",{value:mem(),configurable:true});Object.defineProperty(window,"sessionStorage",{value:mem(),configurable:true})}catch(e2){}}
+if(window.parent===window)return;
+var last=-1;
+function post(){var b=document.body;if(!b)return;var cs=getComputedStyle(b),bottom=0;for(var i=0;i<b.children.length;i++){var k=b.children[i],r=k.getBoundingClientRect();bottom=Math.max(bottom,r.bottom+(parseFloat(getComputedStyle(k).marginBottom)||0))}
+bottom+=(parseFloat(cs.paddingBottom)||0)+(parseFloat(cs.marginBottom)||0)+window.scrollY;var h=Math.ceil(bottom);if(h!==last){last=h;window.parent.postMessage({canvasFrame:{height:h}},"*")}}
+function start(){post();try{new ResizeObserver(post).observe(document.body)}catch(e){}window.addEventListener("load",post)}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
+})();`;
+
+/** An html section with the kit's styles and the frame script put in at the top of its head. */
+export function withKit(html, kitCss) {
+  const off = /<meta\b[^>]*\bname=["']?canvas-kit["']?[^>]*\bcontent=["']?off\b/i.test(html);
+  const tag = `${off ? "" : `<style id="canvas-kit">\n${kitCss}</style>\n`}<script>${FRAME_JS}</script>\n`;
+  for (const re of [/<head\b[^>]*>/i, /<html\b[^>]*>/i, /^\s*<!doctype\b[^>]*>/i]) {
+    const m = html.match(re);
+    if (m) return html.slice(0, m.index + m[0].length) + tag + html.slice(m.index + m[0].length);
+  }
+  // A bare fragment: give it a doctype so it renders in standards mode.
+  return `<!doctype html>\n${tag}${html}`;
+}
+
 // ── clip: put a file itself on the clipboard with clippy ─────────────────────
 // The one thing the page can make the daemon do. A file copy keeps its real
 // name and path, so it pastes into Slack, Mail or Finder as the file.
@@ -394,6 +424,10 @@ function handler(req, res) {
     const path = join(ROOT, parts[1], parts[3]);
     if (!path.startsWith(ROOT + sep) || !existsSync(path)) return send(res, 404, "not found");
     const type = TYPES[extname(path)] || "application/octet-stream";
+    if (extname(path) === ".html") {
+      const sec = readJson(join(ROOT, parts[1], "sections.json"), []).find((s) => s.file === parts[3]);
+      if (sec?.kind === "html") return send(res, 200, withKit(readFileSync(path, "utf8"), readFileSync(join(HERE, "kit.css"), "utf8")), { "Content-Type": type, "Content-Security-Policy": SECTION_CSP });
+    }
     return send(res, 200, readFileSync(path), { "Content-Type": type, "Content-Security-Policy": SECTION_CSP });
   }
   return send(res, 404, "not found");

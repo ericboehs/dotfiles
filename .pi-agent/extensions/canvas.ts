@@ -1048,12 +1048,16 @@ export default function canvas(pi: ExtensionAPI) {
       '"stacked"?, "horizontal"? (bar), "x"?: {"label"}, "y"?: {"label", "unit", "prefix", "min", "max"}, "height"?, "caption"?}; scatter data is [[x, y], ...] and needs no labels; ' +
       'colours come from the page, so leave "color" out unless it means something: c1-c8, accent, ok, warn, bad), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
+      "html sections get the canvas design kit, so write little CSS: the page's colours as variables (--ink --dim --line --soft --card --accent --ok --warn --bad, chart colours --c1 to --c8), " +
+      "light and dark handled, buttons (class primary), inputs, range sliders, select and tables already styled, and classes k-row, k-col, k-grid, k-card, k-stat (b + span), k-field (label above a control), k-muted, k-tag, k-ok, k-warn, k-bad, k-bar (> i). " +
+      "They run in an isolated frame: no network, no access to the page, and localStorage lasts only until reload. " +
       "Use remove: true to delete a section. Returns the page URL; it does not open a browser.",
     promptSnippet: "canvas: put tables, diagrams, plans, screenshots and findings on this session's live web page",
     promptGuidelines: [
       "The user keeps the canvas open beside the terminal and expects it to grow as you work. Use canvas proactively, without being asked.",
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
       "When a reply would contain a table, an option or state matrix, a diagram, a plan or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
+      "Pick the lightest canvas kind that fits: markdown for tables, lists and prose; chart for numbers to compare or follow over time; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section.",
       "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Haiku notes); leave them alone.",

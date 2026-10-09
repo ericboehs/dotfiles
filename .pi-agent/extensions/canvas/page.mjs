@@ -212,6 +212,7 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .mmd { overflow-x: auto; text-align: center; }
 .mmd svg { max-width: 100%; height: auto; }
 iframe { display: block; width: 100%; border: 0; background: #fff; }
+iframe.fit { background: var(--card); }
 iframe.plan { height: 82vh; }
 img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; }
 .findings { margin: 0; padding: 0; list-style: none; }
@@ -471,27 +472,16 @@ function renderMarkdown(text) {
 }
 
 function fitFrame(frame) {
-  const fit = () => {
-    try {
-      const doc = frame.contentDocument;
-      if (!doc?.documentElement) return;
-      // scrollHeight never drops below the frame's own height, so measure the
-      // bottom of the content instead; then the frame can shrink as well as grow.
-      const body = doc.body;
-      if (!body) return;
-      let bottom = 0;
-      for (const kid of body.children) bottom = Math.max(bottom, kid.getBoundingClientRect().bottom);
-      bottom += parseFloat(doc.defaultView.getComputedStyle(body).marginBottom) || 0;
-      frame.style.height = `${Math.min(Math.max(Math.ceil(bottom), 40), 4000)}px`;
-    } catch {}
-  };
-  frame.addEventListener("load", () => {
-    fit();
-    try {
-      new ResizeObserver(fit).observe(frame.contentDocument.body);
-    } catch {}
-  });
+  frame.classList.add("fit");
 }
+
+// html frames are cross-origin to this page (no allow-same-origin), so the
+// kit's frame script reports its content height and this sizes the frame.
+window.addEventListener("message", (e) => {
+  const height = e.data?.canvasFrame?.height;
+  if (typeof height !== "number" || !Number.isFinite(height)) return;
+  for (const f of document.querySelectorAll("iframe.fit")) if (f.contentWindow === e.source) f.style.height = `${Math.min(Math.max(Math.ceil(height), 40), 4000)}px`;
+});
 
 async function sectionBody(id, sec) {
   const url = `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(sec.file)}?v=${encodeURIComponent(sec.at || "")}`;
@@ -504,7 +494,8 @@ async function sectionBody(id, sec) {
       return box;
     }
     case "html": {
-      const f = h("iframe", { src: url, sandbox: "allow-scripts allow-same-origin allow-popups allow-modals allow-downloads", allow: "clipboard-write", loading: "lazy" });
+      // No allow-same-origin: the page's script can't reach this page or the daemon.
+      const f = h("iframe", { src: url, sandbox: "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads", allow: "clipboard-write", loading: "lazy" });
       fitFrame(f);
       return f;
     }
