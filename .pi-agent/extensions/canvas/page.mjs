@@ -422,7 +422,8 @@ kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; backgro
 .toast.show { opacity: 1; }
 
 /* vim keys: the current section, a pending key, the ? overlay */
-.card.current { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.card.current, .card.current:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.card:focus { outline: none; }
 .keyhint { position: fixed; right: 16px; bottom: 16px; z-index: 55; padding: 4px 10px; border-radius: 6px; background: var(--ink); color: var(--card); font: 600 13px ui-monospace, Menlo, monospace; opacity: .9; }
 .cmdk.keys { width: min(760px, calc(100vw - 32px)); padding: 14px 18px 16px; }
 .keys .keys-hd { font-weight: 600; }
@@ -2853,9 +2854,17 @@ const liveCurrent = (cards) => (currentCard && cards.includes(currentCard) && in
 
 function setCurrent(card, scroll = true, instant = false) {
   if (currentCard && currentCard !== card) currentCard.classList.remove("current");
-  currentCard = card || null;
-  if (!card) return;
+  if (!card) {
+    if (currentCard && document.activeElement === currentCard) currentCard.blur();
+    currentCard = null;
+    return;
+  }
+  currentCard = card;
   card.classList.add("current");
+  // Focus it so Tab carries on from here, to the section's first link or
+  // button. tabindex -1: focusable from script, never a Tab stop itself.
+  if (!card.hasAttribute("tabindex")) card.tabIndex = -1;
+  if (!card.contains(document.activeElement)) card.focus({ preventScroll: true });
   if (scroll) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 12, behavior: instant ? "auto" : "smooth" });
 }
 
@@ -3007,7 +3016,11 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     return vimAction(e.key === "d" ? "halfDown" : "halfUp", e);
   }
-  if (e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || (e.key.length !== 1 && e.key !== "Enter")) return;
+  // Enter on a focused link, button or control keeps its own meaning; a
+  // section focused by j / k isn't a control.
+  const control = e.key === "Enter" && t?.closest?.("a, button, summary, iframe, [role=button], [tabindex]");
+  if (control && !control.matches(".card")) return;
   if (helpBox && e.key !== "?") return;
   let seq = keySeq + e.key;
   let m = matchKeys(seq);

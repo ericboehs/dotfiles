@@ -841,11 +841,12 @@ updates through server-sent events with no reload.
   ⌘↵ in a new one; Ctrl-j / Ctrl-k move as well as the arrows. A session page
   uses only the global event stream, so a tab holds one of the browser's six
   connections per host.
-- **Vim keys.** `j` / `k` move a highlighted current section (`esc` clears
-  it; once it scrolls away, the section at the top of the window stands in).
+- **Vim keys.** `j` / `k` move a highlighted current section and focus it, so
+  Tab carries on from its first control (`esc` clears it; once it scrolls
+  away, the section at the top of the window stands in).
   `gg` / `G` top and bottom, `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
-  `N` the next or previous section with the changed-while-folded dot. `o` or
-  `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /
+  `N` the next or previous section with the changed-while-folded dot. Enter, `o`
+  or `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /
   `zM` open or fold every section. `yy` copies the page link, `yc` the
   section's source and `yf` its file through Clippy. `?` lists them all; the
   list and the handler share one table (`VIM_KEYS` in `canvas/nav.mjs`).

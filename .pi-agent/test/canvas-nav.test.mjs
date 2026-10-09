@@ -130,6 +130,7 @@ test("matchKeys: actions, prefixes, misses", () => {
   assert.deepEqual(matchKeys("gg"), { action: "top" });
   assert.deepEqual(matchKeys("za"), { action: "toggle" });
   assert.deepEqual(matchKeys("o"), { action: "toggle" });
+  assert.deepEqual(matchKeys("Enter"), { action: "toggle" });
   assert.deepEqual(matchKeys("zM"), { action: "foldAll" });
   assert.deepEqual(matchKeys("yf"), { action: "yankFile" });
   assert.deepEqual(matchKeys("gj"), {});
