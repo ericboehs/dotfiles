@@ -424,6 +424,7 @@ kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; backgro
 /* vim keys: the current section, a pending key, the ? overlay */
 .card.current, .card.current:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .card:focus { outline: none; }
+.side .card.current { outline-offset: -2px; } /* the sidebar scrolls, which would clip an outside ring */
 .keyhint { position: fixed; right: 16px; bottom: 16px; z-index: 55; padding: 4px 10px; border-radius: 6px; background: var(--ink); color: var(--card); font: 600 13px ui-monospace, Menlo, monospace; opacity: .9; }
 .cmdk.keys { width: min(760px, calc(100vw - 32px)); padding: 14px 18px 16px; }
 .keys .keys-hd { font-weight: 600; }
@@ -2845,7 +2846,13 @@ let keySeq = "";
 let keySeqTimer = 0;
 let helpBox = null;
 
-const mainCards = () => [...$app.querySelectorAll(".main-col .card, .card.sessions")].filter((c) => c.offsetParent && !c.parentElement.closest(".card"));
+const topLevel = (list) => list.filter((c) => c.offsetParent && !c.parentElement.closest(".card"));
+const mainCards = () => topLevel([...$app.querySelectorAll(".main-col .card, .card.sessions")]);
+/** The sidebar's cards (Contents, Files changed, Screenshots); empty when it's hidden (narrow window). */
+const sideCards = () => topLevel([...$app.querySelectorAll(".side .card")]);
+const inSide = (card) => !!card?.closest(".side");
+let lastMain = null; // where l goes back to
+let lastSide = null; // where h goes back to
 function inView(c) {
   const r = c.getBoundingClientRect();
   return r.bottom > 0 && r.top < innerHeight;
@@ -2861,28 +2868,48 @@ function setCurrent(card, scroll = true, instant = false) {
   }
   currentCard = card;
   card.classList.add("current");
+  if (inSide(card)) lastSide = card;
+  else lastMain = card;
   // Focus it so Tab carries on from here, to the section's first link or
   // button. tabindex -1: focusable from script, never a Tab stop itself.
   if (!card.hasAttribute("tabindex")) card.tabIndex = -1;
   if (!card.contains(document.activeElement)) card.focus({ preventScroll: true });
-  if (scroll) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 12, behavior: instant ? "auto" : "smooth" });
+  if (!scroll) return;
+  // The sidebar is sticky with its own scroll; the main column scrolls the window.
+  if (inSide(card)) card.scrollIntoView({ block: "nearest", behavior: instant ? "auto" : "smooth" });
+  else window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 12, behavior: instant ? "auto" : "smooth" });
 }
 
-/** The highlighted section if it's on screen, else the one at the top of the window. */
+/** The highlighted section (either column) if it's on screen, else the main one at the top of the window. */
 function currentOrTop(cards = mainCards()) {
-  const live = liveCurrent(cards);
+  const live = liveCurrent([...cards, ...sideCards()]);
   if (live) return live;
   const i = cards.map((c) => c.getBoundingClientRect().top).findLastIndex((t) => t <= 14);
   return cards[Math.max(i, 0)] ?? null;
 }
 
 function hopSection(dir, instant) {
-  const cards = mainCards();
+  // j / k stay in the column the current section is in.
+  const side = inSide(currentCard) && liveCurrent(sideCards());
+  const cards = side ? sideCards() : mainCards();
   if (!cards.length) return;
   const live = liveCurrent(cards);
   const tops = cards.map((c) => c.getBoundingClientRect().top);
   const i = live ? cards.indexOf(live) + dir : dir > 0 ? tops.findIndex((t) => t > 14) : tops.findLastIndex((t) => t < 10);
   if (i >= 0 && i < cards.length) setCurrent(cards[i], true, instant);
+}
+
+/** h / l: over to the sidebar and back, to the section last used there. */
+function hopColumn(toSide) {
+  if (toSide) {
+    const cards = sideCards();
+    if (!cards.length) return toast("The side panel shows on windows 1200px or wider");
+    if (inSide(currentCard)) return;
+    return setCurrent(cards.includes(lastSide) ? lastSide : cards[0]);
+  }
+  if (!inSide(currentCard)) return;
+  const cards = mainCards();
+  setCurrent(cards.includes(lastMain) && inView(lastMain) ? lastMain : currentOrTop(cards), !(cards.includes(lastMain) && inView(lastMain)));
 }
 
 /** n / N: the next section with the changed-while-folded dot, wrapping like vim. */
@@ -2920,6 +2947,10 @@ function vimAction(action, e) {
       return hopSection(1, e?.repeat);
     case "prev":
       return hopSection(-1, e?.repeat);
+    case "toSide":
+      return hopColumn(true);
+    case "toMain":
+      return hopColumn(false);
     case "top":
       setCurrent(null);
       return window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2947,11 +2978,6 @@ function vimAction(action, e) {
       return pageHooks.setAll?.(false);
     case "foldAll":
       return pageHooks.setAll?.(true);
-    case "yankLink":
-      return copyText(location.href).then(
-        () => toast("Copied the page link"),
-        () => toast("Couldn't copy the link"),
-      );
     case "yankSource":
       return yankWith(currentOrTop(), "[data-yank=source]", "source");
     case "yankFile":

@@ -79,6 +79,8 @@ export function rankItems(items, query, key = (x) => x.label) {
 export const VIM_KEYS = [
   { group: "Move", keys: "j", action: "next", help: "next section" },
   { group: "Move", keys: "k", action: "prev", help: "previous section" },
+  { group: "Move", keys: "h", action: "toSide", help: "over to the side panel (Contents, files, screenshots)" },
+  { group: "Move", keys: "l", action: "toMain", help: "back to the main column" },
   { group: "Move", keys: "gg", action: "top", help: "top of the page" },
   { group: "Move", keys: "G", action: "bottom", help: "bottom of the page" },
   { group: "Move", keys: "d", action: "halfDown", help: "half a page down (or Ctrl-d)" },
@@ -92,9 +94,8 @@ export const VIM_KEYS = [
   { group: "Fold", keys: "zc", action: "close", help: "fold this section" },
   { group: "Fold", keys: "zR", action: "openAll", help: "open every section" },
   { group: "Fold", keys: "zM", action: "foldAll", help: "fold every section" },
-  { group: "Yank", keys: "yy", action: "yankLink", help: "copy the page link" },
-  { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source" },
-  { group: "Yank", keys: "yf", action: "yankFile", help: "copy this section's file (Clippy)" },
+  { group: "Yank", keys: "yy", action: "yankFile", help: "copy this section's file (Clippy), to paste as a file" },
+  { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source as text" },
   { group: "Other", keys: "?", action: "help", help: "this list" },
 ];
 

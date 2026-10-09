@@ -120,7 +120,8 @@ test("vim key table: unique, prefix-free, every action documented", () => {
   assert.equal(new Set(seqs).size, seqs.length, "no sequence twice");
   for (const a of seqs) for (const b of seqs) if (a !== b) assert.ok(!b.startsWith(a), `${a} would shadow ${b}`);
   for (const action of new Set(VIM_KEYS.map((k) => k.action))) assert.ok(VIM_KEYS.some((k) => k.action === action && k.help), `${action} shows in the ? list`);
-  assert.ok(seqs.includes("yf") && seqs.includes("yc") && seqs.includes("yy"));
+  assert.ok(seqs.includes("yy") && seqs.includes("yc") && !seqs.includes("yf"), "yy is Clippy now; yf is gone");
+  assert.ok(seqs.includes("h") && seqs.includes("l"));
 });
 
 test("matchKeys: actions, prefixes, misses", () => {
@@ -132,7 +133,10 @@ test("matchKeys: actions, prefixes, misses", () => {
   assert.deepEqual(matchKeys("o"), { action: "toggle" });
   assert.deepEqual(matchKeys("Enter"), { action: "toggle" });
   assert.deepEqual(matchKeys("zM"), { action: "foldAll" });
-  assert.deepEqual(matchKeys("yf"), { action: "yankFile" });
+  assert.deepEqual(matchKeys("yy"), { action: "yankFile" });
+  assert.deepEqual(matchKeys("yf"), {});
+  assert.deepEqual(matchKeys("h"), { action: "toSide" });
+  assert.deepEqual(matchKeys("l"), { action: "toMain" });
   assert.deepEqual(matchKeys("gj"), {});
   assert.deepEqual(matchKeys("x"), {});
   assert.deepEqual(matchKeys(""), {});

@@ -843,12 +843,14 @@ updates through server-sent events with no reload.
   connections per host.
 - **Vim keys.** `j` / `k` move a highlighted current section and focus it, so
   Tab carries on from its first control (`esc` clears it; once it scrolls
-  away, the section at the top of the window stands in).
+  away, the section at the top of the window stands in). `h` / `l` move over
+  to the side panel and back, each side remembering where you were, and `j` /
+  `k` stay in the column you're in.
   `gg` / `G` top and bottom, `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
   `N` the next or previous section with the changed-while-folded dot. Enter, `o`
   or `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /
-  `zM` open or fold every section. `yy` copies the page link, `yc` the
-  section's source and `yf` its file through Clippy. `?` lists them all; the
+  `zM` open or fold every section. `yy` copies the section's file through
+  Clippy and `yc` its source as text (the page link is in Cmd-K). `?` lists them all; the
   list and the handler share one table (`VIM_KEYS` in `canvas/nav.mjs`).
 - **Themes.** All of Omarchy's first-party themes are bundled
   (`canvas/themes.json`, MIT; `node canvas/build-themes.mjs [sha]` rebuilds
