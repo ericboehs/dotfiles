@@ -6,7 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, diffSkipReason, filesMarkdown, isSensitivePath, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, diffSkipReason, filesMarkdown, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -160,6 +160,36 @@ test("makePatch diffs from the base or from nothing, under the display path", ()
     const gone = makePatch(join(dir, "base"), join(dir, "deleted"), "deleted");
     assert.match(gone.patch, /\+\+\+ \/dev\/null/);
     assert.equal(gone.dels, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("gitDiff diffs a ref or range, adds named untracked files and drops secrets", () => {
+  const dir = mkdtempSync(join(tmpdir(), "canvas-git-"));
+  const git = (...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+  try {
+    git("init", "-q");
+    writeFileSync(join(dir, "a.txt"), "one\ntwo\n");
+    writeFileSync(join(dir, ".env"), "KEY=old\n");
+    git("add", ".");
+    git("commit", "-qm", "first");
+    writeFileSync(join(dir, "a.txt"), "one\n2\n");
+    writeFileSync(join(dir, ".env"), "KEY=new\n");
+    writeFileSync(join(dir, "new.txt"), "fresh\n");
+    const all = gitDiff(dir);
+    assert.match(all.patch, /^diff --git a\/a\.txt b\/a\.txt$/m);
+    assert.ok(!all.patch.includes("KEY="), "the .env change is left out");
+    assert.deepEqual(all.dropped, [".env"]);
+    assert.ok(!all.patch.includes("new.txt"), "untracked files only when named");
+    const named = gitDiff(dir, "HEAD", ["new.txt", "a.txt"]);
+    assert.match(named.patch, /\+\+\+ b\/new\.txt\n@@ -0,0 \+1 @@\n\+fresh/);
+    assert.ok(looksLikeDiff(named.patch));
+    assert.equal(gitDiff(dir, "staged").patch, "");
+    git("commit", "-qam", "second");
+    assert.match(gitDiff(dir, "HEAD~1..HEAD").patch, /^\+2$/m);
+    assert.throws(() => gitDiff(dir, "--output=/tmp/x"), /not a plain ref/);
+    assert.throws(() => gitDiff(tmpdir()), /not inside a git repository/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

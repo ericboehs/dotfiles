@@ -67,12 +67,54 @@ table.diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4
 table.diff td.code::before { display: inline-block; width: 1.2em; color: var(--dim); user-select: none; }
 table.diff tr.add td.code::before { content: "+"; color: var(--ok); }
 table.diff tr.del td.code::before { content: "−"; color: var(--bad); }
-table.diff tr.ctx td.code::before { content: " "; }
+table.diff:not(.split) tr.ctx td.code::before { content: " "; }
 table.diff tr.add td { background: color-mix(in srgb, var(--ok) 13%, transparent); }
 table.diff tr.del td { background: color-mix(in srgb, var(--bad) 12%, transparent); }
 table.diff tr.hunk td { background: color-mix(in srgb, var(--accent) 7%, var(--soft)); color: var(--dim); padding-top: 3px; padding-bottom: 3px; }
 table.diff tr.hunk:not(:first-child) td { border-top: 1px solid var(--line); }
 table.diff tr.note td { color: var(--dim); font-style: italic; }
+table.diff.split { table-layout: fixed; }
+table.diff.split col.c-ln { width: 3.4em; }
+table.diff.split td.ln { min-width: 0; }
+table.diff.split td.ln + td.code + td.ln { border-left: 1px solid var(--line); }
+table.diff.split td.ln + td.ln { border-right: 0; }
+table.diff.split td.code { border-right: 0; }
+table.diff.split td.add { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+table.diff.split td.del { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+table.diff.split td.code::before { content: none; }
+table.diff td.blank { background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--line) 45%, transparent) 5px 6px); }
+table.diff mark { color: inherit; border-radius: 2px; padding: 0; }
+table.diff tr.add mark, table.diff td.add mark { background: color-mix(in srgb, var(--ok) 34%, transparent); }
+table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, var(--bad) 30%, transparent); }
+.diffview { display: flex; flex-direction: column; gap: 10px; }
+.diffview.in-modal { padding: 10px 12px 12px; }
+.diffview.in-modal .dv-file.bare { margin: 0 -12px -12px; border-top: 1px solid var(--line); border-radius: 0; }
+.dv-bar { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.dv-sum { color: var(--dim); }
+.n-add { color: var(--ok); font-weight: 600; }
+.n-del { color: var(--bad); font-weight: 600; }
+.dv-bar .tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.segs { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg { font: 500 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; padding: 5px 9px; border: 0; background: transparent; color: var(--dim); cursor: pointer; }
+.seg + .seg { border-left: 1px solid var(--line); }
+.seg.on { background: var(--soft); color: var(--ink); }
+.dv-files { list-style: none; margin: 0; padding: 5px 0; border: 1px solid var(--line); border-radius: 8px; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dv-files li { display: flex; gap: 10px; align-items: baseline; padding: 0 12px; }
+.dv-files a { color: var(--ink); text-decoration: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-files a:hover { text-decoration: underline; }
+.dv-file { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; scroll-margin-top: 14px; }
+.dv-file > header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: color-mix(in srgb, var(--soft) 50%, var(--card)); border-bottom: 1px solid var(--line); cursor: pointer; font: 600 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dv-file > header:hover .chev { color: var(--ink); }
+.dv-file.shut > header { border-bottom: 0; }
+.dv-file.shut .dv-body { display: none; }
+.dv-file.shut .chev::before { transform: translateX(-1px) rotate(-45deg); }
+.dv-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-n { margin-left: auto; font-weight: 500; white-space: nowrap; }
+.dv-status { font: 500 10.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; padding: 3px 6px; border-radius: 4px; background: var(--soft); color: var(--dim); }
+.dv-status.added { color: var(--ok); } .dv-status.deleted { color: var(--bad); }
+.dv-body { overflow-x: auto; }
+.dv-body > .empty { padding: 10px 12px; }
+.dv-load { margin: 10px 12px; }
 .toc a { display: flex; gap: 10px; align-items: baseline; padding: 4px 12px; color: var(--ink); text-decoration: none; font-size: 13px; }
 .toc a:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
 .toc a .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -287,6 +329,8 @@ function loadHighlight() {
   return hljsReady;
 }
 
+/** What a highlighter's output may keep: <span class> and nothing else. */
+const HL_CLEAN = { ALLOWED_TAGS: ["span"], ALLOWED_ATTR: ["class"], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false };
 const PLAIN = new Set(["text", "txt", "plain", "plaintext", "output", "console", "log"]);
 
 /**
@@ -301,7 +345,7 @@ async function highlightInto(code, lang) {
   if (!hl?.getLanguage(name) || !window.DOMPurify) return;
   try {
     const html = hl.highlight(text, { language: name, ignoreIllegals: true }).value;
-    if (code.textContent === text) code.innerHTML = window.DOMPurify.sanitize(html, { ALLOWED_TAGS: ["span"], ALLOWED_ATTR: ["class"], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
+    if (code.textContent === text) code.innerHTML = window.DOMPurify.sanitize(html, HL_CLEAN);
   } catch {}
 }
 
@@ -404,6 +448,8 @@ async function sectionBody(id, sec) {
       return h("iframe", { class: "plan", src: url, sandbox: "allow-scripts allow-same-origin allow-popups allow-modals allow-downloads", allow: "clipboard-write" });
     case "image":
       return h("img", { class: "shot", src: url, alt: sec.title });
+    case "diff":
+      return renderDiffView(await (await fetch(url)).text(), { title: sec.title || sec.id, href: rawUrl(id, sec, false) });
     default:
       return h("div", { class: "empty" }, `unknown kind ${sec.kind}`);
   }
@@ -604,7 +650,7 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (sec.kind === "markdown" || sec.kind === "mermaid") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
+  if (sec.kind === "markdown" || sec.kind === "mermaid" || sec.kind === "diff") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
@@ -619,6 +665,306 @@ function sectionCard(id, sec) {
       ),
     WIDGETS.includes(sec.id) ? undefined : sec.at, // widgets never fold by age
   );
+}
+
+// ── diffs ────────────────────────────────────────────────────────────────────
+// One renderer for the diff kind, Files changed and the modal: a patch splits
+// into files, each a collapsible block with old and new line numbers, unified
+// or side by side. Lines are coloured by the file's extension, and paired -/+
+// lines mark the words that changed.
+
+const DIFF_LANGS = { rb: "ruby", rake: "ruby", gemspec: "ruby", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript", ts: "typescript", tsx: "typescript", mts: "typescript", json: "json", py: "python", rs: "rust", go: "go", sh: "bash", bash: "bash", zsh: "bash", yml: "yaml", yaml: "yaml", md: "markdown", html: "xml", erb: "xml", xml: "xml", svg: "xml", css: "css", scss: "scss", less: "less", sql: "sql", java: "java", kt: "kotlin", swift: "swift", c: "c", h: "c", cpp: "cpp", cs: "csharp", ini: "ini", toml: "ini", php: "php", lua: "lua", pl: "perl", graphql: "graphql", mk: "makefile", diff: "diff", patch: "diff" };
+
+function langFor(path) {
+  const name = String(path || "").split("/").pop().toLowerCase();
+  if (["gemfile", "rakefile", "guardfile", "brewfile"].includes(name)) return "ruby";
+  if (name === "makefile") return "makefile";
+  return DIFF_LANGS[name.includes(".") ? name.split(".").pop() : ""] || "";
+}
+
+/** A patch as files: { from, to, path, status, binary, hunks: [{ head, rows: [{ t, a, b, text }] }], adds, dels }. */
+function parsePatch(text) {
+  const files = [];
+  let f = null;
+  let hunk = null;
+  let remA = 0;
+  let remB = 0;
+  const start = () => {
+    f = { from: "", to: "", path: "", status: "modified", binary: false, hunks: [], adds: 0, dels: 0, minus: false };
+    files.push(f);
+    hunk = null;
+  };
+  const strip = (p) => (p === "/dev/null" ? "" : p.replace(/\t.*$/, "").replace(/^[ab]\//, ""));
+  for (const line of text.split("\n")) {
+    // Inside a hunk the header's counts say which lines belong to it, so a
+    // removed line that reads "-- x" is never taken for a file header.
+    if (hunk && (remA > 0 || remB > 0)) {
+      const c = line[0];
+      if (c === "+") (hunk.rows.push({ t: "add", b: hunk.b++, text: line.slice(1) }), f.adds++, remB--);
+      else if (c === "-") (hunk.rows.push({ t: "del", a: hunk.a++, text: line.slice(1) }), f.dels++, remA--);
+      else if (c === " " || line === "") (hunk.rows.push({ t: "ctx", a: hunk.a++, b: hunk.b++, text: line.slice(1) }), remA--, remB--);
+      else if (c === "\\") hunk.rows.push({ t: "note", text: line.slice(2) });
+      else hunk = null;
+      if (hunk) continue;
+    }
+    if (hunk && line.startsWith("\\")) {
+      hunk.rows.push({ t: "note", text: line.slice(2) });
+      continue;
+    }
+    let m;
+    if ((m = line.match(/^diff --git a\/(.+?) b\/(.+)$/))) {
+      start();
+      f.from = m[1];
+      f.to = m[2];
+    } else if (line.startsWith("--- ")) {
+      if (!f || f.hunks.length || f.minus) start();
+      f.minus = true;
+      f.from = strip(line.slice(4));
+      if (!f.from) f.status = "added";
+    } else if (line.startsWith("+++ ") && f) {
+      f.to = strip(line.slice(4));
+      if (!f.to) f.status = "deleted";
+    } else if (f && line.startsWith("new file mode")) f.status = "added";
+    else if (f && line.startsWith("deleted file mode")) f.status = "deleted";
+    else if (f && line.startsWith("rename from ")) (f.status = "renamed"), (f.from = line.slice(12));
+    else if (f && line.startsWith("rename to ")) (f.status = "renamed"), (f.to = line.slice(10));
+    else if (line.startsWith("Binary files ")) {
+      if (!f) start();
+      f.binary = true;
+    } else if ((m = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/))) {
+      if (!f) start();
+      hunk = { head: line, a: Number(m[1]), b: Number(m[3]), rows: [] };
+      f.hunks.push(hunk);
+      remA = m[2] === undefined ? 1 : Number(m[2]);
+      remB = m[4] === undefined ? 1 : Number(m[4]);
+    }
+  }
+  for (const x of files) x.path = x.to || x.from;
+  return files.filter((x) => x.hunks.length || x.binary || x.status !== "modified");
+}
+
+const wordTokens = (s) => s.match(/\w+|\s+|[^\w\s]/g) || [];
+
+/** The changed character ranges of a and b (LCS over words), or null when too long or too different to help. */
+function wordRanges(a, b) {
+  const x = wordTokens(a);
+  const y = wordTokens(b);
+  if (!x.length || !y.length || x.length * y.length > 40000) return null;
+  const n = x.length;
+  const m = y.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = x[i] === y[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ra = [];
+  const rb = [];
+  let i = 0;
+  let j = 0;
+  let pa = 0;
+  let pb = 0;
+  let same = 0;
+  const add = (r, s, e) => (r.length && r[r.length - 1][1] === s ? (r[r.length - 1][1] = e) : r.push([s, e]));
+  while (i < n || j < m) {
+    if (i < n && j < m && x[i] === y[j]) {
+      same += x[i].length;
+      pa += x[i++].length;
+      pb += y[j++].length;
+    } else if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) {
+      add(rb, pb, (pb += y[j++].length));
+    } else {
+      add(ra, pa, (pa += x[i++].length));
+    }
+  }
+  // Mostly rewritten lines read better whole than speckled with marks.
+  if (same < 0.4 * Math.max(a.length, b.length)) return null;
+  return [ra, rb];
+}
+
+/** Wrap character ranges of el's text in <mark>, across any highlight spans. */
+function markRanges(el, ranges) {
+  if (!ranges?.length) return;
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let n; (n = walk.nextNode()); ) nodes.push(n);
+  let pos = 0;
+  for (const node of nodes) {
+    const start = pos;
+    const end = (pos += node.data.length);
+    const cuts = ranges.filter(([s, e]) => s < end && e > start).map(([s, e]) => [Math.max(s, start) - start, Math.min(e, end) - start]);
+    if (!cuts.length) continue;
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const [s, e] of cuts) {
+      if (s > at) frag.append(node.data.slice(at, s));
+      frag.append(h("mark", {}, node.data.slice(s, e)));
+      at = e;
+    }
+    if (at < node.data.length) frag.append(node.data.slice(at));
+    node.replaceWith(frag);
+  }
+}
+
+function codeCell(row, hl, lang, ranges) {
+  const td = h("td", { class: "code" });
+  if (!row) return (td.classList.add("blank"), td);
+  let html = null;
+  if (hl && lang && row.t !== "note" && row.text.length <= 2000 && window.DOMPurify) {
+    try {
+      html = window.DOMPurify.sanitize(hl.highlight(row.text, { language: lang, ignoreIllegals: true }).value, HL_CLEAN);
+    } catch {}
+  }
+  if (html != null) td.innerHTML = html;
+  else td.textContent = row.text;
+  markRanges(td, ranges);
+  return td;
+}
+
+/** Each del paired with the add at the same place in its change block: Map row -> ranges. */
+function pairWords(rows) {
+  const marks = new Map();
+  for (let i = 0; i < rows.length; ) {
+    if (rows[i].t !== "del" && rows[i].t !== "add") {
+      i++;
+      continue;
+    }
+    const dels = [];
+    const adds = [];
+    while (i < rows.length && rows[i].t === "del") dels.push(rows[i++]);
+    while (i < rows.length && rows[i].t === "add") adds.push(rows[i++]);
+    for (let k = 0; k < Math.min(dels.length, adds.length); k++) {
+      const r = wordRanges(dels[k].text, adds[k].text);
+      if (r) (marks.set(dels[k], r[0]), marks.set(adds[k], r[1]));
+    }
+  }
+  return marks;
+}
+
+function hunkRows(hunk, split, hl, lang) {
+  const marks = pairWords(hunk.rows);
+  const out = [h("tr", { class: "hunk" }, h("td", { colspan: split ? 4 : 3 }, hunk.head))];
+  const ln = (n) => h("td", { class: "ln" }, n ?? "");
+  if (!split) {
+    for (const r of hunk.rows) out.push(h("tr", { class: r.t }, ln(r.a), ln(r.b), codeCell(r, hl, lang, marks.get(r))));
+    return out;
+  }
+  const rows = hunk.rows;
+  for (let i = 0; i < rows.length; ) {
+    const r = rows[i];
+    if (r.t === "ctx" || r.t === "note") {
+      out.push(h("tr", { class: r.t }, ln(r.a), codeCell(r, hl, lang), ln(r.b), codeCell(r, hl, lang)));
+      i++;
+      continue;
+    }
+    const dels = [];
+    const adds = [];
+    while (i < rows.length && rows[i].t === "del") dels.push(rows[i++]);
+    while (i < rows.length && rows[i].t === "add") adds.push(rows[i++]);
+    for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
+      const d = dels[k];
+      const a = adds[k];
+      out.push(h("tr", { class: "pair" }, ln(d?.a), codeCell(d, hl, lang, marks.get(d)), ln(a?.b), codeCell(a, hl, lang, marks.get(a))));
+      const tr = out[out.length - 1];
+      if (d) (tr.children[0].classList.add("del"), tr.children[1].classList.add("del"));
+      if (a) (tr.children[2].classList.add("add"), tr.children[3].classList.add("add"));
+    }
+  }
+  return out;
+}
+
+const BIG_FILE = 1500;
+const diffViews = new Set();
+const diffMode = () => (localStorage.getItem("canvas:diff-view") === "split" ? "split" : "unified");
+const counts = (adds, dels) => [h("span", { class: "n-add" }, `+${adds}`), " ", h("span", { class: "n-del" }, `\u2212${dels}`)];
+const STATUS = { added: "new", deleted: "deleted", renamed: "renamed" };
+
+function fileBlock(f, split, hl, showHead) {
+  const lang = langFor(f.path);
+  const lines = f.hunks.reduce((n, x) => n + x.rows.length, 0);
+  const body = h("div", { class: "dv-body" });
+  const fill = () => {
+    if (f.binary) return body.replaceChildren(h("div", { class: "empty" }, "Binary file changed."));
+    if (!f.hunks.length) return body.replaceChildren(h("div", { class: "empty" }, f.status === "renamed" ? "Renamed without changes." : "No content changes."));
+    body.replaceChildren(h("table", { class: `diff${split ? " split" : ""}` }, split ? h("colgroup", {}, h("col", { class: "c-ln" }), h("col"), h("col", { class: "c-ln" }), h("col")) : null, h("tbody", {}, f.hunks.flatMap((x) => hunkRows(x, split, hl, lang)))));
+  };
+  if (lines > BIG_FILE && !f.loaded) body.append(h("button", { class: "btn dv-load", type: "button", onclick: () => ((f.loaded = true), fill()) }, `Show this diff (${lines} lines)`));
+  else fill();
+  if (!showHead) return h("section", { class: "dv-file bare" }, body);
+  const block = h("section", { class: `dv-file${f.shut ? " shut" : ""}` });
+  const head = h(
+    "header",
+    { title: f.shut ? "Expand" : "Collapse" },
+    h("button", { class: "chev", type: "button", "aria-label": "Toggle file" }),
+    h("span", { class: "dv-path" }, f.status === "renamed" && f.from !== f.to ? `${f.from} \u2192 ${f.to}` : f.path),
+    STATUS[f.status] ? h("span", { class: `dv-status ${f.status}` }, STATUS[f.status]) : null,
+    h("span", { class: "dv-n" }, f.binary ? "binary" : counts(f.adds, f.dels)),
+  );
+  head.addEventListener("click", () => {
+    f.shut = !f.shut;
+    block.classList.toggle("shut", f.shut);
+  });
+  block.append(head, body);
+  return block;
+}
+
+/** The whole patch: a summary bar, a file list when there are several, then one block per file. */
+async function renderDiffView(text, { title = "Diff", href = "", inModal = false } = {}) {
+  const files = parsePatch(text);
+  if (!files.length) return h("div", { class: "empty" }, text.trim() ? "No file changes in this patch." : "No net change since the session first touched this file.");
+  const hl = files.some((f) => langFor(f.path)) ? await loadHighlight() : null;
+  const root = h("div", { class: `diffview${inModal ? " in-modal" : ""}` });
+  const draw = () => {
+    const split = diffMode() === "split";
+    const adds = files.reduce((n, f) => n + f.adds, 0);
+    const dels = files.reduce((n, f) => n + f.dels, 0);
+    const mode = (m, label) => h("button", { class: `seg${(m === "split") === split ? " on" : ""}`, type: "button", onclick: () => setDiffMode(m) }, label);
+    const blocks = files.map((f) => fileBlock(f, split, hl, !(inModal && files.length === 1)));
+    const bar = h(
+      "div",
+      { class: "dv-bar" },
+      h("span", { class: "dv-sum" }, `${files.length} file${files.length === 1 ? "" : "s"} changed `, counts(adds, dels)),
+      h(
+        "span",
+        { class: "tools" },
+        h("span", { class: "segs" }, mode("unified", "Unified"), mode("split", "Split")),
+        inModal ? null : h("button", { class: "btn", type: "button", title: "Open large", onclick: () => showModal([text], 0, () => ({ kind: "diff", title, href, body: renderDiffView(text, { title, href, inModal: true }) })) }, "Expand \u2922"),
+      ),
+    );
+    const list =
+      files.length > 1
+        ? h(
+            "ol",
+            { class: "dv-files" },
+            files.map((f, i) =>
+              h(
+                "li",
+                {},
+                h(
+                  "a",
+                  {
+                    href: "#",
+                    onclick: (e) => {
+                      e.preventDefault();
+                      if (f.shut) blocks[i].querySelector("header").click();
+                      blocks[i].scrollIntoView({ behavior: "smooth", block: "start" });
+                    },
+                  },
+                  f.path,
+                ),
+                STATUS[f.status] ? h("span", { class: `dv-status ${f.status}` }, STATUS[f.status]) : null,
+                h("span", { class: "dv-n" }, f.binary ? "binary" : counts(f.adds, f.dels)),
+              ),
+            ),
+          )
+        : null;
+    root.replaceChildren(bar, list ?? "", ...blocks);
+  };
+  draw();
+  root.redraw = draw;
+  diffViews.add(root);
+  return root;
+}
+
+function setDiffMode(m) {
+  localStorage.setItem("canvas:diff-view", m);
+  for (const v of diffViews) v.isConnected ? v.redraw() : diffViews.delete(v);
 }
 
 // ── modal: screenshots and diffs open over the page ──────────────────────────
@@ -699,30 +1045,8 @@ const diffItem = (a) => ({
   href: a.href,
   body: fetch(a.href, { cache: "no-store" })
     .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then(renderDiff),
+    .then((t) => renderDiffView(t, { title: a.textContent.trim(), href: a.href, inModal: true })),
 });
-
-/** A unified diff as a table with old and new line numbers. */
-function renderDiff(text) {
-  if (!text.trim()) return h("div", { class: "empty" }, "No net change since the session first touched this file.");
-  const rows = [];
-  let a = 0;
-  let b = 0;
-  const row = (cls, l, r, code) => rows.push(h("tr", { class: cls }, h("td", { class: "ln" }, l), h("td", { class: "ln" }, r), h("td", { class: "code" }, code)));
-  for (const line of text.split("\n")) {
-    const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (m) {
-      a = Number(m[1]);
-      b = Number(m[2]);
-      row("hunk", "", "", line);
-    } else if (line.startsWith("--- ") || line.startsWith("+++ ")) continue;
-    else if (line.startsWith("+")) row("add", "", b++, line.slice(1));
-    else if (line.startsWith("-")) row("del", a++, "", line.slice(1));
-    else if (line.startsWith(" ")) row("ctx", a++, b++, line.slice(1));
-    else if (line.startsWith("\\")) row("note", "", "", line.slice(2));
-  }
-  return h("table", { class: "diff" }, h("tbody", {}, rows));
-}
 
 document.addEventListener("click", (e) => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

@@ -725,8 +725,16 @@ updates through server-sent events with no reload.
   Each run uses one Copilot premium request; tool-free short replies skip it.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
-  its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`, and
-  `finding` (one append-only line in the findings log). `/html-plan` now puts
+  its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
+  `diff`, and `finding` (one append-only line in the findings log). A `diff`
+  takes a unified patch in `body` or `path`, or `ref` (default `HEAD`; a
+  commit, a `a..b` range, or `staged`), `paths` and `repo`, and the extension
+  runs `git diff` itself. Untracked files named in `paths` show as new, and
+  secret-looking files are left out and named in the result. The page shows
+  a file list with +/− counts, then one collapsible block per file:
+  unified or split (the toggle is remembered per browser), coloured by
+  extension, with the changed words marked in paired −/+ lines, and Expand
+  opens it in the modal. `/html-plan` now puts
   its packed page here instead of opening Safari. The tool's guidelines tell
   the main agent to use it without being asked: a finding for each confirmed
   root cause, gotcha or decision, and a section for tables, diagrams and
@@ -742,7 +750,8 @@ updates through server-sent events with no reload.
   the extension copies what the file held (`base-<id>`, never served). After
   each turn, `git diff --no-index` writes `diff-<id>.patch`, the change since
   then. Files changed links each path to its patch with +/− counts. Clicking a
-  path opens a diff viewer, and clicking a screenshot opens it large. Both use
+  path opens the same diff view in the modal, and clicking a screenshot opens
+  it large. Both use
   one modal: ←/→ step through the card's items, Esc closes, and "Open in new
   tab" (or a ⌘-click) opens the raw file. Code blocks with a named language
   are syntax-highlighted (highlight.js, loaded on first use; no guessing, up to

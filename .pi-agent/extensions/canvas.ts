@@ -25,9 +25,9 @@
 
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -291,6 +291,58 @@ export function makePatch(basePath: string | null, cur: string, label: string): 
   if (patch.length > MAX_PATCH) patch = `${patch.slice(0, MAX_PATCH)}\n\\ diff cut at ${MAX_PATCH / 1024} KB\n`;
   return { patch, adds, dels };
 }
+
+// ── the diff kind ────────────────────────────────────────────────────────────
+
+/** A plain ref, "staged", or a range; never starts with "-", so never reads as an option. */
+const DIFF_REF = /^(staged|[A-Za-z0-9_][A-Za-z0-9._/@^~{}:-]*(\.\.\.?[A-Za-z0-9_][A-Za-z0-9._/@^~{}:-]*)?)$/;
+
+/** Drop the files of a git patch whose paths look like they hold secrets. */
+export function dropSensitive(patch: string): { patch: string; dropped: string[] } {
+  const dropped: string[] = [];
+  const parts = patch.split(/^(?=diff --git )/m).filter((part) => {
+    const m = part.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!m || !(isSensitivePath(m[1] ?? "") || isSensitivePath(m[2] ?? ""))) return true;
+    dropped.push(m[2] ?? "");
+    return false;
+  });
+  return { patch: parts.join(""), dropped };
+}
+
+/**
+ * git diff in repo against ref (HEAD by default; "staged" for the index; a
+ * commit or a range), limited to paths. A path git doesn't track shows as a new
+ * file. Secret-looking files are dropped and listed.
+ */
+export function gitDiff(repo: string, ref = "HEAD", paths: string[] = []): { patch: string; dropped: string[] } {
+  if (!DIFF_REF.test(ref)) throw new Error(`ref "${ref}" is not a plain ref, a range or "staged"`);
+  const top = spawnSync("git", ["-C", repo, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (top.status !== 0) throw new Error(`${repo} is not inside a git repository`);
+  const root = top.stdout.trim();
+  const abs = paths.map((p) => (isAbsolute(p) ? p : resolve(repo, p)));
+  const opts = { encoding: "utf8" as const, maxBuffer: 64 * 1024 * 1024 };
+  const git = ["-c", "core.quotepath=off", "-C", root];
+  const r = spawnSync("git", [...git, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", ...(ref === "staged" ? ["--cached"] : [ref]), "--", ...abs], opts);
+  if (r.status !== 0) throw new Error((r.stderr || "git diff failed").trim());
+  let patch = r.stdout;
+  if (ref !== "staged" && !ref.includes("..")) {
+    for (const p of abs) {
+      try {
+        if (!statSync(p).isFile()) continue;
+      } catch {
+        continue;
+      }
+      if (spawnSync("git", [...git, "ls-files", "--error-unmatch", "--", p]).status === 0) continue;
+      // relative to the real path: git's toplevel has symlinks resolved (/var → /private/var).
+      const n = spawnSync("git", [...git, "diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", relative(root, realpathSync(p))], opts);
+      if (n.status === 1) patch += n.stdout;
+    }
+  }
+  return dropSensitive(patch);
+}
+
+/** Whether text reads as a unified diff at all. */
+export const looksLikeDiff = (text: string) => /^(@@ -\d|diff --git |Binary files )/m.test(text);
 
 export function filesMarkdown(
   files: Record<string, FileStat>,
@@ -591,7 +643,7 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "diff", "finding"] as const;
 
 export default function canvas(pi: ExtensionAPI) {
   if (process.env.PI_CANVAS === "0" || process.env.PI_SUBAGENT_CHILD === "1") return;
@@ -906,7 +958,8 @@ export default function canvas(pi: ExtensionAPI) {
       "Show rich output on this session's live web page (the canvas) that the user keeps open beside the terminal. " +
       "Writes one section per call; the same id replaces it. Kinds: markdown (GFM tables, code, ```mermaid fences), " +
       "html (a self-contained page or fragment, shown in a sandboxed frame), html-plan (a packed /html-plan file via path), " +
-      "image (png/jpg/gif/webp/svg via path), mermaid (diagram source), finding (appends one durable line to the findings log; id not needed). " +
+      "image (png/jpg/gif/webp/svg via path), mermaid (diagram source), " +
+      "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
       "Use remove: true to delete a section. Returns the page URL; it does not open a browser.",
     promptSnippet: "canvas: put tables, diagrams, plans, screenshots and findings on this session's live web page",
     promptGuidelines: [
@@ -923,7 +976,10 @@ export default function canvas(pi: ExtensionAPI) {
       title: Type.Optional(Type.String({ description: "Section heading" })),
       kind: Type.Union(KINDS.map((k) => Type.Literal(k)), { description: "Section kind" }),
       body: Type.Optional(Type.String({ description: "Markdown, HTML, mermaid source or finding text" })),
-      path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, or image. Relative to the cwd." })),
+      path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, image, or a patch for diff. Relative to the cwd." })),
+      ref: Type.Optional(Type.String({ description: 'diff without body/path: what git compares the working tree to. Default HEAD; a commit; a range like main..branch; or "staged".' })),
+      paths: Type.Optional(Type.Array(Type.String(), { description: "diff without body/path: only these files (untracked ones show as new). Default: every change." })),
+      repo: Type.Optional(Type.String({ description: "diff without body/path: the repository directory. Default the cwd." })),
       remove: Type.Optional(Type.Boolean({ description: "Delete the section with this id" })),
     }),
     executionMode: "sequential",
@@ -955,7 +1011,29 @@ export default function canvas(pi: ExtensionAPI) {
         }
 
         let file: string;
-        if (params.path) {
+        let note = "";
+        if (params.kind === "diff") {
+          let patch: string;
+          if (params.path || params.body) {
+            if (params.ref || params.paths?.length) throw new Error("diff takes body or path, or ref/paths, not both");
+            if (params.path) {
+              const src = isAbsolute(params.path) ? params.path : resolve(ctx.cwd, params.path);
+              if (statSync(src).size > MAX_BODY) throw new Error(`${params.path} is over 2 MB`);
+              patch = readFileSync(src, "utf8");
+            } else patch = String(params.body);
+          } else {
+            const repo = params.repo ? (isAbsolute(params.repo) ? params.repo : resolve(ctx.cwd, params.repo)) : ctx.cwd;
+            const got = gitDiff(repo, params.ref || "HEAD", params.paths ?? []);
+            patch = got.patch;
+            if (got.dropped.length) note = ` Left out as possibly secret: ${got.dropped.join(", ")}.`;
+            if (!patch.trim()) throw new Error(`git diff ${params.ref || "HEAD"} found no changes${params.paths?.length ? " in those paths" : ""}.${note}`);
+          }
+          if (!looksLikeDiff(patch)) throw new Error("that isn't a unified diff (no @@ hunks)");
+          if (Buffer.byteLength(patch) > MAX_BODY) throw new Error("the diff is over 2 MB; narrow it with paths");
+          file = `${id}.patch`;
+          if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
+          writeAtomic(join(d, file), patch);
+        } else if (params.path) {
           const src = isAbsolute(params.path) ? params.path : resolve(ctx.cwd, params.path);
           const st = statSync(src);
           if (!st.isFile()) throw new Error(`${params.path} is not a file`);
@@ -988,7 +1066,7 @@ export default function canvas(pi: ExtensionAPI) {
         list = upsertSection(list, sec);
         writeAtomic(listPath, JSON.stringify(list, null, 2));
         return {
-          content: [{ type: "text" as const, text: `Canvas: ${old ? "replaced" : "added"} "${id}" (${params.kind}). Page: ${url}#sec-${id}` }],
+          content: [{ type: "text" as const, text: `Canvas: ${old ? "replaced" : "added"} "${id}" (${params.kind}). Page: ${url}#sec-${id}${note}` }],
           details: { id, kind: params.kind, url },
         };
       });
