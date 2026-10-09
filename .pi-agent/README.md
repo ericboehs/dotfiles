@@ -753,8 +753,13 @@ updates through server-sent events with no reload.
   changed shows +/− counts, and clicking a path opens it in the modal with
   Diff and File tabs; markdown files get Diff, Preview (rendered, frontmatter
   as a code block) and Source. The tab you pick holds as you step through files.
-  Clicking a screenshot opens it large. Both use one modal: ←/→ step through the card's items, Esc closes, and "Open in new
-  tab" (or a ⌘-click) opens the raw file. Code blocks with a named language
+  Clicking a screenshot opens it large. Both use one modal: ←/→ step through the card's items, Esc closes, and ↗
+  (or a ⌘-click) opens the raw file. **Clippy** (on each section and in the
+  modal) puts the file itself on the clipboard via `clippy <file>`, to paste
+  into Slack, Mail or Finder: a changed file's real path, a diff as
+  `<name>.patch`, else the section's file. It is the daemon's one write
+  route (`POST /s/<id>/clip`), refused without the page's header or from
+  another origin. Code blocks with a named language
   are syntax-highlighted (highlight.js, loaded on first use; no guessing, up to
   16 KB a block, output cut down to `<span class>`). No diff is kept for binary files,
   files over 1 MB, or secret-looking names (`.env`, `*.pem`, `~/.ssh/…`,

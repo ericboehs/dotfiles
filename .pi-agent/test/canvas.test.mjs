@@ -15,7 +15,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { ActivityTracker, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
+import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -438,6 +438,45 @@ function get(port, path, host = `127.0.0.1:${port}`) {
   });
 }
 
+function post(port, path, body, headers) {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, path, method: "POST", headers: { host: `127.0.0.1:${port}`, "content-type": "application/json", ...headers } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode }));
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+test("clipTarget clips the real file for a copy, a named copy for a diff, else the session file", () => {
+  const { root, mk } = tempRoot();
+  try {
+    const real = join(root, "work", "page.mjs");
+    mkdirSync(join(root, "work"));
+    writeFileSync(real, "x");
+    mk("s1", { pid: process.pid }, {
+      "auto-copies.json": JSON.stringify({ [real]: { file: "cur-aaaaaaaaaaaa.txt" }, "/gone/old.rb": { file: "cur-bbbbbbbbbbbb.txt" } }),
+      "auto-diffs.json": JSON.stringify({ [real]: { patch: "diff-aaaaaaaaaaaa.patch" } }),
+      "cur-aaaaaaaaaaaa.txt": "x",
+      "cur-bbbbbbbbbbbb.txt": "y",
+      "diff-aaaaaaaaaaaa.patch": "p",
+      "plan.md": "# p",
+      "base-aaaaaaaaaaaa": "x",
+    });
+    const dir = join(root, "s1");
+    assert.deepEqual(clipTarget(root, "s1", "cur-aaaaaaaaaaaa.txt"), { path: real });
+    assert.deepEqual(clipTarget(root, "s1", "cur-bbbbbbbbbbbb.txt"), { copy: [join(dir, "cur-bbbbbbbbbbbb.txt"), "old.rb"] }, "gone: the copy, under its name");
+    assert.deepEqual(clipTarget(root, "s1", "diff-aaaaaaaaaaaa.patch"), { copy: [join(dir, "diff-aaaaaaaaaaaa.patch"), "page.mjs.patch"] });
+    assert.deepEqual(clipTarget(root, "s1", "plan.md"), { path: join(dir, "plan.md") });
+    assert.equal(clipTarget(root, "s1", "base-aaaaaaaaaaaa"), null);
+    assert.equal(clipTarget(root, "s1", "nope.md"), null);
+    assert.equal(clipTarget(root, "../s1", "plan.md"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("daemon serves pages, state and sections, and refuses bad hosts and paths", async () => {
   const { root, mk } = tempRoot();
   const port = 18790 + Math.floor(Math.random() * 1000);
@@ -480,6 +519,13 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.match(copy.headers["content-type"], /^text\/plain/, "file copies never render as html");
     assert.equal((await get(port, "/s/s1/f/..%2Fs1%2Fmeta.json")).status, 404);
     assert.equal((await get(port, "/s/..%2F..%2Fetc/f/a.html")).status, 404);
+    // Clip: only from the page itself, only for the session's files. (No
+    // request here gets through to clippy, so the clipboard stays untouched.)
+    assert.equal((await post(port, "/s/s1/clip", { file: "a.html" }, {})).status, 403, "needs the page's header");
+    assert.equal((await post(port, "/s/s1/clip", { file: "a.html" }, { "x-canvas-clip": "1", origin: "https://evil.example" })).status, 403, "foreign origin");
+    assert.equal((await post(port, "/s/s1/clip", { file: "base-0123abcd" }, { "x-canvas-clip": "1" })).status, 404, "bases are never clipped");
+    assert.equal((await post(port, "/s/s1/clip", { file: "../s1/meta.json" }, { "x-canvas-clip": "1" })).status, 404);
+    assert.equal((await post(port, "/s/s1/f/a.html", {}, { "x-canvas-clip": "1" })).status, 405, "everything else stays read-only");
     const list = JSON.parse((await get(port, "/api/sessions")).body);
     assert.equal(list[0].id, "s1");
   } finally {

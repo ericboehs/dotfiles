@@ -12,10 +12,11 @@
 // hostname that resolves to 127.0.0.1. Other local processes stay trusted.
 
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, watch, writeFileSync, renameSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, watch, writeFileSync, renameSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -273,9 +274,90 @@ function publish(key, data) {
   for (const res of clients.get(key) || []) res.write(`event: changed\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+// ── clip: put a file itself on the clipboard with clippy ─────────────────────
+// The one thing the page can make the daemon do. A file copy keeps its real
+// name and path, so it pastes into Slack, Mail or Finder as the file.
+
+/** A name that is safe as the last part of a path: no slashes, no leading dot. */
+const safeName = (s) => String(s).replace(/[/\\\0]/g, "_").replace(/^\.+/, "") || "file";
+
+/**
+ * What clipping a session file puts on the clipboard: the file the agent
+ * changed for a cur- copy (while it still exists), a copy named after it for
+ * a diff, else the session file itself. { path } or { copy: [from, name] }, or
+ * null when the name is not a file of that session.
+ */
+export function clipTarget(root, id, name) {
+  if (!SESSION_ID.test(id || "") || !FILE_NAME.test(name || "")) return null;
+  const dir = join(root, id);
+  const file = join(dir, name);
+  if (!file.startsWith(root + sep) || !existsSync(file)) return null;
+  if (name.startsWith("cur-")) {
+    const copies = readJson(join(dir, "auto-copies.json"), {});
+    const abs = Object.keys(copies).find((k) => copies[k]?.file === name);
+    try {
+      if (abs && statSync(abs).isFile()) return { path: abs };
+    } catch {}
+    return { copy: [file, abs ? safeName(basename(abs)) : name] };
+  }
+  if (name.startsWith("diff-")) {
+    const diffs = readJson(join(dir, "auto-diffs.json"), {});
+    const abs = Object.keys(diffs).find((k) => diffs[k]?.patch === name);
+    if (abs) return { copy: [file, `${safeName(basename(abs))}.patch`] };
+  }
+  return { path: file };
+}
+
+const CLIPPY = ["clippy", "/opt/homebrew/bin/clippy", "/usr/local/bin/clippy"];
+
+function runClippy(path, i = 0) {
+  return new Promise((ok, fail) =>
+    execFile(CLIPPY[i], [path], { timeout: 10_000 }, (e, _out, err) => {
+      if (!e) return ok();
+      if (e.code === "ENOENT" && i + 1 < CLIPPY.length) return runClippy(path, i + 1).then(ok, fail);
+      fail(e.code === "ENOENT" ? Object.assign(new Error("clippy is not installed"), { status: 501 }) : new Error(String(err || e.message).trim()));
+    }),
+  );
+}
+
+function clip(req, res, id) {
+  // Only this page may ask: a cross-site form or fetch can't send this header
+  // without a preflight the daemon never answers, and its Origin won't match.
+  const origin = req.headers.origin;
+  if (req.headers["x-canvas-clip"] !== "1" || (origin && origin !== `http://${req.headers.host}`)) return send(res, 403, "forbidden");
+  let body = "";
+  req.on("data", (c) => {
+    body += c;
+    if (body.length > 1024) req.destroy();
+  });
+  req.on("end", () => {
+    let name = "";
+    try {
+      name = JSON.parse(body).file;
+    } catch {}
+    const target = clipTarget(ROOT, id, name);
+    if (!target) return send(res, 404, "not found");
+    let path = target.path;
+    if (target.copy) {
+      // A fresh folder each time: the clipboard keeps pointing at the last one.
+      const dir = join(tmpdir(), "pi-canvas-clip", String(Date.now()));
+      rmSync(dirname(dir), { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      path = join(dir, target.copy[1]);
+      copyFileSync(target.copy[0], path);
+    }
+    runClippy(path).then(
+      () => json(res, { ok: true, name: basename(path) }),
+      (e) => send(res, e.status || 500, e.message),
+    );
+  });
+}
+
 function handler(req, res) {
   if (!loopback(req.socket.remoteAddress)) return send(res, 403, "forbidden");
   if (!allowedHost(req.headers.host)) return send(res, 421, "misdirected");
+  const route = new URL(req.url || "/", `http://127.0.0.1:${PORT}`).pathname.split("/").filter(Boolean);
+  if (req.method === "POST" && route.length === 3 && route[0] === "s" && route[2] === "clip" && SESSION_ID.test(route[1])) return clip(req, res, route[1]);
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "read only");
 
   const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);

@@ -319,6 +319,43 @@ function copyButton(getText, label = "Copy") {
   return b;
 }
 
+/** /s/<id>/f/<name> as [id, name], or null. */
+function sessionFile(href) {
+  const m = new URL(href, location.href).pathname.match(/^\/s\/([^/]+)\/f\/([^/]+)$/);
+  return m ? [decodeURIComponent(m[1]), decodeURIComponent(m[2])] : null;
+}
+
+/**
+ * Put the file itself on the clipboard (the daemon runs clippy), to paste into
+ * Slack, Mail or Finder as a file. getHref names the session file; for a
+ * changed file's copy that means the real file.
+ */
+function clipButton(getHref, label = "Clippy") {
+  const b = h("button", { class: "btn clip", type: "button", title: "Copy the file itself (clippy), to paste as a file" }, label);
+  let timer;
+  b.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearTimeout(timer);
+    try {
+      const at = sessionFile(getHref());
+      if (!at) throw new Error("not a session file");
+      const r = await fetch(`/s/${encodeURIComponent(at[0])}/clip`, { method: "POST", headers: { "Content-Type": "application/json", "X-Canvas-Clip": "1" }, body: JSON.stringify({ file: at[1] }) });
+      if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+      const { name } = await r.json();
+      b.textContent = "Copied file";
+      b.title = `On the clipboard: ${name}`;
+      b.className = "btn clip ok";
+    } catch (err) {
+      b.textContent = "Failed";
+      b.title = String(err.message || err);
+      b.className = "btn clip bad";
+    }
+    timer = setTimeout(() => ((b.textContent = label), (b.className = "btn clip")), 1600);
+  });
+  return b;
+}
+
 // ── renderers ────────────────────────────────────────────────────────────────
 
 let mermaidReady;
@@ -659,6 +696,7 @@ function sectionCard(id, sec) {
     agoEl(sec.at),
   );
   if (sec.kind === "markdown" || sec.kind === "mermaid" || sec.kind === "diff") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
+  if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
@@ -1005,6 +1043,7 @@ function showModal(items, i, render) {
     d.className = `modal ${kind}`;
     const step = (n, label, tip) => h("button", { class: "btn", type: "button", title: tip, onclick: () => show(i + n) }, label);
     const box = h("div", { class: "mbody" }, h("div", { class: "empty" }, "Loading…"));
+    const raw = h("a", { class: "btn open", href, target: "_blank", rel: "noopener", title: "Open in a new tab" }, "↗");
     d.replaceChildren(
       h(
         "header",
@@ -1016,7 +1055,8 @@ function showModal(items, i, render) {
           { class: "tools" },
           extra ?? null,
           items.length > 1 ? [step(-1, "←", "Previous (←)"), h("span", { class: "pos" }, `${i + 1} / ${items.length}`), step(1, "→", "Next (→)")] : null,
-          h("a", { class: "btn open", href, target: "_blank", rel: "noopener" }, "Open in new tab ↗"),
+          clipButton(() => raw.href),
+          raw,
           h("button", { class: "btn", type: "button", title: "Close (Esc)", onclick: () => d.close() }, "✕"),
         ),
       ),
@@ -1140,6 +1180,8 @@ function fileItem(a) {
 document.addEventListener("click", (e) => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const a = e.target.closest?.("a[href]");
+  // The modal's own links (↗, links in a preview) open normally.
+  if (a?.closest("dialog")) return;
   const gallery = a?.closest(".gallery");
   if (gallery) {
     e.preventDefault();
