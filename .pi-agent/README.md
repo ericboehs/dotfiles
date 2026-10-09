@@ -749,10 +749,10 @@ updates through server-sent events with no reload.
 - **Diffs and lightbox.** Before the agent's first `edit` or `write` to a file,
   the extension copies what the file held (`base-<id>`, never served). After
   each turn, `git diff --no-index` writes `diff-<id>.patch`, the change since
-  then. Files changed links each path to its patch with +/− counts. Clicking a
-  path opens the same diff view in the modal, and clicking a screenshot opens
-  it large. Both use
-  one modal: ←/→ step through the card's items, Esc closes, and "Open in new
+  then, and `cur-<id>.txt` copies the file as it is now (same skips). Files
+  changed shows +/− counts, and clicking a path opens it in the modal with
+  Diff and File tabs; the tab you pick holds as you step through files.
+  Clicking a screenshot opens it large. Both use one modal: ←/→ step through the card's items, Esc closes, and "Open in new
   tab" (or a ⌘-click) opens the raw file. Code blocks with a named language
   are syntax-highlighted (highlight.js, loaded on first use; no guessing, up to
   16 KB a block, output cut down to `<span class>`). No diff is kept for binary files,

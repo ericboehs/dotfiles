@@ -7,14 +7,14 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, diffSkipReason, filesMarkdown, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -206,6 +206,43 @@ test("filesMarkdown links a diffed path to its patch and notes skipped ones", ()
   assert.match(md, /\| \[`a\.ts`\]\(\/s\/s%201\/f\/diff-1\.patch\) \| 1 edit · \+3\u00a0−1 \|/);
   assert.match(md, /\| `\.env` \| 1 edit · no diff \(sensitive\) \|/);
   assert.match(md, /\| `c\.ts` \| 1 edit \|/, "no patch yet, no link");
+
+  const copies = { "/repo/a.ts": { file: "cur-1.txt", mtimeMs: 1, size: 1 }, "/repo/c.ts": { file: "cur-3.txt", mtimeMs: 1, size: 1 }, "/repo/.env": { skip: "sensitive" } };
+  const both = filesMarkdown(files, "/repo", 40, { diffs, copies, sessionId: "s1" });
+  assert.match(both, /\[`a\.ts`\]\(\/s\/s1\/f\/cur-1\.txt#diff\)/, "a copy with a diff");
+  assert.match(both, /\[`c\.ts`\]\(\/s\/s1\/f\/cur-3\.txt\)/, "a copy alone");
+  assert.match(both, /\| `\.env` \|/);
+});
+
+test("syncCopies copies changed files, refreshes on change and drops unfit or deleted ones", () => {
+  const dir = mkdtempSync(join(tmpdir(), "canvas-copies-"));
+  try {
+    const d = join(dir, "sess");
+    mkdirSync(d);
+    const a = join(dir, "a.rb");
+    const env = join(dir, ".env");
+    const bin = join(dir, "x.bin");
+    writeFileSync(a, "one\n");
+    writeFileSync(env, "KEY=1\n");
+    writeFileSync(bin, Buffer.from([1, 0, 2]));
+    let c = syncCopies(d, [a, env, bin], {});
+    const file = `cur-${fileId(a)}.txt`;
+    assert.deepEqual(Object.keys(c[a]), ["file", "mtimeMs", "size"]);
+    assert.equal(c[a].file, file);
+    assert.equal(readFileSync(join(d, file), "utf8"), "one\n");
+    assert.deepEqual(c[env], { skip: "sensitive" });
+    assert.deepEqual(c[bin], { skip: "binary" });
+    writeFileSync(a, "one\ntwo\n");
+    utimesSync(a, new Date(), new Date(Date.now() + 5000));
+    c = syncCopies(d, [a], c);
+    assert.equal(readFileSync(join(d, file), "utf8"), "one\ntwo\n");
+    rmSync(a);
+    c = syncCopies(d, [a], c);
+    assert.deepEqual(c[a], { skip: "deleted" });
+    assert.ok(!existsSync(join(d, file)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("shotsMarkdown links each copied image and escapes names", () => {
@@ -408,6 +445,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     "sections.json": JSON.stringify([{ id: "a", kind: "html", file: "a.html", order: 1, at: "t" }]),
     "a.html": "<p>hi</p>",
     "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
+    "cur-0123abcd.txt": "<script>alert(1)</script>",
     "base-0123abcd": "secret original",
   });
   // Run it through a symlinked directory, the way pi reaches it via
@@ -437,6 +475,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     const patch = await get(port, "/s/s1/f/diff-0123abcd.patch");
     assert.equal(patch.headers["content-type"], "text/plain; charset=utf-8");
     assert.equal((await get(port, "/s/s1/f/base-0123abcd")).status, 404, "diff bases are never served");
+    const copy = await get(port, "/s/s1/f/cur-0123abcd.txt");
+    assert.equal(copy.status, 200);
+    assert.match(copy.headers["content-type"], /^text\/plain/, "file copies never render as html");
     assert.equal((await get(port, "/s/s1/f/..%2Fs1%2Fmeta.json")).status, 404);
     assert.equal((await get(port, "/s/..%2F..%2Fetc/f/a.html")).status, 404);
     const list = JSON.parse((await get(port, "/api/sessions")).body);

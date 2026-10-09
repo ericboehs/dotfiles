@@ -341,6 +341,44 @@ export function gitDiff(repo: string, ref = "HEAD", paths: string[] = []): { pat
   return dropSensitive(patch);
 }
 
+/** A changed file's name in the session folder: the first 12 hex of sha1(path). */
+export const fileId = (abs: string) => createHash("sha1").update(abs).digest("hex").slice(0, 12);
+
+/** A copy of a changed file as it is now, for the page's File tab, or why there is none. */
+export type CopyEntry = { file: string; mtimeMs: number; size: number } | { skip: string };
+
+/**
+ * Bring the copies in d up to date with the files at paths: copy any that are
+ * new or changed since last time, drop any now deleted or unfit (sensitive,
+ * binary, over 1 MB, not a file).
+ */
+export function syncCopies(d: string, paths: string[], prev: Record<string, CopyEntry>): Record<string, CopyEntry> {
+  const next = { ...prev };
+  for (const abs of paths) {
+    const file = `cur-${fileId(abs)}.txt`;
+    let st;
+    try {
+      st = statSync(abs);
+    } catch {}
+    const skip = st ? diffSkipReason(abs) : "deleted";
+    if (skip || !st) {
+      rmSync(join(d, file), { force: true });
+      next[abs] = { skip: skip || "deleted" };
+      continue;
+    }
+    const was = prev[abs];
+    if (was && "file" in was && was.mtimeMs === st.mtimeMs && was.size === st.size && existsSync(join(d, file))) continue;
+    try {
+      copyFileSync(abs, join(d, `${file}.tmp`));
+      renameSync(join(d, `${file}.tmp`), join(d, file));
+      next[abs] = { file, mtimeMs: st.mtimeMs, size: st.size };
+    } catch {
+      next[abs] = { skip: "unreadable" };
+    }
+  }
+  return next;
+}
+
 /** Whether text reads as a unified diff at all. */
 export const looksLikeDiff = (text: string) => /^(@@ -\d|diff --git |Binary files )/m.test(text);
 
@@ -348,15 +386,20 @@ export function filesMarkdown(
   files: Record<string, FileStat>,
   cwd: string,
   max = 40,
-  links: { diffs: Record<string, DiffEntry>; sessionId: string } = { diffs: {}, sessionId: "" },
+  links: { diffs: Record<string, DiffEntry>; copies?: Record<string, CopyEntry>; sessionId: string } = { diffs: {}, sessionId: "" },
 ): string {
   const rows = Object.entries(files).sort((a, b) => b[1].at.localeCompare(a[1].at));
   const what = (f: FileStat) => [f.writes ? (f.writes === 1 ? "written" : `written ${f.writes}×`) : "", f.edits ? `${f.edits} edit${f.edits === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
   const cell = (abs: string) => {
     const code = `\`${displayPath(abs, cwd).replace(/\|/g, "\\|")}\``;
     const e = links.diffs[abs];
-    if (!e || e.skip || e.adds === undefined) return code;
-    return `[${code}](/s/${encodeURIComponent(links.sessionId)}/f/${encodeURIComponent(e.patch)})`;
+    const c = links.copies?.[abs];
+    const hasDiff = !!e && !e.skip && e.adds !== undefined;
+    const copy = c && "file" in c ? c.file : "";
+    if (!hasDiff && !copy) return code;
+    // The link names one file; "#diff" on a copy's link tells the page a diff exists too.
+    const f = (name: string) => `/s/${encodeURIComponent(links.sessionId)}/f/${encodeURIComponent(name)}`;
+    return `[${code}](${copy ? f(copy) + (hasDiff ? "#diff" : "") : f(e!.patch)})`;
   };
   const delta = (abs: string) => {
     const e = links.diffs[abs];
@@ -748,7 +791,7 @@ export default function canvas(pi: ExtensionAPI) {
     const idxPath = join(d, "auto-diffs.json");
     const idx = readJson<Record<string, DiffEntry>>(idxPath, {});
     if (idx[abs]) return;
-    const id = createHash("sha1").update(abs).digest("hex").slice(0, 12);
+    const id = fileId(abs);
     const skip = diffSkipReason(abs);
     let base: string | null = null;
     if (!skip && existsSync(abs)) {
@@ -789,7 +832,11 @@ export default function canvas(pi: ExtensionAPI) {
         } catch {}
       }
       writeAtomic(idxPath, JSON.stringify(idx, null, 2));
-      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd, 40, { diffs: idx, sessionId }), by: "auto" });
+      // Every listed file, not just this turn's: files changed before copies existed get one too.
+      const copiesPath = join(d, "auto-copies.json");
+      const copies = syncCopies(d, Object.keys(files), readJson<Record<string, CopyEntry>>(copiesPath, {}));
+      writeAtomic(copiesPath, JSON.stringify(copies, null, 2));
+      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd, 40, { diffs: idx, copies, sessionId }), by: "auto" });
     }
     if (images.length) {
       const path = join(d, "auto-shots.json");

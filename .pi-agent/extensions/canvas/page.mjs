@@ -115,6 +115,11 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .dv-body { overflow-x: auto; }
 .dv-body > .empty { padding: 10px 12px; }
 .dv-load { margin: 10px 12px; }
+.fileview { display: flex; align-items: stretch; min-height: 100%; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.fileview pre { margin: 0; padding: 8px 0; font: inherit; white-space: pre; }
+.fileview .gutter { flex: none; position: sticky; left: 0; padding: 8px 10px 8px 14px; text-align: right; color: var(--dim); user-select: none; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); }
+.fileview .src { flex: 1; min-width: 0; overflow-x: auto; padding: 8px 14px; tab-size: 4; }
+.fileview .src code { font: inherit; background: none; padding: 0; }
 .toc a { display: flex; gap: 10px; align-items: baseline; padding: 4px 12px; color: var(--ink); text-decoration: none; font-size: 13px; }
 .toc a:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
 .toc a .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -988,12 +993,12 @@ function modalEl() {
   return dlg;
 }
 
-/** Show items[i]; render(item) gives { kind, title, sub, href, body } where body may be a promise. */
+/** Show items[i]; render(item) gives { kind, title, sub, href, extra, body }: extra sits in the header, body may be a promise. */
 function showModal(items, i, render) {
   const d = modalEl();
   const show = (j) => {
     i = (j + items.length) % items.length;
-    const { kind, title, sub, href, body } = render(items[i]);
+    const { kind, title, sub, href, extra, body } = render(items[i]);
     d.className = `modal ${kind}`;
     const step = (n, label, tip) => h("button", { class: "btn", type: "button", title: tip, onclick: () => show(i + n) }, label);
     const box = h("div", { class: "mbody" }, h("div", { class: "empty" }, "Loading…"));
@@ -1006,8 +1011,9 @@ function showModal(items, i, render) {
         h(
           "span",
           { class: "tools" },
+          extra ?? null,
           items.length > 1 ? [step(-1, "←", "Previous (←)"), h("span", { class: "pos" }, `${i + 1} / ${items.length}`), step(1, "→", "Next (→)")] : null,
-          h("a", { class: "btn", href, target: "_blank", rel: "noopener" }, "Open in new tab ↗"),
+          h("a", { class: "btn open", href, target: "_blank", rel: "noopener" }, "Open in new tab ↗"),
           h("button", { class: "btn", type: "button", title: "Close (Esc)", onclick: () => d.close() }, "✕"),
         ),
       ),
@@ -1036,17 +1042,80 @@ const imageItem = (a) => ({
   body: h("img", { class: "lightbox", src: a.href, alt: "" }),
 });
 
-const isDiffLink = (a) => /\/f\/diff-[\w-]+\.patch$/.test(new URL(a.href, location.href).pathname);
+const fetchText = (url) => fetch(url, { cache: "no-store" }).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))));
 
-const diffItem = (a) => ({
-  kind: "diff",
-  title: a.textContent.trim(),
-  sub: a.closest("tr")?.children[1]?.textContent.split(" · ")[1] || "",
-  href: a.href,
-  body: fetch(a.href, { cache: "no-store" })
-    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((t) => renderDiffView(t, { title: a.textContent.trim(), href: a.href, inModal: true })),
-});
+/**
+ * A Files changed link as { diff, file } URLs ("" when absent). A row links
+ * its copy (cur-<id>.txt) or, failing that, its patch (diff-<id>.patch);
+ * "#diff" on a copy's link says the patch exists too.
+ */
+function fileLink(a) {
+  const u = new URL(a.href, location.href);
+  const m = u.pathname.match(/^(.*\/f\/)(diff|cur)-([0-9a-f]{12})\.(patch|txt)$/);
+  if (!m) return null;
+  return { diff: m[2] === "diff" || u.hash === "#diff" ? `${m[1]}diff-${m[3]}.patch` : "", file: m[2] === "cur" ? `${m[1]}cur-${m[3]}.txt` : "" };
+}
+
+/** A file as it is now: line numbers beside the text, coloured by extension. */
+async function renderFileView(url, path) {
+  const text = await fetchText(url);
+  if (!text) return h("div", { class: "empty" }, "Empty file.");
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  const lang = langFor(path);
+  const code = h("code");
+  let html = null;
+  if (lang && text.length <= 256 * 1024) {
+    const hl = await loadHighlight();
+    if (hl?.getLanguage(lang) && window.DOMPurify) {
+      try {
+        html = window.DOMPurify.sanitize(hl.highlight(text, { language: lang, ignoreIllegals: true }).value, HL_CLEAN);
+      } catch {}
+    }
+  }
+  if (html != null) code.innerHTML = html;
+  else code.textContent = text;
+  return h("div", { class: "fileview" }, h("pre", { class: "gutter", "aria-hidden": "true" }, lines.map((_, i) => i + 1).join("\n")), h("pre", { class: "src" }, code));
+}
+
+// The tab last picked in a Files changed modal, kept while stepping through rows.
+let fileTab = "diff";
+
+function fileItem(a) {
+  const urls = fileLink(a);
+  const path = a.textContent.trim();
+  const tab = urls[fileTab] ? fileTab : urls.diff ? "diff" : "file";
+  const view = (t) => (t === "diff" ? fetchText(urls.diff).then((x) => renderDiffView(x, { title: path, href: urls.diff, inModal: true })) : renderFileView(urls.file, path));
+  let shown = 0;
+  const pick = (t, btn) => {
+    fileTab = t;
+    for (const b of btn.parentNode.children) b.classList.toggle("on", b === btn);
+    dlg.querySelector("a.open").href = urls[t];
+    const box = dlg.querySelector(".mbody");
+    const mine = ++shown;
+    box.replaceChildren(h("div", { class: "empty" }, "Loading…"));
+    view(t).then(
+      (n) => mine === shown && box.replaceChildren(n),
+      (e) => mine === shown && box.replaceChildren(h("div", { class: "err" }, String(e))),
+    );
+  };
+  const tabs =
+    urls.diff && urls.file
+      ? h(
+          "span",
+          { class: "segs" },
+          ["diff", "file"].map((t) => h("button", { class: `seg${t === tab ? " on" : ""}`, type: "button", onclick: (e) => pick(t, e.currentTarget) }, t === "diff" ? "Diff" : "File")),
+        )
+      : null;
+  return {
+    kind: "diff",
+    title: path,
+    sub: a.closest("tr")?.children[1]?.textContent.split(" · ")[1] || "",
+    href: urls[tab],
+    extra: tabs,
+    body: view(tab),
+  };
+}
 
 document.addEventListener("click", (e) => {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -1057,10 +1126,10 @@ document.addEventListener("click", (e) => {
     const links = [...gallery.querySelectorAll("a[href]")];
     return showModal(links, links.indexOf(a), imageItem);
   }
-  if (a && isDiffLink(a)) {
+  if (a && fileLink(a)) {
     e.preventDefault();
-    const links = [...(a.closest(".md") || document).querySelectorAll("a[href]")].filter(isDiffLink);
-    return showModal(links, links.indexOf(a), diffItem);
+    const links = [...(a.closest(".md") || document).querySelectorAll("a[href]")].filter(fileLink);
+    return showModal(links, links.indexOf(a), fileItem);
   }
   const shot = e.target.closest?.("img.shot");
   if (shot) showModal([shot], 0, (img) => ({ kind: "image", title: img.alt || "Image", href: img.src, body: h("img", { class: "lightbox", src: img.src, alt: "" }) }));
