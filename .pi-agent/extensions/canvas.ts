@@ -814,15 +814,18 @@ export default function canvas(pi: ExtensionAPI) {
         return false;
       }
     });
-    if (!ops.length && !images.length) return;
+    // Files changed refreshes every turn once it exists: files also change by
+    // shell commands, and a turn without edits still brings old rows up to date.
+    const tracked = existsSync(join(dir(), "auto-files.json"));
+    if (!ops.length && !images.length && !tracked) return;
     const d = ensureDir(ctx);
-    if (ops.length) {
+    if (ops.length || tracked) {
       const path = join(d, "auto-files.json");
       const files = tallyFiles(readJson<Record<string, FileStat>>(path, {}), ops, ctx.cwd);
-      writeAtomic(path, JSON.stringify(files, null, 2));
+      if (ops.length) writeAtomic(path, JSON.stringify(files, null, 2));
       const idxPath = join(d, "auto-diffs.json");
       const idx = readJson<Record<string, DiffEntry>>(idxPath, {});
-      for (const abs of new Set(ops.map((o) => (isAbsolute(o.path) ? o.path : resolve(ctx.cwd, o.path))))) {
+      for (const abs of Object.keys(files)) {
         const e = idx[abs];
         if (!e || e.skip) continue;
         try {
@@ -831,7 +834,7 @@ export default function canvas(pi: ExtensionAPI) {
           idx[abs] = { ...e, adds, dels };
         } catch {}
       }
-      writeAtomic(idxPath, JSON.stringify(idx, null, 2));
+      if (Object.keys(idx).length) writeAtomic(idxPath, JSON.stringify(idx, null, 2));
       // Every listed file, not just this turn's: files changed before copies existed get one too.
       const copiesPath = join(d, "auto-copies.json");
       const copies = syncCopies(d, Object.keys(files), readJson<Record<string, CopyEntry>>(copiesPath, {}));
