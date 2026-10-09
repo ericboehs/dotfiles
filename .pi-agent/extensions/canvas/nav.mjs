@@ -79,8 +79,8 @@ export function rankItems(items, query, key = (x) => x.label) {
 export const VIM_KEYS = [
   { group: "Move", keys: "j", action: "next", help: "next section" },
   { group: "Move", keys: "k", action: "prev", help: "previous section" },
-  { group: "Move", keys: "h", action: "toSide", help: "over to the side panel (Contents, files, screenshots)" },
-  { group: "Move", keys: "l", action: "toMain", help: "back to the main column" },
+  { group: "Move", keys: "h", action: "toMain", help: "left, back to the main column (from a Contents entry: open that section)" },
+  { group: "Move", keys: "l", action: "toSide", help: "right, over to the side panel, on this section's Contents entry (j / k step through it)" },
   { group: "Move", keys: "gg", action: "top", help: "top of the page" },
   { group: "Move", keys: "G", action: "bottom", help: "bottom of the page" },
   { group: "Move", keys: "d", action: "halfDown", help: "half a page down (or Ctrl-d)" },

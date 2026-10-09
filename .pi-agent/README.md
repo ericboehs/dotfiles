@@ -843,9 +843,11 @@ updates through server-sent events with no reload.
   connections per host.
 - **Vim keys.** `j` / `k` move a highlighted current section and focus it, so
   Tab carries on from its first control (`esc` clears it; once it scrolls
-  away, the section at the top of the window stands in). `h` / `l` move over
-  to the side panel and back, each side remembering where you were, and `j` /
-  `k` stay in the column you're in.
+  away, the section at the top of the window stands in). `l` moves right to
+  the side panel and `h` back left, and `j` / `k` stay in the column you're in. `l`
+  lands on the current section's entry in Contents; there `j` / `k` step
+  through the entries (then on to Files changed and Screenshots), and Enter or
+  `h` opens the highlighted section and moves the ring to it.
   `gg` / `G` top and bottom, `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
   `N` the next or previous section with the changed-while-folded dot. Enter, `o`
   or `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /

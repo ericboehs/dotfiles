@@ -425,6 +425,7 @@ kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; backgro
 .card.current, .card.current:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .card:focus { outline: none; }
 .side .card.current { outline-offset: -2px; } /* the sidebar scrolls, which would clip an outside ring */
+.side .toc a:focus { outline: none; background: var(--tint); box-shadow: inset 2px 0 0 var(--accent); color: var(--ink); }
 .keyhint { position: fixed; right: 16px; bottom: 16px; z-index: 55; padding: 4px 10px; border-radius: 6px; background: var(--ink); color: var(--card); font: 600 13px ui-monospace, Menlo, monospace; opacity: .9; }
 .cmdk.keys { width: min(760px, calc(100vw - 32px)); padding: 14px 18px 16px; }
 .keys .keys-hd { font-weight: 600; }
@@ -2357,6 +2358,8 @@ async function sessionView(id) {
     const hidden = keep.filter((k) => !k).length;
     const fold = hidden > 2 && !tocAll;
     const toggle = hidden > 2 ? h("li", { class: "more" }, h("button", { class: "btn", type: "button", onclick: () => ((tocAll = !tocAll), renderToc()) }, tocAll ? "Show fewer" : `Show ${hidden} older`)) : null;
+    // The list is rebuilt on every refresh; keep keyboard focus on the same entry.
+    const had = tocItems.contains(document.activeElement) ? document.activeElement.getAttribute("href") || "more" : null;
     tocItems.replaceChildren(
       ...list
         .filter((_, i) => !fold || keep[i])
@@ -2369,11 +2372,14 @@ async function sessionView(id) {
             if (!card) return;
             if (card.classList.contains("collapsed")) card.setCollapsed(false);
             card.scrollIntoView({ behavior: "smooth", block: "start" });
+            // From the keyboard (a ring is showing), the ring follows to that section.
+            if (currentCard) setCurrent(card, false);
           });
           return h("li", {}, a);
         }),
       toggle ?? [],
     );
+    if (had) (had === "more" ? tocItems.querySelector("li.more button") : [...tocItems.querySelectorAll("a")].find((a) => a.getAttribute("href") === had))?.focus({ preventScroll: true });
     if (tocSlot.firstChild !== tocCard) tocSlot.replaceChildren(tocCard);
   }
   onFold = () => renderToc();
@@ -2942,6 +2948,8 @@ function currentOrTop(cards = mainCards()) {
 }
 
 function hopSection(dir, instant) {
+  // In the sidebar's Contents, j / k step through its entries first.
+  if (stepToc(dir)) return;
   // j / k stay in the column the current section is in.
   const side = inSide(currentCard) && liveCurrent(sideCards());
   const cards = side ? sideCards() : mainCards();
@@ -2949,18 +2957,60 @@ function hopSection(dir, instant) {
   const live = liveCurrent(cards);
   const tops = cards.map((c) => c.getBoundingClientRect().top);
   const i = live ? cards.indexOf(live) + dir : dir > 0 ? tops.findIndex((t) => t > 14) : tops.findLastIndex((t) => t < 10);
-  if (i >= 0 && i < cards.length) setCurrent(cards[i], true, instant);
+  if (i < 0 || i >= cards.length) return;
+  setCurrent(cards[i], true, instant);
+  // Coming up into Contents from below lands on its last entry.
+  if (dir < 0 && cards[i] === tocCardEl()) focusTocEntry(tocEntries().at(-1));
 }
 
-/** h / l: over to the sidebar and back, to the section last used there. */
+// ── Contents entries ── (focus is the selection, so Enter opens a link natively)
+const tocCardEl = () => document.querySelector(".side .toc")?.closest(".card") ?? null;
+const tocEntries = () => {
+  const card = tocCardEl();
+  return card && !card.classList.contains("collapsed") ? [...card.querySelectorAll(".toc a, .toc li.more button")] : [];
+};
+const tocEntryFocused = () => (tocEntries().includes(document.activeElement) ? document.activeElement : null);
+function focusTocEntry(el) {
+  if (!el) return false;
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ block: "nearest" });
+  return true;
+}
+/** j / k inside Contents: true when it moved between entries (or up onto the card's header). */
+function stepToc(dir) {
+  const card = tocCardEl();
+  if (!card || currentCard !== card || !liveCurrent([card])) return false;
+  const list = tocEntries();
+  if (!list.length) return false;
+  const i = list.indexOf(document.activeElement);
+  const next = i + dir;
+  if (i < 0) return dir > 0 ? focusTocEntry(list[0]) : false;
+  if (next < 0) return (card.focus({ preventScroll: true }), true); // the header: o / Enter fold Contents
+  if (next >= list.length) return false; // on to Files changed
+  return focusTocEntry(list[next]);
+}
+
+/** The main-column card a Contents entry points at. */
+const tocTarget = (a) => (a?.hash ? document.getElementById(decodeURIComponent(a.hash.slice(1))) : null);
+
+/** l / h: right to the sidebar and back left. l lands on the Contents entry for where you are. */
 function hopColumn(toSide) {
   if (toSide) {
     const cards = sideCards();
     if (!cards.length) return toast("The side panel shows on windows 1200px or wider");
     if (inSide(currentCard)) return;
+    const here = currentOrTop();
+    const entry = tocEntries().find((a) => a.matches("a") && tocTarget(a) === here);
+    if (entry) {
+      setCurrent(tocCardEl(), false);
+      return focusTocEntry(entry);
+    }
     return setCurrent(cards.includes(lastSide) ? lastSide : cards[0]);
   }
   if (!inSide(currentCard)) return;
+  // h on a Contents entry opens that section, like Enter.
+  const entry = tocEntryFocused();
+  if (entry?.matches("a")) return entry.click();
   const cards = mainCards();
   setCurrent(cards.includes(lastMain) && inView(lastMain) ? lastMain : currentOrTop(cards), !(cards.includes(lastMain) && inView(lastMain)));
 }

@@ -145,8 +145,8 @@ test("matchKeys: actions, prefixes, misses", () => {
   assert.deepEqual(matchKeys("zM"), { action: "foldAll" });
   assert.deepEqual(matchKeys("yy"), { action: "yankFile" });
   assert.deepEqual(matchKeys("yf"), {});
-  assert.deepEqual(matchKeys("h"), { action: "toSide" });
-  assert.deepEqual(matchKeys("l"), { action: "toMain" });
+  assert.deepEqual(matchKeys("h"), { action: "toMain" }); // the side panel is on the right
+  assert.deepEqual(matchKeys("l"), { action: "toSide" });
   assert.deepEqual(matchKeys("gj"), {});
   assert.deepEqual(matchKeys("x"), {});
   assert.deepEqual(matchKeys(""), {});
