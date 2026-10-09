@@ -801,7 +801,9 @@ updates through server-sent events with no reload.
   as "4m ago" within 18 h; the newest five
   show, the rest behind "Show N more", which stays open across updates) and a
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
-  the session folder (the newest four show, the rest behind "Show N more").
+  the session folder (the newest four show, the rest behind "Show N more";
+  captions use the same relative times). On startup and `/reload` these cards
+  and Agents are redrawn at once, so new markup shows without waiting a turn.
   When this session has used agent-link, an **Agents**
   card lists each agent it sent to or heard from, newest exchange first: a
   live dot (working, idle, or a hollow ring once it has exited; the page asks

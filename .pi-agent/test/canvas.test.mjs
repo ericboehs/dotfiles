@@ -248,6 +248,7 @@ test("syncCopies copies changed files, refreshes on change and drops unfit or de
 test("shotsMarkdown links each copied image and escapes names", () => {
   const md = shotsMarkdown([{ file: "shot-abc.png", name: 'a"<b>.png', at: "2026-10-07T10:00:00.000Z" }], "sess-1");
   assert.match(md, /^<div class="gallery"><figure><a href="\/s\/sess-1\/f\/shot-abc\.png"><img src="\/s\/sess-1\/f\/shot-abc\.png" alt="a&quot;&lt;b&gt;\.png"/);
+  assert.match(md, /<figcaption>a&quot;&lt;b&gt;\.png · <time class="rel" datetime="2026-10-07T10:00:00\.000Z">[^<]+<\/time><\/figcaption>/);
 });
 
 // Synthetic agent-link traffic, shaped like real session entries.

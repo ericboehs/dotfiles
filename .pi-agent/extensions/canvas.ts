@@ -430,7 +430,7 @@ export type Shot = { file: string; name: string; at: string };
 export function shotsMarkdown(shots: Shot[], sessionId: string): string {
   const src = (f: string) => `/s/${encodeURIComponent(sessionId)}/f/${encodeURIComponent(f)}`;
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-  return `<div class="gallery">${shots.map((x) => `<figure><a href="${src(x.file)}"><img src="${src(x.file)}" alt="${esc(x.name)}" loading="lazy"></a><figcaption>${esc(x.name)} · ${clockTime(x.at)}</figcaption></figure>`).join("")}</div>`;
+  return `<div class="gallery">${shots.map((x) => `<figure><a href="${src(x.file)}"><img src="${src(x.file)}" alt="${esc(x.name)}" loading="lazy"></a><figcaption>${esc(x.name)} · ${relTime(x.at)}</figcaption></figure>`).join("")}</div>`;
 }
 
 // ── Running: a live card for long bash commands ──
@@ -1213,7 +1213,8 @@ export default function canvas(pi: ExtensionAPI) {
     // Files changed refreshes every turn once it exists: files also change by
     // shell commands, and a turn without edits still brings old rows up to date.
     const tracked = existsSync(join(dir(), "auto-files.json"));
-    if (!ops.length && !images.length && !tracked) return;
+    const shotsTracked = existsSync(join(dir(), "auto-shots.json"));
+    if (!ops.length && !images.length && !tracked && !shotsTracked) return;
     const d = ensureDir(ctx);
     if (ops.length || tracked) {
       const path = join(d, "auto-files.json");
@@ -1253,6 +1254,9 @@ export default function canvas(pi: ExtensionAPI) {
       shots = shots.slice(0, SHOTS_KEPT);
       writeAtomic(path, JSON.stringify(shots, null, 2));
       putMarkdown(d, { id: "auto-screenshots", title: "Screenshots", body: shotsMarkdown(shots, sessionId), by: "auto" });
+    } else if (shotsTracked) {
+      // No new images: redraw from the saved list (a no-op unless the markup changed).
+      putMarkdown(d, { id: "auto-screenshots", title: "Screenshots", body: shotsMarkdown(readJson<Shot[]>(join(d, "auto-shots.json"), []), sessionId), by: "auto" });
     }
   }
 
@@ -1316,7 +1320,11 @@ export default function canvas(pi: ExtensionAPI) {
       // A reload keeps the session and whatever state it was in; any other
       // start begins idle, as pi's own status does.
       if (event.reason !== "reload") writeActivity(true);
-      if (autoOn && ctx.hasUI) void serial(() => updateAgents(ctx)).catch(() => {});
+      if (autoOn && ctx.hasUI) {
+        void serial(() => updateAgents(ctx)).catch(() => {});
+        // Redraw Files changed and Screenshots too, so a /reload shows new markup at once.
+        void serial(() => updateWidgets(ctx, { user: "", tools: [], files: [], reply: "" })).catch(() => {});
+      }
       try {
         settleStaleRun(dir());
       } catch {}
