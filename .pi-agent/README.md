@@ -744,7 +744,10 @@ updates through server-sent events with no reload.
   sit in the page header. A section nobody has opened or collapsed starts
   collapsed once its last change is over an hour old. A collapsed section isn't
   rendered until it's opened, and it shows a dot when it changes while
-  collapsed.
+  collapsed. On a window 1200px or wider, a sticky sidebar holds Contents (every
+  section with its age; a click opens and scrolls to it), Files changed and
+  Screenshots. Narrower, those two widgets sit among the sections in time
+  order.
 - **Opening it.** Safari never opens by itself. `/canvas` opens this session's
   page on display 1, left half, or focuses the tab if it is already open.
   `/canvas url` prints the address, `/canvas status` forces a status run, and

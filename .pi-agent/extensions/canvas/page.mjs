@@ -26,7 +26,28 @@ header.top .tools .back { margin-left: 8px; }
 .state { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .state.working { color: var(--ok); } .state.done { color: var(--warn); } .state.blocked { color: var(--accent); } .state.error { color: var(--bad); } .state.idle, .state.ended { color: var(--dim); font-weight: 400; }
 .state .msg { font-weight: 400; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; scroll-margin-top: 14px; }
+@media (min-width: 1200px) {
+  #app.session { max-width: 1460px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+  .side { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+}
+.side .card > h2 .tag, .side .card > h2 .meta button.btn { display: none; }
+.side .card > .bd { padding: 10px 12px; }
+.side .md table { font-size: 12px; }
+.side .md th, .side .md td { padding: 3px 6px; }
+.side .md td code { font-size: 11.5px; overflow-wrap: anywhere; }
+.side .md td:last-child, .side .md th { white-space: nowrap; }
+.side .gallery { grid-template-columns: 1fr 1fr; gap: 8px; }
+.side .gallery img { height: 96px; }
+.side .gallery figcaption { font-size: 11px; }
+.toc { list-style: none; margin: 0; padding: 4px 0; }
+.toc a { display: flex; gap: 10px; align-items: baseline; padding: 4px 12px; color: var(--ink); text-decoration: none; font-size: 13px; }
+.toc a:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
+.toc a .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc a time { flex: none; color: var(--dim); font-size: 11.5px; }
+.toc a.shut .t { color: var(--dim); }
+.toc a.unseen .t::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
 .card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card > h2 .meta { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; display: flex; gap: 6px; align-items: center; flex: none; padding-right: 4px; }
@@ -253,6 +274,11 @@ function renderMarkdown(text) {
     code.parentElement.replaceWith(box);
     renderMermaid(box, code.textContent);
   }
+  // Paths in table cells may wrap at their slashes, not mid-name.
+  for (const code of el.querySelectorAll("td code")) {
+    const parts = code.textContent.split(/(?<=\/)/);
+    if (parts.length > 1) code.replaceChildren(...parts.flatMap((p, i) => (i ? [document.createElement("wbr"), p] : [p])));
+  }
   for (const pre of el.querySelectorAll("pre")) {
     const code = pre.querySelector("code") || pre;
     const lang = [...code.classList].find((c) => c.startsWith("language-"))?.slice(9);
@@ -373,6 +399,9 @@ function saveChoices() {
   } catch {}
 }
 
+/** Runs after the reader opens or collapses a card (the Contents list). */
+let onFold = null;
+
 /** Shut by the reader's choice, else by age when the card has one. */
 function startsShut(key, at) {
   if (choices[key]) return choices[key] === "shut";
@@ -396,6 +425,7 @@ function collapsible(card, key, onOpen, at) {
     if (remember) {
       choices[key] = shut ? "shut" : "open";
       saveChoices();
+      queueMicrotask(() => onFold?.()); // after the classes below settle
     }
     if (shut) return;
     card.classList.remove("unseen");
@@ -412,6 +442,10 @@ function collapsible(card, key, onOpen, at) {
   card.setCollapsed(startsShut(key, at), false);
   return card;
 }
+
+/** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
+const WIDGETS = ["auto-files", "auto-screenshots"];
+const WIDE = "(min-width: 1200px)";
 
 /** Status and Findings stay on top. Sections follow, newest change first. */
 function sortSections(list) {
@@ -510,7 +544,7 @@ function sectionCard(id, sec) {
         (body) => bd.replaceChildren(body),
         (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
       ),
-    sec.at,
+    WIDGETS.includes(sec.id) ? undefined : sec.at, // widgets never fold by age
   );
 }
 
@@ -521,12 +555,67 @@ async function sessionView(id) {
   const statusSlot = h("div");
   const sectionsSlot = h("div");
   const findingsSlot = h("div");
-  $app.replaceChildren(header, statusSlot, findingsSlot, sectionsSlot);
+  const tocSlot = h("div");
+  const widgetSlot = h("div");
+  $app.classList.add("session");
+  $app.replaceChildren(
+    header,
+    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, tocSlot, widgetSlot)),
+  );
   loadChoices(id);
   const cards = new Map(); // section id → { at, el }
+  const wide = matchMedia(WIDE);
+  let lastSections = [];
   let lastStatusAt;
   let lastState;
   let lastFindings = -1;
+
+  // ── placement: widgets go to the sidebar when the screen is wide ──
+  function place() {
+    const sections = lastSections;
+    const aside = (s) => wide.matches && WIDGETS.includes(s.id);
+    const lay = (slot, list) =>
+      list.forEach((sec, i) => {
+        // Move a card only when its place changed: moving a frame reloads it.
+        const el = cards.get(sec.id).el;
+        const here = slot.children[i];
+        if (here !== el) slot.insertBefore(el, here || null);
+      });
+    const mainList = sections.filter((s) => !aside(s));
+    sectionsSlot.querySelector(":scope > p.empty")?.remove();
+    lay(sectionsSlot, mainList);
+    lay(widgetSlot, WIDGETS.map((wid) => sections.find((s) => s.id === wid)).filter((s) => s && aside(s)));
+    if (!mainList.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
+    renderToc(mainList);
+  }
+
+  // ── Contents: every main-column section, a click opens and scrolls to it ──
+  let tocList = [];
+  const tocItems = h("ul", { class: "toc" });
+  const tocCount = h("span", { class: "n" });
+  const tocCard = collapsible(h("section", { class: "card" }, h("h2", {}, h("span", { class: "title" }, "Contents"), tocCount), tocItems), "_contents");
+  function renderToc(list = tocList) {
+    tocList = list;
+    if (!wide.matches || !list.length) return tocSlot.replaceChildren();
+    tocCount.textContent = String(list.length);
+    tocItems.replaceChildren(
+      ...list.map((sec) => {
+        const card = cards.get(sec.id)?.el;
+        const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : ""].join(" ").trim();
+        const a = h("a", { class: cls, href: `#sec-${sec.id}`, title: sec.title || sec.id }, h("span", { class: "t" }, sec.title || sec.id), agoEl(sec.at));
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          if (!card) return;
+          if (card.classList.contains("collapsed")) card.setCollapsed(false);
+          card.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        return h("li", {}, a);
+      }),
+    );
+    if (tocSlot.firstChild !== tocCard) tocSlot.replaceChildren(tocCard);
+  }
+  onFold = () => renderToc();
+  wide.addEventListener("change", place);
 
   async function refresh() {
     let state;
@@ -566,8 +655,7 @@ async function sessionView(id) {
     const sections = sortSections(state.sections);
     const keep = new Set(sections.map((s) => s.id));
     for (const [sid, c] of cards) if (!keep.has(sid)) (c.el.remove(), cards.delete(sid));
-    sectionsSlot.querySelector(":scope > p.empty")?.remove();
-    sections.forEach((sec, i) => {
+    for (const sec of sections) {
       let c = cards.get(sec.id);
       if (!c || c.at !== sec.at) {
         const el = sectionCard(id, sec);
@@ -579,11 +667,9 @@ async function sessionView(id) {
         c = { at: sec.at, el };
         cards.set(sec.id, c);
       }
-      // Move a card only when its place changed: moving a frame reloads it.
-      const here = sectionsSlot.children[i];
-      if (here !== c.el) sectionsSlot.insertBefore(c.el, here || null);
-    });
-    if (!sections.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
+    }
+    lastSections = sections;
+    place();
 
     if (state.findings.length !== lastFindings) {
       const grew = lastFindings >= 0 && state.findings.length > lastFindings;
