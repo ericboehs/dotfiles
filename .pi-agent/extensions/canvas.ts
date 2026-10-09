@@ -237,6 +237,16 @@ export function tallyFiles(prev: Record<string, FileStat>, ops: { tool: "edit" |
 }
 
 const clockTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/**
+ * A time the page shows as "4m ago" within the last 18 h (and keeps current);
+ * older ones keep this text: the clock time today, else the date and time.
+ */
+export function relTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const abs = d.toDateString() === new Date().toDateString() ? clockTime(iso) : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${clockTime(iso)}`;
+  return `<time class="rel" datetime="${d.toISOString()}">${abs}</time>`;
+}
 
 /** A path as the page shows it: relative to the session's folder, else ~/…. */
 export function displayPath(abs: string, cwd: string): string {
@@ -410,7 +420,7 @@ export function filesMarkdown(
     if (e?.skip) return ` · no diff (${e.skip})`;
     return e?.adds === undefined ? "" : ` · +${e.adds}\u00a0−${e.dels}`;
   };
-  const lines = ["| File | Changes | Last |", "|---|---|---|", ...rows.slice(0, max).map(([abs, f]) => `| ${cell(abs)} | ${what(f)}${delta(abs)} | ${clockTime(f.at)} |`)];
+  const lines = ["| File | Changes | Last |", "|---|---|---|", ...rows.slice(0, max).map(([abs, f]) => `| ${cell(abs)} | ${what(f)}${delta(abs)} | ${relTime(f.at)} |`)];
   if (rows.length > max) lines.push("", `…and ${rows.length - max} more`);
   return lines.join("\n");
 }
@@ -551,13 +561,7 @@ export function agentsMarkdown(traffic: AgentMsg[], peers: Peer[], hasCanvas: (s
   const byWho = new Map<string, AgentMsg[]>();
   for (const m of traffic) byWho.set(m.who, [...(byWho.get(m.who) ?? []), m]);
   for (const msgs of byWho.values()) msgs.sort((a, b) => a.at.localeCompare(b.at)); // oldest→newest, whatever order they came in
-  // The page shows a time within the last 18 h as "4m ago" (and keeps it
-  // current); older ones keep this text.
-  const when = (iso: string) => {
-    const d = new Date(iso);
-    const abs = d.toDateString() === new Date().toDateString() ? clockTime(iso) : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${clockTime(iso)}`;
-    return `<time class="rel" datetime="${esc(iso)}">${abs}</time>`;
-  };
+  const when = relTime;
   const rows = [...byWho.entries()].sort((a, b) => b[1].at(-1)!.at.localeCompare(a[1].at(-1)!.at)).slice(0, max);
   return rows
     .map(([who, msgs]) => {

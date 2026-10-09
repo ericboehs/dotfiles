@@ -797,7 +797,8 @@ updates through server-sent events with no reload.
   `auto-*` section per turn. Findings are tagged `auto` and deduplicated.
   Haiku's section is skipped when the agent wrote one that turn, and only the
   newest six are kept. After every turn the page also updates a **Files
-  changed** table (paths and edit counts from tool calls; the newest five
+  changed** table (paths and edit counts from tool calls, with the last change
+  as "4m ago" within 18 h; the newest five
   show, the rest behind "Show N more", which stays open across updates) and a
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
   the session folder (the newest four show, the rest behind "Show N more").

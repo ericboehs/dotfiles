@@ -123,7 +123,7 @@ test("tallyFiles and filesMarkdown keep a running table, newest first", () => {
   assert.equal(rows.length, 3);
   assert.match(rows[0], /^\| `b\\\|c\.md` \| 1 edit \|/);
   assert.match(rows[1], /^\| `\/elsewhere\/x` \| 1 edit \|/);
-  assert.match(rows[2], /^\| `src\/a\.ts` \| written, 1 edit \|/);
+  assert.match(rows[2], /^\| `src\/a\.ts` \| written, 1 edit \| <time class="rel" datetime="2026-10-07T10:00:00\.000Z">Oct 7 [^<]+<\/time> \|$/);
   assert.match(filesMarkdown(files, "/repo", 1), /…and 2 more$/);
 });
 
