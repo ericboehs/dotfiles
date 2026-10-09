@@ -30,6 +30,28 @@ export function prettyName(name) {
     .join(" ");
 }
 
+/** Omarchy's colors.toml is flat TOML: `key = "value"` per line; comments and blanks ignored. */
+export function parseColors(text) {
+  const out = {};
+  for (const line of String(text).split("\n")) {
+    const m = line.match(/^\s*([a-z_]+)\s*=\s*"([^"]*)"/);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+/**
+ * The theme Omarchy has applied, from its current/theme/colors.toml and
+ * current/theme.name: { name, colors }, or null when the palette lacks a
+ * background or foreground (mid-switch, or not a theme at all).
+ */
+export function systemTheme(colorsText, nameText) {
+  const colors = parseColors(colorsText);
+  if (!rgb(colors.background) || !rgb(colors.foreground)) return null;
+  const name = String(nameText || "").trim().replace(/[^a-z0-9._-]/gi, "").slice(0, 60) || "system";
+  return { name, colors };
+}
+
 /** "dark" or "light"; a theme without a mode is judged by its background. */
 export function themeMode(c) {
   if (c?.mode === "dark" || c?.mode === "light") return c.mode;

@@ -2469,6 +2469,7 @@ async function sessionView(id) {
   markSeen();
   banner();
   const es = new EventSource("/api/events");
+  es.addEventListener("system-theme", onSystemTheme);
   es.addEventListener("changed", (e) => {
     let d = {};
     try {
@@ -2505,6 +2506,23 @@ function themeCache() {
   }
 }
 const themePair = () => readPair(localStorage.getItem("canvas:theme"));
+/** The pair plus `system`: follow the OS theme (Omarchy) in both modes instead. */
+function themePrefs() {
+  let system = false;
+  try {
+    system = JSON.parse(localStorage.getItem("canvas:theme") || "null")?.system === true;
+  } catch {}
+  return { ...themePair(), system };
+}
+let systemReady = null;
+/** The applied Omarchy theme from the daemon, { name, colors }, or null. */
+function loadSystemTheme() {
+  return (systemReady ??= fetch("/api/system-theme")
+    .then((r) => r.json())
+    .then((j) => j.theme || null)
+    .catch(() => null));
+}
+const systemEntry = (sys) => ({ name: `system:${sys.name}`, mode: themeMode(sys.colors), vars: themeVars(sys.colors) });
 /** { name, mode, vars } in force now, or null for the canvas default. */
 function activeTheme() {
   if (themePreview) return themePreview.vars ? themePreview : null;
@@ -2528,30 +2546,50 @@ function applyTheme() {
   rethemeMermaid();
 }
 
-async function setTheme(name, mode) {
-  const themes = await loadThemes();
-  const pair = { ...themePair(), [mode]: name };
-  const cache = themeCache();
-  cache[mode] = name !== "canvas" && themes[name] ? { name, mode, vars: themeVars(themes[name]) } : null;
+/**
+ * The cache for some prefs: the system palette for both modes when following
+ * it (its own mode already decides dark or light), else one per pair entry.
+ * Null when following a system theme the daemon can't read just now.
+ */
+function cacheFor(prefs, themes, sys) {
+  if (prefs.system) return sys ? { dark: systemEntry(sys), light: systemEntry(sys) } : null;
+  const cache = {};
+  for (const mode of ["dark", "light"]) if (prefs[mode] !== "canvas" && themes[prefs[mode]]) cache[mode] = { name: prefs[mode], mode, vars: themeVars(themes[prefs[mode]]) };
+  return cache;
+}
+
+async function saveTheme(prefs) {
+  const [themes, sys] = await Promise.all([loadThemes(), prefs.system ? loadSystemTheme() : null]);
+  const cache = cacheFor(prefs, themes, sys);
   try {
-    localStorage.setItem("canvas:theme", JSON.stringify(pair));
+    localStorage.setItem("canvas:theme", JSON.stringify(prefs));
+    if (cache) localStorage.setItem("canvas:theme-cache", JSON.stringify(cache));
+  } catch {}
+  applyTheme();
+}
+
+const setTheme = (name, mode) => saveTheme({ ...themePrefs(), [mode]: name, system: false });
+const followSystemTheme = () => saveTheme({ ...themePrefs(), system: true });
+
+/** Rebuild the cache from themes.json or the system theme, in case either changed. */
+async function refreshThemeCache() {
+  const prefs = themePrefs();
+  if (!prefs.system && prefs.dark === "canvas" && prefs.light === "canvas" && !localStorage.getItem("canvas:theme-cache")) return;
+  const [themes, sys] = await Promise.all([loadThemes(), prefs.system ? loadSystemTheme() : null]);
+  const cache = cacheFor(prefs, themes, sys);
+  // Mid-switch the daemon may have no palette: keep the last one.
+  if (!cache || JSON.stringify(cache) === JSON.stringify(themeCache())) return;
+  try {
     localStorage.setItem("canvas:theme-cache", JSON.stringify(cache));
   } catch {}
   applyTheme();
 }
 
-/** Rebuild the cache from themes.json, in case the palettes or the mapping changed. */
-async function refreshThemeCache() {
-  const pair = themePair();
-  if (pair.dark === "canvas" && pair.light === "canvas") return;
-  const themes = await loadThemes();
-  const cache = {};
-  for (const mode of ["dark", "light"]) if (themes[pair[mode]]) cache[mode] = { name: pair[mode], mode, vars: themeVars(themes[pair[mode]]) };
-  if (JSON.stringify(cache) === JSON.stringify(themeCache())) return;
-  try {
-    localStorage.setItem("canvas:theme-cache", JSON.stringify(cache));
-  } catch {}
-  applyTheme();
+/** The daemon saw Omarchy switch themes. Every tab gets this and refreshes. */
+function onSystemTheme() {
+  systemReady = null;
+  if (themePrefs().system) refreshThemeCache();
+  if (picker?.mode === "theme") setPickerMode("theme");
 }
 
 function mermaidConfig() {
@@ -2701,7 +2739,12 @@ function mainItems() {
       run: () => navigator.clipboard.writeText(location.href).then(() => toast("Link copied"), () => toast("Couldn't copy the link")),
     },
     currentSession && { label: "All sessions", sub: "the sessions index", run: (e) => go("/", e?.metaKey || e?.ctrlKey) },
-    { label: "Change theme…", sub: `dark: ${pair.dark === "canvas" ? "Canvas" : prettyName(pair.dark)} · light: ${pair.light === "canvas" ? "Canvas" : prettyName(pair.light)}`, stay: true, run: () => setPickerMode("theme") },
+    {
+      label: "Change theme…",
+      sub: themePrefs().system ? "following the system theme (Omarchy)" : `dark: ${pair.dark === "canvas" ? "Canvas" : prettyName(pair.dark)} · light: ${pair.light === "canvas" ? "Canvas" : prettyName(pair.light)}`,
+      stay: true,
+      run: () => setPickerMode("theme"),
+    },
     { label: "Keyboard shortcuts", sub: "or press ? on the page", run: () => toggleHelp() },
   ]
     .filter(Boolean)
@@ -2709,9 +2752,18 @@ function mainItems() {
   return [...sessions, ...actions];
 }
 
-function themeItems(themes) {
-  const pair = themePair();
+function themeItems(themes, sys) {
+  const prefs = themePrefs();
   const out = [];
+  if (sys)
+    out.push({
+      group: "Follow the system",
+      label: "Omarchy (system)",
+      sub: `now ${prettyName(sys.name)}; changes when Omarchy's theme does`,
+      end: () => [prefs.system ? h("span", { class: "in-use" }, "in use") : null, h("span", { class: "sw" }, swatch(sys.colors).map((v) => h("i", { style: `background:${v}` })))],
+      preview: systemEntry(sys),
+      run: () => followSystemTheme(),
+    });
   for (const mode of ["dark", "light"]) {
     const names = Object.keys(themes).filter((n) => themeMode(themes[n]) === mode).sort();
     for (const name of ["canvas", ...names]) {
@@ -2721,12 +2773,12 @@ function themeItems(themes) {
         group: mode === "dark" ? "For dark mode" : "For light mode",
         label,
         sub: name === "canvas" ? "the default look" : "",
-        end: () => [pair[mode] === name ? h("span", { class: "in-use" }, "in use") : null, c ? h("span", { class: "sw" }, swatch(c).map((v) => h("i", { style: `background:${v}` }))) : null],
+        end: () => [!prefs.system && prefs[mode] === name ? h("span", { class: "in-use" }, "in use") : null, c ? h("span", { class: "sw" }, swatch(c).map((v) => h("i", { style: `background:${v}` }))) : null],
         // The default palette for the other mode lives in a media query, so it can't be previewed.
         preview: name === "canvas" ? (mode === systemMode() ? { vars: null } : null) : { name, mode, vars: themeVars(c) },
         run: () => {
           setTheme(name, mode);
-          if (mode !== systemMode()) toast(`${label} will be used when macOS is in ${mode} mode`);
+          if (mode !== systemMode()) toast(`${label} will be used when the system is in ${mode} mode`);
         },
       });
     }
@@ -2742,13 +2794,14 @@ function setPickerMode(mode) {
   picker.input.placeholder = mode === "theme" ? "Pick a theme…" : "Jump to a session or run an action…";
   if (mode === "theme") {
     picker.items = [];
-    loadThemes().then((themes) => {
+    loadThemes().then(async (themes) => {
+      const sys = await loadSystemTheme();
       if (picker?.mode !== "theme") return;
-      picker.items = themeItems(themes);
+      picker.items = themeItems(themes, sys);
       // Start on the theme in force now.
       const now = themePair()[systemMode()];
       const label = now === "canvas" ? "Canvas" : prettyName(now);
-      picker.sel = Math.max(0, picker.items.findIndex((it) => it.label === label && it.group.includes(systemMode())));
+      picker.sel = sys && themePrefs().system ? 0 : Math.max(0, picker.items.findIndex((it) => it.label === label && it.group.includes(systemMode())));
       drawPicker(false);
     });
   } else {
@@ -3146,6 +3199,7 @@ async function indexView() {
 
   await refresh();
   const es = new EventSource("/api/events");
+  es.addEventListener("system-theme", onSystemTheme);
   es.addEventListener("changed", refresh);
 }
 

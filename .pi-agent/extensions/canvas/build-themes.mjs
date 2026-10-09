@@ -8,18 +8,11 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseColors } from "./theme.mjs";
+
+export { parseColors };
 
 const REPO = "basecamp/omarchy";
-
-/** Flat TOML: `key = "value"` per line; comments and blanks ignored. */
-export function parseColors(text) {
-  const out = {};
-  for (const line of String(text).split("\n")) {
-    const m = line.match(/^\s*([a-z_]+)\s*=\s*"([^"]*)"/);
-    if (m) out[m[1]] = m[2];
-  }
-  return out;
-}
 
 function build(refArg) {
   const gh = (path) => JSON.parse(execFileSync("gh", ["api", path], { encoding: "utf8", maxBuffer: 1 << 24 }));

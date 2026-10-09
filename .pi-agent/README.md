@@ -861,6 +861,15 @@ updates through server-sent events with no reload.
   the terminal colours follow its alacritty template. Mermaid, charts and the
   terminal follow the theme, and `html` frames get it by `postMessage`.
   `theme-boot.js` applies the cached palette before the first paint.
+- **Omarchy (system).** On an Omarchy machine the theme picker also offers
+  Omarchy (system): the canvas then uses whatever theme Omarchy has applied,
+  custom and installed themes included, and changes with it live. The daemon
+  reads `~/.local/state/omarchy/current/theme/colors.toml` (same format as
+  the bundle; `PI_CANVAS_OMARCHY` points elsewhere), watches `current/` (its
+  theme folder is replaced on each switch), and sends open pages a
+  `system-theme` event. No Omarchy hook is needed, and picking any named theme
+  stops following. It reads the machine pi runs on, so a canvas on a laptop
+  can't follow a separate Omarchy box.
 - **Opening it.** Safari never opens by itself. `/canvas` opens this session's
   page on display 1, left half, or focuses the tab if it is already open.
   `/canvas url` prints the address, `/canvas status` forces a status run, and

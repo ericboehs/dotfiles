@@ -623,7 +623,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
   const link = join(root, ".ext");
   symlinkSync(fileURLToPath(new URL("../extensions/", import.meta.url)), link);
   const daemon = join(link, "canvas", "daemon.mjs");
-  const child = spawn(process.execPath, [daemon, "--port", String(port), "--root", root, "--version", "t1"], { stdio: "ignore" });
+  const child = spawn(process.execPath, [daemon, "--port", String(port), "--root", root, "--omarchy", join(root, "no-omarchy"), "--version", "t1"], { stdio: "ignore" });
   try {
     let up;
     for (let i = 0; i < 50 && !up; i++) {
@@ -672,7 +672,59 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.equal((await post(port, "/s/s1/f/a.html", {}, { "x-canvas-clip": "1" })).status, 405, "everything else stays read-only");
     const list = JSON.parse((await get(port, "/api/sessions")).body);
     assert.equal(list[0].id, "s1");
+    assert.deepEqual(JSON.parse((await get(port, "/api/system-theme")).body), { theme: null }, "no Omarchy here");
   } finally {
+    child.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon follows the Omarchy theme: serves it, and tells pages when it switches", async () => {
+  const { root } = tempRoot();
+  const port = 19790 + Math.floor(Math.random() * 1000);
+  // A fake ~/.local/state/omarchy/current, switched the way omarchy-theme-set
+  // does it: stage next-theme, rm the theme folder, mv the stage in, write theme.name.
+  const cur = join(root, ".omarchy-current");
+  const put = (name, bg, fg) => {
+    const next = join(cur, "next-theme");
+    mkdirSync(next, { recursive: true });
+    writeFileSync(join(next, "colors.toml"), `mode = "dark"\naccent = "#7aa2f7"\nbackground = "${bg}"\nforeground = "${fg}"\n`);
+    rmSync(join(cur, "theme"), { recursive: true, force: true });
+    execFileSync("mv", [next, join(cur, "theme")]);
+    writeFileSync(join(cur, "theme.name"), `${name}\n`);
+  };
+  put("tokyo-night", "#1a1b26", "#a9b1d6");
+  const link = join(root, ".ext");
+  symlinkSync(fileURLToPath(new URL("../extensions/", import.meta.url)), link);
+  const child = spawn(process.execPath, [join(link, "canvas", "daemon.mjs"), "--port", String(port), "--root", root, "--omarchy", cur, "--version", "t2"], { stdio: "ignore" });
+  let stream;
+  try {
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (await get(port, "/health").catch(() => undefined)) break;
+    }
+    const first = JSON.parse((await get(port, "/api/system-theme")).body).theme;
+    assert.equal(first.name, "tokyo-night");
+    assert.equal(first.colors.background, "#1a1b26");
+    const got = new Promise((resolve, reject) => {
+      stream = request({ host: "127.0.0.1", port, path: "/api/events", headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        let buf = "";
+        res.on("data", (d) => {
+          buf += d;
+          const m = buf.match(/event: system-theme\ndata: (.*)\n/);
+          if (m) resolve(JSON.parse(m[1]));
+        });
+      });
+      stream.on("error", reject);
+      stream.end();
+      setTimeout(() => reject(new Error("no system-theme event")), 4000);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    put("flexoki-light", "#fffcf0", "#100f0f");
+    assert.deepEqual(await got, { name: "flexoki-light" });
+    assert.equal(JSON.parse((await get(port, "/api/system-theme")).body).theme.colors.background, "#fffcf0");
+  } finally {
+    stream?.destroy();
     child.kill();
     rmSync(root, { recursive: true, force: true });
   }

@@ -18,6 +18,7 @@ import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { systemTheme } from "./theme.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -28,6 +29,8 @@ function arg(name, fallback) {
 
 export const PORT = Number(arg("port", process.env.PI_CANVAS_PORT || "8790"));
 export const ROOT = resolve(arg("root", process.env.PI_CANVAS_ROOT || join(homedir(), ".pi", "canvas")));
+// Where Omarchy keeps the applied theme (theme/colors.toml + theme.name).
+export const OMARCHY = resolve(arg("omarchy", process.env.PI_CANVAS_OMARCHY || join(homedir(), ".local", "state", "omarchy", "current")));
 const VERSION = arg("version", "dev");
 const RETAIN_DAYS = Number(process.env.PI_CANVAS_RETAIN_DAYS || 30);
 
@@ -299,6 +302,11 @@ function publish(key, data) {
   for (const res of clients.get(key) || []) res.write(`event: changed\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+/** A named event to every open stream. */
+function broadcast(event, data) {
+  for (const set of clients.values()) for (const res of set) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
 // ── html sections: the design kit and the frame script ─────────────────────────
 // The frame is cross-origin to the page, so the page can't measure it: this
 // script posts the content's height instead. It also stands in an in-memory
@@ -437,6 +445,7 @@ function handler(req, res) {
     return;
   }
   if (url.pathname === "/api/sessions") return json(res, listSessions(ROOT));
+  if (url.pathname === "/api/system-theme") return json(res, { theme: readSystemTheme() });
   if (url.pathname === "/api/events") return subscribe("*", req, res);
   if (parts[0] === "api" && parts[1] === "s" && SESSION_ID.test(parts[2] || "")) {
     const id = parts[2];
@@ -458,6 +467,39 @@ function handler(req, res) {
 }
 
 // ── watch ────────────────────────────────────────────────────────────────────
+
+/**
+ * Omarchy: follow the system theme. omarchy-theme-set copies the theme to
+ * current/theme (rm + mv, so the folder's inode changes) and then writes
+ * current/theme.name. Watch current/ itself, and tell open pages once a whole
+ * palette is readable and differs from the last one.
+ * Returns { name, colors } for the applied theme, or null (no Omarchy, mid-switch).
+ */
+export function readSystemTheme(dir = OMARCHY) {
+  try {
+    const name = existsSync(join(dir, "theme.name")) ? readFileSync(join(dir, "theme.name"), "utf8") : "";
+    return systemTheme(readFileSync(join(dir, "theme", "colors.toml"), "utf8"), name);
+  } catch {
+    return null;
+  }
+}
+
+function watchSystemTheme() {
+  if (!existsSync(OMARCHY)) return;
+  let last = JSON.stringify(readSystemTheme());
+  let timer;
+  try {
+    watch(OMARCHY, () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const now = readSystemTheme();
+        if (!now || JSON.stringify(now) === last) return;
+        last = JSON.stringify(now);
+        broadcast("system-theme", { name: now.name });
+      }, 300);
+    }).on("error", () => {});
+  } catch {}
+}
 
 const pending = new Map();
 
@@ -485,6 +527,7 @@ export function start() {
   // flips to "ended" on the next poll. Nudge index viewers once a minute.
   setInterval(() => publish("*", { tick: true }), 60_000).unref();
   watch(ROOT, { recursive: true }, (_event, file) => onChange(file ? String(file) : ""));
+  watchSystemTheme();
   const server = createServer(handler);
   server.on("error", (e) => {
     // Another daemon won the race for the port: that one serves, this one goes.

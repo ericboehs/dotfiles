@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fuzzyScore, matchKeys, nextSeen, orderSessions, rankItems, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
-import { mix, prettyName, readPair, swatch, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
+import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
 const THEMES = JSON.parse(readFileSync(new URL("../extensions/canvas/themes.json", import.meta.url), "utf8")).themes;
@@ -61,6 +61,16 @@ test("readPair keeps known themes in the right slot and falls back to canvas", (
 
 test("parseColors reads Omarchy's flat colors.toml", () => {
   assert.deepEqual(parseColors('mode = "dark"\n# c\naccent = "#7aa2f7"\n\nbright_red = "#ff7a93"\nbad line'), { mode: "dark", accent: "#7aa2f7", bright_red: "#ff7a93" });
+});
+
+test("systemTheme: a whole palette or null, and a safe name", () => {
+  const toml = 'mode = "dark"\nbackground = "#1a1b26"\nforeground = "#a9b1d6"\n';
+  assert.deepEqual(systemTheme(toml, "tokyo-night\n"), { name: "tokyo-night", colors: { mode: "dark", background: "#1a1b26", foreground: "#a9b1d6" } });
+  assert.equal(systemTheme(toml, "").name, "system", "no theme.name");
+  assert.equal(systemTheme(toml, "<b>evil</b> name").name, "bevilbname", "only name characters survive");
+  assert.equal(systemTheme('mode = "dark"\nbackground = "#1a1b26"\n', "x"), null, "no foreground: mid-switch");
+  assert.equal(systemTheme("", "x"), null);
+  assert.equal(themeMode(systemTheme('background = "#fffcf0"\nforeground = "#100f0f"', "x").colors), "light", "no mode line: judged by background");
 });
 
 // ── nav.mjs ──────────────────────────────────────────────────────────────────
