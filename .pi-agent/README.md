@@ -799,7 +799,16 @@ updates through server-sent events with no reload.
   newest six are kept. After every turn the page also updates a **Files
   changed** table (paths and edit counts from tool calls) and a
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
-  the session folder. `PI_CANVAS_AUTO=0` turns all of this off.
+  the session folder. When this session has used agent-link, an **Agents**
+  card lists each agent it sent to or heard from, newest exchange first: a
+  live dot (working, idle, or a hollow ring once it has exited, from
+  agent-link's registry in `~/.claude/sessions`), ↑ sent / ↓ received counts
+  and the last message's first line. A click opens the last six messages and
+  the agent's folder, with a link to its canvas page if it has one. It's
+  rebuilt from the session's own history (sends, asks and their answers,
+  replies, and agent-link's headers on incoming messages) after each turn,
+  when a message arrives, and on startup, so nothing in agent-link changes.
+  `PI_CANVAS_AUTO=0` turns all of this off.
 - **Diffs and lightbox.** Before the agent's first `edit` or `write` to a file,
   the extension copies what the file held (`base-<id>`, never served). After
   each turn, `git diff --no-index` writes `diff-<id>.patch`, the change since
@@ -826,8 +835,8 @@ updates through server-sent events with no reload.
   rendered until it's opened, and it shows a dot when it changes while
   collapsed. On a window 1200px or wider, a sticky sidebar holds Contents (every
   section with its age; a click opens and scrolls to it; past six, older
-  collapsed sections wait behind "Show N older"), Files changed and
-  Screenshots. Narrower, those two widgets sit among the sections in time
+  collapsed sections wait behind "Show N older"), Agents, Files changed and
+  Screenshots. Narrower, those widgets sit among the sections in time
   order.
 - **Waiting on you.** A strip above the header has a chip for each other
   live session that is blocked, done or failed and changed since you last had
@@ -846,7 +855,7 @@ updates through server-sent events with no reload.
   away, the section at the top of the window stands in). `l` moves right to
   the side panel and `h` back left, and `j` / `k` stay in the column you're in. `l`
   lands on the current section's entry in Contents; there `j` / `k` step
-  through the entries (then on to Files changed and Screenshots), and Enter or
+  through the entries (then on to Agents, Files changed and Screenshots), and Enter or
   `h` opens the highlighted section and moves the ring to it.
   `gg` / `G` top and bottom, `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
   `N` the next or previous section with the changed-while-folded dot. Enter, `o`

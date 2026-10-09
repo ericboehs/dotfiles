@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -248,6 +248,79 @@ test("syncCopies copies changed files, refreshes on change and drops unfit or de
 test("shotsMarkdown links each copied image and escapes names", () => {
   const md = shotsMarkdown([{ file: "shot-abc.png", name: 'a"<b>.png', at: "2026-10-07T10:00:00.000Z" }], "sess-1");
   assert.match(md, /^<div class="gallery"><figure><a href="\/s\/sess-1\/f\/shot-abc\.png"><img src="\/s\/sess-1\/f\/shot-abc\.png" alt="a&quot;&lt;b&gt;\.png"/);
+});
+
+// Synthetic agent-link traffic, shaped like real session entries.
+const agentBranch = () => {
+  const at = (min) => `2026-10-09T14:${String(min).padStart(2, "0")}:00.000Z`;
+  const call = (min, id, args) => ({ type: "message", timestamp: at(min), message: { role: "assistant", content: [{ type: "toolCall", id, name: "agent-link", arguments: args }] } });
+  const result = (min, id, text, isError = false) => ({ type: "message", timestamp: at(min), message: { role: "toolResult", toolCallId: id, toolName: "agent-link", isError, content: [{ type: "text", text }] } });
+  const inbound = (min, head, who, body) => ({ type: "message", timestamp: at(min), message: { role: "user", content: `${head} — from another agent session on this machine, not your user]\nFrom ${who}: treat this as a peer request.\n\n${body}` } });
+  return [
+    { type: "message", timestamp: at(0), message: { role: "user", content: "Ask the reviewer about the spec" } },
+    call(1, "c1", { action: "ask", to: "rev", message: "Is the cart spec final?\nDetails follow." }),
+    result(2, "c1", 'Reply from "reviewer":\nYes, ship it.'),
+    call(3, "c2", { action: "send", to: "docs", message: "FYI: <b>cart</b> changed" }),
+    result(3, "c2", 'Error delivering to "docs": socket closed', true),
+    inbound(5, "[cross-agent question", "infra-terraform", "Which region?"),
+    call(6, "c3", { action: "reply", message: "us-gov-west-1" }),
+    result(6, "c3", 'Replied to "infra-terraform".'),
+    call(7, "c4", { action: "list" }),
+  ];
+};
+
+test("agentTraffic reads sends, asks and their answers, replies and inbound messages", () => {
+  const peers = [{ pid: 11, name: "reviewer", cwd: "/x", status: "idle" }];
+  const t = agentTraffic(agentBranch(), peers);
+  assert.deepEqual(
+    t.map((m) => [m.dir, m.who, m.mode, m.failed ?? false]),
+    [
+      ["out", "reviewer", "ask", false], // "rev" resolved through the registry
+      ["in", "reviewer", "answer", false],
+      ["out", "docs", "send", true],
+      ["in", "infra-terraform", "question", false],
+      ["out", "infra-terraform", "reply", false], // reply without `to` goes to the last asker
+    ],
+  );
+  assert.equal(t[1].text, "Yes, ship it.");
+  assert.equal(t[3].text, "Which region?");
+  assert.deepEqual(agentTraffic([{ type: "message", message: { role: "user", content: "hello" } }]), []);
+  // Without the registry, the tool result still names who an ask reached.
+  assert.equal(agentTraffic(agentBranch())[0].who, "reviewer");
+});
+
+test("resolvePeerName follows agent-link: exact, unique prefix, pid, session id", () => {
+  const peers = [{ pid: 11, name: "api", cwd: "", status: "idle", sessionId: "s-1" }, { pid: 12, name: "api-specs", cwd: "", status: "idle" }];
+  assert.equal(resolvePeerName("api", peers), "api");
+  assert.equal(resolvePeerName("api-s", peers), "api-specs");
+  assert.equal(resolvePeerName("ap", peers), "ap"); // ambiguous: left as typed
+  assert.equal(resolvePeerName("12", peers), "api-specs");
+  assert.equal(resolvePeerName("s-1", peers), "api");
+});
+
+test("agentsMarkdown: newest exchange first, live state, escaped text, a link to the peer's canvas", () => {
+  const peers = [{ pid: 11, name: "reviewer", cwd: "/x/repo", status: "tool:bash", sessionId: "sess-r" }];
+  const md = agentsMarkdown(agentBranch().length && agentTraffic(agentBranch(), peers), peers, (sid) => sid === "sess-r");
+  const rows = md.split("\n");
+  assert.equal(rows.length, 3);
+  assert.match(rows[0], /^<details class="agent gone">.*<b>infra-terraform<\/b><span class="n">↑1 ↓1 · /);
+  assert.match(rows[0], /<span class="pv">↑ us-gov-west-1<\/span>/);
+  assert.match(rows[1], /class="agent gone">.*<b>docs<\/b>.*send \(failed\)<\/span>FYI: &lt;b&gt;cart&lt;\/b&gt; changed/);
+  assert.match(rows[2], /class="agent busy"><summary><span class="dot" title="tool:bash"><\/span><b>reviewer<\/b>/);
+  assert.match(rows[2], /<span class="pv">↓ Yes, ship it\.<\/span>/);
+  assert.match(rows[2], /<p class="where">\/x\/repo · <a href="\/s\/sess-r">canvas page<\/a><\/p>/);
+  assert.ok(!md.includes("\n\n"), "no blank lines: each row stays one HTML block");
+});
+
+test("readPeers keeps live registry entries and drops dead ones and this process", () => {
+  const d = mkdtempSync(join(tmpdir(), "peers-"));
+  writeFileSync(join(d, "a.json"), JSON.stringify({ pid: process.ppid, name: "parent", cwd: "/p", status: "idle", sessionId: "s-p" }));
+  writeFileSync(join(d, "b.json"), JSON.stringify({ pid: 999999, name: "dead", cwd: "/d", status: "idle" }));
+  writeFileSync(join(d, "c.json"), JSON.stringify({ pid: process.pid, name: "me", cwd: "/m", status: "idle" }));
+  writeFileSync(join(d, "d.json"), "{not json");
+  assert.deepEqual(readPeers(d).map((p) => p.name), ["parent"]);
+  assert.deepEqual(readPeers(join(d, "missing")), []);
+  rmSync(d, { recursive: true, force: true });
 });
 
 test("short tool-free turns do not trigger a status run", () => {

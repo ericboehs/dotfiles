@@ -44,6 +44,24 @@ header.top .tools .back { margin-left: 8px; }
 .side .gallery { grid-template-columns: 1fr 1fr; gap: 8px; }
 .side .gallery img { height: 96px; }
 .side .gallery figcaption { font-size: 11px; }
+/* Agents (auto-agents): one expandable row per agent this session talked to */
+.md details.agent { border-top: 1px solid var(--line); padding: 7px 0; }
+.md details.agent:first-child { border-top: 0; padding-top: 0; }
+.md details.agent > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: auto 1fr auto; column-gap: 7px; align-items: center; }
+.md details.agent > summary::-webkit-details-marker { display: none; }
+.md details.agent .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.md details.agent.busy .dot { background: var(--accent); }
+.md details.agent.gone .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--dim); }
+.md details.agent.gone b { color: var(--dim); }
+.md details.agent b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md details.agent .n { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.md details.agent .pv { grid-column: 2 / 4; color: var(--dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md details.agent[open] .pv { display: none; } /* the list below repeats it */
+.md details.agent ul { list-style: none; margin: 6px 0 0 15px; padding: 0; font-size: 12.5px; }
+.md details.agent li { margin: 0 0 6px; overflow-wrap: anywhere; }
+.md details.agent li .when { display: block; color: var(--dim); font-size: 11.5px; }
+.md details.agent li.failed { color: var(--bad); }
+.md details.agent .where { margin: 2px 0 0 15px; color: var(--dim); font-size: 12px; }
 .toc { list-style: none; margin: 0; padding: 4px 0; }
 dialog.modal { padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); width: min(1180px, 94vw); max-width: 94vw; max-height: 92vh; box-shadow: 0 24px 70px rgba(0, 0, 0, .35); overflow: hidden; }
 dialog.modal[open] { display: flex; flex-direction: column; }
@@ -814,7 +832,7 @@ function collapsible(card, key, onOpen, at) {
 }
 
 /** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
-const WIDGETS = ["auto-files", "auto-screenshots"];
+const WIDGETS = ["auto-agents", "auto-files", "auto-screenshots"];
 const WIDE = "(min-width: 1200px)";
 
 /** Status and Findings stay on top. Sections follow, newest change first. */

@@ -18,14 +18,14 @@
  *
  * Env: PI_CANVAS=0 disables everything; PI_CANVAS_STATUS=0 keeps the tool but
  * stops status runs; PI_CANVAS_MODEL=provider/id overrides the status model;
- * PI_CANVAS_AUTO=0 stops the auto findings, sections, Files changed and
+ * PI_CANVAS_AUTO=0 stops the auto findings, sections, Agents, Files changed and
  * Screenshots widgets; PI_CANVAS_PORT / PI_CANVAS_ROOT move the daemon. Subagent children
  * (PI_SUBAGENT_CHILD=1) skip the canvas.
  */
 
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -421,6 +421,127 @@ export function shotsMarkdown(shots: Shot[], sessionId: string): string {
   const src = (f: string) => `/s/${encodeURIComponent(sessionId)}/f/${encodeURIComponent(f)}`;
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
   return `<div class="gallery">${shots.map((x) => `<figure><a href="${src(x.file)}"><img src="${src(x.file)}" alt="${esc(x.name)}" loading="lazy"></a><figcaption>${esc(x.name)} · ${clockTime(x.at)}</figcaption></figure>`).join("")}</div>`;
+}
+
+// ── Agents: who this session talked to over agent-link ──
+
+/** Live agents from agent-link's registry (~/.claude/sessions/<pid>.json), this process left out. */
+export function readPeers(dir = join(homedir(), ".claude", "sessions")): Peer[] {
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const peers: Peer[] = [];
+  for (const f of files) {
+    try {
+      const s = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      if (typeof s?.pid !== "number" || s.pid === process.pid) continue;
+      process.kill(s.pid, 0); // throws when the process is gone
+      peers.push({ pid: s.pid, name: typeof s.name === "string" ? s.name : `pid ${s.pid}`, cwd: typeof s.cwd === "string" ? s.cwd : "", status: typeof s.status === "string" ? s.status : "unknown", sessionId: typeof s.sessionId === "string" ? s.sessionId : undefined });
+    } catch {}
+  }
+  return peers;
+}
+
+/** One agent-link message, as this session saw it. */
+export type AgentMsg = { dir: "out" | "in"; who: string; mode: "send" | "ask" | "reply" | "answer" | "message" | "question"; text: string; at: string; failed?: boolean };
+/** A live agent from the registry agent-link (and Claude Code) share. */
+export type Peer = { pid: number; name: string; cwd: string; status: string; sessionId?: string };
+
+/** agent-link's headers on a message it injects (see frameInbound in pi-agent-link). */
+const INBOUND = [
+  ["[cross-agent message", "message"],
+  ["[cross-agent question", "question"],
+  ["[reply from", "reply"],
+] as const;
+
+/** Every agent-link message on the branch, oldest first: our sends, asks and replies, and what came in. */
+export function agentTraffic(branch: unknown[], peers: Peer[] = []): AgentMsg[] {
+  const out: AgentMsg[] = [];
+  const asks = new Map<string, AgentMsg>();
+  const sent = new Map<string, AgentMsg>();
+  let lastAsker = "";
+  for (const raw of (branch || []) as (Entry & { timestamp?: string })[]) {
+    const m = raw?.message as (Entry["message"] & { timestamp?: number }) | undefined;
+    if (raw?.type !== "message" || !m) continue;
+    const at = raw.timestamp || (m.timestamp ? new Date(m.timestamp).toISOString() : new Date(0).toISOString());
+    if (m.role === "user") {
+      const t = textOf(m.content);
+      const kind = INBOUND.find(([head]) => t.startsWith(head));
+      const from = kind && /^From (.+?): /m.exec(t);
+      const who = from?.[1];
+      if (!kind || !who) continue;
+      const cut = t.indexOf("\n\n");
+      out.push({ dir: "in", who, mode: kind[1], text: cut >= 0 ? t.slice(cut + 2) : t, at });
+      if (kind[1] === "question") lastAsker = who;
+    } else if (m.role === "assistant" && Array.isArray(m.content)) {
+      for (const p of m.content as (Part & { id?: string })[]) {
+        const a = (p?.type === "toolCall" && p.name === "agent-link" && p.arguments) || null;
+        if (!a || !["send", "ask", "reply"].includes(String(a.action)) || typeof a.message !== "string") continue;
+        const to = typeof a.to === "string" && a.to.trim() ? resolvePeerName(a.to.trim(), peers) : a.action === "reply" ? lastAsker : "";
+        if (!to) continue;
+        const msg: AgentMsg = { dir: "out", who: to, mode: a.action as AgentMsg["mode"], text: a.message, at };
+        out.push(msg);
+        if (p.id) (a.action === "ask" ? asks : sent).set(p.id, msg);
+      }
+    } else if (m.role === "toolResult" && m.toolName === "agent-link" && m.toolCallId) {
+      const t = textOf(m.content);
+      const mine = asks.get(m.toolCallId) ?? sent.get(m.toolCallId);
+      if (!mine) continue;
+      // The tool's result names the agent it resolved, so a prefix or pid becomes the real name.
+      const named = /^(?:Delivered to|Reply from|Sent to|Replied to|Error delivering to|Error replying to) "(.+?)"/.exec(t);
+      if (named?.[1]) mine.who = named[1];
+      if (m.isError) mine.failed = true;
+      else if (asks.has(m.toolCallId) && t.startsWith("Reply from")) out.push({ dir: "in", who: mine.who, mode: "answer", text: t.slice(t.indexOf("\n") + 1), at });
+    }
+  }
+  return out;
+}
+
+/** What agent-link would resolve `to` to: exact name, a unique prefix, a pid, or a session id. */
+export function resolvePeerName(to: string, peers: Peer[]): string {
+  const exact = peers.find((p) => p.name === to);
+  if (exact) return exact.name;
+  const pre = peers.filter((p) => p.name.toLowerCase().startsWith(to.toLowerCase()));
+  if (pre.length === 1 && pre[0]) return pre[0].name;
+  return peers.find((p) => String(p.pid) === to || p.sessionId === to)?.name ?? to;
+}
+
+/** The Agents card: one expandable row per agent, the most recent exchange first. */
+export function agentsMarkdown(traffic: AgentMsg[], peers: Peer[], hasCanvas: (sessionId: string) => boolean = () => false, max = 12): string {
+  const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const first = (t: string, n: number) => oneLine(t.split("\n").find((l) => l.trim()) ?? "", n);
+  const byWho = new Map<string, AgentMsg[]>();
+  for (const m of traffic) byWho.set(m.who, [...(byWho.get(m.who) ?? []), m]);
+  const when = (iso: string) => {
+    const d = new Date(iso);
+    return d.toDateString() === new Date().toDateString() ? clockTime(iso) : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${clockTime(iso)}`;
+  };
+  const rows = [...byWho.entries()].sort((a, b) => b[1].at(-1)!.at.localeCompare(a[1].at(-1)!.at)).slice(0, max);
+  return rows
+    .map(([who, msgs]) => {
+      const peer = peers.find((p) => p.name === who);
+      const state = !peer ? "gone" : peer.status === "idle" ? "idle" : "busy";
+      const label = !peer ? "not running" : peer.status;
+      const last = msgs.at(-1)!;
+      const up = msgs.filter((m) => m.dir === "out").length;
+      const down = msgs.length - up;
+      const arrow = (m: AgentMsg) => (m.dir === "out" ? "↑" : "↓");
+      const items = msgs
+        .slice(-6)
+        .map((m) => `<li class="${m.dir}${m.failed ? " failed" : ""}"><span class="when">${arrow(m)} ${when(m.at)} · ${m.mode}${m.failed ? " (failed)" : ""}</span>${esc(oneLine(m.text, 240))}</li>`)
+        .join("");
+      const where = peer ? [esc(peer.cwd.replace(homedir(), "~")), peer.sessionId && hasCanvas(peer.sessionId) ? `<a href="/s/${encodeURIComponent(peer.sessionId)}">canvas page</a>` : ""].filter(Boolean).join(" · ") : "";
+      return (
+        `<details class="agent ${state}"><summary><span class="dot" title="${esc(label)}"></span><b>${esc(who)}</b>` +
+        `<span class="n">↑${up} ↓${down} · ${when(last.at)}</span>` +
+        `<span class="pv">${arrow(last)} ${esc(first(last.text, 90))}</span></summary>` +
+        `<ul>${items}</ul>${where ? `<p class="where">${where}</p>` : ""}</details>`
+      );
+    })
+    .join("\n");
 }
 
 export function parseStatus(text: string): Status | null {
@@ -942,7 +1063,17 @@ export default function canvas(pi: ExtensionAPI) {
   }
 
   const AUTO_SECTIONS_KEPT = 6;
-  const WIDGETS = new Set(["auto-files", "auto-screenshots"]);
+  const WIDGETS = new Set(["auto-agents", "auto-files", "auto-screenshots"]);
+
+  /** Agents: rebuilt from the branch each time, so it backfills and follows branch switches. */
+  function updateAgents(ctx: ExtensionContext) {
+    const peers = readPeers();
+    const traffic = agentTraffic(ctx.sessionManager.getBranch() || [], peers);
+    if (!traffic.length && !existsSync(join(dir(), "auto-agents.md"))) return;
+    const d = ensureDir(ctx);
+    const body = traffic.length ? agentsMarkdown(traffic, peers, (sid) => existsSync(join(canvasRoot(), sid, "meta.json"))) : "No agent-link messages on this branch.";
+    putMarkdown(d, { id: "auto-agents", title: "Agents", body, by: "auto" });
+  }
 
   /** Record Haiku's findings and section, then trim old auto sections. */
   function applyExtras(d: string, extras: Extras, known: string[], agentWroteSection: boolean) {
@@ -1104,6 +1235,7 @@ export default function canvas(pi: ExtensionAPI) {
       // A reload keeps the session and whatever state it was in; any other
       // start begins idle, as pi's own status does.
       if (event.reason !== "reload") writeActivity(true);
+      if (autoOn && ctx.hasUI) void serial(() => updateAgents(ctx)).catch(() => {});
     }
     void ensureDaemon();
   });
@@ -1117,7 +1249,14 @@ export default function canvas(pi: ExtensionAPI) {
     writeActivity();
   };
   pi.on("agent_start", track);
-  pi.on("message_end", track);
+  pi.on("message_end", (event, ctx) => {
+    track(event);
+    // A message from another agent shows in Agents right away, not after the turn it starts.
+    const m = (event as { message?: { role?: string; content?: unknown } }).message;
+    if (!autoOn || !ctx.hasUI || !sessionId || m?.role !== "user") return;
+    const t = textOf(m.content);
+    if (t.startsWith("[cross-agent") || t.startsWith("[reply from")) void serial(() => updateAgents(ctx)).catch(() => {});
+  });
   pi.on("session_before_compact", track);
   pi.on("session_compact", track);
   pi.on("session_compact_failed", track);
@@ -1139,6 +1278,7 @@ export default function canvas(pi: ExtensionAPI) {
     if (autoOn) {
       const turn = lastTurn(ctx.sessionManager.getBranch() || []);
       void serial(() => updateWidgets(ctx, turn)).catch(() => {});
+      void serial(() => updateAgents(ctx)).catch(() => {});
     }
     if (event.aborted || !statusOn) return;
     void refreshStatus(ctx);
