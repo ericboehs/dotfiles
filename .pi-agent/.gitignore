@@ -5,6 +5,7 @@
 !settings.*.json
 !models.*.json
 !keybindings.json
+!AGENTS.md
 !approval-guardian.json
 !web-search.json
 

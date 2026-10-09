@@ -209,6 +209,9 @@ REPO_PATH = "ericboehs/dotfiles"
 # shared copy meant every machine carried a permanent conflicting diff of the
 # same file. bootstrap:pi links the per-host .pi-agent/settings.<host>.json.
 "~/.pi/agent/keybindings.json" = ".pi-agent/keybindings.json"
+# Global agent instructions. Published, so keep it free of family and
+# coworker details.
+"~/.pi/agent/AGENTS.md" = ".pi-agent/AGENTS.md"
 "~/.pi/agent/approval-guardian.json" = ".pi-agent/approval-guardian.json"
 # One directory link means a newly pulled extension appears immediately. Using
 # symlink-each here left existing hosts without new files until bootstrap ran.
