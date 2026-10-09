@@ -169,6 +169,7 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .term-meta .btn { margin: -4px -6px -4px 0; }
 .term-exit { font-weight: 600; }
 .term-exit.ok { color: var(--ok); } .term-exit.bad { color: var(--bad); }
+.files-more { display: block; margin: 6px 0 0; }
 .term-running { display: inline-flex; gap: 6px; align-items: center; color: var(--ok); font-variant-numeric: tabular-nums; }
 .term-tools { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .term-tools .btn { margin-left: auto; }
@@ -922,6 +923,24 @@ function findingsCard(findings, showAll = false) {
 const rawUrl = (id, sec, bust = true) =>
   `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(sec.file)}${bust ? `?v=${encodeURIComponent(sec.at || "")}` : ""}`;
 
+// Files changed: the newest few rows, the rest behind a toggle that holds across updates.
+const FILES_SHOWN = 5;
+let filesAll = false;
+function foldFiles(body) {
+  const extra = [...body.querySelectorAll("tbody tr")].slice(FILES_SHOWN);
+  if (!extra.length) return body;
+  const btn = h("button", { class: "btn files-more", type: "button" });
+  const set = () => {
+    extra.forEach((r) => (r.hidden = !filesAll));
+    btn.textContent = filesAll ? "Show fewer" : `Show ${extra.length} more`;
+    btn.setAttribute("aria-expanded", String(filesAll));
+  };
+  btn.addEventListener("click", () => ((filesAll = !filesAll), set()));
+  set();
+  body.append(btn);
+  return body;
+}
+
 function sectionCard(id, sec) {
   const meta = h(
     "span",
@@ -945,7 +964,7 @@ function sectionCard(id, sec) {
     sec.id,
     () =>
       sectionBody(id, sec).then(
-        (body) => bd.replaceChildren(body),
+        (body) => bd.replaceChildren(sec.id === "auto-files" ? foldFiles(body) : body),
         (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
       ),
     WIDGETS.includes(sec.id) ? undefined : sec.at, // widgets never fold by age
