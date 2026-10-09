@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -267,6 +267,34 @@ test("turnDigest carries previous status, tools, files and todos", () => {
   assert.match(d, /Files changed: x\.ts/);
   assert.match(d, /- \[ \] #1 thing/);
   assert.match(turnDigest({ user: "", tools: [], files: [], reply: "" }, null), /Previous status: none/);
+  const withSecs = turnDigest({ user: "", tools: [], files: [], reply: "" }, null, { sections: [{ id: "plan", title: "Plan", kind: "steps" }, { id: "auto-notes", title: "Notes", kind: "markdown", by: "auto" }] });
+  assert.match(withSecs, /- plan: Plan \[steps\] \(agent's\)/);
+  assert.match(withSecs, /- auto-notes: Notes \[markdown\] \(yours\)/);
+});
+
+test("lastTurn names a canvas post by kind and id, not by its file path", () => {
+  const call = (args) => ({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "canvas", arguments: args }] } });
+  const t = lastTurn([
+    { type: "message", message: { role: "user", content: "post it" } },
+    call({ kind: "table", id: "commits-table", path: "/tmp/commits.json" }),
+    call({ kind: "finding", body: "x" }),
+    call({ kind: "markdown", id: "old", remove: true }),
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: "/tmp/a.txt" } }] } },
+  ]);
+  assert.deepEqual(t.tools.map((x) => x.arg), ["table commits-table", "finding", "remove old", "/tmp/a.txt"]);
+});
+
+test("prompt copy points at the newer kinds and keeps bodies out of context", async () => {
+  assert.match(STATUS_PROMPT, /restate one on the same topic in another form/);
+  let tool;
+  const pi = new Proxy({}, { get: (_, k) => (k === "registerTool" ? (d) => (tool = d) : k === "getSessionName" ? () => "" : () => {}) });
+  await canvasExtension(pi);
+  assert.match(tool.promptSnippet, /checklists, command output, timelines/);
+  const rules = tool.promptGuidelines.join("\n");
+  assert.match(rules, /a plan \(as steps\)/);
+  assert.match(rules, /or a compare section when there is a clear before and after/);
+  assert.match(rules, /over ~2 KB, write a file and pass path/);
+  for (const k of ["terminal", "stats", "table", "compare", "steps", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
 });
 
 test("parseStatus accepts fenced JSON and clamps lists", () => {

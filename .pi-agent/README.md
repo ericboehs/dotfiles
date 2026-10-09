@@ -788,8 +788,11 @@ updates through server-sent events with no reload.
   opens it in the modal. `/html-plan` now puts
   its packed page here instead of opening Safari. The tool's guidelines tell
   the main agent to use it without being asked: a finding for each confirmed
-  root cause, gotcha or decision, and a section for tables, diagrams and
-  command lists.
+  root cause, gotcha or decision, a section for tables, diagrams and
+  command lists, plans as a `steps` checklist, and a file `path` instead of
+  an inline body over ~2 KB so the data stays out of its context. The status
+  digest names each canvas post by kind and id, and lists the page's
+  sections with their kinds so Haiku doesn't restate one in another form.
 - **Auto content.** The same Haiku call may add up to two findings and one
   `auto-*` section per turn. Findings are tagged `auto` and deduplicated.
   Haiku's section is skipped when the agent wrote one that turn, and only the

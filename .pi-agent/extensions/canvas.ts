@@ -114,7 +114,11 @@ export function lastTurn(branch: unknown[]): Turn {
       if (p?.type === "text" && p.text?.trim()) turn.reply = p.text.trim();
       if (p?.type !== "toolCall" || !p.name) continue;
       const a = p.arguments ?? {};
-      const arg = a.command ?? a.path ?? a.query ?? a.url ?? a.pattern ?? a.id ?? a.op ?? "";
+      // A canvas post reads as its kind and section id (a path alone would hide both).
+      const arg =
+        p.name === "canvas"
+          ? [a.remove ? "remove" : a.kind, a.id].filter(Boolean).join(" ")
+          : (a.command ?? a.path ?? a.query ?? a.url ?? a.pattern ?? a.id ?? a.op ?? "");
       const failed = Boolean(p.id && errored.has(p.id));
       turn.tools.push({ name: p.name, arg: oneLine(arg, 160), error: failed });
       if ((p.name === "edit" || p.name === "write") && typeof a.path === "string") {
@@ -148,7 +152,7 @@ export function worthStatus(turn: Turn): boolean {
 export function turnDigest(
   turn: Turn,
   prev: Status | null,
-  extra: { name?: string; cwd?: string; todo?: string[]; findings?: string[]; sections?: { id: string; title: string; by?: string }[] } = {},
+  extra: { name?: string; cwd?: string; todo?: string[]; findings?: string[]; sections?: { id: string; title: string; kind?: string; by?: string }[] } = {},
 ): string {
   const lines: string[] = [];
   lines.push(`Previous status: ${prev ? JSON.stringify({ goal: prev.goal, now: prev.now, done: prev.done, open: prev.open, next: prev.next }) : "none"}`);
@@ -161,7 +165,7 @@ export function turnDigest(
   if (turn.files.length) lines.push("", `Files changed: ${turn.files.slice(0, 20).join(", ")}`);
   if (extra.todo?.length) lines.push("", "Open tasks:", ...extra.todo.slice(0, 10).map((t) => `- ${t}`));
   lines.push("", "Recent findings (do not repeat these):", ...(extra.findings?.length ? extra.findings.slice(-12).map((f) => `- ${oneLine(f, 200)}`) : ["- none"]));
-  lines.push("", "Sections on the page:", ...(extra.sections?.length ? extra.sections.map((x) => `- ${x.id}: ${x.title}${x.by === "auto" ? " (yours)" : " (agent's)"}`) : ["- none"]));
+  lines.push("", "Sections on the page:", ...(extra.sections?.length ? extra.sections.map((x) => `- ${x.id}: ${x.title}${x.kind ? ` [${x.kind}]` : ""}${x.by === "auto" ? " (yours)" : " (agent's)"}`) : ["- none"]));
   lines.push("", `Agent's final reply:\n${turn.reply.slice(0, 4000)}`);
   return lines.join("\n");
 }
@@ -176,7 +180,7 @@ export const STATUS_PROMPT = [
   "open: questions or decisions waiting on the user, at most 4. Drop ones that were answered.",
   "next: at most 3 likely next actions.",
   "findings: 0 to 2 durable facts learned this turn that someone resuming the work later would need: a root cause, a gotcha, a non-obvious constraint, an API fact, or a decision and its reason. Not progress reports, not plans. Each at most 30 words; `code` allowed. Skip anything already in Recent findings. Usually empty.",
-  "section: when the turn produced reference material worth keeping in view, such as a comparison or table, a state or option matrix, a set of commands, or a short design summary, return it as GitHub markdown (tables and ```mermaid fences allowed), at most 2500 characters, with a short title and a lowercase-slug id. To revise one of your own sections, reuse its id. Never copy an agent's section. Otherwise null; most turns are null.",
+  "section: when the turn produced reference material worth keeping in view, such as a comparison or table, a state or option matrix, a set of commands, or a short design summary, return it as GitHub markdown (tables and ```mermaid fences allowed), at most 2500 characters, with a short title and a lowercase-slug id. To revise one of your own sections, reuse its id. Never copy an agent's section, or restate one on the same topic in another form. Otherwise null; most turns are null.",
   "Plain text in status fields, no markdown. Never include secrets, tokens, passwords or keys anywhere.",
 ].join("\n");
 
@@ -1063,7 +1067,7 @@ export default function canvas(pi: ExtensionAPI) {
     } catch {}
     const sections = readJson<Section[]>(join(d, "sections.json"), [])
       .filter((x) => !WIDGETS.has(x.id))
-      .map((x) => ({ id: x.id, title: x.title, by: x.by }));
+      .map((x) => ({ id: x.id, title: x.title, kind: x.kind, by: x.by }));
     const digest = turnDigest(turn, prev, { name: pi.getSessionName(), cwd: ctx.cwd, todo, ...(autoOn ? { findings: known, sections } : {}) });
 
     inflight?.abort();
@@ -1205,15 +1209,16 @@ export default function canvas(pi: ExtensionAPI) {
       "light and dark handled, buttons (class primary), inputs, range sliders, select and tables already styled, and classes k-row, k-col, k-grid, k-card, k-stat (b + span), k-field (label above a control), k-muted, k-tag, k-ok, k-warn, k-bad, k-bar (> i). " +
       "They run in an isolated frame: no network, no access to the page, and localStorage lasts only until reload. " +
       "Use remove: true to delete a section. Returns the page URL; it does not open a browser.",
-    promptSnippet: "canvas: put tables, diagrams, plans, screenshots and findings on this session's live web page",
+    promptSnippet: "canvas: put tables, charts, checklists, command output, timelines, diagrams, screenshots and findings on this session's live web page",
     promptGuidelines: [
       "The user keeps the canvas open beside the terminal and expects it to grow as you work. Use canvas proactively, without being asked.",
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
-      "When a reply would contain a table, an option or state matrix, a diagram, a plan or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
+      "When a reply would contain a table, an option or state matrix, a diagram, a plan (as steps), or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
       "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
         "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
-      "After verifying UI work with screenshots, add the one that shows the result as an image section.",
+      "After verifying UI work with screenshots, add the one that shows the result as an image section, or a compare section when there is a clear before and after.",
+      "For a body over ~2 KB, write a file and pass path; the data then stays out of your context.",
       "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Haiku notes); leave them alone.",
       "Never put secrets, tokens or passwords on the canvas.",
     ],
