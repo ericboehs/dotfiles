@@ -190,7 +190,10 @@ async function mount(overrides = {}) {
 
   const component = factory(
     { requestRender: () => { renders += 1; }, mode: "fullscreen" },
-    { fg: (color, text) => (color === "dim" ? `\x1B[2m${text}\x1B[22m` : text) },
+    {
+      fg: (color, text) => (color === "dim" ? `\x1B[2m${text}\x1B[22m` : text),
+      appearance: overrides.appearance ?? "dark",
+    },
     {
       getGitBranch: () => branch,
       getExtensionStatuses: () => statuses,
@@ -211,6 +214,8 @@ async function mount(overrides = {}) {
     /** Fire the input event, as pi does when something is submitted. */
     input: (event = { source: "interactive", text: "hi" }) => pi.handlers.input(event, ctx),
     startSession: (event = {}) => pi.handlers.session_start(event, ctx),
+    /** Fire a session event registered with pi.on (message_start, ...). */
+    fire: (name, event) => pi.handlers[name](event, ctx),
     renderCount: () => renders,
     /** Render once with ANSI stripped. */
     plain: (width = 120) => component.render(width).map(strip),
@@ -256,6 +261,138 @@ function clampThinking(requested, supported) {
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
   assert.equal((await ui.settled())[0], "dotfiles master* gh opus hi 41.2k/1m");
+});
+
+/** Drive one streamed reply: turn_start, ttft wait, deltas over `ms`, message_end. */
+async function streamReply(ui, clock, { ttft = 1_000, ms = 1_000, chars = 400, output }) {
+  await ui.fire("turn_start", { type: "turn_start", turnIndex: 0, timestamp: clock.now });
+  await ui.fire("message_start", { message: { role: "assistant", usage: { output: 0 } } });
+  clock.now += ttft;
+  const delta = (text) => ui.fire("message_update", {
+    message: { role: "assistant", usage: { output: 0 } },
+    assistantMessageEvent: { type: "text_delta", delta: text },
+  });
+  await delta("");
+  clock.now += ms;
+  await delta("x".repeat(chars));
+  await ui.fire("message_end", { message: { role: "assistant", usage: { output } } });
+}
+
+test("tk/s chip: bare live estimate while streaming, exact rate after message_end", async (t) => {
+  const clock = { now: 1_000_000 };
+  t.mock.method(Date, "now", () => clock.now);
+  const ui = await mount();
+  assert.ok(!/ \d+$/.test(ui.plain()[0]));
+  await ui.fire("turn_start", {});
+  await ui.fire("message_start", { message: { role: "assistant", usage: { output: 0 } } });
+  clock.now += 3_100;
+  const message = { role: "assistant", usage: { output: 0 } };
+  // *_start events are not tokens and do not stop the TTFT clock.
+  await ui.fire("message_update", { message, assistantMessageEvent: { type: "text_start" } });
+  await ui.fire("message_update", { message, assistantMessageEvent: { type: "text_delta", delta: "hi" } });
+  clock.now += 1_000;
+  // 400 chars ≈ 100 tokens over 1s at the uncalibrated chars/4.
+  await ui.fire("message_update", { message, assistantMessageEvent: { type: "text_delta", delta: "x".repeat(398) } });
+  assert.match(ui.raw()[0], /\x1B\[2m\x1B\[38;2;148;226;213m100\x1B\[39m\x1B\[22m$/);
+  clock.now += 1_000;
+  // The rate runs from the first token: 85 tokens over 2s, TTFT excluded, rounded.
+  await ui.fire("message_end", { message: { role: "assistant", usage: { output: 85 } } });
+  assert.ok(ui.plain()[0].endsWith(" 43"));
+  ui.click(ui.plain()[0].length - 1, 0);
+  assert.ok(ui.plain()[0].endsWith(" 3.1s 43tk/s"));
+  ui.click(ui.plain()[0].length - 1, 0);
+  assert.ok(ui.plain()[0].endsWith(" 43"));
+  // Non-assistant messages leave the figure alone.
+  await ui.fire("message_start", { message: { role: "user" } });
+  await ui.fire("message_end", { message: { role: "user" } });
+  assert.ok(ui.plain()[0].endsWith(" 43"));
+});
+
+test("tk/s live estimate calibrates to the provider's tokens-per-char", async (t) => {
+  const clock = { now: 1_000_000 };
+  t.mock.method(Date, "now", () => clock.now);
+  const ui = await mount();
+  // Summarized thinking: 400 streamed chars, but 200 tokens billed.
+  await streamReply(ui, clock, { output: 200 });
+  assert.ok(ui.plain()[0].endsWith(" 200"));
+  // Next reply streams the same way: live reads 0.375 tokens/char (half-way
+  // from chars/4 toward the observed 0.5), not the old chars/4 guess.
+  await ui.fire("turn_start", {});
+  await ui.fire("message_start", { message: { role: "assistant", usage: { output: 0 } } });
+  const message = { role: "assistant", usage: { output: 0 } };
+  await ui.fire("message_update", { message, assistantMessageEvent: { type: "text_delta", delta: "" } });
+  // Until the first live figure, the previous rate dims rather than reading as current.
+  assert.match(ui.raw()[0], /\x1B\[2m\x1B\[38;2;249;226;175m200\x1B\[39m\x1B\[22m$/);
+  clock.now += 1_000;
+  await ui.fire("message_update", { message, assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) } });
+  assert.match(ui.raw()[0], /\x1B\[2m\x1B\[38;2;148;226;213m150\x1B\[39m\x1B\[22m$/);
+});
+
+test("tk/s colors reward speed only, in Catppuccin Mocha or Latte by theme", async (t) => {
+  const clock = { now: 1_000_000 };
+  t.mock.method(Date, "now", () => clock.now);
+  const sgr = (hex) => {
+    const v = Number.parseInt(hex.slice(1), 16);
+    return `38;2;${(v >> 16) & 255};${(v >> 8) & 255};${v & 255}`;
+  };
+  // [tk/s, Mocha, Latte]: overlay0, green, teal, yellow, peach, pink, mauve.
+  const cases = [
+    [49, "#6c7086", "#9ca0b0"], [50, "#a6e3a1", "#40a02b"], [100, "#94e2d5", "#179299"],
+    [200, "#f9e2af", "#df8e1d"], [400, "#fab387", "#fe640b"], [700, "#f5c2e7", "#ea76cb"],
+    [1_000, "#cba6f7", "#8839ef"],
+  ];
+  for (const [appearance, column] of [["dark", 1], ["light", 2]]) {
+    const ui = await mount({ appearance });
+    for (const row of cases) {
+      const output = row[0];
+      await streamReply(ui, clock, { output });
+      assert.ok(ui.raw()[0].endsWith(`\x1B[${sgr(row[column])}m${output}\x1B[39m`), `${appearance} ${output} tk/s`);
+    }
+  }
+});
+
+test("tk/s chip counts the TTFT up, dim, until the first token", async (t) => {
+  const clock = { now: 1_000_000 };
+  t.mock.method(Date, "now", () => clock.now);
+  const ui = await mount();
+  await ui.fire("turn_start", {});
+  clock.now += 1_234;
+  assert.match(ui.raw()[0], /\x1B\[2m1\.2s\x1B\[22m$/);
+  clock.now += 900;
+  assert.ok(ui.plain()[0].endsWith(" 2.1s"));
+  // The provider's stream opening is not a token: still waiting.
+  await ui.fire("message_start", { message: { role: "assistant", usage: { output: 0 } } });
+  assert.ok(ui.plain()[0].endsWith(" 2.1s"));
+  const message = { role: "assistant", usage: { output: 0 } };
+  await ui.fire("message_update", { message, assistantMessageEvent: { type: "text_delta", delta: "x" } });
+  assert.ok(!ui.plain()[0].endsWith("s"));
+  clock.now += 1_000;
+  await ui.fire("message_end", { message: { role: "assistant", usage: { output: 99 } } });
+  ui.click(ui.plain()[0].length - 1, 0);
+  assert.ok(ui.plain()[0].endsWith(" 2.1s 99tk/s"));
+  // Detailed mode keeps the previous rate, faint, beside the ticking TTFT.
+  await ui.fire("turn_start", {});
+  clock.now += 500;
+  assert.ok(ui.plain()[0].endsWith(" 0.5s 99tk/s"));
+  assert.match(ui.raw()[0], /\x1B\[2m0\.5s\x1B\[22m \x1B\[2m\x1B\[38;2;[\d;]+m99tk\/s/);
+  // An agent that ends without a reply (abort before the first token) stops the counter.
+  await ui.fire("agent_end", {});
+  assert.ok(ui.plain()[0].endsWith(" 2.1s 99tk/s"));
+});
+
+test("tk/s state resets on session change and model switch", async (t) => {
+  const clock = { now: 1_000_000 };
+  t.mock.method(Date, "now", () => clock.now);
+  const ui = await mount();
+  await streamReply(ui, clock, { output: 99 });
+  ui.click(ui.plain()[0].length - 1, 0);
+  assert.ok(ui.plain()[0].endsWith(" 1.0s 99tk/s"));
+  await ui.startSession();
+  assert.ok(!ui.plain()[0].includes("tk/s"));
+  await streamReply(ui, clock, { output: 99 });
+  assert.ok(ui.plain()[0].endsWith(" 99"));
+  await ui.fire("model_select", {});
+  assert.ok(!ui.plain()[0].endsWith(" 99"));
 });
 
 test("first render omits git and repaints when the refresh lands", async () => {

@@ -2,8 +2,16 @@
  * Minimal footer/statusline for pi — a lean replacement for the pi-footer package.
  *
  * Renders a main line:
- *   dir branch* ⇣⇡ provider model thinking [bypass] ctx/window $cost [inline statuses] ⚡boot   session-name
+ *   dir branch* ⇣⇡ provider model thinking [bypass] ctx/window $cost [inline statuses] ⚡boot tk/s   session-name
  * plus an optional dim row of other extension statuses (from ctx.ui.setStatus).
+ * The tk/s chip is the output rate: dim and live while a reply streams, then
+ * the exact figure for the last reply (usage.output over first token → end).
+ * It shows a bare "99"; clicking it toggles "3.1s 99tk/s", which leads with
+ * the time to first token (turn start → first streamed delta). While waiting
+ * for that first token the chip counts the TTFT up, dim. Color rewards
+ * speed only, in Catppuccin accents (Mocha or Latte, following pi's theme
+ * appearance): overlay gray under 50 tk/s, then green, teal, yellow, peach,
+ * pink and mauve at 1000+ (RATE_BANDS); live and stale figures render faint.
  * When the terminal is too narrow for the chips, they wrap whole onto another
  * row instead of being cut. The session/peer name keeps its place right-
  * aligned on the first row: the chips there fill only the space left of it.
@@ -667,6 +675,94 @@ function formatPercent(value: number): string {
   return `${Math.round(value)}%`;
 }
 
+/** 77.1 → "77": whole tokens are precise enough to glance at. */
+function formatRateValue(tokensPerSecond: number): string {
+  return `${Math.round(tokensPerSecond)}`;
+}
+
+/** "#a6e3a1" → "38;2;166;227;161", a truecolor SGR foreground for color(). */
+function truecolor(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `38;2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}`;
+}
+
+interface RateBand {
+  floor: number;
+  dark: string;
+  light: string;
+}
+
+/**
+ * Speed bands for the tk/s chip: quiet gray for ordinary speeds, then a heat
+ * ladder that only rewards fast output. The top bands are for Cerebras-class
+ * hardware (1000+ tk/s); frontier models over an API land in green/teal.
+ *
+ * Catppuccin accents in truecolor rather than ANSI-16: Mocha's ANSI red and
+ * magenta are both rose and read as one color, and the 256-color cube's
+ * pink/purple clash with the pastels. Peach stands in for red for the same
+ * reason. Truecolor can't follow the terminal palette, so the pair is picked
+ * by pi's theme appearance (dark → Mocha, light → Latte).
+ */
+const RATE_BANDS: readonly RateBand[] = [
+  { floor: 1_000, dark: "#cba6f7", light: "#8839ef" }, // mauve
+  { floor: 700, dark: "#f5c2e7", light: "#ea76cb" }, // pink
+  { floor: 400, dark: "#fab387", light: "#fe640b" }, // peach
+  { floor: 200, dark: "#f9e2af", light: "#df8e1d" }, // yellow
+  { floor: 100, dark: "#94e2d5", light: "#179299" }, // teal
+  { floor: 50, dark: "#a6e3a1", light: "#40a02b" }, // green
+  { floor: 0, dark: "#6c7086", light: "#9ca0b0" }, // overlay0
+];
+
+function rateColor(tokensPerSecond: number, light: boolean): string {
+  const band = RATE_BANDS.find(({ floor }) => tokensPerSecond >= floor) ?? RATE_BANDS[RATE_BANDS.length - 1]!;
+  return truecolor(light ? band.light : band.dark);
+}
+
+/** Faint (SGR 2) over the band color: live and stale figures keep their hue but recede. */
+function faint(text: string): string {
+  return text ? `\x1b[2m${text}\x1b[22m` : "";
+}
+
+/** Compact "99", or detailed "3.1s 99tk/s" led by the time to first token. */
+function formatRateChip(tokensPerSecond: number, ttftMs: number | undefined, detailed: boolean): string {
+  const value = formatRateValue(tokensPerSecond);
+  if (!detailed) return value;
+  return ttftMs === undefined ? `${value}tk/s` : `${(ttftMs / 1_000).toFixed(1)}s ${value}tk/s`;
+}
+
+/** Shortest stream worth a rate: a tiny reply over a few ms reads as thousands of tk/s. */
+const MIN_RATE_WINDOW_MS = 250;
+/** Live-rate repaint throttle; deltas arrive far faster than anyone can read. */
+const RATE_REPAINT_MS = 250;
+/** Repaint cadence for the TTFT counter while waiting for the first token. */
+const WAIT_TICK_MS = 100;
+/** Starting tokens-per-char for the live estimate, until a finished reply calibrates it. */
+const DEFAULT_TOKENS_PER_CHAR = 1 / 4;
+/** Weight of the newest reply in the calibrated tokens-per-char average. */
+const CALIBRATION_WEIGHT = 0.5;
+
+/** text/thinking/toolcall deltas carry generated output; *_start/*_end do not. */
+function isStreamDelta(event: unknown): boolean {
+  const type = (event as { type?: unknown } | undefined)?.type;
+  return typeof type === "string" && type.endsWith("_delta");
+}
+
+/** Streamed text in one assistant-message event, for the live token estimate. */
+function streamedChars(event: unknown): number {
+  const delta = (event as { delta?: unknown } | undefined)?.delta;
+  return typeof delta === "string" ? delta.length : 0;
+}
+
+/** Output tokens on an assistant message's usage, or 0 when not reported yet. */
+function outputTokens(message: unknown): number {
+  const output = (message as { usage?: { output?: unknown } } | undefined)?.usage?.output;
+  return typeof output === "number" && Number.isFinite(output) ? output : 0;
+}
+
+function isAssistant(message: unknown): boolean {
+  return (message as { role?: unknown } | undefined)?.role === "assistant";
+}
+
 /** 903 → "903ms", 1240 → "1.24s". */
 function formatMs(ms: number): string {
   return ms < 1_000 ? `${ms}ms` : `${(ms / 1_000).toFixed(2)}s`;
@@ -1183,6 +1279,32 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let compactProviderUsage = true;
   /** The budget-usage cost chip shows its percent-only tail by default ("11%"). */
   let compactCostUsage = true;
+  /**
+   * Output-rate chip. TTFT runs from turn_start (request about to go out) to
+   * the first streamed delta; the rate runs from that first delta to
+   * message_end, so TTFT never dilutes it.
+   *
+   * The live figure is an estimate: providers report usage.output only at the
+   * end, and Claude's summarized thinking (like OpenAI's hidden reasoning)
+   * bills far more tokens than it streams. A flat chars/4 guess therefore read
+   * ~half the real rate and the chip jumped at message_end. Each finished
+   * reply now calibrates tokens-per-streamed-char for the next live estimate.
+   */
+  let turnStartMs: number | undefined;
+  /** Set from turn_start until the first token: the chip ticks the TTFT up, dim. */
+  let waitingForToken = false;
+  let waitTimer: ReturnType<typeof setInterval> | undefined;
+  let streaming = false;
+  let firstTokenMs: number | undefined;
+  let streamChars = 0;
+  let lastRateRepaintMs = 0;
+  let tokensPerChar = DEFAULT_TOKENS_PER_CHAR;
+  let liveRate: number | undefined;
+  let liveTtftMs: number | undefined;
+  let lastRate: number | undefined;
+  let lastTtftMs: number | undefined;
+  /** The rate chip shows "3.1s 99tk/s" instead of the bare "99" when true. */
+  let detailedRate = false;
   /** Clickable chip actions. The session-cost chip stays glance-only. */
   type FooterClickAction =
     | "model"
@@ -1193,6 +1315,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     | "context"
     | "providerUsage"
     | "cost"
+    | "rate"
     | "name"
     | "gitStatus"
     | "gitPush"
@@ -1212,6 +1335,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     context?: ClickZone;
     cost?: ClickZone;
     providerUsage?: ClickZone;
+    rate?: ClickZone;
     name?: ClickZone;
   }
   /**
@@ -1248,6 +1372,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     if (zoneHit(row.context, x)) return "context";
     if (zoneHit(row.cost, x)) return "cost";
     if (zoneHit(row.providerUsage, x)) return "providerUsage";
+    if (zoneHit(row.rate, x)) return "rate";
     if (zoneHit(row.name, x)) return "name";
     return undefined;
   }
@@ -1332,6 +1457,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
             } else if (action === "providerUsage") {
               compactProviderUsage = !compactProviderUsage;
               repaint?.();
+            } else if (action === "rate") {
+              detailedRate = !detailedRate;
+              repaint?.();
             } else if (action === "cost") {
               compactCostUsage = !compactCostUsage;
               repaint?.();
@@ -1357,6 +1485,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const gitChip = formatGit(branch, gitState);
           const statuses = footerData.getExtensionStatuses();
           const usageValue = usageChip(provider);
+          // theme is pi's live proxy, so a light/dark switch repaints with the right pair.
+          const lightTheme = theme.appearance === "light";
 
           if (coldStart && bootMs === undefined) {
             bootMs = Math.round(process.uptime() * 1_000);
@@ -1396,6 +1526,22 @@ export default function footerExtension(pi: ExtensionAPI): void {
               return value ? renderWindowUsage(value, compactProviderUsage) : "";
             }),
             showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
+            // Waiting for the first token: the TTFT counts up, dim (detailed
+            // mode keeps the previous rate beside it, faint). Then live
+            // (faint) while streaming, and the exact figure once it ends.
+            waitingForToken && turnStartMs !== undefined
+              ? `${theme.fg("dim", `${((Date.now() - turnStartMs) / 1_000).toFixed(1)}s`)}${
+                  detailedRate && lastRate !== undefined
+                    ? ` ${faint(color(rateColor(lastRate, lightTheme), `${formatRateValue(lastRate)}tk/s`))}`
+                    : ""
+                }`
+              : liveRate !== undefined
+              ? faint(color(rateColor(liveRate, lightTheme), formatRateChip(liveRate, liveTtftMs, detailedRate)))
+              : lastRate !== undefined
+                ? streaming
+                  ? faint(color(rateColor(lastRate, lightTheme), formatRateChip(lastRate, lastTtftMs, detailedRate)))
+                  : color(rateColor(lastRate, lightTheme), formatRateChip(lastRate, lastTtftMs, detailedRate))
+                : "",
           ];
 
           // Fall back to the name other agents use to reach this session.
@@ -1419,7 +1565,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // clickable chip columns per row; skipped empties contribute no
           // separator, non-empty parts join with one space.
           const chipRows: Array<FooterClickRow & { line: string }> = [];
-          const bootIndex = left.length - 1;
+          const bootIndex = left.length - 2;
           const nameWidth = visibleWidth(right);
           const firstLimit = nameWidth > 0 ? Math.max(0, width - nameWidth - 1) : width;
           let rowLimit = firstLimit;
@@ -1437,6 +1583,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           let contextZone: ClickZone | undefined;
           let providerUsageZone: ClickZone | undefined;
           let costZone: ClickZone | undefined;
+          let rateZone: ClickZone | undefined;
           const flushChipRow = () => {
             const line = truncateToWidth(current, rowLimit, "…");
             const paintedWidth = visibleWidth(line);
@@ -1454,6 +1601,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
               context: clipZone(contextZone, paintedWidth),
               cost: clipZone(costZone, paintedWidth),
               providerUsage: clipZone(providerUsageZone, paintedWidth),
+              rate: clipZone(rateZone, paintedWidth),
             });
             current = "";
             cursor = 0;
@@ -1469,6 +1617,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             contextZone = undefined;
             costZone = undefined;
             providerUsageZone = undefined;
+            rateZone = undefined;
             rowLimit = width;
           };
           for (let index = 0; index < left.length; index += 1) {
@@ -1512,6 +1661,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
               providerUsageZone = [providerUsageZone?.[0] ?? cursor, cursor + partWidth];
             }
             if (index === bootIndex && showBoot) bootZone = [cursor, cursor + partWidth];
+            if (index === bootIndex + 1) rateZone = [cursor, cursor + partWidth];
             current += part;
             cursor += partWidth;
           }
@@ -1569,6 +1719,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
                 context: row.context,
                 cost: row.cost,
                 providerUsage: row.providerUsage,
+                rate: row.rate,
                 name: row.name,
               } satisfies FooterClickRow;
             }
@@ -1845,6 +1996,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
     bypassed = false;
     compactProviderUsage = true;
     compactCostUsage = true;
+    turnStartMs = undefined;
+    stopWaiting();
+    streaming = false;
+    firstTokenMs = undefined;
+    tokensPerChar = DEFAULT_TOKENS_PER_CHAR;
+    liveRate = undefined;
+    liveTtftMs = undefined;
+    lastRate = undefined;
+    lastTtftMs = undefined;
+    detailedRate = false;
     coldStart = event.reason === "startup";
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer
@@ -1871,8 +2032,97 @@ export default function footerExtension(pi: ExtensionAPI): void {
     return undefined;
   });
 
-  pi.on("model_select", async (_event, ctx) => apply(ctx));
+  /** Renders are event-driven; a 10Hz tick keeps the waiting TTFT counting. */
+  function startWaiting(): void {
+    waitingForToken = true;
+    if (waitTimer === undefined) {
+      waitTimer = setInterval(() => repaint?.(), WAIT_TICK_MS);
+      waitTimer.unref?.();
+    }
+    repaint?.();
+  }
+  function stopWaiting(): void {
+    waitingForToken = false;
+    if (waitTimer !== undefined) clearInterval(waitTimer);
+    waitTimer = undefined;
+  }
+
+  // One turn is one LLM request: turn_start fires just before it goes out.
+  pi.on("turn_start", async () => {
+    turnStartMs = Date.now();
+    startWaiting();
+  });
+  pi.on("message_start", async (event) => {
+    if (!isAssistant(event.message)) return;
+    streaming = true;
+    firstTokenMs = undefined;
+    streamChars = 0;
+    lastRateRepaintMs = 0;
+    liveRate = undefined;
+    liveTtftMs = undefined;
+    repaint?.();
+  });
+  pi.on("message_update", async (event) => {
+    if (!streaming || !isAssistant(event.message)) return;
+    const update = event.assistantMessageEvent;
+    if (!isStreamDelta(update)) return;
+    const now = Date.now();
+    if (firstTokenMs === undefined) {
+      firstTokenMs = now;
+      if (turnStartMs !== undefined) liveTtftMs = now - turnStartMs;
+      stopWaiting();
+      repaint?.();
+    }
+    streamChars += streamedChars(update);
+    const elapsed = now - firstTokenMs;
+    if (elapsed < MIN_RATE_WINDOW_MS || now - lastRateRepaintMs < RATE_REPAINT_MS) return;
+    const tokens = Math.max(outputTokens(event.message), streamChars * tokensPerChar);
+    if (tokens <= 0) return;
+    liveRate = tokens / (elapsed / 1_000);
+    lastRateRepaintMs = now;
+    repaint?.();
+  });
+  pi.on("message_end", async (event) => {
+    if (!streaming || !isAssistant(event.message)) return undefined;
+    const now = Date.now();
+    const tokens = outputTokens(event.message);
+    if (firstTokenMs !== undefined && tokens > 0) {
+      const elapsed = now - firstTokenMs;
+      // Aborted/errored replies and tiny blips keep the previous figure.
+      if (elapsed >= MIN_RATE_WINDOW_MS) {
+        lastRate = tokens / (elapsed / 1_000);
+        lastTtftMs = liveTtftMs;
+      }
+      if (streamChars > 0) {
+        const observed = tokens / streamChars;
+        tokensPerChar = tokensPerChar * (1 - CALIBRATION_WEIGHT) + observed * CALIBRATION_WEIGHT;
+      }
+    }
+    streaming = false;
+    stopWaiting();
+    firstTokenMs = undefined;
+    liveRate = undefined;
+    repaint?.();
+    return undefined;
+  });
+  // message_end should always arrive, but never leave the chip stuck dim.
+  pi.on("agent_end", async () => {
+    if (!streaming && !waitingForToken) return;
+    streaming = false;
+    stopWaiting();
+    liveRate = undefined;
+    repaint?.();
+  });
+
+  pi.on("model_select", async (_event, ctx) => {
+    // A rate and its calibration belong to the model that produced them.
+    lastRate = undefined;
+    lastTtftMs = undefined;
+    tokensPerChar = DEFAULT_TOKENS_PER_CHAR;
+    apply(ctx);
+  });
   pi.on("session_shutdown", async (_event, ctx) => {
+    stopWaiting();
     if (ctx.hasUI) {
       ctx.ui.setFooter(undefined);
       ctx.ui.setWidget(UPDATE_WIDGET_KEY, undefined);
