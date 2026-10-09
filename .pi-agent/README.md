@@ -738,6 +738,15 @@ updates through server-sent events with no reload.
   changed** table (paths and edit counts from tool calls) and a
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
   the session folder. `PI_CANVAS_AUTO=0` turns all of this off.
+- **Diffs and lightbox.** Before the agent's first `edit` or `write` to a file,
+  the extension copies what the file held (`base-<id>`, never served). After
+  each turn, `git diff --no-index` writes `diff-<id>.patch`, the change since
+  then. Files changed links each path to its patch with +/− counts. Clicking a
+  path opens a diff viewer, and clicking a screenshot opens it large. Both use
+  one modal: ←/→ step through the card's items, Esc closes, and "Open in new
+  tab" (or a ⌘-click) opens the raw file. No diff is kept for binary files,
+  files over 1 MB, or secret-looking names (`.env`, `*.pem`, `~/.ssh/…`,
+  `*token*`); their row says why. Changes made through `bash` aren't tracked.
 - **Layout.** Status and Findings stay on top, and findings read newest first.
   Sections follow, newest change first. Click a card's header to collapse it.
   Each browser remembers that choice per session, and Collapse all / Expand all

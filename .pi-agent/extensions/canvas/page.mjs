@@ -42,6 +42,37 @@ header.top .tools .back { margin-left: 8px; }
 .side .gallery img { height: 96px; }
 .side .gallery figcaption { font-size: 11px; }
 .toc { list-style: none; margin: 0; padding: 4px 0; }
+dialog.modal { padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); width: min(1180px, 94vw); max-width: 94vw; max-height: 92vh; box-shadow: 0 24px 70px rgba(0, 0, 0, .35); overflow: hidden; }
+dialog.modal[open] { display: flex; flex-direction: column; }
+dialog.modal.image { width: auto; }
+dialog.modal.diff { height: min(92vh, 960px); }
+dialog.modal:focus, dialog.modal:focus-visible { outline: none; }
+dialog.modal::backdrop { background: rgba(24, 20, 16, .58); }
+dialog.modal > header { display: flex; gap: 10px; align-items: center; padding: 6px 8px 6px 14px; min-height: 40px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); font-size: 13px; }
+dialog.modal > header .title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.modal.diff > header .title { font: 600 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+dialog.modal > header .sub { color: var(--dim); font-size: 12px; white-space: nowrap; }
+dialog.modal > header .tools { margin-left: auto; display: flex; gap: 2px; align-items: center; flex: none; }
+dialog.modal > header .pos { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; padding: 0 4px; }
+dialog.modal .mbody { overflow: auto; min-height: 0; flex: 1; }
+dialog.modal .mbody > .empty, dialog.modal .mbody > .err { padding: 18px; }
+dialog.modal.image .mbody { background: var(--soft); display: flex; align-items: center; justify-content: center; }
+dialog.modal img.lightbox { display: block; max-width: 94vw; max-height: calc(92vh - 42px); object-fit: contain; }
+.gallery a, img.shot { cursor: zoom-in; }
+table.diff { border-collapse: collapse; width: 100%; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+table.diff td { padding: 0 10px; vertical-align: top; }
+table.diff td.ln { width: 1%; min-width: 2.6em; text-align: right; color: var(--dim); user-select: none; white-space: nowrap; padding: 0 6px; }
+table.diff td.ln + td.ln { border-right: 1px solid var(--line); }
+table.diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+table.diff td.code::before { display: inline-block; width: 1.2em; color: var(--dim); user-select: none; }
+table.diff tr.add td.code::before { content: "+"; color: var(--ok); }
+table.diff tr.del td.code::before { content: "−"; color: var(--bad); }
+table.diff tr.ctx td.code::before { content: " "; }
+table.diff tr.add td { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+table.diff tr.del td { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+table.diff tr.hunk td { background: color-mix(in srgb, var(--accent) 7%, var(--soft)); color: var(--dim); padding-top: 3px; padding-bottom: 3px; }
+table.diff tr.hunk:not(:first-child) td { border-top: 1px solid var(--line); }
+table.diff tr.note td { color: var(--dim); font-style: italic; }
 .toc a { display: flex; gap: 10px; align-items: baseline; padding: 4px 12px; color: var(--ink); text-decoration: none; font-size: 13px; }
 .toc a:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
 .toc a .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -547,6 +578,127 @@ function sectionCard(id, sec) {
     WIDGETS.includes(sec.id) ? undefined : sec.at, // widgets never fold by age
   );
 }
+
+// ── modal: screenshots and diffs open over the page ──────────────────────────
+// One <dialog> serves both. Esc and a backdrop click close it; ← and → step
+// through the other items from the same card. A modifier-click still opens the
+// link in a tab, as does the modal's own link.
+
+let dlg;
+let dlgKeys = null;
+
+function modalEl() {
+  if (dlg) return dlg;
+  dlg = h("dialog", { class: "modal" });
+  dlg.addEventListener("click", (e) => e.target === dlg && dlg.close());
+  dlg.addEventListener("close", () => {
+    dlg.replaceChildren();
+    if (dlgKeys) document.removeEventListener("keydown", dlgKeys);
+    dlgKeys = null;
+  });
+  document.body.append(dlg);
+  return dlg;
+}
+
+/** Show items[i]; render(item) gives { kind, title, sub, href, body } where body may be a promise. */
+function showModal(items, i, render) {
+  const d = modalEl();
+  const show = (j) => {
+    i = (j + items.length) % items.length;
+    const { kind, title, sub, href, body } = render(items[i]);
+    d.className = `modal ${kind}`;
+    const step = (n, label, tip) => h("button", { class: "btn", type: "button", title: tip, onclick: () => show(i + n) }, label);
+    const box = h("div", { class: "mbody" }, h("div", { class: "empty" }, "Loading…"));
+    d.replaceChildren(
+      h(
+        "header",
+        {},
+        h("span", { class: "title", title }, title),
+        sub ? h("span", { class: "sub" }, sub) : null,
+        h(
+          "span",
+          { class: "tools" },
+          items.length > 1 ? [step(-1, "←", "Previous (←)"), h("span", { class: "pos" }, `${i + 1} / ${items.length}`), step(1, "→", "Next (→)")] : null,
+          h("a", { class: "btn", href, target: "_blank", rel: "noopener" }, "Open in new tab ↗"),
+          h("button", { class: "btn", type: "button", title: "Close (Esc)", onclick: () => d.close() }, "✕"),
+        ),
+      ),
+      box,
+    );
+    Promise.resolve(body).then(
+      (node) => box.replaceChildren(node),
+      (e) => box.replaceChildren(h("div", { class: "err" }, String(e))),
+    );
+  };
+  if (dlgKeys) document.removeEventListener("keydown", dlgKeys);
+  dlgKeys = (e) => {
+    if (items.length < 2 || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "ArrowLeft") (e.preventDefault(), show(i - 1));
+    if (e.key === "ArrowRight") (e.preventDefault(), show(i + 1));
+  };
+  document.addEventListener("keydown", dlgKeys);
+  if (!d.open) d.showModal();
+  show(i);
+}
+
+const imageItem = (a) => ({
+  kind: "image",
+  title: a.closest("figure")?.querySelector("figcaption")?.textContent || a.querySelector("img")?.alt || "Image",
+  href: a.href,
+  body: h("img", { class: "lightbox", src: a.href, alt: "" }),
+});
+
+const isDiffLink = (a) => /\/f\/diff-[\w-]+\.patch$/.test(new URL(a.href, location.href).pathname);
+
+const diffItem = (a) => ({
+  kind: "diff",
+  title: a.textContent.trim(),
+  sub: a.closest("tr")?.children[1]?.textContent.split(" · ")[1] || "",
+  href: a.href,
+  body: fetch(a.href, { cache: "no-store" })
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then(renderDiff),
+});
+
+/** A unified diff as a table with old and new line numbers. */
+function renderDiff(text) {
+  if (!text.trim()) return h("div", { class: "empty" }, "No net change since the session first touched this file.");
+  const rows = [];
+  let a = 0;
+  let b = 0;
+  const row = (cls, l, r, code) => rows.push(h("tr", { class: cls }, h("td", { class: "ln" }, l), h("td", { class: "ln" }, r), h("td", { class: "code" }, code)));
+  for (const line of text.split("\n")) {
+    const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (m) {
+      a = Number(m[1]);
+      b = Number(m[2]);
+      row("hunk", "", "", line);
+    } else if (line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+    else if (line.startsWith("+")) row("add", "", b++, line.slice(1));
+    else if (line.startsWith("-")) row("del", a++, "", line.slice(1));
+    else if (line.startsWith(" ")) row("ctx", a++, b++, line.slice(1));
+    else if (line.startsWith("\\")) row("note", "", "", line.slice(2));
+  }
+  return h("table", { class: "diff" }, h("tbody", {}, rows));
+}
+
+document.addEventListener("click", (e) => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest?.("a[href]");
+  const gallery = a?.closest(".gallery");
+  if (gallery) {
+    e.preventDefault();
+    const links = [...gallery.querySelectorAll("a[href]")];
+    return showModal(links, links.indexOf(a), imageItem);
+  }
+  if (a && isDiffLink(a)) {
+    e.preventDefault();
+    const links = [...(a.closest(".md") || document).querySelectorAll("a[href]")].filter(isDiffLink);
+    return showModal(links, links.indexOf(a), diffItem);
+  }
+  const shot = e.target.closest?.("img.shot");
+  if (shot) showModal([shot], 0, (img) => ({ kind: "image", title: img.alt || "Image", href: img.src, body: h("img", { class: "lightbox", src: img.src, alt: "" }) }));
+});
 
 // ── session view ─────────────────────────────────────────────────────────────
 
