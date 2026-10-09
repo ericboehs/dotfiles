@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { fuzzyScore, nextSeen, orderSessions, rankItems, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { fuzzyScore, matchKeys, nextSeen, orderSessions, rankItems, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -113,4 +113,26 @@ test("fuzzyScore and rankItems match titles in order, favouring word starts", ()
   assert.deepEqual(rankItems(items, "theme").map((x) => x.label), ["Change theme…"]);
   assert.deepEqual(rankItems(items, "").map((x) => x.label), items.map((x) => x.label), "an empty query keeps the order");
   assert.equal(rankItems(items, "fold")[0].label, "Fold all sections");
+});
+
+test("vim key table: unique, prefix-free, every action documented", () => {
+  const seqs = VIM_KEYS.map((k) => k.keys);
+  assert.equal(new Set(seqs).size, seqs.length, "no sequence twice");
+  for (const a of seqs) for (const b of seqs) if (a !== b) assert.ok(!b.startsWith(a), `${a} would shadow ${b}`);
+  for (const action of new Set(VIM_KEYS.map((k) => k.action))) assert.ok(VIM_KEYS.some((k) => k.action === action && k.help), `${action} shows in the ? list`);
+  assert.ok(seqs.includes("yf") && seqs.includes("yc") && seqs.includes("yy"));
+});
+
+test("matchKeys: actions, prefixes, misses", () => {
+  assert.deepEqual(matchKeys("j"), { action: "next" });
+  assert.deepEqual(matchKeys("G"), { action: "bottom" });
+  assert.deepEqual(matchKeys("g"), { pending: true });
+  assert.deepEqual(matchKeys("gg"), { action: "top" });
+  assert.deepEqual(matchKeys("za"), { action: "toggle" });
+  assert.deepEqual(matchKeys("o"), { action: "toggle" });
+  assert.deepEqual(matchKeys("zM"), { action: "foldAll" });
+  assert.deepEqual(matchKeys("yf"), { action: "yankFile" });
+  assert.deepEqual(matchKeys("gj"), {});
+  assert.deepEqual(matchKeys("x"), {});
+  assert.deepEqual(matchKeys(""), {});
 });

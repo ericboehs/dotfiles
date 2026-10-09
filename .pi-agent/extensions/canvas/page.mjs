@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { nextSeen, orderSessions, rankItems, waitingSessions } from "/assets/nav.mjs";
+import { matchKeys, nextSeen, orderSessions, rankItems, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -420,6 +420,17 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--soft); font: 11px ui-monospace, Menlo, monospace; }
 .toast { position: fixed; bottom: 18px; left: 50%; z-index: 60; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: var(--ink); color: var(--card); font-size: 13px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); opacity: 0; transition: opacity .15s; pointer-events: none; }
 .toast.show { opacity: 1; }
+
+/* vim keys: the current section, a pending key, the ? overlay */
+.card.current { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.keyhint { position: fixed; right: 16px; bottom: 16px; z-index: 55; padding: 4px 10px; border-radius: 6px; background: var(--ink); color: var(--card); font: 600 13px ui-monospace, Menlo, monospace; opacity: .9; }
+.cmdk.keys { width: min(760px, calc(100vw - 32px)); padding: 14px 18px 16px; }
+.keys .keys-hd { font-weight: 600; }
+.keys .keys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 4px 28px; overflow-y: auto; }
+.keys h3 { margin: 12px 0 4px; color: var(--dim); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.keys table { border-collapse: collapse; font-size: 13px; }
+.keys td { padding: 3px 12px 3px 0; vertical-align: top; }
+.keys td:first-child { white-space: nowrap; }
 `;
 
 const $app = document.getElementById("app");
@@ -887,7 +898,11 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "timeline"].includes(sec.kind)) meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
+  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "timeline"].includes(sec.kind)) {
+    const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source");
+    src.dataset.yank = "source"; // yc presses it
+    meta.append(src);
+  }
   if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
@@ -2685,6 +2700,7 @@ function mainItems() {
     },
     currentSession && { label: "All sessions", sub: "the sessions index", run: (e) => go("/", e?.metaKey || e?.ctrlKey) },
     { label: "Change theme…", sub: `dark: ${pair.dark === "canvas" ? "Canvas" : prettyName(pair.dark)} · light: ${pair.light === "canvas" ? "Canvas" : prettyName(pair.light)}`, stay: true, run: () => setPickerMode("theme") },
+    { label: "Keyboard shortcuts", sub: "or press ? on the page", run: () => toggleHelp() },
   ]
     .filter(Boolean)
     .map((a) => ({ group: "Actions", ...a }));
@@ -2792,8 +2808,8 @@ function openPicker() {
       if (p.shown.length) p.sel = (p.sel + d + p.shown.length) % p.shown.length;
       drawPicker(false);
     };
-    if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) return move(1);
-    if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "p")) return move(-1);
+    if (e.key === "ArrowDown" || (e.ctrlKey && (e.key === "n" || e.key === "j"))) return move(1);
+    if (e.key === "ArrowUp" || (e.ctrlKey && (e.key === "p" || e.key === "k"))) return move(-1);
     if (e.key === "Enter") return (e.preventDefault(), runPick(p.shown[p.sel], e));
     if (e.key === "Escape") return (e.preventDefault(), p.mode === "theme" ? setPickerMode("main") : closePicker());
     if (e.key === "Backspace" && !input.value && p.mode === "theme") return (e.preventDefault(), setPickerMode("main"));
@@ -2818,30 +2834,199 @@ function closePicker(keepTheme = false) {
   focus?.focus?.();
 }
 
-// ── j / k: next and previous section ─────────────────────────────────────────
+// ── vim keys ─────────────────────────────────────────────────────────────────
+// j / k move a highlighted "current" section, and o, za, zc, zo, yc and yf act
+// on it. Once it scrolls out of view, the section at the top of the window
+// stands in. The keys themselves are the VIM_KEYS table in nav.mjs.
 
-function hopSection(dir) {
-  const cards = [...$app.querySelectorAll(".main-col .card, .card.sessions")].filter((c) => c.offsetParent && !c.parentElement.closest(".card"));
+let currentCard = null;
+let keySeq = "";
+let keySeqTimer = 0;
+let helpBox = null;
+
+const mainCards = () => [...$app.querySelectorAll(".main-col .card, .card.sessions")].filter((c) => c.offsetParent && !c.parentElement.closest(".card"));
+function inView(c) {
+  const r = c.getBoundingClientRect();
+  return r.bottom > 0 && r.top < innerHeight;
+}
+const liveCurrent = (cards) => (currentCard && cards.includes(currentCard) && inView(currentCard) ? currentCard : null);
+
+function setCurrent(card, scroll = true, instant = false) {
+  if (currentCard && currentCard !== card) currentCard.classList.remove("current");
+  currentCard = card || null;
+  if (!card) return;
+  card.classList.add("current");
+  if (scroll) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 12, behavior: instant ? "auto" : "smooth" });
+}
+
+/** The highlighted section if it's on screen, else the one at the top of the window. */
+function currentOrTop(cards = mainCards()) {
+  const live = liveCurrent(cards);
+  if (live) return live;
+  const i = cards.map((c) => c.getBoundingClientRect().top).findLastIndex((t) => t <= 14);
+  return cards[Math.max(i, 0)] ?? null;
+}
+
+function hopSection(dir, instant) {
+  const cards = mainCards();
   if (!cards.length) return;
+  const live = liveCurrent(cards);
   const tops = cards.map((c) => c.getBoundingClientRect().top);
-  const i = dir > 0 ? tops.findIndex((t) => t > 14) : tops.findLastIndex((t) => t < 10);
-  if (i < 0) return;
-  window.scrollTo({ top: tops[i] + window.scrollY - 12, behavior: "smooth" });
+  const i = live ? cards.indexOf(live) + dir : dir > 0 ? tops.findIndex((t) => t > 14) : tops.findLastIndex((t) => t < 10);
+  if (i >= 0 && i < cards.length) setCurrent(cards[i], true, instant);
+}
+
+/** n / N: the next section with the changed-while-folded dot, wrapping like vim. */
+function hopChanged(dir) {
+  const cards = mainCards();
+  const from = cards.indexOf(currentOrTop(cards));
+  const order = dir > 0 ? [...cards.slice(from + 1), ...cards.slice(0, from + 1)] : [...cards.slice(0, Math.max(from, 0)).reverse(), ...cards.slice(Math.max(from, 0)).reverse()];
+  const card = order.find((c) => c.classList.contains("unseen"));
+  if (!card) return toast("No sections changed while folded");
+  card.setCollapsed?.(false);
+  setCurrent(card);
+}
+
+const cardTitle = (card) => card?.querySelector(":scope > h2 .title")?.textContent || "this section";
+
+/** Press a header button of the current section (Copy source, Clippy) and echo its result. */
+async function yankWith(card, selector, what) {
+  const b = card?.querySelector(`:scope > h2 ${selector}`);
+  if (!b) return toast(`“${cardTitle(card)}” has no ${what} to copy`);
+  setCurrent(card, false);
+  b.click();
+  const ok = await new Promise((resolve) => {
+    const mo = new MutationObserver(() => /\b(ok|bad)\b/.test(b.className) && (clearTimeout(t), mo.disconnect(), resolve(b.className.includes("ok"))));
+    const t = setTimeout(() => (mo.disconnect(), resolve(null)), 5000);
+    mo.observe(b, { attributes: true, attributeFilter: ["class"] });
+  });
+  if (ok === true) toast(what === "file" ? b.title || "File copied" : `Copied the source of “${cardTitle(card)}”`);
+  else if (ok === false) toast(`Couldn't copy the ${what}${b.title && what === "file" ? `: ${b.title}` : ""}`);
+}
+
+function vimAction(action, e) {
+  const smooth = e?.repeat ? "auto" : "smooth";
+  switch (action) {
+    case "next":
+      return hopSection(1, e?.repeat);
+    case "prev":
+      return hopSection(-1, e?.repeat);
+    case "top":
+      setCurrent(null);
+      return window.scrollTo({ top: 0, behavior: "smooth" });
+    case "bottom":
+      setCurrent(null);
+      return window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+    case "halfDown":
+      return window.scrollBy({ top: innerHeight / 2, behavior: smooth });
+    case "halfUp":
+      return window.scrollBy({ top: -innerHeight / 2, behavior: smooth });
+    case "nextChanged":
+      return hopChanged(1);
+    case "prevChanged":
+      return hopChanged(-1);
+    case "toggle":
+    case "open":
+    case "close": {
+      const c = currentOrTop();
+      if (!c?.setCollapsed) return;
+      c.setCollapsed(action === "toggle" ? !c.classList.contains("collapsed") : action === "close");
+      // Folding a tall section whose top is off screen: bring its header back.
+      return setCurrent(c, c.getBoundingClientRect().top < 0);
+    }
+    case "openAll":
+      return pageHooks.setAll?.(false);
+    case "foldAll":
+      return pageHooks.setAll?.(true);
+    case "yankLink":
+      return copyText(location.href).then(
+        () => toast("Copied the page link"),
+        () => toast("Couldn't copy the link"),
+      );
+    case "yankSource":
+      return yankWith(currentOrTop(), "[data-yank=source]", "source");
+    case "yankFile":
+      return yankWith(currentOrTop(), ".clip", "file");
+    case "help":
+      return toggleHelp();
+  }
+}
+
+function showKeyHint(text) {
+  let el = document.querySelector(".keyhint");
+  if (!text) return el?.remove();
+  if (!el) document.body.append((el = h("div", { class: "keyhint", "aria-live": "polite" })));
+  el.textContent = text;
+}
+function clearSeq() {
+  keySeq = "";
+  clearTimeout(keySeqTimer);
+  showKeyHint("");
+}
+
+function closeHelp() {
+  helpBox?.remove();
+  helpBox = null;
+}
+function toggleHelp() {
+  if (helpBox) return closeHelp();
+  const row = (keys, text) => h("tr", {}, h("td", {}, keys.flatMap((k, i) => [i ? " " : "", h("kbd", {}, k)])), h("td", {}, text));
+  const groups = [...new Set(VIM_KEYS.map((k) => k.group))].map((g) =>
+    h("div", {}, h("h3", {}, g), h("table", {}, VIM_KEYS.filter((k) => k.group === g && k.help).map((k) => row([k.keys], k.help)))),
+  );
+  groups.push(
+    h(
+      "div",
+      {},
+      h("h3", {}, "Picker"),
+      h("table", {}, row(["⌘K", "Ctrl-K"], "sessions, actions and themes"), row(["↑↓", "Ctrl-n/p", "Ctrl-j/k"], "move"), row(["↵", "⌘↵"], "open here, or in a new tab"), row(["esc"], "back, close, or clear the highlight")),
+    ),
+  );
+  const box = h("div", { class: "cmdk keys", role: "dialog", "aria-label": "Keyboard shortcuts" }, h("div", { class: "keys-hd" }, "Keyboard shortcuts"), h("div", { class: "keys-grid" }, groups));
+  helpBox = h("div", { class: "cmdk-back" }, box);
+  helpBox.addEventListener("mousedown", (e) => e.target === helpBox && closeHelp());
+  document.body.append(helpBox);
 }
 
 document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return; // the picker's own keys (Ctrl-k moves up there)
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
+    closeHelp();
     return picker ? closePicker() : openPicker();
   }
-  if (picker || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || (e.key !== "j" && e.key !== "k")) return;
+  if (picker) return;
   const t = e.target;
   if (t?.isContentEditable || t?.closest?.("input, textarea, select") || document.querySelector("dialog[open]")) return;
+  if (e.key === "Escape") {
+    if (helpBox) return closeHelp();
+    if (keySeq) return clearSeq();
+    return setCurrent(null);
+  }
+  if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "d" || e.key === "u")) {
+    e.preventDefault();
+    return vimAction(e.key === "d" ? "halfDown" : "halfUp", e);
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+  if (helpBox && e.key !== "?") return;
+  let seq = keySeq + e.key;
+  let m = matchKeys(seq);
+  // A dangling prefix (g then j) shouldn't swallow the key after it.
+  if (!m.action && !m.pending && keySeq) m = matchKeys((seq = e.key));
+  clearSeq();
+  if (m.pending) {
+    e.preventDefault();
+    keySeq = seq;
+    showKeyHint(seq);
+    keySeqTimer = setTimeout(clearSeq, 1500);
+    return;
+  }
+  if (!m.action) return;
   e.preventDefault();
-  hopSection(e.key === "j" ? 1 : -1);
+  vimAction(m.action, e);
 });
 
-const kbdButton = () => h("button", { class: "btn", type: "button", title: "Sessions, actions and themes (⌘K)", onclick: () => openPicker() }, "⌘K");
+const kbdButton = () => h("button", { class: "btn", type: "button", title: "Sessions, actions and themes (⌘K). Press ? for every key.", onclick: () => openPicker() }, "⌘K");
 
 // ── index view ───────────────────────────────────────────────────────────────
 

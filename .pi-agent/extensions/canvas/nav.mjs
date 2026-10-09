@@ -71,3 +71,40 @@ export function rankItems(items, query, key = (x) => x.label) {
     .sort((a, b) => b.s - a.s || a.i - b.i)
     .map((x) => x.item);
 }
+
+// ── vim keys ────────────────────────────────────────────────────────────────────────
+// One table drives both the key handling and the ? overlay, so they can't
+// drift. Ctrl-d / Ctrl-u are handled with the modifiers, not here.
+
+export const VIM_KEYS = [
+  { group: "Move", keys: "j", action: "next", help: "next section" },
+  { group: "Move", keys: "k", action: "prev", help: "previous section" },
+  { group: "Move", keys: "gg", action: "top", help: "top of the page" },
+  { group: "Move", keys: "G", action: "bottom", help: "bottom of the page" },
+  { group: "Move", keys: "d", action: "halfDown", help: "half a page down (or Ctrl-d)" },
+  { group: "Move", keys: "u", action: "halfUp", help: "half a page up (or Ctrl-u)" },
+  { group: "Move", keys: "n", action: "nextChanged", help: "next section changed while folded (the dot)" },
+  { group: "Move", keys: "N", action: "prevChanged", help: "previous changed section" },
+  { group: "Fold", keys: "o", action: "toggle", help: "open or fold this section (or za)" },
+  { group: "Fold", keys: "za", action: "toggle", help: "" },
+  { group: "Fold", keys: "zo", action: "open", help: "open this section" },
+  { group: "Fold", keys: "zc", action: "close", help: "fold this section" },
+  { group: "Fold", keys: "zR", action: "openAll", help: "open every section" },
+  { group: "Fold", keys: "zM", action: "foldAll", help: "fold every section" },
+  { group: "Yank", keys: "yy", action: "yankLink", help: "copy the page link" },
+  { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source" },
+  { group: "Yank", keys: "yf", action: "yankFile", help: "copy this section's file (Clippy)" },
+  { group: "Other", keys: "?", action: "help", help: "this list" },
+];
+
+/**
+ * Where a typed sequence stands: { action } when it names one, { pending }
+ * when it is the start of one (wait for the next key), or {} when it is
+ * neither (drop it).
+ */
+export function matchKeys(seq) {
+  const hit = VIM_KEYS.find((k) => k.keys === seq);
+  if (hit) return { action: hit.action };
+  if (seq && VIM_KEYS.some((k) => k.keys.startsWith(seq))) return { pending: true };
+  return {};
+}
