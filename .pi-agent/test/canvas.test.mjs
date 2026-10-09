@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, checkChart, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -505,6 +505,46 @@ test("checkChart accepts good specs and explains bad ones", () => {
   assert.match(checkChart('{"type":"pie","labels":["a"],"series":[{"data":[-1]}]}'), /one series of values that aren't negative/);
 });
 
+test("normalizeSpec: terminal takes plain text or a spec, and keeps only known fields", () => {
+  assert.deepEqual(JSON.parse(normalizeSpec("terminal", "\x1b[31mboom\x1b[0m\n")), { output: "\x1b[31mboom\x1b[0m\n" });
+  assert.deepEqual(JSON.parse(normalizeSpec("terminal", '{"ok":true}')), { output: '{"ok":true}' }, "a command's own JSON is output");
+  const s = JSON.parse(normalizeSpec("terminal", JSON.stringify({ command: "npm test", output: "x", exit: 1, duration: 4.2, cwd: "/tmp", junk: 1 })));
+  assert.deepEqual(s, { command: "npm test", cwd: "/tmp", exit: 1, duration: 4.2, output: "x" });
+  assert.throws(() => normalizeSpec("terminal", '{"output":"x","exit":"1"}'), /exit must be an integer/);
+  assert.throws(() => normalizeSpec("terminal", '{"output":"x","command":["ls"]}'), /command must be a string/);
+});
+
+test("normalizeSpec: stats takes a list or {items} and explains bad items", () => {
+  assert.deepEqual(JSON.parse(normalizeSpec("stats", '[{"label":"Tests","value":31,"delta":2}]')), { items: [{ label: "Tests", value: 31, delta: 2 }] });
+  assert.equal(JSON.parse(normalizeSpec("stats", '{"items":[{"label":"p95","value":"120 ms","good":"down","spark":[1,null,3]}]}')).items[0].good, "down");
+  assert.throws(() => normalizeSpec("stats", "[]"), /needs items/);
+  assert.throws(() => normalizeSpec("stats", '[{"value":1}]'), /items\[0\] needs a label/);
+  assert.throws(() => normalizeSpec("stats", '[{"label":"a","value":null}]'), /value must be a number or text/);
+  assert.throws(() => normalizeSpec("stats", '[{"label":"a","value":1,"good":"left"}]'), /up, down or none/);
+  assert.throws(() => normalizeSpec("stats", '[{"label":"a","value":1,"spark":["1"]}]'), /spark must be numbers/);
+  assert.throws(() => normalizeSpec("stats", "{nope"), /stats body must be JSON/);
+});
+
+test("normalizeSpec: table takes rows with or without columns, or CSV/TSV", () => {
+  assert.deepEqual(JSON.parse(normalizeSpec("table", '[{"a":1}]')), { rows: [{ a: 1 }] });
+  const t = JSON.parse(normalizeSpec("table", JSON.stringify({ columns: ["name", { label: "Size", type: "bar" }], rows: [["x", 3]] })));
+  assert.equal(t.columns[1].type, "bar");
+  assert.throws(() => normalizeSpec("table", '{"rows":[]}'), /table needs rows/);
+  assert.throws(() => normalizeSpec("table", '{"rows":[1]}'), /array of cells or an object/);
+  assert.throws(() => normalizeSpec("table", '{"columns":["a"],"rows":[[1,2]]}'), /rows\[0\] has more cells than there are columns \(1\)/);
+  assert.throws(() => normalizeSpec("table", '{"columns":[{"label":"a","type":"pie"}],"rows":[[1]]}'), /type must be one of/);
+  const csv = JSON.parse(normalizeSpec("table", 'repo,stars,note\napi,12,"a, b"\nweb,3.5,"say ""hi"""\n', ".csv"));
+  assert.deepEqual(csv, { columns: [{ label: "repo" }, { label: "stars" }, { label: "note" }], rows: [["api", 12, "a, b"], ["web", 3.5, 'say "hi"']] });
+  assert.deepEqual(parseDelimited("a\tb\r\n1\tx\r\n", "\t"), { columns: [{ label: "a" }, { label: "b" }], rows: [[1, "x"]] });
+});
+
+test("compareOptions checks labels and mode", () => {
+  assert.deepEqual(compareOptions(undefined), {});
+  assert.deepEqual(compareOptions('{"labels":["main","branch"],"mode":"onion"}'), { labels: ["main", "branch"], mode: "onion" });
+  assert.throws(() => compareOptions('{"labels":["one"]}'), /two strings/);
+  assert.throws(() => compareOptions('{"mode":"flip"}'), /slider, side, onion/);
+});
+
 test("daemon serves pages, state and sections, and refuses bad hosts and paths", async () => {
   const { root, mk } = tempRoot();
   const port = 18790 + Math.floor(Math.random() * 1000);
@@ -517,6 +557,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     "a.html": "<p>hi</p>",
     "p.html": "<!doctype html><p>plan</p>",
     "c.chart": '{"type":"bar","labels":["a"],"series":[{"data":[1]}]}',
+    "t.term": '{"output":"ok"}',
+    "k.compare": '{"before":"k-before.png","after":"k-after.png"}',
+    "k-before.png": "png",
     "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
     "cur-0123abcd.txt": "<script>alert(1)</script>",
     "base-0123abcd": "secret original",
@@ -548,6 +591,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     const chart = await get(port, "/s/s1/f/c.chart");
     assert.equal(chart.headers["content-type"], "application/json; charset=utf-8");
     assert.equal(JSON.parse(chart.body).type, "bar");
+    assert.equal((await get(port, "/s/s1/f/t.term")).headers["content-type"], "application/json; charset=utf-8");
+    assert.equal(JSON.parse((await get(port, "/s/s1/f/k.compare")).body).after, "k-after.png");
+    assert.equal((await get(port, "/s/s1/f/k-before.png")).headers["content-type"], "image/png", "compare images are served");
     assert.equal((await get(port, "/s/s1/f/meta.json")).status, 404);
     const patch = await get(port, "/s/s1/f/diff-0123abcd.patch");
     assert.equal(patch.headers["content-type"], "text/plain; charset=utf-8");

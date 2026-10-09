@@ -449,7 +449,7 @@ export function openTodos(text: string): string[] {
 }
 
 /** The page sorts sections by `at`, newest first; `order` is only in old files. */
-export type Section = { id: string; title: string; kind: string; file: string; at: string; by?: "auto"; order?: number };
+export type Section = { id: string; title: string; kind: string; file: string; at: string; by?: "auto"; order?: number; extra?: string[] };
 
 export function upsertSection(list: Section[], sec: Section): Section[] {
   const out = list.filter((s) => s.id !== sec.id);
@@ -686,7 +686,113 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "diff", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "diff", "finding"] as const;
+
+// Kinds whose body is a JSON spec the page draws, and the extension each is stored under.
+const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table" };
+const TABLE_TYPES = ["text", "number", "bar", "spark", "tag", "link", "code"];
+const COMPARE_MODES = ["slider", "side", "onion"];
+
+function parseJson(text: string, what: string): any {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`${what} body must be JSON: ${(e as Error).message}`);
+  }
+}
+const optString = (v: unknown, what: string) => {
+  if (v != null && typeof v !== "string") throw new Error(`${what} must be a string`);
+};
+
+/** CSV or TSV as a table spec: the first row is the header; number-looking cells become numbers. */
+export function parseDelimited(text: string, sep = ","): { columns: { label: string }[]; rows: unknown[][] } {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c !== '"') cell += c;
+      else if (text[i + 1] === '"') (cell += '"'), i++;
+      else quoted = false;
+    } else if (c === '"' && cell === "") quoted = true;
+    else if (c === sep) row.push(cell), (cell = "");
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell), rows.push(row), (row = []), (cell = "");
+    } else cell += c;
+  }
+  if (cell !== "" || row.length) row.push(cell), rows.push(row);
+  const [head = [], ...body] = rows.filter((r) => r.some((c) => c.trim() !== ""));
+  const typed = (s: string) => (/^\s*-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i.test(s) ? Number(s) : s);
+  return { columns: head.map((label) => ({ label: label.trim() })), rows: body.map((r) => r.map(typed)) };
+}
+
+/**
+ * A terminal, stats or table body checked and normalised to the JSON the page
+ * draws. Throws with a message that says what to fix. `ext` is the source
+ * file's extension when the body came from a path (.csv/.tsv for tables).
+ */
+export function normalizeSpec(kind: string, text: string, ext = ""): string {
+  if (kind === "terminal") {
+    let s: any;
+    try {
+      s = JSON.parse(text);
+    } catch {}
+    // Plain text, or JSON that isn't a spec (a command's own JSON output), is the output itself.
+    if (!s || typeof s !== "object" || Array.isArray(s) || typeof s.output !== "string") s = { output: text };
+    optString(s.command, "command");
+    optString(s.cwd, "cwd");
+    if (s.exit != null && !Number.isInteger(s.exit)) throw new Error("exit must be an integer");
+    if (s.duration != null && typeof s.duration !== "string" && !isNum(s.duration)) throw new Error("duration must be seconds or text");
+    return JSON.stringify({ command: s.command, cwd: s.cwd, exit: s.exit, duration: s.duration, output: s.output });
+  }
+  if (kind === "stats") {
+    const s = parseJson(text, "stats");
+    const items = Array.isArray(s) ? s : s?.items;
+    if (!Array.isArray(items) || !items.length) throw new Error("stats needs items: [{ label, value }]");
+    if (items.length > 24) throw new Error("stats takes at most 24 items");
+    items.forEach((it: any, i: number) => {
+      if (!it || typeof it.label !== "string" || !it.label) throw new Error(`items[${i}] needs a label`);
+      if (!isNum(it.value) && typeof it.value !== "string") throw new Error(`items[${i}].value must be a number or text`);
+      if (it.delta != null && !isNum(it.delta) && typeof it.delta !== "string") throw new Error(`items[${i}].delta must be a number or text`);
+      if (it.good != null && !["up", "down", "none"].includes(it.good)) throw new Error(`items[${i}].good must be up, down or none`);
+      if (it.spark != null && (!Array.isArray(it.spark) || !it.spark.every((v: unknown) => v === null || isNum(v)))) throw new Error(`items[${i}].spark must be numbers`);
+      for (const k of ["unit", "prefix", "note"]) optString(it[k], `items[${i}].${k}`);
+    });
+    return JSON.stringify({ items });
+  }
+  if (kind === "table") {
+    const s = ext === ".csv" || ext === ".tsv" ? parseDelimited(text, ext === ".tsv" ? "\t" : ",") : parseJson(text, "table");
+    const spec = Array.isArray(s) ? { rows: s } : s;
+    if (!spec || !Array.isArray(spec.rows) || !spec.rows.length) throw new Error("table needs rows: [[cells]] or [{ column: cell }]");
+    if (spec.rows.length > 5000) throw new Error("a table takes at most 5000 rows");
+    if (!spec.rows.every((r: unknown) => r && typeof r === "object")) throw new Error("each row must be an array of cells or an object");
+    if (spec.columns != null) {
+      if (!Array.isArray(spec.columns) || !spec.columns.length) throw new Error("columns must be a list");
+      spec.columns.forEach((c: any, i: number) => {
+        if (typeof c === "string") return;
+        if (!c || typeof c !== "object" || (typeof c.label !== "string" && typeof c.key !== "string")) throw new Error(`columns[${i}] needs a label`);
+        if (c.type != null && !TABLE_TYPES.includes(c.type)) throw new Error(`columns[${i}].type must be one of ${TABLE_TYPES.join(", ")}`);
+      });
+      const wide = spec.rows.findIndex((r: unknown) => Array.isArray(r) && r.length > spec.columns.length);
+      if (wide >= 0) throw new Error(`rows[${wide}] has more cells than there are columns (${spec.columns.length})`);
+    }
+    return JSON.stringify(spec);
+  }
+  throw new Error(`${kind} has no spec`);
+}
+
+/** compare's optional body: labels for the two images and the starting view. */
+export function compareOptions(body: string | undefined): { labels?: [string, string]; mode?: string } {
+  if (!body?.trim()) return {};
+  const s = parseJson(body, "compare");
+  if (!s || typeof s !== "object" || Array.isArray(s)) throw new Error("compare body must be a JSON object");
+  if (s.labels != null && !(Array.isArray(s.labels) && s.labels.length === 2 && s.labels.every((l: unknown) => typeof l === "string"))) throw new Error("labels must be two strings: [before, after]");
+  if (s.mode != null && !COMPARE_MODES.includes(s.mode)) throw new Error(`mode must be one of ${COMPARE_MODES.join(", ")}`);
+  return { ...(s.labels ? { labels: s.labels } : {}), ...(s.mode ? { mode: s.mode } : {}) };
+}
 
 const CHART_TYPES = ["bar", "line", "area", "scatter", "pie", "donut"];
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -1047,6 +1153,11 @@ export default function canvas(pi: ExtensionAPI) {
       'chart (body is a JSON spec: {"type": bar|line|area|scatter|pie|donut, "labels": [one per point], "series": [{"name", "data": [numbers, null for a gap], "color"?}], ' +
       '"stacked"?, "horizontal"? (bar), "x"?: {"label"}, "y"?: {"label", "unit", "prefix", "min", "max"}, "height"?, "caption"?}; scatter data is [[x, y], ...] and needs no labels; ' +
       'colours come from the page, so leave "color" out unless it means something: c1-c8, accent, ok, warn, bad), ' +
+      'terminal (command output: body is the raw output, or JSON {"command", "output", "exit", "duration" (seconds or text), "cwd"}; ANSI colours kept, long output folds, lines can be filtered), ' +
+      'stats (a row of number cards: JSON [{"label", "value", "unit"?, "prefix"?, "delta"? (number or text), "good"?: up|down|none, "spark"?: [numbers], "note"?}]), ' +
+      'table (sortable and filterable: JSON {"columns": [{"label", "key"?, "type"?: text|number|bar|spark|tag|link|code, "unit"?, "prefix"?}], "rows": [[cells]] or [{key: cell}], "sort"?: {"column", "desc"}, "caption"?}; ' +
+      'a spark cell is an array of numbers, a link cell a URL or {"text", "href"}; types are inferred when left out; or path to a .csv/.tsv), ' +
+      'compare (two images with a before/after slider: paths [before, after]; optional body {"labels": [a, b], "mode": slider|side|onion}), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
       "html sections get the canvas design kit, so write little CSS: the page's colours as variables (--ink --dim --line --soft --card --accent --ok --warn --bad, chart colours --c1 to --c8), " +
       "light and dark handled, buttons (class primary), inputs, range sliders, select and tables already styled, and classes k-row, k-col, k-grid, k-card, k-stat (b + span), k-field (label above a control), k-muted, k-tag, k-ok, k-warn, k-bad, k-bar (> i). " +
@@ -1057,7 +1168,8 @@ export default function canvas(pi: ExtensionAPI) {
       "The user keeps the canvas open beside the terminal and expects it to grow as you work. Use canvas proactively, without being asked.",
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
       "When a reply would contain a table, an option or state matrix, a diagram, a plan or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
-      "Pick the lightest canvas kind that fits: markdown for tables, lists and prose; chart for numbers to compare or follow over time; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
+      "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
+        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section.",
       "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Haiku notes); leave them alone.",
@@ -1070,7 +1182,7 @@ export default function canvas(pi: ExtensionAPI) {
       body: Type.Optional(Type.String({ description: "Markdown, HTML, mermaid source, chart JSON or finding text" })),
       path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, image, chart JSON, or a patch for diff. Relative to the cwd." })),
       ref: Type.Optional(Type.String({ description: 'diff without body/path: what git compares the working tree to. Default HEAD; a commit; a range like main..branch; or "staged".' })),
-      paths: Type.Optional(Type.Array(Type.String(), { description: "diff without body/path: only these files (untracked ones show as new). Default: every change." })),
+      paths: Type.Optional(Type.Array(Type.String(), { description: "diff without body/path: only these files (untracked ones show as new). Default: every change. compare: [before, after] image files." })),
       repo: Type.Optional(Type.String({ description: "diff without body/path: the repository directory. Default the cwd." })),
       remove: Type.Optional(Type.Boolean({ description: "Delete the section with this id" })),
     }),
@@ -1097,14 +1209,50 @@ export default function canvas(pi: ExtensionAPI) {
         const old = list.find((s) => s.id === id);
 
         if (params.remove) {
-          if (old) rmSync(join(d, old.file), { force: true });
+          if (old) for (const f of [old.file, ...(old.extra ?? [])]) rmSync(join(d, f), { force: true });
           writeAtomic(listPath, JSON.stringify(list.filter((s) => s.id !== id), null, 2));
           return { content: [{ type: "text" as const, text: `Canvas: removed "${id}". Page: ${url}` }], details: { id, removed: true, url } };
         }
 
         let file: string;
         let note = "";
-        if (params.kind === "diff") {
+        const extra: string[] = [];
+        if (params.kind === "compare") {
+          if (params.paths?.length !== 2) throw new Error("compare needs paths: [before, after] image files");
+          const opts = compareOptions(params.body);
+          const names = params.paths.map((p, i) => {
+            const src = isAbsolute(p) ? p : resolve(ctx.cwd, p);
+            const st = statSync(src);
+            if (!st.isFile()) throw new Error(`${p} is not a file`);
+            if (st.size > MAX_FILE) throw new Error(`${p} is over 20 MB`);
+            const ext = extname(src).toLowerCase().replace(".jpeg", ".jpg");
+            if (!IMAGE_EXT.has(ext)) throw new Error(`${p}: compare takes ${[...IMAGE_EXT].join(", ")}`);
+            return { src, name: `${id}-${i ? "after" : "before"}${ext}` };
+          });
+          for (const { src, name } of names) {
+            copyFileSync(src, join(d, `${name}.tmp`));
+            renameSync(join(d, `${name}.tmp`), join(d, name));
+            extra.push(name);
+          }
+          file = `${id}.compare`;
+          if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
+          writeAtomic(join(d, file), JSON.stringify({ before: extra[0], after: extra[1], ...opts }));
+        } else if (SPEC_EXT[params.kind]) {
+          let text: string;
+          let ext = "";
+          if (params.path) {
+            const src = isAbsolute(params.path) ? params.path : resolve(ctx.cwd, params.path);
+            if (statSync(src).size > MAX_BODY) throw new Error(`${params.path} is over 2 MB`);
+            text = readFileSync(src, "utf8");
+            ext = extname(src).toLowerCase();
+          } else text = String(params.body ?? "");
+          if (!text.trim() && params.kind !== "terminal") throw new Error("body is empty");
+          if (Buffer.byteLength(text) > MAX_BODY) throw new Error("body is over 2 MB; write a file and pass path");
+          file = `${id}.${SPEC_EXT[params.kind]}`;
+          const spec = normalizeSpec(params.kind, text, ext);
+          if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
+          writeAtomic(join(d, file), spec);
+        } else if (params.kind === "diff") {
           let patch: string;
           if (params.path || params.body) {
             if (params.ref || params.paths?.length) throw new Error("diff takes body or path, or ref/paths, not both");
@@ -1162,7 +1310,8 @@ export default function canvas(pi: ExtensionAPI) {
           writeAtomic(join(d, file), body);
         }
 
-        const sec: Section = { id, title: params.title || old?.title || id, kind: params.kind, file, at: new Date().toISOString() };
+        for (const f of old?.extra ?? []) if (f !== file && !extra.includes(f)) rmSync(join(d, f), { force: true });
+        const sec: Section = { id, title: params.title || old?.title || id, kind: params.kind, file, at: new Date().toISOString(), ...(extra.length ? { extra } : {}) };
         list = upsertSection(list, sec);
         writeAtomic(listPath, JSON.stringify(list, null, 2));
         return {

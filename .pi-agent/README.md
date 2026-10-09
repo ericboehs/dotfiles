@@ -726,9 +726,11 @@ updates through server-sent events with no reload.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
-  `chart`, `diff`, and `finding` (one append-only line in the findings log).
+  `chart`, `terminal`, `stats`, `table`, `compare`, `diff`, and `finding`
+  (one append-only line in the findings log).
   The tool's guidelines tell the agent to pick the lightest kind that fits:
-  markdown for tables, chart for numbers, mermaid for flows, html only for
+  markdown for short tables, table for data, stats for headline numbers,
+  chart for numbers over time, mermaid for flows, html only for
   something to interact with. `html` sections get the **design kit**
   (`canvas/kit.css`, put in by the daemon): the page's colours as CSS
   variables in light and dark, styled buttons, inputs, sliders and tables,
@@ -738,7 +740,20 @@ updates through server-sent events with no reload.
   spec (`bar` grouped, stacked or horizontal, `line`, `area`, `scatter`,
   `pie`, `donut`; labels, series, axis label, unit and prefix), checked by
   the tool and drawn by the page as SVG in the page's colours, with legends
-  and hover values. A `diff`
+  and hover values. A `terminal` is command output (raw, or JSON with the
+  command, exit code, duration and cwd): ANSI colours (16, 256 and true
+  colour) mapped to theme-aware variables, `\r` redraws applied, error,
+  warning and pass lines tinted when the output has no colour of its own, the
+  middle of long output folded, and a filter box that marks matches. `stats`
+  is a row of number cards with an optional change (green or red by which
+  way is good) and a sparkline. A `table` is JSON rows (arrays or objects) or
+  a `.csv`/`.tsv` path: click a header to sort (numbers high-first, empties
+  last, a third click turns it off), type to filter, sticky headers, numbers
+  right-aligned, and typed cells (`bar`, `spark`, `tag` coloured by word,
+  `link`, `code`); types are inferred when left out, and 500 rows are drawn
+  at a time. `compare` takes two image `paths` (copied in and removed with
+  the section) and shows them with a draggable before/after slider (arrow
+  keys too), side by side, or as an onion skin with an opacity slider. A `diff`
   takes a unified patch in `body` or `path`, or `ref` (default `HEAD`; a
   commit, a `a..b` range, or `staged`), `paths` and `repo`, and the extension
   runs `git diff` itself. Untracked files named in `paths` show as new, and

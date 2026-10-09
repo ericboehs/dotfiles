@@ -134,6 +134,79 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .chart-legend em { font-style: normal; color: var(--dim); }
 .chart-cap { font-size: 12.5px; color: var(--dim); }
+.term { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--code); }
+.term-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.term-cmd { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); white-space: pre-wrap; word-break: break-all; background: none; padding: 0; }
+.term-ps { color: var(--dim); user-select: none; }
+.term-meta { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--dim); white-space: nowrap; }
+.term-meta .btn { margin: -4px -6px -4px 0; }
+.term-exit { font-weight: 600; }
+.term-exit.ok { color: var(--ok); } .term-exit.bad { color: var(--bad); }
+.term-tools { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.term-tools .btn { margin-left: auto; }
+.term-filter, .tbl-filter { font: 12.5px/1.2 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: min(260px, 50%); }
+.term-count, .tbl-count { font-size: 12px; color: var(--dim); }
+.term-body { max-height: 640px; overflow: auto; padding: 6px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tl { display: flex; min-height: 1.5em; padding: 0 12px 0 0; }
+.tl .ln { flex: none; width: 4.2em; padding-right: 12px; text-align: right; color: var(--dim); opacity: 0.6; user-select: none; }
+.tl .tx { white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.tl.bad .tx { color: var(--bad); } .tl.warn .tx { color: var(--warn); } .tl.ok .tx { color: var(--ok); }
+.tl mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; }
+.term-fold { display: block; margin: 4px 12px 4px 4.2em; font: 500 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--accent); background: none; border: 1px dashed var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+.term-fold:hover { background: var(--soft); }
+.term-none { padding: 6px 12px; color: var(--dim); font-style: italic; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px; }
+.stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.stat-label { font-size: 12px; color: var(--dim); }
+.stat-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.stat-value { font-size: 24px; line-height: 1.15; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat-delta { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-delta.ok { color: var(--ok); } .stat-delta.bad { color: var(--bad); } .stat-delta.flat { color: var(--dim); }
+.stat-note { font-size: 11.5px; color: var(--dim); }
+svg.spark { display: block; overflow: visible; margin-top: 2px; max-width: 100%; height: auto; }
+svg.spark path { fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.tbl-tools { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.tbl-scroll { max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+table.ktable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0; }
+table.ktable th, table.ktable td { padding: 5px 10px; border-bottom: 1px solid var(--soft); text-align: left; vertical-align: middle; white-space: nowrap; }
+table.ktable td { white-space: normal; }
+table.ktable thead th { position: sticky; top: 0; background: var(--card); border-bottom: 1px solid var(--line); z-index: 1; padding: 0; }
+table.ktable tbody tr:hover { background: var(--soft); }
+table.ktable .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.ktable th.num .tbl-sort { justify-content: flex-end; }
+table.ktable td.nil { color: var(--dim); }
+.tbl-sort { all: unset; box-sizing: border-box; display: flex; gap: 5px; align-items: center; width: 100%; padding: 7px 10px; font-weight: 600; font-size: 12.5px; cursor: pointer; }
+.tbl-sort .arrow { font-size: 9px; color: var(--dim); opacity: 0.5; }
+.tbl-sort.on .arrow { opacity: 1; color: var(--accent); }
+.tbl-sort:hover .arrow { opacity: 1; }
+.tbl-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+td.barc > div { display: flex; align-items: center; gap: 8px; min-width: 140px; }
+.cbar { flex: 1; height: 8px; background: var(--soft); border-radius: 999px; overflow: hidden; min-width: 60px; }
+.cbar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+td.barc .num { min-width: 4em; }
+.ctag { display: inline-block; font-size: 11.5px; line-height: 1; padding: 3px 7px; border-radius: 999px; background: var(--soft); color: var(--dim); white-space: nowrap; }
+.ctag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.ctag.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.ctag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.tbl-more { margin-top: 6px; }
+.tbl-more .term-fold { margin-left: 0; }
+.cmp-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.cmp-fade { width: 200px; accent-color: var(--accent); }
+.cmp-stack { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; line-height: 0; user-select: none; touch-action: none; }
+.cmp-stack img { display: block; width: 100%; height: auto; }
+.cmp-stack img.top { position: absolute; inset: 0; height: 100%; object-fit: contain; object-position: left top; }
+.cmp-stack.slide { cursor: ew-resize; }
+.cmp-stack.slide:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cmp-handle { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
+.cmp-handle span { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; font: 600 15px/30px -apple-system, sans-serif; text-align: center; box-shadow: 0 1px 4px rgb(0 0 0 / 0.3); }
+.cmp-tag { position: absolute; top: 8px; font: 600 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; padding: 4px 8px; border-radius: 999px; background: rgb(0 0 0 / 0.6); color: #fff; pointer-events: none; }
+.cmp-tag.l { left: 8px; } .cmp-tag.r { right: 8px; }
+.cmp-side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cmp-side figure { margin: 0; min-width: 0; }
+.cmp-side figcaption { font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 4px; }
+.cmp-side img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+:root { --t0:#1c1b19; --t1:#c0392b; --t2:#1f7a52; --t3:#a86a00; --t4:#285880; --t5:#8a3f9e; --t6:#1f7a8a; --t7:#6b675e; --t8:#8a8578; --t9:#e0533f; --t10:#2f9e72; --t11:#b8901c; --t12:#3b7dd8; --t13:#a35bc0; --t14:#2e9bb0; --t15:#3a3834; }
+@media (prefers-color-scheme: dark) { :root { --t0:#6b675e; --t1:#ef6f5e; --t2:#5cc495; --t3:#e2b257; --t4:#6ea3ec; --t5:#c792ea; --t6:#5cc3d3; --t7:#d6d3cc; --t8:#8a8578; --t9:#ff8a7a; --t10:#7ad9ab; --t11:#f0cc70; --t12:#8fbaf2; --t13:#d8aaf2; --t14:#7ad4e2; --t15:#ffffff; } }
 .fileview { display: flex; align-items: stretch; min-height: 100%; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .fileview pre { margin: 0; padding: 8px 0; font: inherit; white-space: pre; }
 .fileview .gutter { flex: none; position: sticky; left: 0; padding: 8px 10px 8px 14px; text-align: right; color: var(--dim); user-select: none; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); }
@@ -507,6 +580,14 @@ async function sectionBody(id, sec) {
       return renderDiffView(await (await fetch(url)).text(), { title: sec.title || sec.id, href: rawUrl(id, sec, false) });
     case "chart":
       return renderChart(JSON.parse(await (await fetch(url)).text()));
+    case "terminal":
+      return renderTerminal(JSON.parse(await (await fetch(url)).text()));
+    case "stats":
+      return renderStats(JSON.parse(await (await fetch(url)).text()));
+    case "table":
+      return renderTable(JSON.parse(await (await fetch(url)).text()));
+    case "compare":
+      return renderCompare(JSON.parse(await (await fetch(url)).text()), (f) => `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(f)}?v=${encodeURIComponent(sec.at || "")}`);
     default:
       return h("div", { class: "empty" }, `unknown kind ${sec.kind}`);
   }
@@ -707,7 +788,7 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (sec.kind === "markdown" || sec.kind === "mermaid" || sec.kind === "diff" || sec.kind === "chart") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
+  if (["markdown", "mermaid", "diff", "chart", "stats", "table"].includes(sec.kind)) meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
   if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
@@ -989,6 +1070,415 @@ function drawPie(spec, W) {
   function marks(el) {
     root.append(el);
   }
+}
+
+// ── terminal ─────────────────────────────────────────────────────────────────────
+// Command output with its ANSI colours (mapped to --t0…--t15 so they follow
+// the theme), a header with the command, exit code and duration, the middle of
+// long output folded, and a filter box. Output without colour gets error,
+// warning and pass lines tinted.
+
+function applySgr(style, params) {
+  const p = params === "" ? [0] : params.split(";").map(Number);
+  const c256 = (n) => {
+    if (n < 16) return n;
+    if (n >= 232) return `rgb(${[0, 0, 0].map(() => 8 + (n - 232) * 10).join(",")})`;
+    const v = (x) => (x ? x * 40 + 55 : 0);
+    n -= 16;
+    return `rgb(${v(Math.floor(n / 36))},${v(Math.floor(n / 6) % 6)},${v(n % 6)})`;
+  };
+  for (let i = 0; i < p.length; i++) {
+    const n = p[i];
+    if (n === 0) for (const k of Object.keys(style)) delete style[k];
+    else if (n === 1) style.b = 1;
+    else if (n === 2) style.dim = 1;
+    else if (n === 3) style.i = 1;
+    else if (n === 4) style.u = 1;
+    else if (n === 7) style.inv = 1;
+    else if (n === 22) delete style.b, delete style.dim;
+    else if (n === 23) delete style.i;
+    else if (n === 24) delete style.u;
+    else if (n === 27) delete style.inv;
+    else if (n >= 30 && n <= 37) style.fg = n - 30;
+    else if (n >= 90 && n <= 97) style.fg = n - 90 + 8;
+    else if (n === 39) delete style.fg;
+    else if (n >= 40 && n <= 47) style.bg = n - 40;
+    else if (n >= 100 && n <= 107) style.bg = n - 100 + 8;
+    else if (n === 49) delete style.bg;
+    else if (n === 38 || n === 48) {
+      const key = n === 38 ? "fg" : "bg";
+      if (p[i + 1] === 5) (style[key] = c256(p[i + 2] || 0)), (i += 2);
+      else if (p[i + 1] === 2) (style[key] = `rgb(${p[i + 2] || 0},${p[i + 3] || 0},${p[i + 4] || 0})`), (i += 4);
+    }
+  }
+}
+
+/** Output split into lines of [text, style] runs, with \r redraws applied and other escapes dropped. */
+function parseAnsi(text) {
+  const lines = [];
+  const style = {};
+  let segs = [];
+  let plain = "";
+  const push = (t) => {
+    t = t.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+    if (t) segs.push([t, { ...style }]), (plain += t);
+  };
+  const end = () => {
+    lines.push({ segs, plain });
+    segs = [];
+    plain = "";
+  };
+  text = text.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "");
+  const re = /\x1b\[([0-9;?]*)([A-Za-z])|\r\n|\n|\r/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    push(text.slice(last, m.index));
+    last = re.lastIndex;
+    if (m[0] === "\n" || m[0] === "\r\n") end();
+    else if (m[0] === "\r") (segs = []), (plain = "");
+    else if (m[2] === "m") applySgr(style, m[1]);
+  }
+  push(text.slice(last));
+  if (segs.length || plain) end();
+  return lines;
+}
+
+function ansiCss(st) {
+  const color = (c) => (typeof c === "number" ? `var(--t${c})` : c);
+  let fg = st.fg != null ? color(st.fg) : null;
+  let bg = st.bg != null ? color(st.bg) : null;
+  if (st.inv) [fg, bg] = [bg || "var(--code)", fg || "var(--ink)"];
+  return [fg && `color:${fg}`, bg && `background:${bg}`, st.b && "font-weight:700", st.dim && "opacity:.65", st.i && "font-style:italic", st.u && "text-decoration:underline"].filter(Boolean).join(";");
+}
+
+const lineTint = (s) =>
+  /(?<!\b0 )\b(error|errors|failed|failure|fatal|panic|exception)\b|✖|✗|^\s*not ok\b|^\s*FAIL\b/i.test(s)
+    ? " bad"
+    : /\b(warn|warning|deprecated)\b/i.test(s)
+      ? " warn"
+      : /✔|✓|^\s*ok\b|^\s*PASS\b|(?<!\b0 )\bpassed\b/.test(s)
+        ? " ok"
+        : "";
+
+function fmtSeconds(s) {
+  if (s < 1) return `${Math.round(s * 1000)} ms`;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`;
+  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+}
+
+function renderTerminal(spec) {
+  const output = spec.output || "";
+  const lines = parseAnsi(output);
+  const colored = /\x1b\[[0-9;]*m/.test(output);
+  const count = h("span", { class: "term-count" });
+  const filter = lines.length > 15 ? h("input", { class: "term-filter", type: "search", placeholder: "Filter lines", "aria-label": "Filter lines" }) : null;
+  const head = h(
+    "div",
+    { class: "term-head" },
+    h("code", { class: "term-cmd" }, spec.command ? [h("span", { class: "term-ps" }, "$ "), spec.command] : h("span", { class: "term-ps" }, "output")),
+    h(
+      "span",
+      { class: "term-meta" },
+      spec.cwd ? h("span", { title: spec.cwd }, tilde(spec.cwd)) : null,
+      spec.duration != null ? h("span", {}, typeof spec.duration === "number" ? fmtSeconds(spec.duration) : spec.duration) : null,
+      spec.exit != null ? h("span", { class: `term-exit ${spec.exit === 0 ? "ok" : "bad"}` }, `exit ${spec.exit}`) : null,
+      h("span", {}, `${lines.length.toLocaleString()} line${lines.length === 1 ? "" : "s"}`),
+    ),
+  );
+  const copy = copyButton(() => lines.map((l) => l.plain).join("\n"), "Copy output");
+  const tools = filter ? h("div", { class: "term-tools" }, filter, count, copy) : null;
+  if (!filter) head.lastChild.append(copy);
+  const body = h("div", { class: "term-body" });
+  const lineEl = (l, i, q) => {
+    const text = h("span", { class: "tx" });
+    if (q) {
+      // Filtered lines show plain text with the matches marked.
+      const low = l.plain.toLowerCase();
+      let at = 0;
+      for (let k = low.indexOf(q); k >= 0; k = low.indexOf(q, at)) {
+        text.append(l.plain.slice(at, k), h("mark", {}, l.plain.slice(k, k + q.length)));
+        at = k + q.length;
+      }
+      text.append(l.plain.slice(at));
+    } else for (const [t, st] of l.segs) text.append(Object.keys(st).length ? h("span", { style: ansiCss(st) }, t) : t);
+    return h("div", { class: `tl${colored ? "" : lineTint(l.plain)}` }, h("span", { class: "ln" }, i + 1), text);
+  };
+  const HEAD = 30;
+  const TAIL = 40;
+  let expanded = false;
+  const draw = () => {
+    const q = filter?.value.trim().toLowerCase() || "";
+    body.replaceChildren();
+    if (q) {
+      const hits = [];
+      lines.forEach((l, i) => l.plain.toLowerCase().includes(q) && hits.push(i));
+      for (const i of hits.slice(0, 2000)) body.append(lineEl(lines[i], i, q));
+      if (!hits.length) body.append(h("div", { class: "term-none" }, "No lines match"));
+      count.textContent = `${hits.length.toLocaleString()} of ${lines.length.toLocaleString()}`;
+      return;
+    }
+    count.textContent = "";
+    if (expanded || lines.length <= HEAD + TAIL + 10) lines.forEach((l, i) => body.append(lineEl(l, i)));
+    else {
+      lines.slice(0, HEAD).forEach((l, i) => body.append(lineEl(l, i)));
+      const hidden = lines.length - HEAD - TAIL;
+      body.append(h("button", { class: "term-fold", type: "button", onclick: () => ((expanded = true), draw()) }, `Show ${hidden.toLocaleString()} more lines`));
+      lines.slice(-TAIL).forEach((l, k) => body.append(lineEl(l, lines.length - TAIL + k)));
+    }
+    if (!lines.length) body.append(h("div", { class: "term-none" }, "No output"));
+  };
+  filter?.addEventListener("input", draw);
+  draw();
+  return h("div", { class: "term" }, head, tools, body);
+}
+
+// ── stats ──────────────────────────────────────────────────────────────────────────
+
+/** A small line of numbers with a dot on the last one; null leaves a gap. */
+function sparkSvg(data, w = 90, hgt = 26, color = "var(--accent)") {
+  const vals = (data || []).filter(Number.isFinite);
+  if (vals.length < 2) return null;
+  const lo = Math.min(...vals);
+  const span = Math.max(...vals) - lo || 1;
+  const x = (i) => 2 + (i / (data.length - 1)) * (w - 4);
+  const y = (v) => 3 + (1 - (v - lo) / span) * (hgt - 6);
+  let d = "";
+  let pen = false;
+  data.forEach((v, i) => {
+    if (!Number.isFinite(v)) return void (pen = false);
+    d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+    pen = true;
+  });
+  let li = data.length - 1;
+  while (li > 0 && !Number.isFinite(data[li])) li--;
+  return svg("svg", { class: "spark", viewBox: `0 0 ${w} ${hgt}`, width: w, height: hgt, "aria-hidden": "true" }, svg("path", { d, style: `stroke:${color}` }), svg("circle", { cx: x(li), cy: y(data[li]), r: 2.2, style: `fill:${color}` }));
+}
+
+function renderStats(spec) {
+  const items = spec.items || [];
+  return h(
+    "div",
+    { class: "stats" },
+    items.map((it) => {
+      const color = /^c[1-8]$/.test(it.color) || NAMED.has(it.color) ? `var(--${it.color})` : "var(--accent)";
+      const value = typeof it.value === "number" ? fmtValue(it.value, it) : `${it.prefix ?? ""}${it.value}${it.unit ? `\u2009${it.unit}` : ""}`;
+      let delta = null;
+      if (it.delta != null && it.delta !== "") {
+        const dir = typeof it.delta === "number" ? Math.sign(it.delta) : /^\s*-/.test(it.delta) ? -1 : /^\s*\+/.test(it.delta) ? 1 : 0;
+        const text = typeof it.delta === "number" ? fmtValue(Math.abs(it.delta), { unit: it.unit === "%" ? "%" : "" }) : String(it.delta).replace(/^\s*[+-]\s*/, "");
+        const good = it.good || "up";
+        const cls = !dir || good === "none" ? "flat" : (dir > 0) === (good === "up") ? "ok" : "bad";
+        delta = h("span", { class: `stat-delta ${cls}` }, `${dir > 0 ? "↑" : dir < 0 ? "↓" : "→"} ${text}`);
+      }
+      return h(
+        "div",
+        { class: "stat" },
+        h("div", { class: "stat-label" }, it.label),
+        h("div", { class: "stat-row" }, h("b", { class: "stat-value", style: it.color ? `color:${color}` : null }, value), delta),
+        it.spark ? sparkSvg(it.spark, 120, 28, color) : null,
+        it.note ? h("div", { class: "stat-note" }, it.note) : null,
+      );
+    }),
+  );
+}
+
+// ── table ──────────────────────────────────────────────────────────────────────────
+// Rows from JSON or CSV: click a header to sort (asc, desc, off), type to
+// filter, typed cells (number, bar, spark, tag, link, code), 500 rows at a time.
+
+const TAG_TONE = [
+  [/^(ok|pass(ed|ing)?|success(ful)?|succeeded|done|yes|up|green|healthy|merged|open|active)$/i, "ok"],
+  [/^(fail(ed|ing|ure)?|error|errored|broken|no|down|red|critical|high|blocked)$/i, "bad"],
+  [/^(warn(ing)?|pending|queued|running|medium|yellow|slow|draft|skipped|flaky)$/i, "warn"],
+];
+
+function renderTable(spec) {
+  const rows = spec.rows || [];
+  let cols = spec.columns;
+  if (!cols) cols = Array.isArray(rows[0]) ? rows[0].map((_, i) => `Column ${i + 1}`) : [...new Set(rows.slice(0, 50).flatMap((r) => Object.keys(r)))];
+  cols = cols.map((c, i) => (typeof c === "string" ? { label: c, key: c } : { ...c, label: c.label ?? c.key, key: c.key ?? c.label ?? String(i) }));
+  const data = rows.map((r) => cols.map((c, i) => (Array.isArray(r) ? r[i] : r?.[c.key])));
+  for (const [i, c] of cols.entries()) {
+    if (c.type) continue;
+    const vals = data.map((r) => r[i]).filter((v) => v != null && v !== "");
+    c.type = !vals.length ? "text" : vals.every((v) => typeof v === "number") ? "number" : vals.every((v) => Array.isArray(v) && v.every((x) => x === null || typeof x === "number")) ? "spark" : "text";
+  }
+  const max = cols.map((c, i) => (c.type === "bar" ? Math.max(0, ...data.map((r) => (Number.isFinite(r[i]) ? Math.abs(r[i]) : 0))) : 0));
+  const text = (v) => (v == null ? "" : Array.isArray(v) ? "" : typeof v === "object" ? String(v.text ?? v.href ?? "") : String(v));
+  const haystack = data.map((r) => r.map(text).join(" \u0001 ").toLowerCase());
+  const sortKey = (v, c) => (c.type === "spark" ? (Array.isArray(v) ? v.filter(Number.isFinite).at(-1) : null) : c.type === "number" || c.type === "bar" ? (Number.isFinite(v) ? v : null) : text(v) || null);
+
+  const cell = (v, c, i) => {
+    if (v == null || v === "") return h("td", { class: "nil" }, "–");
+    switch (c.type) {
+      case "number":
+        return h("td", { class: "num" }, typeof v === "number" ? fmtValue(v, c) : String(v));
+      case "bar": {
+        const pct = max[i] && Number.isFinite(v) ? (Math.abs(v) / max[i]) * 100 : 0;
+        return h("td", { class: "barc" }, h("div", {}, h("span", { class: "cbar" }, h("i", { style: `width:${pct.toFixed(1)}%` })), h("span", { class: "num" }, Number.isFinite(v) ? fmtValue(v, c) : String(v))));
+      }
+      case "spark":
+        return h("td", { class: "sparkc" }, Array.isArray(v) ? sparkSvg(v, 84, 20) || "–" : String(v));
+      case "tag": {
+        const tone = TAG_TONE.find(([re]) => re.test(String(v).trim()))?.[1];
+        return h("td", {}, h("span", { class: `ctag${tone ? ` ${tone}` : ""}` }, String(v)));
+      }
+      case "link": {
+        const href = typeof v === "object" ? v.href : v;
+        const label = typeof v === "object" ? v.text ?? v.href : v;
+        return h("td", {}, /^https?:\/\//i.test(String(href)) ? h("a", { href, target: "_blank", rel: "noopener noreferrer" }, String(label)) : String(label));
+      }
+      case "code":
+        return h("td", {}, h("code", {}, String(v)));
+      default:
+        return h("td", {}, text(v));
+    }
+  };
+
+  const startCol = spec.sort ? cols.findIndex((c, i) => c.key === spec.sort.column || c.label === spec.sort.column || i === spec.sort.column) : -1;
+  const sort = { col: startCol, desc: !!spec.sort?.desc };
+  let limit = 500;
+  const filter = rows.length > 8 ? h("input", { class: "tbl-filter", type: "search", placeholder: `Filter ${rows.length.toLocaleString()} rows`, "aria-label": "Filter rows" }) : null;
+  const count = h("span", { class: "tbl-count" });
+  const thead = h("thead");
+  const tbody = h("tbody");
+  const more = h("div", { class: "tbl-more" });
+  const draw = () => {
+    const q = filter?.value.trim().toLowerCase() || "";
+    let order = data.map((_, i) => i);
+    if (q) order = order.filter((i) => haystack[i].includes(q));
+    if (sort.col >= 0) {
+      const c = cols[sort.col];
+      const keys = data.map((r) => sortKey(r[sort.col], c));
+      order.sort((a, b) => {
+        const x = keys[a];
+        const y = keys[b];
+        if (x == null || y == null) return x == null ? (y == null ? a - b : 1) : -1; // empties last
+        const d = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: "base" });
+        return (sort.desc ? -d : d) || a - b;
+      });
+    }
+    thead.replaceChildren(
+      h(
+        "tr",
+        {},
+        cols.map((c, i) => {
+          const on = sort.col === i;
+          const right = c.type === "number" || c.align === "right";
+          return h(
+            "th",
+            { class: right ? "num" : null, "aria-sort": on ? (sort.desc ? "descending" : "ascending") : "none" },
+            h(
+              "button",
+              {
+                type: "button",
+                class: `tbl-sort${on ? " on" : ""}`,
+                title: "Sort",
+                onclick: () => {
+                  // Numbers start high-first, text A-Z; a third click turns sorting off.
+                  const firstDesc = c.type === "number" || c.type === "bar" || c.type === "spark";
+                  if (!on) Object.assign(sort, { col: i, desc: firstDesc });
+                  else if (sort.desc === firstDesc) sort.desc = !sort.desc;
+                  else sort.col = -1;
+                  draw();
+                },
+              },
+              c.label,
+              h("span", { class: "arrow" }, on ? (sort.desc ? "▼" : "▲") : "↕"),
+            ),
+          );
+        }),
+      ),
+    );
+    tbody.replaceChildren(...order.slice(0, limit).map((ri) => h("tr", {}, cols.map((c, i) => cell(data[ri][i], c, i)))));
+    if (!order.length) tbody.append(h("tr", {}, h("td", { class: "nil", colspan: cols.length }, "No rows match")));
+    count.textContent = q ? `${order.length.toLocaleString()} of ${rows.length.toLocaleString()} rows` : `${rows.length.toLocaleString()} rows`;
+    more.replaceChildren(
+      order.length > limit ? h("button", { class: "term-fold", type: "button", onclick: () => ((limit += 1000), draw()) }, `Show ${Math.min(1000, order.length - limit).toLocaleString()} more of ${(order.length - limit).toLocaleString()}`) : "",
+    );
+  };
+  filter?.addEventListener("input", () => ((limit = 500), draw()));
+  draw();
+  return h(
+    "div",
+    { class: "tbl" },
+    h("div", { class: "tbl-tools" }, filter, count),
+    h("div", { class: "tbl-scroll" }, h("table", { class: "ktable" }, thead, tbody)),
+    more,
+    spec.caption ? h("div", { class: "chart-cap" }, spec.caption) : null,
+  );
+}
+
+// ── compare ────────────────────────────────────────────────────────────────────────
+// Two images: a slider (before on the left, after on the right; drag, or the
+// arrow keys), side by side, or onion skin (after over before, faded). The
+// view is remembered per browser unless the section asks for one.
+
+function renderCompare(spec, src) {
+  const [la, lb] = spec.labels || ["Before", "After"];
+  let mode = spec.mode || localStorage.getItem("canvas:compare-mode") || "slider";
+  const img = (file, alt, cls) => h("img", { src: src(file), alt, class: cls, draggable: "false" });
+  const stage = h("div", { class: "cmp-stage" });
+  const fade = h("input", { type: "range", min: 0, max: 100, value: 50, class: "cmp-fade", "aria-label": `${lb} opacity` });
+  const modes = h("span", { class: "segs" });
+  const draw = () => {
+    modes.replaceChildren(
+      ...[
+        ["slider", "Slider"],
+        ["side", "Side by side"],
+        ["onion", "Onion skin"],
+      ].map(([m, label]) => h("button", { type: "button", class: `seg${m === mode ? " on" : ""}`, onclick: () => ((mode = m), localStorage.setItem("canvas:compare-mode", m), draw()) }, label)),
+    );
+    fade.hidden = mode !== "onion";
+    if (mode === "side") {
+      stage.replaceChildren(h("div", { class: "cmp-side" }, [[spec.before, la], [spec.after, lb]].map(([f, l]) => h("figure", {}, h("figcaption", {}, l), img(f, l)))));
+      return;
+    }
+    const top = img(spec.after, lb, "top");
+    const box = h("div", { class: "cmp-stack" }, img(spec.before, la), top);
+    if (mode === "onion") {
+      const apply = () => (top.style.opacity = String(fade.value / 100));
+      fade.oninput = apply;
+      apply();
+      box.append(h("span", { class: "cmp-tag l" }, `${la} → ${lb}`));
+      stage.replaceChildren(box);
+      return;
+    }
+    const handle = h("div", { class: "cmp-handle" }, h("span", {}, "⟷"));
+    box.append(handle, h("span", { class: "cmp-tag l" }, la), h("span", { class: "cmp-tag r" }, lb));
+    Object.assign(box, { tabIndex: 0 });
+    box.setAttribute("role", "slider");
+    box.setAttribute("aria-label", `${la} and ${lb}`);
+    box.classList.add("slide");
+    const set = (p) => {
+      p = Math.min(Math.max(p, 0), 100);
+      top.style.clipPath = `inset(0 0 0 ${p}%)`;
+      handle.style.left = `${p}%`;
+      box.setAttribute("aria-valuenow", String(Math.round(p)));
+      box.dataset.pos = String(p);
+    };
+    const at = (e) => {
+      const r = box.getBoundingClientRect();
+      set(((e.clientX - r.left) / r.width) * 100);
+    };
+    box.addEventListener("pointerdown", (e) => {
+      box.setPointerCapture(e.pointerId);
+      at(e);
+    });
+    box.addEventListener("pointermove", (e) => box.hasPointerCapture(e.pointerId) && at(e));
+    box.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 10 : 2;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        set(Number(box.dataset.pos) + (e.key === "ArrowLeft" ? -step : step));
+      }
+    });
+    set(50);
+    stage.replaceChildren(box);
+  };
+  draw();
+  return h("div", { class: "cmp" }, h("div", { class: "cmp-bar" }, modes, fade), stage);
 }
 
 // ── diffs ────────────────────────────────────────────────────────────────────
