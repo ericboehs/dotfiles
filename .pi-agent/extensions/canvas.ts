@@ -550,9 +550,13 @@ export function agentsMarkdown(traffic: AgentMsg[], peers: Peer[], hasCanvas: (s
   const first = (t: string, n: number) => oneLine(t.split("\n").find((l) => l.trim()) ?? "", n);
   const byWho = new Map<string, AgentMsg[]>();
   for (const m of traffic) byWho.set(m.who, [...(byWho.get(m.who) ?? []), m]);
+  for (const msgs of byWho.values()) msgs.sort((a, b) => a.at.localeCompare(b.at)); // oldest→newest, whatever order they came in
+  // The page shows a time within the last 18 h as "4m ago" (and keeps it
+  // current); older ones keep this text.
   const when = (iso: string) => {
     const d = new Date(iso);
-    return d.toDateString() === new Date().toDateString() ? clockTime(iso) : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${clockTime(iso)}`;
+    const abs = d.toDateString() === new Date().toDateString() ? clockTime(iso) : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${clockTime(iso)}`;
+    return `<time class="rel" datetime="${esc(iso)}">${abs}</time>`;
   };
   const rows = [...byWho.entries()].sort((a, b) => b[1].at(-1)!.at.localeCompare(a[1].at(-1)!.at)).slice(0, max);
   return rows
@@ -566,6 +570,7 @@ export function agentsMarkdown(traffic: AgentMsg[], peers: Peer[], hasCanvas: (s
       const arrow = (m: AgentMsg) => (m.dir === "out" ? "↑" : "↓");
       const items = msgs
         .slice(-6)
+        .reverse() // newest first
         .map((m) => `<li class="${m.dir}${m.failed ? " failed" : ""}"><span class="when">${arrow(m)} ${when(m.at)} · ${m.mode}${m.failed ? " (failed)" : ""}</span>${esc(oneLine(m.text, 240))}</li>`)
         .join("");
       const where = peer ? [esc(peer.cwd.replace(homedir(), "~")), peer.sessionId && hasCanvas(peer.sessionId) ? `<a href="/s/${encodeURIComponent(peer.sessionId)}">canvas page</a>` : ""].filter(Boolean).join(" · ") : "";

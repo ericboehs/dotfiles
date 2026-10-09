@@ -305,6 +305,9 @@ test("agentsMarkdown: newest exchange first, live state, escaped text, a link to
   assert.equal(rows.length, 3);
   assert.match(rows[0], /^<details class="agent gone" data-agent="infra-terraform">.*<b>infra-terraform<\/b><span class="n">↑1 ↓1 · /);
   assert.match(rows[0], /<span class="pv">↑ us-gov-west-1<\/span>/);
+  // The open list is newest first, and every time is a <time class="rel"> the page can make relative.
+  assert.match(rows[0], /<ul><li class="out">.*<li class="in">/);
+  assert.match(rows[0], /<span class="when">↑ <time class="rel" datetime="[^"]+">[^<]+<\/time> · /);
   assert.match(rows[1], /class="agent gone" data-agent="docs">.*<b>docs<\/b>.*send \(failed\)<\/span>FYI: &lt;b&gt;cart&lt;\/b&gt; changed/);
   assert.match(rows[2], /class="agent busy" data-agent="reviewer"><summary><span class="dot" title="tool:bash"><\/span><b>reviewer<\/b>/);
   assert.match(rows[2], /<span class="pv">↓ Yes, ship it\.<\/span>/);

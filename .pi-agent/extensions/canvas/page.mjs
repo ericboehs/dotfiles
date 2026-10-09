@@ -513,8 +513,20 @@ function dayLabel(d) {
 
 /** A relative time that the ticker below keeps current. */
 const agoEl = (iso) => h("time", { "data-at": iso, datetime: iso, title: fullDate(iso) }, ago(iso));
+// <time class="rel"> in generated markdown (Agents): relative within 18 h,
+// else the absolute text it came with.
+const REL_WITHIN = 18 * 3600_000;
+function relTimes(root) {
+  for (const t of root.querySelectorAll("time.rel[datetime]")) {
+    const at = Date.parse(t.getAttribute("datetime"));
+    if (Number.isNaN(at)) continue;
+    if (t.dataset.abs === undefined) (t.dataset.abs = t.textContent), (t.title = fullDate(t.getAttribute("datetime")));
+    t.textContent = Date.now() - at < REL_WITHIN ? ago(at) : t.dataset.abs;
+  }
+}
 setInterval(() => {
   for (const t of document.querySelectorAll("time[data-at]")) t.textContent = ago(t.dataset.at);
+  relTimes(document);
 }, 15_000);
 
 async function copyText(text) {
@@ -661,6 +673,7 @@ function renderMarkdown(text) {
     return el;
   }
   el.innerHTML = window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true }));
+  relTimes(el);
   for (const a of el.querySelectorAll("a[href]")) a.target = "_blank";
   for (const code of el.querySelectorAll("pre > code.language-mermaid")) {
     const box = h("div");

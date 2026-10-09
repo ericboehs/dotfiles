@@ -808,7 +808,9 @@ updates through server-sent events with no reload.
   agent-link's registry in `~/.claude/sessions` and returns live names and
   statuses only), ↑ sent / ↓ received counts
   and the last message's first line. Agents that have exited wait behind
-  "Show N inactive" (refolded as the dots change; an open row stays). A click opens the last six messages and
+  "Show N inactive" (refolded as the dots change; an open row stays). Times
+  within the last 18 h read "4m ago" and stay current; older ones show the
+  date and time. A click opens the last six messages (newest first) and
   the agent's folder, with a link to its canvas page if it has one. It's
   rebuilt from the session's own history (sends, asks and their answers,
   replies, and agent-link's headers on incoming messages) after each turn,
