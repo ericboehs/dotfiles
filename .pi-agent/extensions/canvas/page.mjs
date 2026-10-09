@@ -78,6 +78,8 @@ table.diff tr.note td { color: var(--dim); font-style: italic; }
 .toc a .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toc a time { flex: none; color: var(--dim); font-size: 11.5px; }
 .toc a.shut .t { color: var(--dim); }
+.toc li.more { padding: 2px 8px 2px; }
+.toc li.more .btn { margin: 0; }
 .toc a.unseen .t::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
 .card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -746,23 +748,35 @@ async function sessionView(id) {
   const tocItems = h("ul", { class: "toc" });
   const tocCount = h("span", { class: "n" });
   const tocCard = collapsible(h("section", { class: "card" }, h("h2", {}, h("span", { class: "title" }, "Contents"), tocCount), tocItems), "_contents");
+  const TOC_RECENT = 6;
+  let tocAll = false;
   function renderToc(list = tocList) {
     tocList = list;
     if (!wide.matches || !list.length) return tocSlot.replaceChildren();
     tocCount.textContent = String(list.length);
+    // The newest few, plus anything open or changed unseen; older collapsed
+    // sections wait behind "Show N older".
+    const state = (sec) => cards.get(sec.id)?.el?.classList;
+    const keep = list.map((sec, i) => i < TOC_RECENT || !state(sec)?.contains("collapsed") || state(sec)?.contains("unseen"));
+    const hidden = keep.filter((k) => !k).length;
+    const fold = hidden > 2 && !tocAll;
+    const toggle = hidden > 2 ? h("li", { class: "more" }, h("button", { class: "btn", type: "button", onclick: () => ((tocAll = !tocAll), renderToc()) }, tocAll ? "Show fewer" : `Show ${hidden} older`)) : null;
     tocItems.replaceChildren(
-      ...list.map((sec) => {
-        const card = cards.get(sec.id)?.el;
-        const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : ""].join(" ").trim();
-        const a = h("a", { class: cls, href: `#sec-${sec.id}`, title: sec.title || sec.id }, h("span", { class: "t" }, sec.title || sec.id), agoEl(sec.at));
-        a.addEventListener("click", (e) => {
-          e.preventDefault();
-          if (!card) return;
-          if (card.classList.contains("collapsed")) card.setCollapsed(false);
-          card.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
-        return h("li", {}, a);
-      }),
+      ...list
+        .filter((_, i) => !fold || keep[i])
+        .map((sec) => {
+          const card = cards.get(sec.id)?.el;
+          const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : ""].join(" ").trim();
+          const a = h("a", { class: cls, href: `#sec-${sec.id}`, title: sec.title || sec.id }, h("span", { class: "t" }, sec.title || sec.id), agoEl(sec.at));
+          a.addEventListener("click", (e) => {
+            e.preventDefault();
+            if (!card) return;
+            if (card.classList.contains("collapsed")) card.setCollapsed(false);
+            card.scrollIntoView({ behavior: "smooth", block: "start" });
+          });
+          return h("li", {}, a);
+        }),
+      toggle ?? [],
     );
     if (tocSlot.firstChild !== tocCard) tocSlot.replaceChildren(tocCard);
   }

@@ -754,7 +754,8 @@ updates through server-sent events with no reload.
   collapsed once its last change is over an hour old. A collapsed section isn't
   rendered until it's opened, and it shows a dot when it changes while
   collapsed. On a window 1200px or wider, a sticky sidebar holds Contents (every
-  section with its age; a click opens and scrolls to it), Files changed and
+  section with its age; a click opens and scrolls to it; past six, older
+  collapsed sections wait behind "Show N older"), Files changed and
   Screenshots. Narrower, those two widgets sit among the sections in time
   order.
 - **Opening it.** Safari never opens by itself. `/canvas` opens this session's
