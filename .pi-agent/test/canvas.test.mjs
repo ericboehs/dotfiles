@@ -379,7 +379,7 @@ test("daemon reports pi's program state, done for unknown, ended when pi is gone
   const { root, mk } = tempRoot();
   try {
     mk("busy", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "working" }) });
-    mk("ask", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "blocked", message: "Allow bash?" }) });
+    mk("ask", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "blocked", message: "Allow bash?", at: "2026-10-09T18:00:00.000Z" }) });
     mk("legacy", { pid: process.pid }, { "activity.json": JSON.stringify({ state: "waiting" }) });
     mk("old", { pid: process.pid }); // written before activity.json existed
     mk("gone", { pid: 999999 }, { "activity.json": JSON.stringify({ state: "working", message: "x" }) });
@@ -389,6 +389,8 @@ test("daemon reports pi's program state, done for unknown, ended when pi is gone
     assert.equal(sessionState(root, "old").activity, "done");
     assert.deepEqual([sessionState(root, "gone").activity, sessionState(root, "gone").activityMessage], ["ended", ""]);
     assert.equal(listSessions(root).find((s) => s.id === "ask").activityMessage, "Allow bash?");
+    assert.equal(listSessions(root).find((s) => s.id === "ask").activityAt, "2026-10-09T18:00:00.000Z", "when the state changed, for the waiting banner");
+    assert.equal(sessionState(root, "gone").activityAt, undefined, "no change time once pi is gone");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -647,6 +649,10 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     for (const f of ["j.jsonv", "s.steps", "l.timeline"]) assert.equal((await get(port, `/s/s1/f/${f}`)).status, 200, f);
     assert.equal(JSON.parse((await get(port, "/s/s1/f/k.compare")).body).after, "k-after.png");
     assert.equal((await get(port, "/s/s1/f/k-before.png")).headers["content-type"], "image/png", "compare images are served");
+    for (const a of ["page.mjs", "theme.mjs", "nav.mjs", "theme-boot.js"]) assert.equal((await get(port, `/assets/${a}`)).headers["content-type"], "text/javascript; charset=utf-8", a);
+    assert.ok(Object.keys(JSON.parse((await get(port, "/assets/themes.json")).body).themes).length >= 20, "Omarchy themes are served");
+    assert.match(page.body, /<script src="\/assets\/theme-boot\.js"><\/script>[\s\S]*page\.mjs/, "the theme boot script runs before the page module");
+    assert.match(sec.body, /canvasTheme/, "html frames listen for the theme");
     assert.equal((await get(port, "/s/s1/f/meta.json")).status, 404);
     const patch = await get(port, "/s/s1/f/diff-0123abcd.patch");
     assert.equal(patch.headers["content-type"], "text/plain; charset=utf-8");

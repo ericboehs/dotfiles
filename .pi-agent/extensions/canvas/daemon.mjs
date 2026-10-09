@@ -158,7 +158,9 @@ export function sessionState(root, id) {
   const act = readJson(join(dir, "activity.json"), null);
   const activity = !live ? "ended" : ACTIVITY_STATES.has(act?.state) ? act.state : "done";
   const activityMessage = live && typeof act?.message === "string" ? act.message.slice(0, 200) : "";
-  return { meta: { ...meta, id }, live, activity, activityMessage, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
+  // When the state last changed: the banner compares it with when you last saw the page.
+  const activityAt = live && typeof act?.at === "string" ? act.at : undefined;
+  return { meta: { ...meta, id }, live, activity, activityMessage, activityAt, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
 }
 
 export function listSessions(root) {
@@ -181,6 +183,7 @@ export function listSessions(root) {
       live: s.live,
       activity: s.activity,
       activityMessage: s.activityMessage,
+      activityAt: s.activityAt,
       started: s.meta.started,
       ended: s.meta.ended,
       updated: s.updated,
@@ -250,12 +253,24 @@ function loopback(addr) {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
+// Files the page loads from /assets/, read fresh on each request so edits
+// show on reload without restarting the daemon.
+const JS = "text/javascript; charset=utf-8";
+const ASSETS = {
+  "/assets/page.mjs": ["page.mjs", JS],
+  "/assets/theme.mjs": ["theme.mjs", JS],
+  "/assets/nav.mjs": ["nav.mjs", JS],
+  "/assets/theme-boot.js": ["theme-boot.js", JS],
+  "/assets/themes.json": ["themes.json", "application/json; charset=utf-8"],
+};
+
 const SHELL = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Canvas</title>
 <link rel="icon" href="data:,">
+<script src="/assets/theme-boot.js"></script>
 <script src="/assets/vendor/marked.js" defer></script>
 <script src="/assets/vendor/purify.js" defer></script>
 <script src="/assets/page.mjs" type="module"></script>
@@ -293,6 +308,7 @@ const FRAME_JS = `(function(){
 function mem(){var m=new Map();return{getItem:function(k){k=String(k);return m.has(k)?m.get(k):null},setItem:function(k,v){m.set(String(k),String(v))},removeItem:function(k){m.delete(String(k))},clear:function(){m.clear()},key:function(i){var a=Array.from(m.keys());return i<a.length?a[i]:null},get length(){return m.size}}}
 try{window.localStorage}catch(e){try{Object.defineProperty(window,"localStorage",{value:mem(),configurable:true});Object.defineProperty(window,"sessionStorage",{value:mem(),configurable:true})}catch(e2){}}
 if(window.parent===window)return;
+window.addEventListener("message",function(e){if(e.source!==window.parent||!e.data||!("canvasTheme" in e.data))return;var t=e.data.canvasTheme,s=document.documentElement.style,ks=["--bg","--card","--ink","--dim","--line","--soft","--code","--accent","--ok","--warn","--bad","--c1","--c2","--c3","--c4","--c5","--c6","--c7","--c8"];for(var i=0;i<ks.length;i++){if(t&&t.vars&&t.vars[ks[i]])s.setProperty(ks[i],t.vars[ks[i]]);else s.removeProperty(ks[i])}s.colorScheme=t&&t.mode?t.mode:""});
 var last=-1;
 function post(){var b=document.body;if(!b)return;var cs=getComputedStyle(b),bottom=0;for(var i=0;i<b.children.length;i++){var k=b.children[i],r=k.getBoundingClientRect();bottom=Math.max(bottom,r.bottom+(parseFloat(getComputedStyle(k).marginBottom)||0))}
 bottom+=(parseFloat(cs.paddingBottom)||0)+(parseFloat(cs.marginBottom)||0)+window.scrollY;var h=Math.ceil(bottom);if(h!==last){last=h;window.parent.postMessage({canvasFrame:{height:h}},"*")}}
@@ -405,8 +421,9 @@ function handler(req, res) {
   if (url.pathname === "/" || (parts[0] === "s" && parts.length === 2 && SESSION_ID.test(parts[1]))) {
     return send(res, 200, SHELL, { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": PAGE_CSP });
   }
-  if (url.pathname === "/assets/page.mjs") {
-    return send(res, 200, readFileSync(join(HERE, "page.mjs")), { "Content-Type": "text/javascript; charset=utf-8" });
+  if (ASSETS[url.pathname]) {
+    const [file, type] = ASSETS[url.pathname];
+    return send(res, 200, readFileSync(join(HERE, file)), { "Content-Type": type });
   }
   if (parts[0] === "assets" && parts[1] === "vendor" && parts.length === 3) {
     vendorFile(parts[2]).then(

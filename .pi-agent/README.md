@@ -829,6 +829,26 @@ updates through server-sent events with no reload.
   collapsed sections wait behind "Show N older"), Files changed and
   Screenshots. Narrower, those two widgets sit among the sections in time
   order.
+- **Waiting on you.** A strip above the header has a chip for each other
+  live session that is blocked, done or failed and changed since you last had
+  its page in view. Most urgent comes first, and a click opens it. "Seen" times
+  are kept in `localStorage` (`canvas:seen`), so every canvas tab agrees. On
+  the first run every session counts as seen.
+- **Cmd-K** (or Ctrl-K, or the ⌘K button) opens a picker matched on titles.
+  It lists waiting sessions first, then the other live ones, then recent ones,
+  followed by actions: fold or open all, copy the page link, the sessions
+  index, and Change theme…. ↵ opens in the same tab and ⌘↵ in a new one. `j` /
+  `k` hop to the next or previous section. A session page uses only the global
+  event stream, so a tab holds one of the browser's six connections per host.
+- **Themes.** All of Omarchy's first-party themes are bundled
+  (`canvas/themes.json`, MIT; `node canvas/build-themes.mjs [sha]` rebuilds
+  it). You pick one for when macOS is dark and one for light, or keep the
+  Canvas default, and every canvas page uses the pair. The picker previews
+  each theme as you move through it. `canvas/theme.mjs` maps a palette onto
+  the page's variables using the mixes from Omarchy's `pi.json` template, and
+  the terminal colours follow its alacritty template. Mermaid, charts and the
+  terminal follow the theme, and `html` frames get it by `postMessage`.
+  `theme-boot.js` applies the cached palette before the first paint.
 - **Opening it.** Safari never opens by itself. `/canvas` opens this session's
   page on display 1, left half, or focuses the tab if it is already open.
   `/canvas url` prints the address, `/canvas status` forces a status run, and
@@ -863,7 +883,7 @@ status runs, and `PI_CANVAS_MODEL=provider/id` changes the status model.
 Subagent children skip the canvas.
 
 ```sh
-node --test .pi-agent/test/canvas.test.mjs
+node --test .pi-agent/test/canvas.test.mjs .pi-agent/test/canvas-nav.test.mjs
 ```
 
 ## Inline images

@@ -2,6 +2,9 @@
 // Re-fetches state on each server-sent "changed" event and re-renders only the
 // sections whose timestamp moved, so iframes and scroll position survive.
 
+import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
+import { nextSeen, orderSessions, rankItems, waitingSessions } from "/assets/nav.mjs";
+
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
 @media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; --hl-kw:#8fc4e2; --hl-str:#bed59d; --hl-num:#e5c29b; --hl-com:#a5b4c6; --hl-title:#d6b9ed; --c1:#6ea3ec; --c2:#f08f5c; --c3:#4fc493; --c4:#e36a7c; --c5:#a888e0; --c6:#e0bd4a; --c7:#5cc3d3; --c8:#a8a194; } }
@@ -383,6 +386,40 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 .sessions .row .side time { color: var(--dim); font-size: 12px; }
 .sessions .row.ended .name, .sessions .row.ended .goal { color: color-mix(in srgb, var(--ink) 75%, var(--dim)); }
 .err { color: #c0392b; font-size: 13px; white-space: pre-wrap; }
+
+/* Other sessions waiting on you, above the header. */
+.waitbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 12px; }
+.waitbar:empty { display: none; }
+.waitbar .lbl { color: var(--dim); font-size: 12px; margin-right: 2px; }
+.waitchip { display: inline-flex; align-items: center; gap: 6px; max-width: 360px; padding: 3px 10px 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink); font-size: 12.5px; text-decoration: none; }
+.waitchip:hover { border-color: var(--accent); }
+.waitchip.blocked { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.waitchip.error { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+.waitchip .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waitchip .st { color: var(--dim); white-space: nowrap; }
+
+/* Cmd-K picker */
+.cmdk-back { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: color-mix(in srgb, #000 35%, transparent); }
+.cmdk { width: min(620px, calc(100vw - 32px)); max-height: 72vh; display: flex; flex-direction: column; overflow: hidden; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, .35); }
+.cmdk .q { display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+.cmdk .q .crumb { flex: none; padding: 2px 8px; border-radius: 6px; background: var(--soft); color: var(--dim); font-size: 12px; }
+.cmdk .q input { flex: 1; min-width: 0; padding: 13px 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 15px; }
+.cmdk ul { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
+.cmdk li.grp { padding: 8px 10px 4px; color: var(--dim); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.cmdk li.it { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 7px; cursor: pointer; }
+.cmdk li.it.on { background: var(--soft); }
+.cmdk li.it .lb { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cmdk li.it .sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12.5px; }
+.cmdk li.it .end { flex: none; margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 12px; white-space: nowrap; }
+.cmdk li.it .end .state { font-size: 11.5px; }
+.cmdk .sw { display: inline-flex; gap: 2px; }
+.cmdk .sw i { width: 10px; height: 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(127, 127, 127, .35); }
+.cmdk .in-use { color: var(--accent); font-weight: 600; }
+.cmdk .none { padding: 16px; color: var(--dim); text-align: center; }
+.cmdk .foot { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 12px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11.5px; }
+kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--soft); font: 11px ui-monospace, Menlo, monospace; }
+.toast { position: fixed; bottom: 18px; left: 50%; z-index: 60; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: var(--ink); color: var(--card); font-size: 13px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); opacity: 0; transition: opacity .15s; pointer-events: none; }
+.toast.show { opacity: 1; }
 `;
 
 const $app = document.getElementById("app");
@@ -548,8 +585,7 @@ function loadMermaid() {
     const s = document.createElement("script");
     s.src = "/assets/vendor/mermaid.js";
     s.onload = () => {
-      const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-      window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral" });
+      window.mermaid.initialize(mermaidConfig());
       resolve(window.mermaid);
     };
     s.onerror = () => reject(new Error("mermaid failed to load"));
@@ -562,6 +598,7 @@ async function renderMermaid(el, source) {
   // Not "mermaid": mermaid's own startOnLoad scans for that class when its
   // script loads and would empty this box before render() fills it.
   el.classList.add("mmd");
+  el._src = source; // kept so a theme change can draw it again
   try {
     const mermaid = await loadMermaid();
     const { svg } = await mermaid.render(`mmd-${++mermaidSeq}`, source);
@@ -2244,6 +2281,8 @@ document.addEventListener("click", (e) => {
 // ── session view ─────────────────────────────────────────────────────────────
 
 async function sessionView(id) {
+  currentSession = id;
+  const waitbar = h("div", { class: "waitbar" });
   const header = h("header", { class: "top" });
   const statusSlot = h("div");
   const sectionsSlot = h("div");
@@ -2252,6 +2291,7 @@ async function sessionView(id) {
   const widgetSlot = h("div");
   $app.classList.add("session");
   $app.replaceChildren(
+    waitbar,
     header,
     h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, tocSlot, widgetSlot)),
   );
@@ -2340,6 +2380,7 @@ async function sessionView(id) {
         { class: "tools" },
         h("button", { class: "btn", type: "button", onclick: () => setAll(true) }, "Collapse all"),
         h("button", { class: "btn", type: "button", onclick: () => setAll(false) }, "Expand all"),
+        kbdButton(),
         h("a", { class: "back", href: "/" }, "All sessions"),
       ),
     );
@@ -2391,19 +2432,423 @@ async function sessionView(id) {
   function setAll(shut) {
     for (const card of $app.querySelectorAll(".card[data-key]")) card.setCollapsed?.(shut);
   }
+  pageHooks.setAll = setAll;
+
+  // One stream for every session: this page refreshes on its own changes, and
+  // the banner on anyone's (a second stream per tab would eat into the
+  // browser's six connections per host).
+  let bannerTimer = 0;
+  const banner = () => {
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(() => fetchSessions().then(() => renderWaitbar(waitbar)), 400);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    markSeen();
+    banner();
+  });
 
   await refresh();
-  const es = new EventSource(`/api/s/${encodeURIComponent(id)}/events`);
-  es.addEventListener("changed", refresh);
+  markSeen();
+  banner();
+  const es = new EventSource("/api/events");
+  es.addEventListener("changed", (e) => {
+    let d = {};
+    try {
+      d = JSON.parse(e.data);
+    } catch {}
+    if (d.id === id) refresh().then(markSeen);
+    banner();
+  });
   setInterval(refresh, 30_000);
 }
+
+// ── themes ───────────────────────────────────────────────────────────────────
+// A pair of Omarchy themes, one for when macOS is dark and one for light, shared
+// by every canvas page (one origin, one localStorage). The resolved variables
+// are cached so theme-boot.js can apply them before the first paint.
+
+const darkMq = matchMedia("(prefers-color-scheme: dark)");
+const THEME_KEYS = Object.keys(themeVars({ background: "#000000", foreground: "#ffffff" }));
+let themesReady = null;
+let themePreview = null; // what the picker is hovering, until Enter or Esc
+
+function loadThemes() {
+  return (themesReady ??= fetch("/assets/themes.json")
+    .then((r) => r.json())
+    .then((j) => j.themes || {})
+    .catch(() => ({})));
+}
+const systemMode = () => (darkMq.matches ? "dark" : "light");
+function themeCache() {
+  try {
+    return JSON.parse(localStorage.getItem("canvas:theme-cache") || "null") || {};
+  } catch {
+    return {};
+  }
+}
+const themePair = () => readPair(localStorage.getItem("canvas:theme"));
+/** { name, mode, vars } in force now, or null for the canvas default. */
+function activeTheme() {
+  if (themePreview) return themePreview.vars ? themePreview : null;
+  return themeCache()[systemMode()] || null;
+}
+const isDark = () => (activeTheme()?.mode ?? systemMode()) === "dark";
+
+function postTheme(frame) {
+  try {
+    frame.contentWindow?.postMessage({ canvasTheme: activeTheme() }, "*");
+  } catch {}
+}
+
+function applyTheme() {
+  const t = activeTheme();
+  const s = document.documentElement.style;
+  for (const k of THEME_KEYS) s.removeProperty(k);
+  if (t?.vars) for (const [k, v] of Object.entries(t.vars)) s.setProperty(k, v);
+  s.colorScheme = t?.mode || "";
+  for (const f of document.querySelectorAll("iframe")) postTheme(f);
+  rethemeMermaid();
+}
+
+async function setTheme(name, mode) {
+  const themes = await loadThemes();
+  const pair = { ...themePair(), [mode]: name };
+  const cache = themeCache();
+  cache[mode] = name !== "canvas" && themes[name] ? { name, mode, vars: themeVars(themes[name]) } : null;
+  try {
+    localStorage.setItem("canvas:theme", JSON.stringify(pair));
+    localStorage.setItem("canvas:theme-cache", JSON.stringify(cache));
+  } catch {}
+  applyTheme();
+}
+
+/** Rebuild the cache from themes.json, in case the palettes or the mapping changed. */
+async function refreshThemeCache() {
+  const pair = themePair();
+  if (pair.dark === "canvas" && pair.light === "canvas") return;
+  const themes = await loadThemes();
+  const cache = {};
+  for (const mode of ["dark", "light"]) if (themes[pair[mode]]) cache[mode] = { name: pair[mode], mode, vars: themeVars(themes[pair[mode]]) };
+  if (JSON.stringify(cache) === JSON.stringify(themeCache())) return;
+  try {
+    localStorage.setItem("canvas:theme-cache", JSON.stringify(cache));
+  } catch {}
+  applyTheme();
+}
+
+function mermaidConfig() {
+  const base = { startOnLoad: false, securityLevel: "strict" };
+  const v = activeTheme()?.vars;
+  if (!v) return { ...base, theme: isDark() ? "dark" : "neutral" };
+  return {
+    ...base,
+    theme: "base",
+    themeVariables: {
+      darkMode: isDark(),
+      background: v["--card"],
+      mainBkg: v["--soft"],
+      primaryColor: v["--soft"],
+      primaryTextColor: v["--ink"],
+      primaryBorderColor: v["--dim"],
+      secondaryColor: v["--tint"],
+      tertiaryColor: v["--code"],
+      nodeBorder: v["--dim"],
+      lineColor: v["--dim"],
+      textColor: v["--ink"],
+      titleColor: v["--ink"],
+      clusterBkg: v["--code"],
+      clusterBorder: v["--line"],
+      edgeLabelBackground: v["--card"],
+    },
+  };
+}
+
+let mermaidRetheme = 0;
+function rethemeMermaid() {
+  // Debounced: arrowing through themes in the picker shouldn't redraw each step.
+  clearTimeout(mermaidRetheme);
+  mermaidRetheme = setTimeout(() => {
+    if (!window.mermaid) return;
+    window.mermaid.initialize(mermaidConfig());
+    for (const el of document.querySelectorAll(".mmd")) if (el._src) renderMermaid(el, el._src);
+  }, 120);
+}
+
+darkMq.addEventListener("change", applyTheme);
+addEventListener("storage", (e) => e.key === "canvas:theme-cache" && applyTheme());
+// Frames get the theme once their script is listening (load doesn't bubble).
+document.addEventListener("load", (e) => e.target?.tagName === "IFRAME" && postTheme(e.target), true);
+applyTheme();
+refreshThemeCache();
+
+// ── other sessions waiting on you ────────────────────────────────────────────
+// A session waits on you when it is blocked, done or failed. It gets a chip
+// until you have its page in view after that change. "Seen" times live in
+// localStorage (canvas:seen), so every canvas tab agrees.
+
+const SEEN_KEY = "canvas:seen";
+let sessionsCache = [];
+let currentSession = null;
+const pageHooks = {}; // set by sessionView: setAll(shut)
+
+function readSeen() {
+  try {
+    return JSON.parse(localStorage.getItem(SEEN_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+function writeSeen(m) {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify(m));
+  } catch {}
+}
+function markSeen() {
+  if (!currentSession || document.visibilityState !== "visible") return;
+  writeSeen({ ...(readSeen() || {}), [currentSession]: Date.now() });
+}
+
+async function fetchSessions() {
+  try {
+    sessionsCache = await (await fetch("/api/sessions")).json();
+  } catch {
+    return sessionsCache;
+  }
+  const seen = nextSeen(readSeen(), sessionsCache);
+  if (currentSession && document.visibilityState === "visible") seen[currentSession] = Date.now();
+  writeSeen(seen);
+  return sessionsCache;
+}
+
+const sessionName = (s) => s.name || String(s.cwd || "").split("/").filter(Boolean).pop() || s.id.slice(0, 8);
+const waitingNow = () => waitingSessions(sessionsCache, readSeen() || {}, currentSession);
+
+function renderWaitbar(bar) {
+  const list = waitingNow();
+  if (!list.length) return bar.replaceChildren();
+  bar.replaceChildren(
+    h("span", { class: "lbl" }, "Waiting on you"),
+    ...list.map((s) =>
+      h(
+        "a",
+        { class: `waitchip ${s.activity}`, href: `/s/${encodeURIComponent(s.id)}`, title: [tilde(s.cwd), s.activityMessage, s.now || s.goal].filter(Boolean).join("\n") },
+        h("span", { class: `pulse ${s.activity}` }),
+        h("span", { class: "nm" }, sessionName(s)),
+        h("span", { class: "st" }, STATE_LABEL[s.activity] || s.activity, " · ", s.activityAt ? agoEl(s.activityAt) : ""),
+      ),
+    ),
+  );
+}
+
+// ── toast ───────────────────────────────────────────────────────────────────
+
+let toastTimer = 0;
+function toast(text) {
+  let el = document.querySelector(".toast");
+  if (!el) document.body.append((el = h("div", { class: "toast", role: "status" })));
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+// ── Cmd-K picker ─────────────────────────────────────────────────────────────
+// Other sessions (waiting on you first, then live, then recent) and a few
+// actions, matched on titles. "Change theme…" opens a second list that
+// previews each theme as you move through it.
+
+let picker = null;
+
+function go(href, newTab) {
+  if (newTab) window.open(href, "_blank", "noopener");
+  else location.href = href;
+}
+
+function mainItems() {
+  const waiting = waitingNow();
+  const wait = new Set(waiting.map((s) => s.id));
+  const sessions = orderSessions(sessionsCache, waiting, currentSession).map((s) => ({
+    group: wait.has(s.id) ? "Waiting on you" : s.live ? "Sessions" : "Recent",
+    label: sessionName(s),
+    sub: [tilde(s.cwd), s.goal].filter(Boolean).join(" · "),
+    end: () => [stateBadge(s), agoEl(s.activityAt || s.ended || new Date(s.updated).toISOString())],
+    run: (e) => go(`/s/${encodeURIComponent(s.id)}`, e?.metaKey || e?.ctrlKey),
+  }));
+  const pair = themePair();
+  const actions = [
+    currentSession && { label: "Fold all sections", run: () => pageHooks.setAll?.(true) },
+    currentSession && { label: "Open all sections", run: () => pageHooks.setAll?.(false) },
+    {
+      label: "Copy link to this page",
+      run: () => navigator.clipboard.writeText(location.href).then(() => toast("Link copied"), () => toast("Couldn't copy the link")),
+    },
+    currentSession && { label: "All sessions", sub: "the sessions index", run: (e) => go("/", e?.metaKey || e?.ctrlKey) },
+    { label: "Change theme…", sub: `dark: ${pair.dark === "canvas" ? "Canvas" : prettyName(pair.dark)} · light: ${pair.light === "canvas" ? "Canvas" : prettyName(pair.light)}`, stay: true, run: () => setPickerMode("theme") },
+  ]
+    .filter(Boolean)
+    .map((a) => ({ group: "Actions", ...a }));
+  return [...sessions, ...actions];
+}
+
+function themeItems(themes) {
+  const pair = themePair();
+  const out = [];
+  for (const mode of ["dark", "light"]) {
+    const names = Object.keys(themes).filter((n) => themeMode(themes[n]) === mode).sort();
+    for (const name of ["canvas", ...names]) {
+      const c = themes[name];
+      const label = name === "canvas" ? "Canvas" : prettyName(name);
+      out.push({
+        group: mode === "dark" ? "For dark mode" : "For light mode",
+        label,
+        sub: name === "canvas" ? "the default look" : "",
+        end: () => [pair[mode] === name ? h("span", { class: "in-use" }, "in use") : null, c ? h("span", { class: "sw" }, swatch(c).map((v) => h("i", { style: `background:${v}` }))) : null],
+        // The default palette for the other mode lives in a media query, so it can't be previewed.
+        preview: name === "canvas" ? (mode === systemMode() ? { vars: null } : null) : { name, mode, vars: themeVars(c) },
+        run: () => {
+          setTheme(name, mode);
+          if (mode !== systemMode()) toast(`${label} will be used when macOS is in ${mode} mode`);
+        },
+      });
+    }
+  }
+  return out;
+}
+
+function setPickerMode(mode) {
+  if (!picker) return;
+  picker.mode = mode;
+  picker.input.value = "";
+  picker.crumb.hidden = mode !== "theme";
+  picker.input.placeholder = mode === "theme" ? "Pick a theme…" : "Jump to a session or run an action…";
+  if (mode === "theme") {
+    picker.items = [];
+    loadThemes().then((themes) => {
+      if (picker?.mode !== "theme") return;
+      picker.items = themeItems(themes);
+      // Start on the theme in force now.
+      const now = themePair()[systemMode()];
+      const label = now === "canvas" ? "Canvas" : prettyName(now);
+      picker.sel = Math.max(0, picker.items.findIndex((it) => it.label === label && it.group.includes(systemMode())));
+      drawPicker(false);
+    });
+  } else {
+    themePreview = null;
+    applyTheme();
+    picker.items = mainItems();
+  }
+  picker.sel = 0;
+  drawPicker();
+}
+
+function drawPicker(resetSel = true) {
+  const p = picker;
+  const q = p.input.value;
+  p.shown = rankItems(p.items, q);
+  if (resetSel && p.lastQ !== q) p.sel = 0;
+  p.lastQ = q;
+  p.sel = Math.min(Math.max(p.sel, 0), Math.max(p.shown.length - 1, 0));
+  const rows = [];
+  let group = null;
+  p.shown.forEach((it, i) => {
+    // Group headings only for the unfiltered list; a search is ordered by match.
+    if (!q && it.group !== group) rows.push(h("li", { class: "grp" }, (group = it.group)));
+    const li = h("li", { class: `it${i === p.sel ? " on" : ""}`, role: "option", "aria-selected": String(i === p.sel) }, h("span", { class: "lb" }, it.label), h("span", { class: "sub" }, q && p.mode === "main" ? [it.group, it.sub].filter(Boolean).join(" · ") : it.sub || ""), h("span", { class: "end" }, it.end?.() ?? []));
+    li.addEventListener("mousemove", () => p.sel !== i && ((p.sel = i), drawPicker(false)));
+    li.addEventListener("click", (e) => runPick(it, e));
+    rows.push(li);
+  });
+  p.list.replaceChildren(...(rows.length ? rows : [h("li", { class: "none" }, p.mode === "theme" && !p.items.length ? "Loading themes…" : "No matches")]));
+  p.list.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+  if (p.mode === "theme") {
+    const it = p.shown[p.sel];
+    themePreview = it?.preview ?? null;
+    applyTheme();
+  }
+}
+
+function runPick(it, e) {
+  if (!it) return;
+  if (!it.stay) closePicker(true);
+  it.run(e);
+}
+
+function openPicker() {
+  if (picker) return;
+  const input = h("input", { type: "text", spellcheck: "false", autocomplete: "off", "aria-label": "Search" });
+  const crumb = h("span", { class: "crumb" }, "Theme");
+  const list = h("ul", { role: "listbox" });
+  const foot = h("div", { class: "foot" }, h("span", {}, h("kbd", {}, "↑↓"), " move"), h("span", {}, h("kbd", {}, "↵"), " open"), h("span", {}, h("kbd", {}, "⌘↵"), " new tab"), h("span", {}, h("kbd", {}, "esc"), " back / close"));
+  const box = h("div", { class: "cmdk", role: "dialog", "aria-label": "Go to" }, h("div", { class: "q" }, crumb, input), list, foot);
+  const back = h("div", { class: "cmdk-back" }, box);
+  back.addEventListener("mousedown", (e) => e.target === back && closePicker());
+  picker = { back, input, crumb, list, mode: "main", items: [], shown: [], sel: 0, lastQ: "", focus: document.activeElement };
+  input.addEventListener("input", () => drawPicker());
+  input.addEventListener("keydown", (e) => {
+    const p = picker;
+    const move = (d) => {
+      e.preventDefault();
+      if (p.shown.length) p.sel = (p.sel + d + p.shown.length) % p.shown.length;
+      drawPicker(false);
+    };
+    if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) return move(1);
+    if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "p")) return move(-1);
+    if (e.key === "Enter") return (e.preventDefault(), runPick(p.shown[p.sel], e));
+    if (e.key === "Escape") return (e.preventDefault(), p.mode === "theme" ? setPickerMode("main") : closePicker());
+    if (e.key === "Backspace" && !input.value && p.mode === "theme") return (e.preventDefault(), setPickerMode("main"));
+  });
+  document.body.append(back);
+  setPickerMode("main");
+  input.focus();
+  // The cache may be a minute old; refresh and redraw if the picker is still on the main list.
+  fetchSessions().then(() => picker?.mode === "main" && ((picker.items = mainItems()), drawPicker(false)));
+}
+
+function closePicker(keepTheme = false) {
+  if (!picker) return;
+  const { back, focus } = picker;
+  picker = null;
+  back.remove();
+  if (!keepTheme && themePreview) {
+    themePreview = null;
+    applyTheme();
+  }
+  themePreview = null;
+  focus?.focus?.();
+}
+
+// ── j / k: next and previous section ─────────────────────────────────────────
+
+function hopSection(dir) {
+  const cards = [...$app.querySelectorAll(".main-col .card, .card.sessions")].filter((c) => c.offsetParent && !c.parentElement.closest(".card"));
+  if (!cards.length) return;
+  const tops = cards.map((c) => c.getBoundingClientRect().top);
+  const i = dir > 0 ? tops.findIndex((t) => t > 14) : tops.findLastIndex((t) => t < 10);
+  if (i < 0) return;
+  window.scrollTo({ top: tops[i] + window.scrollY - 12, behavior: "smooth" });
+}
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    return picker ? closePicker() : openPicker();
+  }
+  if (picker || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || (e.key !== "j" && e.key !== "k")) return;
+  const t = e.target;
+  if (t?.isContentEditable || t?.closest?.("input, textarea, select") || document.querySelector("dialog[open]")) return;
+  e.preventDefault();
+  hopSection(e.key === "j" ? 1 : -1);
+});
+
+const kbdButton = () => h("button", { class: "btn", type: "button", title: "Sessions, actions and themes (⌘K)", onclick: () => openPicker() }, "⌘K");
 
 // ── index view ───────────────────────────────────────────────────────────────
 
 async function indexView() {
   document.title = "Canvas";
   const groups = h("div");
-  const header = h("header", { class: "top" }, h("h1", {}, "Canvas"), h("span", { class: "cwd" }, ""));
+  const header = h("header", { class: "top" }, h("h1", {}, "Canvas"), h("span", { class: "cwd" }, ""), h("span", { class: "tools" }, kbdButton()));
   $app.replaceChildren(header, groups);
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -2451,6 +2896,7 @@ async function indexView() {
     let sessions;
     try {
       sessions = await (await fetch("/api/sessions")).json();
+      sessionsCache = sessions;
     } catch {
       return;
     }
