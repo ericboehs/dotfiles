@@ -736,7 +736,8 @@ updates through server-sent events with no reload.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
-  `chart`, `terminal`, `stats`, `table`, `compare`, `diff`, and `finding`
+  `chart`, `terminal`, `stats`, `table`, `compare`, `steps`, `json`,
+  `timeline`, `diff`, and `finding`
   (one append-only line in the findings log).
   The tool's guidelines tell the agent to pick the lightest kind that fits:
   markdown for short tables, table for data, stats for headline numbers,
@@ -763,7 +764,20 @@ updates through server-sent events with no reload.
   `link`, `code`); types are inferred when left out, and 500 rows are drawn
   at a time. `compare` takes two image `paths` (copied in and removed with
   the section) and shows them with a draggable before/after slider (arrow
-  keys too), side by side, or as an onion skin with an opacity slider. A `diff`
+  keys too), side by side, or as an onion skin with an opacity slider.
+  `steps` is a checklist (done, active, todo, failed, skipped, blocked, each
+  with an optional note and detail) under a progress bar that leaves skipped
+  steps out; the agent replaces the same id as work moves. `json` shows any
+  JSON (body or a `.json` path, stored as written) as a tree built as nodes
+  open: two levels open to start, a filter that keeps and opens the paths to
+  matching keys and values, Expand all and Collapse, 200 children at a time,
+  and a click on a key copies its jq-style path (`.shop["created-at"]`). It
+  is stored as `.jsonv`, since a section called `meta` or `sections` would
+  otherwise overwrite the page's own files. A `timeline` lists events down a
+  line with a coloured dot per tone and an optional tag; when every event
+  has a real time they are sorted, grouped under day headings and marked with
+  the gap since the one before (`+1h 32m`), and text times (`T+5m`) are
+  shown as written in the given order. A `diff`
   takes a unified patch in `body` or `path`, or `ref` (default `HEAD`; a
   commit, a `a..b` range, or `staged`), `paths` and `repo`, and the extension
   runs `git diff` itself. Untracked files named in `paths` show as new, and

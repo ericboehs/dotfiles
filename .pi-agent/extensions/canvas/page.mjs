@@ -205,6 +205,60 @@ td.barc .num { min-width: 4em; }
 .cmp-side figure { margin: 0; min-width: 0; }
 .cmp-side figcaption { font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 4px; }
 .cmp-side img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+.steps-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 10px; }
+.steps-count { font-size: 12.5px; color: var(--dim); }
+.steps-count .bad { color: var(--bad); } .steps-count .warn { color: var(--warn); }
+.steps-bar { flex: 1 1 160px; height: 6px; background: var(--soft); border-radius: 999px; overflow: hidden; }
+.steps-bar i { display: block; height: 100%; background: var(--ok); border-radius: inherit; transition: width 0.3s; }
+ol.steps-list { list-style: none; margin: 0; padding: 0; }
+.step { position: relative; display: flex; gap: 10px; padding: 0 0 12px; }
+.step:not(:last-child)::before { content: ""; position: absolute; left: 10px; top: 22px; bottom: 0; width: 2px; background: var(--line); }
+.step.s-done:not(:last-child)::before { background: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.smark { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); box-sizing: border-box; display: grid; place-items: center; font: 700 11px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--card); background: var(--card); }
+.s-done .smark { background: var(--ok); border-color: var(--ok); }
+.s-failed .smark { background: var(--bad); border-color: var(--bad); }
+.s-blocked .smark { background: var(--warn); border-color: var(--warn); }
+.s-skipped .smark { color: var(--dim); }
+.s-active .smark { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.s-active .smark::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.sbody { min-width: 0; padding-top: 2px; }
+.slabel { font-size: 13.5px; line-height: 1.35; }
+.s-active .slabel { font-weight: 600; }
+.s-skipped .slabel { color: var(--dim); text-decoration: line-through; }
+.s-failed .slabel { color: var(--bad); }
+.snote { font-size: 12.5px; color: var(--dim); margin-top: 1px; }
+.sdetail { margin: 4px 0 0; font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); background: var(--code); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; }
+.jtools { margin-left: auto; display: flex; gap: 4px; }
+.jt { font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; max-height: 70vh; overflow: auto; }
+.jc { display: none; padding-left: 18px; border-left: 1px solid var(--soft); margin-left: 6px; }
+.jn.open > .jc { display: block; }
+.jrow { cursor: pointer; border-radius: 4px; }
+.jrow:hover { background: var(--soft); }
+.jn.leaf { padding-left: 0; }
+.jtog { display: inline-block; width: 14px; color: var(--dim); font-size: 10px; user-select: none; }
+.jk { all: unset; cursor: copy; color: var(--t4); }
+.jk.idx { color: var(--dim); }
+.jk:hover { text-decoration: underline; }
+.jk.copied { color: var(--ok); }
+.jp { color: var(--dim); }
+.jprev { color: var(--dim); font-size: 11.5px; }
+.jn.open > .jrow > .jprev { opacity: 0.6; }
+.jv { white-space: pre-wrap; word-break: break-word; }
+.j-string { color: var(--t2); } .j-number { color: var(--t3); } .j-boolean { color: var(--t5); } .j-null { color: var(--dim); font-style: italic; }
+.jt mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; }
+.jmore { margin: 2px 0; }
+ol.tline { list-style: none; margin: 0; padding: 0; }
+.tday { font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; padding: 10px 0 6px 92px; }
+.tday:first-child { padding-top: 0; }
+.tev { position: relative; display: grid; grid-template-columns: 76px 16px 1fr; gap: 0 8px; padding-bottom: 12px; }
+.tev::before { content: ""; position: absolute; left: 91px; top: 14px; bottom: -2px; width: 2px; background: var(--line); }
+.tev:last-child::before, .tev:has(+ .tday)::before { display: none; }
+.twhen { text-align: right; font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--dim); padding-top: 1px; display: flex; flex-direction: column; }
+.tgap { font-size: 11px; opacity: 0.75; }
+.tdot { width: 12px; height: 12px; margin: 4px 0 0 1px; border-radius: 50%; background: var(--card); border: 2px solid var(--line); box-sizing: border-box; z-index: 1; }
+.tev.toned .tdot { background: var(--tone); border-color: var(--tone); }
+.ttitle { font-size: 13.5px; line-height: 1.4; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.tnote { font-size: 12.5px; color: var(--dim); margin-top: 2px; white-space: pre-wrap; }
 :root { --t0:#1c1b19; --t1:#c0392b; --t2:#1f7a52; --t3:#a86a00; --t4:#285880; --t5:#8a3f9e; --t6:#1f7a8a; --t7:#6b675e; --t8:#8a8578; --t9:#e0533f; --t10:#2f9e72; --t11:#b8901c; --t12:#3b7dd8; --t13:#a35bc0; --t14:#2e9bb0; --t15:#3a3834; }
 @media (prefers-color-scheme: dark) { :root { --t0:#6b675e; --t1:#ef6f5e; --t2:#5cc495; --t3:#e2b257; --t4:#6ea3ec; --t5:#c792ea; --t6:#5cc3d3; --t7:#d6d3cc; --t8:#8a8578; --t9:#ff8a7a; --t10:#7ad9ab; --t11:#f0cc70; --t12:#8fbaf2; --t13:#d8aaf2; --t14:#7ad4e2; --t15:#ffffff; } }
 .fileview { display: flex; align-items: stretch; min-height: 100%; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -586,6 +640,12 @@ async function sectionBody(id, sec) {
       return renderStats(JSON.parse(await (await fetch(url)).text()));
     case "table":
       return renderTable(JSON.parse(await (await fetch(url)).text()));
+    case "steps":
+      return renderSteps(JSON.parse(await (await fetch(url)).text()));
+    case "json":
+      return renderJson(await (await fetch(url)).text());
+    case "timeline":
+      return renderTimeline(JSON.parse(await (await fetch(url)).text()));
     case "compare":
       return renderCompare(JSON.parse(await (await fetch(url)).text()), (f) => `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(f)}?v=${encodeURIComponent(sec.at || "")}`);
     default:
@@ -788,7 +848,7 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (["markdown", "mermaid", "diff", "chart", "stats", "table"].includes(sec.kind)) meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
+  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "timeline"].includes(sec.kind)) meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
   if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
@@ -1479,6 +1539,220 @@ function renderCompare(spec, src) {
   };
   draw();
   return h("div", { class: "cmp" }, h("div", { class: "cmp-bar" }, modes, fade), stage);
+}
+
+// ── steps ───────────────────────────────────────────────────────────────────────────
+// A checklist with a progress bar; the agent replaces the section as steps move.
+
+const STEP_ICON = { done: "✓", active: "", failed: "✕", skipped: "–", blocked: "!", todo: "" };
+
+function renderSteps(spec) {
+  const steps = spec.steps || [];
+  const n = (s) => steps.filter((x) => x.status === s).length;
+  const counted = steps.length - n("skipped");
+  const pct = counted ? (n("done") / counted) * 100 : 100;
+  const extra = [n("failed") && h("span", { class: "bad" }, `${n("failed")} failed`), n("blocked") && h("span", { class: "warn" }, `${n("blocked")} blocked`), n("skipped") && h("span", {}, `${n("skipped")} skipped`)].filter(Boolean);
+  return h(
+    "div",
+    { class: "steps" },
+    h(
+      "div",
+      { class: "steps-head" },
+      spec.title ? h("b", {}, spec.title) : null,
+      h("span", { class: "steps-count" }, `${n("done")} of ${counted} done`, extra.flatMap((e) => [" · ", e])),
+      h("span", { class: `steps-bar${n("failed") ? " bad" : ""}`, role: "progressbar", "aria-valuenow": Math.round(pct), "aria-valuemin": 0, "aria-valuemax": 100 }, h("i", { style: `width:${pct.toFixed(1)}%` })),
+    ),
+    h(
+      "ol",
+      { class: "steps-list" },
+      steps.map((s) =>
+        h(
+          "li",
+          { class: `step s-${s.status}` },
+          h("span", { class: "smark", title: s.status }, STEP_ICON[s.status] ?? ""),
+          h("div", { class: "sbody" }, h("div", { class: "slabel" }, s.label), s.note ? h("div", { class: "snote" }, s.note) : null, s.detail ? h("pre", { class: "sdetail" }, s.detail) : null),
+        ),
+      ),
+    ),
+  );
+}
+
+// ── json ────────────────────────────────────────────────────────────────────────────
+// A collapsible tree, built lazily as nodes open. Two levels open to start;
+// the filter keeps the paths to matching keys and values and opens them.
+// Clicking a key copies its jq-style path.
+
+function renderJson(text) {
+  let root;
+  try {
+    root = JSON.parse(text);
+  } catch (e) {
+    return h("pre", { class: "err" }, `Not JSON: ${e.message}`);
+  }
+  const isObj = (v) => v && typeof v === "object";
+  // jq-style paths: the root is ".", its children ".key" and ".[0]".
+  const childPath = (p, k) => {
+    const b = p === "." ? "" : p;
+    if (typeof k === "number") return `${b || "."}[${k}]`;
+    return /^[A-Za-z_$][\w$]*$/.test(k) ? `${b}.${k}` : `${b || "."}[${JSON.stringify(k)}]`;
+  };
+  const entriesOf = (v) => (Array.isArray(v) ? v.map((x, i) => [i, x]) : Object.entries(v));
+  const filter = h("input", { class: "tbl-filter", type: "search", placeholder: "Filter keys and values", "aria-label": "Filter keys and values" });
+  const count = h("span", { class: "tbl-count" });
+  const tree = h("div", { class: "jt" });
+  let state = { open: "auto", keep: null, q: "", budget: 0 };
+
+  const marked = (s, q) => {
+    if (!q) return s;
+    const k = s.toLowerCase().indexOf(q);
+    return k < 0 ? s : [s.slice(0, k), h("mark", {}, s.slice(k, k + q.length)), s.slice(k + q.length)];
+  };
+  const prim = (v) => {
+    const t = v === null ? "null" : typeof v;
+    return h("span", { class: `jv j-${t}` }, marked(t === "string" ? JSON.stringify(v) : String(v), state.q));
+  };
+  const keyEl = (k, path) =>
+    k == null
+      ? null
+      : h(
+          "button",
+          {
+            type: "button",
+            class: `jk${typeof k === "number" ? " idx" : ""}`,
+            title: `Copy path ${path}`,
+            onclick: async (e) => {
+              e.stopPropagation();
+              await copyText(path).catch(() => {});
+              e.target.classList.add("copied");
+              setTimeout(() => e.target.classList.remove("copied"), 900);
+            },
+          },
+          typeof k === "number" ? String(k) : marked(k, state.q),
+        );
+  const node = (k, v, path, depth, free) => {
+    if (!isObj(v)) return h("div", { class: "jn leaf" }, h("span", { class: "jtog" }), keyEl(k, path), k != null ? h("span", { class: "jp" }, ": ") : null, prim(v));
+    const entries = entriesOf(v);
+    const arr = Array.isArray(v);
+    const kids = h("div", { class: "jc" });
+    const tog = h("span", { class: "jtog" }, entries.length ? "▸" : "");
+    const preview = h("span", { class: "jprev" }, arr ? `[ ${entries.length} item${entries.length === 1 ? "" : "s"} ]` : `{ ${entries.length} key${entries.length === 1 ? "" : "s"} }`);
+    const row = h("div", { class: "jrow" }, tog, keyEl(k, path), k != null ? h("span", { class: "jp" }, ": ") : null, preview);
+    const wrap = h("div", { class: "jn" }, row, kids);
+    let built = false;
+    const build = () => {
+      built = true;
+      const keep = free ? null : state.keep;
+      let shown = entries.filter(([ck]) => !keep || keep.has(childPath(path, ck)));
+      const LIMIT = 200;
+      const add = (from) => {
+        for (const [ck, cv] of shown.slice(from, from + LIMIT)) {
+          const cp = childPath(path, ck);
+          // Below a match, everything shows; elsewhere the filter keeps only paths that lead to one.
+          kids.append(node(ck, cv, cp, depth + 1, free || (keep && state.hits.has(cp))));
+        }
+        if (shown.length > from + LIMIT) {
+          const more = h("button", { type: "button", class: "term-fold jmore", onclick: () => (more.remove(), add(from + LIMIT)) }, `Show ${Math.min(LIMIT, shown.length - from - LIMIT)} more of ${shown.length - from - LIMIT}`);
+          kids.append(more);
+        }
+      };
+      add(0);
+    };
+    const set = (open) => {
+      if (open && !built) build();
+      wrap.classList.toggle("open", open);
+      tog.textContent = entries.length ? (open ? "▾" : "▸") : "";
+    };
+    row.addEventListener("click", () => entries.length && set(!wrap.classList.contains("open")));
+    let open;
+    if (state.keep && !free) open = true;
+    else if (state.open === "all") open = state.budget-- > 0;
+    else if (state.open === "none") open = depth === 0;
+    else open = depth < 2 && entries.length <= 60;
+    if (open && entries.length) set(true);
+    return wrap;
+  };
+
+  const draw = () => {
+    const q = filter.value.trim().toLowerCase();
+    state.q = q;
+    state.keep = null;
+    state.hits = new Set();
+    if (q) {
+      const keep = new Set(["."]);
+      let seen = 0;
+      const walk = (v, path, k, trail) => {
+        if (++seen > 50000 || state.hits.size >= 500) return;
+        const hit = (k != null && typeof k === "string" && k.toLowerCase().includes(q)) || (!isObj(v) && String(v).toLowerCase().includes(q));
+        if (hit) {
+          state.hits.add(path);
+          for (const t of trail) keep.add(t);
+          keep.add(path);
+        }
+        if (isObj(v)) for (const [ck, cv] of entriesOf(v)) walk(cv, childPath(path, ck), ck, [...trail, path]);
+      };
+      walk(root, ".", null, []);
+      state.keep = keep;
+      count.textContent = `${state.hits.size >= 500 ? "500+" : state.hits.size} match${state.hits.size === 1 ? "" : "es"}`;
+    } else count.textContent = "";
+    tree.replaceChildren(node(null, root, ".", 0, false));
+    if (q && !state.hits.size) tree.replaceChildren(h("div", { class: "term-none" }, "Nothing matches"));
+  };
+  filter.addEventListener("input", () => ((state.open = "auto"), draw()));
+  const btn = (label, mode) => h("button", { type: "button", class: "btn", onclick: () => ((state.open = mode), (state.budget = 3000), (filter.value = ""), draw()) }, label);
+  draw();
+  return h("div", { class: "jsonv" }, h("div", { class: "tbl-tools" }, filter, count, h("span", { class: "jtools" }, btn("Expand all", "all"), btn("Collapse", "none"), copyButton(() => JSON.stringify(root, null, 2), "Copy JSON"))), tree);
+}
+
+// ── timeline ─────────────────────────────────────────────────────────────────────
+// Events down a line. When every event has a real time they are sorted
+// (unless order is "given"), grouped under day headings, and the gap since
+// the previous event is shown; text times are shown as written.
+
+function fmtGap(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "";
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
+  const d = Math.floor(m / 1440);
+  const hr = Math.round((m % 1440) / 60);
+  return `${d}d${hr ? ` ${hr}h` : ""}`;
+}
+
+function renderTimeline(spec) {
+  const toDate = (at) => (typeof at === "number" ? new Date(at) : typeof at === "string" && /\d{4}-\d{2}-\d{2}|^\d{1,2}:\d{2}/.test(at) ? new Date(/^\d{1,2}:\d{2}/.test(at) ? `1970-01-01T${at.padStart(5, "0")}` : at) : null);
+  let events = (spec.events || []).map((e, i) => ({ ...e, i, d: toDate(e.at) }));
+  const dated = events.every((e) => e.d && !Number.isNaN(e.d.getTime()));
+  const timeOnly = dated && events.every((e) => typeof e.at === "string" && /^\d{1,2}:\d{2}/.test(e.at));
+  if (dated && spec.order !== "given") events = [...events].sort((a, b) => a.d - b.d || a.i - b.i);
+  const list = h("ol", { class: "tline" });
+  let lastDay = "";
+  let prev = null;
+  for (const e of events) {
+    if (dated && !timeOnly) {
+      const day = e.d.toDateString();
+      if (day !== lastDay) list.append(h("li", { class: "tday" }, dayLabel(e.d)));
+      lastDay = day;
+    }
+    const gap = dated && prev ? fmtGap(e.d - prev.d) : "";
+    const tone = /^(ok|warn|bad|accent|dim|c[1-8])$/.test(e.tone) ? `var(--${e.tone})` : "var(--line)";
+    list.append(
+      h(
+        "li",
+        { class: `tev${e.tone ? " toned" : ""}`, style: `--tone:${tone}` },
+        h("div", { class: "twhen" }, h("span", { title: dated && !timeOnly ? e.d.toLocaleString() : null }, dated ? (timeOnly ? e.at : clock(e.d)) : e.at ?? ""), gap ? h("span", { class: "tgap" }, `+${gap}`) : null),
+        h("span", { class: "tdot" }),
+        h(
+          "div",
+          { class: "tbody" },
+          h("div", { class: "ttitle" }, e.title, e.tag ? h("span", { class: `ctag${/^(ok|warn|bad)$/.test(e.tone) ? ` ${e.tone}` : ""}` }, e.tag) : null),
+          e.note ? h("div", { class: "tnote" }, e.note) : null,
+        ),
+      ),
+    );
+    prev = e;
+  }
+  const span = dated && events.length > 1 ? fmtGap(events.at(-1).d - events[0].d) : "";
+  return h("div", { class: "tlw" }, list, spec.caption || span ? h("div", { class: "chart-cap" }, [spec.caption, span && `${events.length} events over ${span}`].filter(Boolean).join(" · ")) : null);
 }
 
 // ── diffs ────────────────────────────────────────────────────────────────────

@@ -686,10 +686,13 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "diff", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "json", "timeline", "diff", "finding"] as const;
 
 // Kinds whose body is a JSON spec the page draws, and the extension each is stored under.
-const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table" };
+// (Not .json for the json kind: a section called "meta" or "sections" would overwrite the page's own files.)
+const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", json: "jsonv", timeline: "timeline" };
+const STEP_STATUS = ["done", "active", "todo", "failed", "skipped", "blocked"];
+const TONES = ["ok", "warn", "bad", "accent", "dim", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
 const TABLE_TYPES = ["text", "number", "bar", "spark", "tag", "link", "code"];
 const COMPARE_MODES = ["slider", "side", "onion"];
 
@@ -780,6 +783,42 @@ export function normalizeSpec(kind: string, text: string, ext = ""): string {
       if (wide >= 0) throw new Error(`rows[${wide}] has more cells than there are columns (${spec.columns.length})`);
     }
     return JSON.stringify(spec);
+  }
+  if (kind === "steps") {
+    const s = parseJson(text, "steps");
+    const list = Array.isArray(s) ? s : s?.steps;
+    if (!Array.isArray(list) || !list.length) throw new Error("steps needs steps: [{ label, status }]");
+    if (list.length > 200) throw new Error("steps takes at most 200 steps");
+    const steps = list.map((st: any, i: number) => {
+      if (typeof st === "string" && st) return { label: st, status: "todo" };
+      if (!st || typeof st.label !== "string" || !st.label) throw new Error(`steps[${i}] needs a label`);
+      if (st.status != null && !STEP_STATUS.includes(st.status)) throw new Error(`steps[${i}].status must be one of ${STEP_STATUS.join(", ")}`);
+      for (const k of ["note", "detail"]) optString(st[k], `steps[${i}].${k}`);
+      return { label: st.label, status: st.status ?? "todo", ...(st.note ? { note: st.note } : {}), ...(st.detail ? { detail: st.detail } : {}) };
+    });
+    if (!Array.isArray(s)) optString(s.title, "title");
+    return JSON.stringify({ ...(!Array.isArray(s) && s.title ? { title: s.title } : {}), steps });
+  }
+  if (kind === "json") {
+    parseJson(text, "json");
+    return text; // kept as written: the page parses it, and key order and spacing stay the agent's
+  }
+  if (kind === "timeline") {
+    const s = parseJson(text, "timeline");
+    const events = Array.isArray(s) ? s : s?.events;
+    if (!Array.isArray(events) || !events.length) throw new Error("timeline needs events: [{ at, title }]");
+    if (events.length > 1000) throw new Error("a timeline takes at most 1000 events");
+    events.forEach((ev: any, i: number) => {
+      if (!ev || typeof ev.title !== "string" || !ev.title) throw new Error(`events[${i}] needs a title`);
+      if (ev.at != null && typeof ev.at !== "string" && !isNum(ev.at)) throw new Error(`events[${i}].at must be an ISO time, epoch ms or text`);
+      if (ev.tone != null && !TONES.includes(ev.tone)) throw new Error(`events[${i}].tone must be one of ${TONES.join(", ")}`);
+      for (const k of ["note", "tag"]) optString(ev[k], `events[${i}].${k}`);
+    });
+    if (!Array.isArray(s)) {
+      optString(s.caption, "caption");
+      if (s.order != null && !["time", "given"].includes(s.order)) throw new Error("order must be time or given");
+    }
+    return JSON.stringify(Array.isArray(s) ? { events } : { events, caption: s.caption, order: s.order });
   }
   throw new Error(`${kind} has no spec`);
 }
@@ -1158,6 +1197,9 @@ export default function canvas(pi: ExtensionAPI) {
       'table (sortable and filterable: JSON {"columns": [{"label", "key"?, "type"?: text|number|bar|spark|tag|link|code, "unit"?, "prefix"?}], "rows": [[cells]] or [{key: cell}], "sort"?: {"column", "desc"}, "caption"?}; ' +
       'a spark cell is an array of numbers, a link cell a URL or {"text", "href"}; types are inferred when left out; or path to a .csv/.tsv), ' +
       'compare (two images with a before/after slider: paths [before, after]; optional body {"labels": [a, b], "mode": slider|side|onion}), ' +
+      'steps (a checklist with progress: JSON [{"label", "status": done|active|todo|failed|skipped|blocked, "note"?, "detail"?}] or {"title", "steps"}; plain strings are todo steps; replace the same id as work moves), ' +
+      'json (any JSON as a collapsible, searchable tree: body is the JSON itself, or path to a .json file), ' +
+      'timeline (events in time: JSON [{"at" (ISO time or text), "title", "note"?, "tag"?, "tone"?: ok|warn|bad|accent|dim|c1-c8}] or {"events", "caption", "order": time|given}; dated events are sorted and grouped by day), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
       "html sections get the canvas design kit, so write little CSS: the page's colours as variables (--ink --dim --line --soft --card --accent --ok --warn --bad, chart colours --c1 to --c8), " +
       "light and dark handled, buttons (class primary), inputs, range sliders, select and tables already styled, and classes k-row, k-col, k-grid, k-card, k-stat (b + span), k-field (label above a control), k-muted, k-tag, k-ok, k-warn, k-bad, k-bar (> i). " +
@@ -1169,7 +1211,7 @@ export default function canvas(pi: ExtensionAPI) {
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
       "When a reply would contain a table, an option or state matrix, a diagram, a plan or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
       "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
-        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
+        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section.",
       "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Haiku notes); leave them alone.",

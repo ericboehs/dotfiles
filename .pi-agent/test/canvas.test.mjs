@@ -538,6 +538,27 @@ test("normalizeSpec: table takes rows with or without columns, or CSV/TSV", () =
   assert.deepEqual(parseDelimited("a\tb\r\n1\tx\r\n", "\t"), { columns: [{ label: "a" }, { label: "b" }], rows: [[1, "x"]] });
 });
 
+test("normalizeSpec: steps, json and timeline", () => {
+  assert.deepEqual(JSON.parse(normalizeSpec("steps", '["plan",{"label":"build","status":"done","note":"ok"}]')), { steps: [{ label: "plan", status: "todo" }, { label: "build", status: "done", note: "ok" }] });
+  assert.equal(JSON.parse(normalizeSpec("steps", '{"title":"Ship","steps":["a"]}')).title, "Ship");
+  assert.throws(() => normalizeSpec("steps", "[]"), /steps needs steps/);
+  assert.throws(() => normalizeSpec("steps", '[{"label":"a","status":"maybe"}]'), /steps\[0\]\.status must be one of/);
+  assert.throws(() => normalizeSpec("steps", '[{"status":"done"}]'), /steps\[0\] needs a label/);
+
+  const raw = '{\n  "b": 1,\n  "a": [true, null]\n}';
+  assert.equal(normalizeSpec("json", raw), raw, "json is kept as written");
+  assert.equal(normalizeSpec("json", "42"), "42");
+  assert.throws(() => normalizeSpec("json", "{a:1}"), /json body must be JSON/);
+
+  assert.deepEqual(JSON.parse(normalizeSpec("timeline", '[{"at":"2025-10-09T12:00:00Z","title":"deploy","tone":"ok"}]')), { events: [{ at: "2025-10-09T12:00:00Z", title: "deploy", tone: "ok" }] });
+  assert.equal(JSON.parse(normalizeSpec("timeline", '{"events":[{"title":"x"}],"order":"given"}')).order, "given");
+  assert.throws(() => normalizeSpec("timeline", '{"events":[]}'), /timeline needs events/);
+  assert.throws(() => normalizeSpec("timeline", '[{"at":"now"}]'), /events\[0\] needs a title/);
+  assert.throws(() => normalizeSpec("timeline", '[{"title":"x","tone":"pink"}]'), /tone must be one of/);
+  assert.throws(() => normalizeSpec("timeline", '[{"title":"x","at":{}}]'), /at must be/);
+  assert.throws(() => normalizeSpec("timeline", '{"events":[{"title":"x"}],"order":"random"}'), /order must be time or given/);
+});
+
 test("compareOptions checks labels and mode", () => {
   assert.deepEqual(compareOptions(undefined), {});
   assert.deepEqual(compareOptions('{"labels":["main","branch"],"mode":"onion"}'), { labels: ["main", "branch"], mode: "onion" });
@@ -558,6 +579,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     "p.html": "<!doctype html><p>plan</p>",
     "c.chart": '{"type":"bar","labels":["a"],"series":[{"data":[1]}]}',
     "t.term": '{"output":"ok"}',
+    "j.jsonv": '{"a":1}',
+    "s.steps": '{"steps":[]}',
+    "l.timeline": '{"events":[]}',
     "k.compare": '{"before":"k-before.png","after":"k-after.png"}',
     "k-before.png": "png",
     "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
@@ -592,6 +616,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.equal(chart.headers["content-type"], "application/json; charset=utf-8");
     assert.equal(JSON.parse(chart.body).type, "bar");
     assert.equal((await get(port, "/s/s1/f/t.term")).headers["content-type"], "application/json; charset=utf-8");
+    for (const f of ["j.jsonv", "s.steps", "l.timeline"]) assert.equal((await get(port, `/s/s1/f/${f}`)).status, 200, f);
     assert.equal(JSON.parse((await get(port, "/s/s1/f/k.compare")).body).after, "k-after.png");
     assert.equal((await get(port, "/s/s1/f/k-before.png")).headers["content-type"], "image/png", "compare images are served");
     assert.equal((await get(port, "/s/s1/f/meta.json")).status, 404);
