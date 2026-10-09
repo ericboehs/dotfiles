@@ -840,9 +840,11 @@ updates through server-sent events with no reload.
   collapsed sections wait behind "Show N older"), Agents, Files changed and
   Screenshots. Narrower, those widgets sit among the sections in time
   order.
-- **Waiting on you.** A strip above the header has a chip for each other
+- **Waiting on you.** The header row has a chip for each other
   live session that is blocked, done or failed and changed since you last had
-  its page in view. Most urgent comes first, and a click opens it. "Seen" times
+  its page in view. Most urgent comes first, and a click opens it. The chips
+  share the title's line and never wrap, so they can't push the page around;
+  ones that don't fit fold into "+N", which opens Cmd-K. "Seen" times
   are kept in `localStorage` (`canvas:seen`), so every canvas tab agrees. On
   the first run every session counts as seen.
 - **Cmd-K** (or Ctrl-K, or the ⌘K button) opens a picker matched on titles.

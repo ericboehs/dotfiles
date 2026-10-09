@@ -12,7 +12,13 @@ const CSS = `
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 #app { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
 a { color: var(--accent); }
-header.top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+header.top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; min-height: 26px; }
+@media (min-width: 700px) {
+  /* One row: the waiting chips share it, so they can't push the page down. */
+  header.top { flex-wrap: nowrap; }
+  header.top h1, header.top .tools { flex: none; white-space: nowrap; }
+  header.top .cwd { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 header.top h1 { font-size: 20px; margin: 0; }
 header.top .cwd { color: var(--dim); font-size: 13px; }
 header.top .back { font-size: 13px; }
@@ -405,11 +411,15 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 .sessions .row.ended .name, .sessions .row.ended .goal { color: color-mix(in srgb, var(--ink) 75%, var(--dim)); }
 .err { color: #c0392b; font-size: 13px; white-space: pre-wrap; }
 
-/* Other sessions waiting on you, above the header. */
-.waitbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 12px; }
+/* Other sessions waiting on you: chips in the header row, one line, so they never move the page. */
+.waitbar { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; align-self: center; overflow: hidden; margin: 0 4px; }
 .waitbar:empty { display: none; }
-.waitbar .lbl { color: var(--dim); font-size: 12px; margin-right: 2px; }
-.waitchip { display: inline-flex; align-items: center; gap: 6px; max-width: 360px; padding: 3px 10px 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink); font-size: 12.5px; text-decoration: none; }
+.waitchip.off { display: none; }
+/* Only when one chip alone doesn't fit: the name, cut short, and no state. */
+.waitchip.squeeze { flex-shrink: 1; min-width: 0; }
+.waitchip.squeeze .st { display: none; }
+.waitchip.more { flex: none; cursor: pointer; font: inherit; font-size: 12.5px; color: var(--dim); padding: 2px 9px; }
+.waitchip { display: inline-flex; flex: none; align-items: center; gap: 6px; max-width: 300px; padding: 2px 10px 2px 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink); font-size: 12.5px; line-height: 1.4; text-decoration: none; }
 .waitchip:hover { border-color: var(--accent); }
 .waitchip.blocked { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .waitchip.error { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
@@ -2327,7 +2337,6 @@ async function sessionView(id) {
   const widgetSlot = h("div");
   $app.classList.add("session");
   $app.replaceChildren(
-    waitbar,
     header,
     h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, tocSlot, widgetSlot)),
   );
@@ -2416,6 +2425,7 @@ async function sessionView(id) {
       h("h1", {}, name),
       h("span", { class: "cwd" }, tilde(state.meta.cwd)),
       stateBadge(state),
+      waitbar,
       h(
         "span",
         { class: "tools" },
@@ -2733,18 +2743,41 @@ const waitingNow = () => waitingSessions(sessionsCache, readSeen() || {}, curren
 function renderWaitbar(bar) {
   const list = waitingNow();
   if (!list.length) return bar.replaceChildren();
+  bar.title = "Waiting on you";
+  bar.setAttribute("aria-label", "Sessions waiting on you");
   bar.replaceChildren(
-    h("span", { class: "lbl" }, "Waiting on you"),
     ...list.map((s) =>
       h(
         "a",
-        { class: `waitchip ${s.activity}`, href: `/s/${encodeURIComponent(s.id)}`, title: [tilde(s.cwd), s.activityMessage, s.now || s.goal].filter(Boolean).join("\n") },
+        { class: `waitchip ${s.activity}`, href: `/s/${encodeURIComponent(s.id)}`, title: ["Waiting on you", tilde(s.cwd), s.activityMessage, s.now || s.goal].filter(Boolean).join("\n") },
         h("span", { class: `pulse ${s.activity}` }),
         h("span", { class: "nm" }, sessionName(s)),
         h("span", { class: "st" }, STATE_LABEL[s.activity] || s.activity, " · ", s.activityAt ? agoEl(s.activityAt) : ""),
       ),
     ),
   );
+  fitWaitbar(bar);
+  if (!bar.fitting) {
+    bar.fitting = true;
+    new ResizeObserver(() => fitWaitbar(bar)).observe(bar);
+  }
+}
+
+/** Chips that don't fit the header row fold into "+N", which opens Cmd-K (its first group lists them all). */
+function fitWaitbar(bar) {
+  bar.querySelector(".waitchip.more")?.remove();
+  const chips = [...bar.querySelectorAll(".waitchip")];
+  chips.forEach((c) => c.classList.remove("off", "squeeze"));
+  if (bar.scrollWidth <= bar.clientWidth + 1) return;
+  const more = h("button", { class: "waitchip more", type: "button", title: "Every session waiting on you (⌘K)", onclick: () => openPicker() });
+  bar.append(more);
+  let off = 0;
+  for (let i = chips.length - 1; i > 0 && (off === 0 || bar.scrollWidth > bar.clientWidth + 1); i--) {
+    chips[i].classList.add("off");
+    more.textContent = `+${++off}`;
+  }
+  if (!off) more.remove();
+  if (bar.scrollWidth > bar.clientWidth + 1) chips[0]?.classList.add("squeeze");
 }
 
 // ── toast ───────────────────────────────────────────────────────────────────
