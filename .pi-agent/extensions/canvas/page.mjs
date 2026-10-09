@@ -2616,6 +2616,33 @@ function onSystemTheme() {
   if (picker?.mode === "theme") setPickerMode("theme");
 }
 
+// ── Agents card: live dots ── The card is rebuilt only per turn; the daemon's
+// /api/peers (names and statuses from agent-link's registry) keeps the dots current.
+const PEERS_EVERY = 4000;
+let peersBusy = false;
+async function refreshPeerDots() {
+  const rows = [...document.querySelectorAll("details.agent[data-agent]")];
+  if (!rows.length || peersBusy || document.visibilityState !== "visible") return;
+  peersBusy = true;
+  try {
+    const { peers } = await (await fetch("/api/peers")).json();
+    const live = new Map(peers.map((p) => [p.name, p.status]));
+    for (const row of rows) {
+      const status = live.get(row.dataset.agent);
+      const state = status === undefined ? "gone" : status === "idle" ? "idle" : "busy";
+      row.classList.remove("idle", "busy", "gone");
+      row.classList.add(state);
+      const dot = row.querySelector(".dot");
+      if (dot) dot.title = status ?? "not running";
+    }
+  } catch {
+  } finally {
+    peersBusy = false;
+  }
+}
+setInterval(refreshPeerDots, PEERS_EVERY);
+document.addEventListener("visibilitychange", refreshPeerDots);
+
 function mermaidConfig() {
   const base = { startOnLoad: false, securityLevel: "strict" };
   const v = activeTheme()?.vars;

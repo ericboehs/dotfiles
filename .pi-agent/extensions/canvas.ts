@@ -535,7 +535,7 @@ export function agentsMarkdown(traffic: AgentMsg[], peers: Peer[], hasCanvas: (s
         .join("");
       const where = peer ? [esc(peer.cwd.replace(homedir(), "~")), peer.sessionId && hasCanvas(peer.sessionId) ? `<a href="/s/${encodeURIComponent(peer.sessionId)}">canvas page</a>` : ""].filter(Boolean).join(" · ") : "";
       return (
-        `<details class="agent ${state}"><summary><span class="dot" title="${esc(label)}"></span><b>${esc(who)}</b>` +
+        `<details class="agent ${state}" data-agent="${esc(who)}"><summary><span class="dot" title="${esc(label)}"></span><b>${esc(who)}</b>` +
         `<span class="n">↑${up} ↓${down} · ${when(last.at)}</span>` +
         `<span class="pv">${arrow(last)} ${esc(first(last.text, 90))}</span></summary>` +
         `<ul>${items}</ul>${where ? `<p class="where">${where}</p>` : ""}</details>`

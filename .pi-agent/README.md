@@ -801,8 +801,10 @@ updates through server-sent events with no reload.
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
   the session folder. When this session has used agent-link, an **Agents**
   card lists each agent it sent to or heard from, newest exchange first: a
-  live dot (working, idle, or a hollow ring once it has exited, from
-  agent-link's registry in `~/.claude/sessions`), ↑ sent / ↓ received counts
+  live dot (working, idle, or a hollow ring once it has exited; the page asks
+  the daemon every 4 s while the tab is visible, and `GET /api/peers` reads
+  agent-link's registry in `~/.claude/sessions` and returns live names and
+  statuses only), ↑ sent / ↓ received counts
   and the last message's first line. A click opens the last six messages and
   the agent's folder, with a link to its canvas page if it has one. It's
   rebuilt from the session's own history (sends, asks and their answers,

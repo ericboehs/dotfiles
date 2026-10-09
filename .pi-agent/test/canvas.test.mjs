@@ -303,10 +303,10 @@ test("agentsMarkdown: newest exchange first, live state, escaped text, a link to
   const md = agentsMarkdown(agentBranch().length && agentTraffic(agentBranch(), peers), peers, (sid) => sid === "sess-r");
   const rows = md.split("\n");
   assert.equal(rows.length, 3);
-  assert.match(rows[0], /^<details class="agent gone">.*<b>infra-terraform<\/b><span class="n">↑1 ↓1 · /);
+  assert.match(rows[0], /^<details class="agent gone" data-agent="infra-terraform">.*<b>infra-terraform<\/b><span class="n">↑1 ↓1 · /);
   assert.match(rows[0], /<span class="pv">↑ us-gov-west-1<\/span>/);
-  assert.match(rows[1], /class="agent gone">.*<b>docs<\/b>.*send \(failed\)<\/span>FYI: &lt;b&gt;cart&lt;\/b&gt; changed/);
-  assert.match(rows[2], /class="agent busy"><summary><span class="dot" title="tool:bash"><\/span><b>reviewer<\/b>/);
+  assert.match(rows[1], /class="agent gone" data-agent="docs">.*<b>docs<\/b>.*send \(failed\)<\/span>FYI: &lt;b&gt;cart&lt;\/b&gt; changed/);
+  assert.match(rows[2], /class="agent busy" data-agent="reviewer"><summary><span class="dot" title="tool:bash"><\/span><b>reviewer<\/b>/);
   assert.match(rows[2], /<span class="pv">↓ Yes, ship it\.<\/span>/);
   assert.match(rows[2], /<p class="where">\/x\/repo · <a href="\/s\/sess-r">canvas page<\/a><\/p>/);
   assert.ok(!md.includes("\n\n"), "no blank lines: each row stays one HTML block");
@@ -696,7 +696,12 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
   const link = join(root, ".ext");
   symlinkSync(fileURLToPath(new URL("../extensions/", import.meta.url)), link);
   const daemon = join(link, "canvas", "daemon.mjs");
-  const child = spawn(process.execPath, [daemon, "--port", String(port), "--root", root, "--omarchy", join(root, "no-omarchy"), "--version", "t1"], { stdio: "ignore" });
+  // agent-link's registry: one live agent (the test runner), one dead, one with a folder that must not leak.
+  const peersDir = join(root, "peers");
+  mkdirSync(peersDir);
+  writeFileSync(join(peersDir, "1.json"), JSON.stringify({ pid: process.pid, name: "reviewer", status: "tool:bash", cwd: "/secret/folder", sessionId: "sid-1" }));
+  writeFileSync(join(peersDir, "2.json"), JSON.stringify({ pid: 999999, name: "dead", status: "idle" }));
+  const child = spawn(process.execPath, [daemon, "--port", String(port), "--root", root, "--omarchy", join(root, "no-omarchy"), "--peers", peersDir, "--version", "t1"], { stdio: "ignore" });
   try {
     let up;
     for (let i = 0; i < 50 && !up; i++) {
@@ -746,6 +751,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     const list = JSON.parse((await get(port, "/api/sessions")).body);
     assert.equal(list[0].id, "s1");
     assert.deepEqual(JSON.parse((await get(port, "/api/system-theme")).body), { theme: null }, "no Omarchy here");
+    assert.deepEqual(JSON.parse((await get(port, "/api/peers")).body), { peers: [{ name: "reviewer", status: "tool:bash" }] }, "live agents only, name and status only");
   } finally {
     child.kill();
     rmSync(root, { recursive: true, force: true });

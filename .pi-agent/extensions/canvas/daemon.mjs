@@ -31,6 +31,8 @@ export const PORT = Number(arg("port", process.env.PI_CANVAS_PORT || "8790"));
 export const ROOT = resolve(arg("root", process.env.PI_CANVAS_ROOT || join(homedir(), ".pi", "canvas")));
 // Where Omarchy keeps the applied theme (theme/colors.toml + theme.name).
 export const OMARCHY = resolve(arg("omarchy", process.env.PI_CANVAS_OMARCHY || join(homedir(), ".local", "state", "omarchy", "current")));
+/** agent-link's registry (shared with Claude Code): one <pid>.json per live agent. */
+export const PEERS = resolve(arg("peers", process.env.PI_CANVAS_PEERS || join(homedir(), ".claude", "sessions")));
 const VERSION = arg("version", "dev");
 const RETAIN_DAYS = Number(process.env.PI_CANVAS_RETAIN_DAYS || 30);
 
@@ -446,6 +448,7 @@ function handler(req, res) {
   }
   if (url.pathname === "/api/sessions") return json(res, listSessions(ROOT));
   if (url.pathname === "/api/system-theme") return json(res, { theme: readSystemTheme() });
+  if (url.pathname === "/api/peers") return json(res, { peers: readPeers() });
   if (url.pathname === "/api/events") return subscribe("*", req, res);
   if (parts[0] === "api" && parts[1] === "s" && SESSION_ID.test(parts[2] || "")) {
     const id = parts[2];
@@ -482,6 +485,26 @@ export function readSystemTheme(dir = OMARCHY) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Live agents for the Agents card's dots: name and status only (no folders,
+ * sockets or session ids), and only processes that are still running.
+ */
+export function readPeers(dir = PEERS) {
+  let files = [];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const peers = [];
+  for (const f of files) {
+    const s = readJson(join(dir, f), null);
+    if (!s || typeof s.name !== "string" || !pidAlive(s.pid)) continue;
+    peers.push({ name: s.name, status: typeof s.status === "string" ? s.status.slice(0, 40) : "unknown" });
+  }
+  return peers;
 }
 
 function watchSystemTheme() {
