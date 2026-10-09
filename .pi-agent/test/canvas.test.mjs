@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, filesMarkdown, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, diffSkipReason, filesMarkdown, isSensitivePath, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -125,6 +125,57 @@ test("tallyFiles and filesMarkdown keep a running table, newest first", () => {
   assert.match(rows[1], /^\| `\/elsewhere\/x` \| 1 edit \|/);
   assert.match(rows[2], /^\| `src\/a\.ts` \| written, 1 edit \|/);
   assert.match(filesMarkdown(files, "/repo", 1), /…and 2 more$/);
+});
+
+test("isSensitivePath and diffSkipReason keep secrets and binaries off the page", () => {
+  for (const p of ["/r/.env", "/r/.env.local", "/r/server.pem", "/h/.ssh/config", "/r/aws_credentials.json", "/r/id_ed25519", "/r/api-token.txt"]) assert.ok(isSensitivePath(p), p);
+  for (const p of ["/r/src/app.ts", "/r/README.md", "/r/environment.rb", "/r/keyboard.js"]) assert.ok(!isSensitivePath(p), p);
+  const dir = mkdtempSync(join(tmpdir(), "canvas-diff-"));
+  try {
+    writeFileSync(join(dir, "bin.dat"), Buffer.from([1, 0, 2]));
+    writeFileSync(join(dir, "ok.txt"), "hi\n");
+    assert.equal(diffSkipReason(join(dir, "bin.dat")), "binary");
+    assert.equal(diffSkipReason(join(dir, "ok.txt")), "");
+    assert.equal(diffSkipReason(join(dir, "new.txt")), "", "a missing file is a new file");
+    assert.equal(diffSkipReason(join(dir, ".env")), "sensitive");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("makePatch diffs from the base or from nothing, under the display path", () => {
+  const dir = mkdtempSync(join(tmpdir(), "canvas-diff-"));
+  try {
+    writeFileSync(join(dir, "base"), "one\ntwo\nthree\n");
+    writeFileSync(join(dir, "cur.txt"), "one\n2\nthree\nfour\n");
+    const p = makePatch(join(dir, "base"), join(dir, "cur.txt"), "src/cur.txt");
+    assert.deepEqual([p.adds, p.dels], [2, 1]);
+    assert.match(p.patch, /^--- a\/src\/cur\.txt\n\+\+\+ b\/src\/cur\.txt\n@@ /);
+    assert.match(p.patch, /^-two$/m);
+    const fresh = makePatch(null, join(dir, "cur.txt"), "cur.txt");
+    assert.match(fresh.patch, /^--- \/dev\/null\n\+\+\+ b\/cur\.txt/);
+    assert.equal(fresh.adds, 4);
+    writeFileSync(join(dir, "same"), "one\ntwo\nthree\n");
+    assert.deepEqual(makePatch(join(dir, "base"), join(dir, "same"), "same"), { patch: "", adds: 0, dels: 0 });
+    const gone = makePatch(join(dir, "base"), join(dir, "deleted"), "deleted");
+    assert.match(gone.patch, /\+\+\+ \/dev\/null/);
+    assert.equal(gone.dels, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("filesMarkdown links a diffed path to its patch and notes skipped ones", () => {
+  const files = tallyFiles({}, [{ tool: "edit", path: "a.ts" }, { tool: "edit", path: ".env" }, { tool: "edit", path: "c.ts" }], "/repo", "2026-10-07T10:00:00.000Z");
+  const diffs = {
+    "/repo/a.ts": { base: "base-1", patch: "diff-1.patch", adds: 3, dels: 1 },
+    "/repo/.env": { base: null, patch: "diff-2.patch", skip: "sensitive" },
+    "/repo/c.ts": { base: "base-3", patch: "diff-3.patch" },
+  };
+  const md = filesMarkdown(files, "/repo", 40, { diffs, sessionId: "s 1" });
+  assert.match(md, /\| \[`a\.ts`\]\(\/s\/s%201\/f\/diff-1\.patch\) \| 1 edit · \+3\u00a0−1 \|/);
+  assert.match(md, /\| `\.env` \| 1 edit · no diff \(sensitive\) \|/);
+  assert.match(md, /\| `c\.ts` \| 1 edit \|/, "no patch yet, no link");
 });
 
 test("shotsMarkdown links each copied image and escapes names", () => {
@@ -326,6 +377,8 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
   mk("s1", { name: "test", pid: process.pid }, {
     "sections.json": JSON.stringify([{ id: "a", kind: "html", file: "a.html", order: 1, at: "t" }]),
     "a.html": "<p>hi</p>",
+    "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
+    "base-0123abcd": "secret original",
   });
   // Run it through a symlinked directory, the way pi reaches it via
   // ~/.pi/agent/extensions. A main-module check on raw paths exits silently.
@@ -351,6 +404,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.equal(sec.body, "<p>hi</p>");
     assert.match(sec.headers["content-security-policy"], /connect-src 'none'/);
     assert.equal((await get(port, "/s/s1/f/meta.json")).status, 404);
+    const patch = await get(port, "/s/s1/f/diff-0123abcd.patch");
+    assert.equal(patch.headers["content-type"], "text/plain; charset=utf-8");
+    assert.equal((await get(port, "/s/s1/f/base-0123abcd")).status, 404, "diff bases are never served");
     assert.equal((await get(port, "/s/s1/f/..%2Fs1%2Fmeta.json")).status, 404);
     assert.equal((await get(port, "/s/..%2F..%2Fetc/f/a.html")).status, 404);
     const list = JSON.parse((await get(port, "/api/sessions")).body);

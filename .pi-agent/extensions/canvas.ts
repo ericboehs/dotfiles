@@ -23,7 +23,7 @@
  * (PI_SUBAGENT_CHILD=1) skip the canvas.
  */
 
-import { spawn, execFile } from "node:child_process";
+import { spawn, spawnSync, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -234,12 +234,83 @@ export function tallyFiles(prev: Record<string, FileStat>, ops: { tool: "edit" |
 
 const clockTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
-export function filesMarkdown(files: Record<string, FileStat>, cwd: string, max = 40): string {
+/** A path as the page shows it: relative to the session's folder, else ~/…. */
+export function displayPath(abs: string, cwd: string): string {
   const home = homedir();
+  return abs.startsWith(`${cwd}/`) ? abs.slice(cwd.length + 1) : abs.startsWith(`${home}/`) ? `~/${abs.slice(home.length + 1)}` : abs;
+}
+
+// ── diffs: what the session changed in each file it edited or wrote ─────────────
+// Before the first edit or write to a file, its contents are copied to
+// base-<id> (none for a new file). After each turn, diff-<id>.patch holds the
+// change from that base to the file as it is now.
+
+export type DiffEntry = { base: string | null; patch: string; skip?: string; adds?: number; dels?: number };
+const MAX_BASE = 1024 * 1024;
+const MAX_PATCH = 512 * 1024;
+
+/** Files whose contents never get copied onto the page. */
+export function isSensitivePath(p: string): boolean {
+  const name = basename(p).toLowerCase();
+  return (
+    /^\.env(\..*)?$|^\.netrc$|^\.npmrc$|\.(pem|key|p12|pfx|jks|keystore|kdbx)$|^id_(rsa|dsa|ecdsa|ed25519)|secret|credential|password|token/.test(name) ||
+    /(^|\/)\.(ssh|aws|gnupg|kube)\//.test(p)
+  );
+}
+
+/** Why a file gets no diff, or "" when it can have one (a missing file is new). */
+export function diffSkipReason(p: string): string {
+  if (isSensitivePath(p)) return "sensitive";
+  try {
+    const st = statSync(p);
+    if (!st.isFile()) return "not a file";
+    if (st.size > MAX_BASE) return "too large";
+    if (readFileSync(p).subarray(0, 8192).includes(0)) return "binary";
+  } catch {}
+  return "";
+}
+
+/** A unified diff from base (null: nothing) to the file now, under the display path. */
+export function makePatch(basePath: string | null, cur: string, label: string): { patch: string; adds: number; dels: number } {
+  const a = basePath ?? "/dev/null";
+  const b = existsSync(cur) ? cur : "/dev/null";
+  if (a === "/dev/null" && b === "/dev/null") return { patch: "", adds: 0, dels: 0 };
+  const r = spawnSync("git", ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "--", a, b], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  if (r.status !== 0 && r.status !== 1) throw new Error(r.stderr || "git diff failed");
+  const out = r.stdout || "";
+  const at = out.search(/^@@/m);
+  const body = at < 0 ? "" : out.slice(at);
+  let adds = 0;
+  let dels = 0;
+  for (const l of body.split("\n")) {
+    if (l.startsWith("+")) adds++;
+    else if (l.startsWith("-")) dels++;
+  }
+  let patch = body ? `--- ${a === "/dev/null" ? a : `a/${label}`}\n+++ ${b === "/dev/null" ? b : `b/${label}`}\n${body}` : "";
+  if (patch.length > MAX_PATCH) patch = `${patch.slice(0, MAX_PATCH)}\n\\ diff cut at ${MAX_PATCH / 1024} KB\n`;
+  return { patch, adds, dels };
+}
+
+export function filesMarkdown(
+  files: Record<string, FileStat>,
+  cwd: string,
+  max = 40,
+  links: { diffs: Record<string, DiffEntry>; sessionId: string } = { diffs: {}, sessionId: "" },
+): string {
   const rows = Object.entries(files).sort((a, b) => b[1].at.localeCompare(a[1].at));
-  const show = (abs: string) => (abs.startsWith(`${cwd}/`) ? abs.slice(cwd.length + 1) : abs.startsWith(`${home}/`) ? `~/${abs.slice(home.length + 1)}` : abs);
   const what = (f: FileStat) => [f.writes ? (f.writes === 1 ? "written" : `written ${f.writes}×`) : "", f.edits ? `${f.edits} edit${f.edits === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
-  const lines = ["| File | Changes | Last |", "|---|---|---|", ...rows.slice(0, max).map(([abs, f]) => `| \`${show(abs).replace(/\|/g, "\\|")}\` | ${what(f)} | ${clockTime(f.at)} |`)];
+  const cell = (abs: string) => {
+    const code = `\`${displayPath(abs, cwd).replace(/\|/g, "\\|")}\``;
+    const e = links.diffs[abs];
+    if (!e || e.skip || e.adds === undefined) return code;
+    return `[${code}](/s/${encodeURIComponent(links.sessionId)}/f/${encodeURIComponent(e.patch)})`;
+  };
+  const delta = (abs: string) => {
+    const e = links.diffs[abs];
+    if (e?.skip) return ` · no diff (${e.skip})`;
+    return e?.adds === undefined ? "" : ` · +${e.adds}\u00a0−${e.dels}`;
+  };
+  const lines = ["| File | Changes | Last |", "|---|---|---|", ...rows.slice(0, max).map(([abs, f]) => `| ${cell(abs)} | ${what(f)}${delta(abs)} | ${clockTime(f.at)} |`)];
   if (rows.length > max) lines.push("", `…and ${rows.length - max} more`);
   return lines.join("\n");
 }
@@ -617,6 +688,25 @@ export default function canvas(pi: ExtensionAPI) {
 
   const SHOTS_KEPT = 12;
 
+  /** Before the first edit or write to a file, keep what it held so the page can diff it. */
+  function snapshotBase(ctx: ExtensionContext, raw: string) {
+    const abs = isAbsolute(raw) ? raw : resolve(ctx.cwd, raw);
+    const d = ensureDir(ctx);
+    const idxPath = join(d, "auto-diffs.json");
+    const idx = readJson<Record<string, DiffEntry>>(idxPath, {});
+    if (idx[abs]) return;
+    const id = createHash("sha1").update(abs).digest("hex").slice(0, 12);
+    const skip = diffSkipReason(abs);
+    let base: string | null = null;
+    if (!skip && existsSync(abs)) {
+      base = `base-${id}`;
+      copyFileSync(abs, join(d, `${base}.tmp`));
+      renameSync(join(d, `${base}.tmp`), join(d, base));
+    }
+    idx[abs] = { base, patch: `diff-${id}.patch`, ...(skip ? { skip } : {}) };
+    writeAtomic(idxPath, JSON.stringify(idx, null, 2));
+  }
+
   /** Files changed and Screenshots: plain bookkeeping from the turn's tool calls. */
   function updateWidgets(ctx: ExtensionContext, turn: Turn) {
     const ops = turn.ops ?? [];
@@ -634,7 +724,19 @@ export default function canvas(pi: ExtensionAPI) {
       const path = join(d, "auto-files.json");
       const files = tallyFiles(readJson<Record<string, FileStat>>(path, {}), ops, ctx.cwd);
       writeAtomic(path, JSON.stringify(files, null, 2));
-      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd), by: "auto" });
+      const idxPath = join(d, "auto-diffs.json");
+      const idx = readJson<Record<string, DiffEntry>>(idxPath, {});
+      for (const abs of new Set(ops.map((o) => (isAbsolute(o.path) ? o.path : resolve(ctx.cwd, o.path))))) {
+        const e = idx[abs];
+        if (!e || e.skip) continue;
+        try {
+          const { patch, adds, dels } = makePatch(e.base ? join(d, e.base) : null, abs, displayPath(abs, ctx.cwd));
+          writeAtomic(join(d, e.patch), patch);
+          idx[abs] = { ...e, adds, dels };
+        } catch {}
+      }
+      writeAtomic(idxPath, JSON.stringify(idx, null, 2));
+      putMarkdown(d, { id: "auto-files", title: "Files changed", body: filesMarkdown(files, ctx.cwd, 40, { diffs: idx, sessionId }), by: "auto" });
     }
     if (images.length) {
       const path = join(d, "auto-shots.json");
@@ -734,6 +836,15 @@ export default function canvas(pi: ExtensionAPI) {
   pi.on("session_compact_failed", track);
   pi.on("ui_prompt_start", track);
   pi.on("ui_prompt_end", track);
+
+  // Never throw here: a failing tool_call handler blocks the tool.
+  pi.on("tool_call", (event, ctx) => {
+    try {
+      if (!autoOn || !ctx.hasUI || !sessionId || (event.toolName !== "edit" && event.toolName !== "write")) return;
+      const p = (event.input as { path?: unknown }).path;
+      if (typeof p === "string" && p) snapshotBase(ctx, p);
+    } catch {}
+  });
 
   pi.on("agent_settled", (event, ctx) => {
     track(event);
