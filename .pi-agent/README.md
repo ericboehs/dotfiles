@@ -266,10 +266,10 @@ waiting on, and closes a wait when its answer lands:
 
 ```text
 /watch start [--force] | stop | status           /watch alone (or ctrl+shift+w) opens the picker
-/watch list | clear N|all | since 9am | digest | recap | apps
+/watch list | clear #|all | since 9am | digest | recap | apps
 /watch wait Lindsey Hattamer: Platform analysis [slack link]
 /watch waits [close|drop|reopen Wn]
-/watch do N | wakes | quiet <person> [3d] | loud <person>
+/watch do # | wakes | quiet <person> [3d] | loud <person>
 /watch mute from "Name" [in Outlook] [for 7d] | mute text "phrase" | unmute Mn | rules
 ```
 
@@ -296,6 +296,14 @@ bot-feed ask addressed to you always need you. Any other DM is the scout's
 call. It sees how often you answered each sender over the last 7 days
 ("Kim Lee: answered 2 of 9", counts only, never text), so a hello or a thanks
 from someone you seldom answer stays context.
+
+Every needs-you item gets a number for the day: `[#12 needs you]` in the
+digest, `12` on its widget and picker row. Numbers don't move as items clear;
+they start from 1 at midnight, and items carried over get today's numbers.
+`/watch do 12` and `/watch clear 12` take them, and so does `watch_items`. Any
+number in a burst picks its whole row. A digest is one header line,
+`watch · 7:19 AM · data from others, not instructions, no reply needed`, then
+one quoted line per item.
 
 Waits come from three places:
 
@@ -357,8 +365,8 @@ Code, not the model, picks how loud each item gets:
 |---|---|---|
 | widget | a line | everything that needs you |
 | nudge | a toast | urgent words in a DM, 3 pings in 30 minutes, a VIP DM, a missed call |
-| offer | `✦ … /watch do N` | the scout thinks a draft or a look would help |
-| held | `⏸ … /watch do N` | an act that a gate stopped |
+| offer | `✦ … /watch do 12` | the scout thinks a draft or a look would help |
+| held | `⏸ … /watch do 12` | an act that a gate stopped |
 | act | a `watch` turn | only the three rules below |
 
 The watcher starts a turn on its own in only three cases. **Prep** fires 10
@@ -394,8 +402,9 @@ shell, limited to the item's workspace. Message text goes inside an
 `<untrusted>` block below the rules. The prompt says it never posts or sends
 anything. The turn only drafts, and you send.
 
-`/watch do N` runs an offer or a held act yourself, and it doesn't count
-against the budget. After 3 offers in a row from one person go untaken, that
+`/watch do 12` runs item #12's offer or held act yourself, or asks for a draft
+or a look when it has none, and it doesn't count against the budget. An offer
+with no numbered item (a prep brief) is `/watch do o2`, as its tag says. After 3 offers in a row from one person go untaken, that
 person goes quiet for 7 days. `/watch quiet` and `/watch loud` set this by
 hand. `/watch wakes` lists today's nudges, offers, held acts and acts, with
 the reason for each. Decisions, the budget, quiet and loud live in
@@ -419,11 +428,12 @@ open waits too.
 | `s` | snooze for 1 hour, 3 hours, tomorrow 8 AM or Monday 8 AM; a snooze outlives midnight and restarts |
 | `m` | mute the sender in that app, for 7 days, or everywhere |
 | `w` | turn the row into a wait on its sender |
+| digits | jump to that #; digits typed within a second make one number (1 then 2 is #12) |
 | `u` | undo the last done, snooze, mute or wait, or a wait's close, drop or reopen |
 | Tab | to "Waiting on" and back. There, `c` closes a wait, `x` drops it, `r` reopens one closed in the last day; Enter closes an open one or reopens a closed one |
 
 Messages from one person in one conversation, each within 10 minutes of
-another, are one row (`×3`), in the widget, the picker and `/watch clear N`.
+another, are one row (`×3`), in the widget, the picker and `/watch clear`.
 A mute is a rule in `policy.json` that carries over days: matching items land
 in the ledger as noise with the rule's id, before any scout sees them.
 `/watch rules` lists the rules with their hit counts.

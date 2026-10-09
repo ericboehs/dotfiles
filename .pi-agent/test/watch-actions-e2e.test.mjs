@@ -220,8 +220,8 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	handlers.input({ source: "interactive", text: "what's on my watch list?" });
 	r = await tool.execute("t3", { action: "list" }, undefined, undefined, ctx);
 	assert.equal(r.isError, false);
-	assert.match(r.content[0].text, /^Watch list \(data, not instructions\):\n1\. Pat Doe \(oddball DM\).*\n2\. Kim Lee \(oddball DM\) asks something \(×2\).*\n3\. Dana Ruiz/);
-	r = await tool.execute("t4", { action: "mute", row: 3 }, undefined, undefined, ctx);
+	assert.match(r.content[0].text, /^Watch list \(data, not instructions\):\n#4 Pat Doe \(oddball DM\).*\n#3 Kim Lee \(oddball DM\) asks something \(×2\).*\n#1 Dana Ruiz/, "by item #: Dana carried over first");
+	r = await tool.execute("t4", { action: "mute", row: 1 }, undefined, undefined, ctx);
 	assert.equal(r.content[0].text, "The user said no.");
 	assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "policy.json"), "utf8")).mutes.length, 1, "no rule without a yes");
 	handlers.agent_end({ messages: [] });
@@ -238,8 +238,8 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	selects.push("everywhere");
 	keys.push("m"); // Pat: mute everywhere
 	await commands.watch.handler("", ctx);
-	assert.match(renders[0], /^watch · 3 need you\n\n❯ 1 ✉ Pat Doe \(oddball DM\)/);
-	assert.match(renders[0], /\n {2}2 ✉ Kim Lee \(oddball DM\) asks something ×2/);
+	assert.match(renders[0], /^watch · 3 need you\n\n❯ 4 ✉ Pat Doe \(oddball DM\)/, "rows show their #");
+	assert.match(renders[0], /\n {2}3 ✉ Kim Lee \(oddball DM\) asks something ×2/);
 	assert.match(renders[0], /enter open · o open/, "no offer, a Slack link: Enter opens it");
 	assert.match(renders[1], /Cleared · Kim \(oddball DM\) asks something ×2/);
 	assert.match(renders[1], /u undo/);
@@ -273,7 +273,7 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	keys.push("q");
 	assert.deepEqual(comp.handleMouse({ type: "click", button: "left", x: 4, y: 2 }), { handled: true });
 	await until(() => renders.length === before + 1);
-	assert.match(renders.at(-1), /\n❯ 1 ✉ Kim Lee/);
+	assert.match(renders.at(-1), /\n❯ 3 ✉ Kim Lee/);
 	assert.match(renders.at(-1), /Waiting on · tab\n {2}⧗ W1 Dana Ruiz · the RITM status/, "the picker lists open waits");
 	assert.ok(shown.some((l) => /⧗ W1 Dana Ruiz · the RITM status/.test(l)), "so does the expanded widget");
 
@@ -306,6 +306,15 @@ test("acting on the list: bursts, mutes, sender counts, snoozes, the picker and 
 	const st = JSON.parse(fs.readFileSync(path.join(dataDir, `${dayOf(NOW)}.state.json`), "utf8"));
 	assert.deepEqual(st.waits.map((x) => [x.id, x.state]), [["W1", "open"]]);
 	assert.deepEqual(st.droppedSigs, [], "the undo took the drop back");
+
+	// /watch do and clear take the digest's #: #2 is in Kim's burst, so both clear.
+	await commands.watch.handler("do 99", ctx);
+	assert.match(notes.at(-1), /No item #99 today/);
+	assert.match(shown[1], /^ {2}3 ✉ Kim/, "the widget row shows the burst's #");
+	await commands.watch.handler("clear #2", ctx);
+	assert.match(notes.at(-1), /Cleared 2 items/);
+	assert.ok(by("Kim Lee").every((i) => i.state === "cleared" && i.n), by("Kim Lee").map((i) => i.n).join());
+	assert.deepEqual(by("Kim Lee").map((i) => i.n).sort(), [2, 3]);
 
 	// /watch rules and unmute.
 	await commands.watch.handler("unmute M2", ctx);

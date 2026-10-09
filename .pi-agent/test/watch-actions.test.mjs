@@ -389,3 +389,25 @@ test("picker waits: tab in and out; c, x, r only where they make sense; enter cl
 	p.handleInput("\t");
 	assert.match(p.render(140)[2], /^❯ 1/, "no waits: tab stays put");
 });
+
+test("picker: rows show their #; digits typed within a second make one number", (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+	const numbered = [3, 12, 14].map((n) => ({ ...rows[0], n, label: `item ${n}` }));
+	const { p, out } = panel(numbered);
+	const sel = () => p.render(80).find((l) => l.startsWith("❯"));
+	assert.match(sel(), /^❯ 3 /, "the # in place of the position");
+	p.handleInput("1");
+	assert.match(sel(), /^❯ 12 /, "1: the first # that starts with it");
+	p.handleInput("4");
+	assert.match(sel(), /^❯ 14 /, "then 4: #14");
+	t.mock.timers.tick(1001);
+	p.handleInput("3");
+	assert.match(sel(), /^❯ 3 /, "a second later, a new number");
+	p.handleInput("9");
+	assert.match(sel(), /^❯ 3 /, "39 matches nothing: the selection stays");
+	t.mock.timers.tick(1001);
+	p.handleInput("1");
+	p.handleInput("2");
+	p.handleInput("d");
+	assert.deepEqual(out.result, { verb: "done", row: 1 }, "1 then 2: #12");
+});

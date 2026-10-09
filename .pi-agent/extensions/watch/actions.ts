@@ -132,7 +132,8 @@ export function iconOf(i: { closesWait?: string; maybeWait?: string; kind: strin
 
 // ── the picker ───────────────────────────────────────────────────────────────
 
-export type PickerRow = { icon: string; label: string; age: string; count: number; verb: Verb };
+/** n: the item's # for the day (the digests' #12); rows without one show their position. */
+export type PickerRow = { icon: string; label: string; age: string; count: number; verb: Verb; n?: number };
 export type WaitVerb = "close" | "drop" | "reopen";
 /** A row verb on needs row `row`, or a wait verb on wait `row` (zone "waits"). */
 export type PickerResult = { verb: Verb; row: number; zone?: "rows" | "waits" } | { verb: WaitVerb; row: number; zone: "waits" };
@@ -163,6 +164,9 @@ export class PickerPanel {
 	private readonly d: Deps;
 	private sel: number;
 	private zone: "rows" | "waits";
+	/** Digits typed within a second of each other make one number: 1 then 2 jumps to #12. */
+	private typed = "";
+	private typedAt = 0;
 
 	constructor(d: Deps) {
 		this.d = d;
@@ -190,9 +194,23 @@ export class PickerPanel {
 		if (matchesKey(data, "up") || data === "k") this.sel = (this.sel - 1 + n) % n;
 		else if (matchesKey(data, "down") || data === "j") this.sel = (this.sel + 1) % n;
 		else if (matchesKey(data, "enter")) return this.d.done({ verb: this.d.rows[this.sel]!.verb, row: this.sel });
-		else if (/^[1-9]$/.test(data) && Number(data) <= n) this.sel = Number(data) - 1;
+		else if (/^[0-9]$/.test(data)) {
+			const now = Date.now();
+			this.typed = now - this.typedAt < 1000 ? this.typed + data : data;
+			this.typedAt = now;
+			const k = this.numAt(this.typed);
+			if (k >= 0) this.sel = k;
+		}
 		else if (KEY_VERB[data]) return this.d.done({ verb: KEY_VERB[data]!, row: this.sel });
 		this.d.tui.requestRender();
+	}
+
+	/** The row for typed digits: its # exactly, else the first # that starts with them; no #s: by position. */
+	private numAt(typed: string): number {
+		const rows = this.d.rows;
+		if (!rows.some((r) => r.n)) return Number(typed) >= 1 && Number(typed) <= rows.length ? Number(typed) - 1 : -1;
+		const exact = rows.findIndex((r) => r.n === Number(typed));
+		return exact >= 0 ? exact : rows.findIndex((r) => String(r.n ?? "").startsWith(typed));
 	}
 
 	private waitInput(data: string, waits: PickerWait[]): void {
@@ -249,7 +267,7 @@ export class PickerPanel {
 			this.rowLine[k] = out.length;
 			const count = r.count > 1 ? ` ${theme.fg("warning", `×${r.count}`)}` : "";
 			const tail = ` ${dim(r.age)}`;
-			const head = `${k + 1} ${r.icon} `;
+			const head = `${r.n ?? k + 1} ${r.icon} `;
 			const room = Math.max(10, width - 4 - visibleWidth(head) - visibleWidth(count) - visibleWidth(tail));
 			const line = `${head}${truncateToWidth(r.label, room)}${count}${tail}`;
 			out.push(truncateToWidth(this.zone === "rows" && k === this.sel ? `${theme.fg("accent", "❯")} ${line}` : `  ${line}`, width));
