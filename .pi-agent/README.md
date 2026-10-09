@@ -744,7 +744,9 @@ updates through server-sent events with no reload.
   then. Files changed links each path to its patch with +/− counts. Clicking a
   path opens a diff viewer, and clicking a screenshot opens it large. Both use
   one modal: ←/→ step through the card's items, Esc closes, and "Open in new
-  tab" (or a ⌘-click) opens the raw file. No diff is kept for binary files,
+  tab" (or a ⌘-click) opens the raw file. Code blocks with a named language
+  are syntax-highlighted (highlight.js, loaded on first use; no guessing, up to
+  16 KB a block, output cut down to `<span class>`). No diff is kept for binary files,
   files over 1 MB, or secret-looking names (`.env`, `*.pem`, `~/.ssh/…`,
   `*token*`); their row says why. Changes made through `bash` aren't tracked.
 - **Layout.** Status and Findings stay on top, and findings read newest first.
@@ -771,7 +773,7 @@ whose pi process is gone (`PI_CANVAS_RETAIN_DAYS`).
 The daemon is spawned detached on `session_start` when none answers
 `/health`. Its version is a hash of `daemon.mjs` and `page.mjs` on disk, so
 after an edit the next pi to start replaces it. Logs go to
-`~/.pi/canvas/.daemon.log`. Browser libraries (marked, DOMPurify, mermaid) are
+`~/.pi/canvas/.daemon.log`. Browser libraries (marked, DOMPurify, highlight.js, mermaid) are
 fetched once from jsdelivr, checked against the sha256 pins in `daemon.mjs`,
 and cached in `~/.pi/canvas/.vendor`; mermaid alone is 5.5 MB, too heavy to
 commit here.

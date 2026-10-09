@@ -3,8 +3,8 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 const CSS = `
-:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; }
-@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; } }
+:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; --hl-kw:#8fc4e2; --hl-str:#bed59d; --hl-num:#e5c29b; --hl-com:#a5b4c6; --hl-title:#d6b9ed; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 #app { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
@@ -124,6 +124,14 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .md code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 12.5px; }
 .md pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 0; font-size: 12.5px; line-height: 1.5; }
 .md pre code { background: none; padding: 0; }
+.hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-section, .hljs-name, .hljs-tag { color: var(--hl-kw); }
+.hljs-keyword, .hljs-section { font-weight: 600; }
+.hljs-string, .hljs-regexp, .hljs-quote, .hljs-addition { color: var(--hl-str); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-attr, .hljs-attribute, .hljs-bullet, .hljs-variable, .hljs-template-variable { color: var(--hl-num); }
+.hljs-comment, .hljs-doctag { color: var(--hl-com); font-style: italic; }
+.hljs-title, .hljs-built_in, .hljs-type, .hljs-selector-class, .hljs-selector-id { color: var(--hl-title); }
+.hljs-deletion { color: var(--bad); }
+.hljs-emphasis { font-style: italic; } .hljs-strong { font-weight: 600; }
 .codeblock { position: relative; margin: 10px 0; border: 1px solid var(--line); border-radius: 8px; }
 .codeblock:first-child { margin-top: 0; } .codeblock:last-child { margin-bottom: 0; }
 .codeblock .lang { position: absolute; top: 6px; left: 10px; font: 500 10px/1 ui-monospace, Menlo, monospace; color: var(--dim); text-transform: lowercase; pointer-events: none; }
@@ -265,6 +273,37 @@ function copyButton(getText, label = "Copy") {
 
 let mermaidReady;
 let mermaidSeq = 0;
+let hljsReady;
+
+/** highlight.js, loaded on first use; null when it can't load (code stays plain). */
+function loadHighlight() {
+  hljsReady ??= new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "/assets/vendor/highlight.js";
+    s.onload = () => resolve(window.hljs || null);
+    s.onerror = () => resolve(null);
+    document.head.append(s);
+  });
+  return hljsReady;
+}
+
+const PLAIN = new Set(["text", "txt", "plain", "plaintext", "output", "console", "log"]);
+
+/**
+ * Colour a code element in place. Only a named language (no guessing), only
+ * blocks up to 16 KB, and the result is cut down to <span class> before use.
+ */
+async function highlightInto(code, lang) {
+  const name = String(lang || "").trim().split(/\s/, 1)[0].toLowerCase();
+  const text = code.textContent;
+  if (!name || PLAIN.has(name) || text.length > 16000 || !/^[a-z0-9_+#.-]{1,40}$/.test(name)) return;
+  const hl = await loadHighlight();
+  if (!hl?.getLanguage(name) || !window.DOMPurify) return;
+  try {
+    const html = hl.highlight(text, { language: name, ignoreIllegals: true }).value;
+    if (code.textContent === text) code.innerHTML = window.DOMPurify.sanitize(html, { ALLOWED_TAGS: ["span"], ALLOWED_ATTR: ["class"], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
+  } catch {}
+}
 
 function loadMermaid() {
   mermaidReady ??= new Promise((resolve, reject) => {
@@ -318,6 +357,7 @@ function renderMarkdown(text) {
     const wrap = h("div", { class: "codeblock" });
     pre.replaceWith(wrap);
     wrap.append(lang ? h("span", { class: "lang" }, lang) : "", pre, copyButton(() => code.textContent.replace(/\n$/, "")));
+    if (lang) highlightInto(code, lang);
   }
   return el;
 }

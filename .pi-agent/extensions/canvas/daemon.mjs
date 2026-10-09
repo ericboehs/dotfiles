@@ -36,6 +36,7 @@ const RETAIN_DAYS = Number(process.env.PI_CANVAS_RETAIN_DAYS || 30);
 export const VENDOR = {
   "marked.js": { url: "https://cdn.jsdelivr.net/npm/marked@18.1.0/lib/marked.umd.js", sha256: "f424dcb508fdf93e0137a970cfce8f3207ea2e3f37eca5f7556a52875683632a" },
   "purify.js": { url: "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js", sha256: "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2" },
+  "highlight.js": { url: "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/highlight.min.js", sha256: "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53" },
   "mermaid.js": { url: "https://cdn.jsdelivr.net/npm/mermaid@12.1.0/dist/mermaid.min.js", sha256: "6484afc32872a3aa16cac9a76ba1816a1ed4cc870a6593cc2e17757750f518b2" },
 };
 
