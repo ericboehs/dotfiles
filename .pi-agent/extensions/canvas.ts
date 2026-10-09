@@ -253,7 +253,8 @@ const MAX_PATCH = 512 * 1024;
 export function isSensitivePath(p: string): boolean {
   const name = basename(p).toLowerCase();
   return (
-    /^\.env(\..*)?$|^\.netrc$|^\.npmrc$|\.(pem|key|p12|pfx|jks|keystore|kdbx)$|^id_(rsa|dsa|ecdsa|ed25519)|secret|credential|password|token/.test(name) ||
+    /^\.env(\..*)?$|^\.netrc$|^\.npmrc$|\.(pem|key|p12|pfx|jks|keystore|kdbx)$|^id_(rsa|dsa|ecdsa|ed25519)/.test(name) ||
+    /(^|[._-])(secrets?|credentials?|passwords?|passwd|tokens?|api[_-]?keys?)([._-]|$)/.test(name) ||
     /(^|\/)\.(ssh|aws|gnupg|kube)\//.test(p)
   );
 }

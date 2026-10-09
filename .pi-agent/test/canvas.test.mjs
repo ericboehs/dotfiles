@@ -129,7 +129,7 @@ test("tallyFiles and filesMarkdown keep a running table, newest first", () => {
 
 test("isSensitivePath and diffSkipReason keep secrets and binaries off the page", () => {
   for (const p of ["/r/.env", "/r/.env.local", "/r/server.pem", "/h/.ssh/config", "/r/aws_credentials.json", "/r/id_ed25519", "/r/api-token.txt"]) assert.ok(isSensitivePath(p), p);
-  for (const p of ["/r/src/app.ts", "/r/README.md", "/r/environment.rb", "/r/keyboard.js"]) assert.ok(!isSensitivePath(p), p);
+  for (const p of ["/r/src/app.ts", "/r/README.md", "/r/environment.rb", "/r/keyboard.js", "/r/tokenizer.ts", "/r/secretary.md"]) assert.ok(!isSensitivePath(p), p);
   const dir = mkdtempSync(join(tmpdir(), "canvas-diff-"));
   try {
     writeFileSync(join(dir, "bin.dat"), Buffer.from([1, 0, 2]));
