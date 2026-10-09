@@ -686,7 +686,42 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "diff", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "diff", "finding"] as const;
+
+const CHART_TYPES = ["bar", "line", "area", "scatter", "pie", "donut"];
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/** Why a chart spec won't draw, or "" when it will. The message is for the agent to fix it. */
+export function checkChart(text: string): string {
+  let s: any;
+  try {
+    s = JSON.parse(text);
+  } catch (e) {
+    return `chart body must be JSON: ${(e as Error).message}`;
+  }
+  if (!s || typeof s !== "object" || Array.isArray(s)) return "chart body must be a JSON object";
+  if (!CHART_TYPES.includes(s.type)) return `chart type must be one of ${CHART_TYPES.join(", ")}`;
+  if (!Array.isArray(s.series) || !s.series.length) return "chart needs series: [{ name, data: [...] }]";
+  if (s.series.length > 12) return "a chart takes at most 12 series";
+  const scatter = s.type === "scatter";
+  for (const [i, x] of s.series.entries()) {
+    if (!x || !Array.isArray(x.data)) return `series[${i}].data must be an array`;
+    if (x.data.length > 5000) return `series[${i}] has over 5000 points`;
+    const ok = scatter
+      ? x.data.every((p: any) => (Array.isArray(p) ? isNum(p[0]) && isNum(p[1]) : p && isNum(p.x) && isNum(p.y)))
+      : x.data.every((v: unknown) => v === null || isNum(v));
+    if (!ok) return scatter ? `series[${i}].data must be [x, y] pairs of numbers` : `series[${i}].data must be numbers (null for a gap)`;
+  }
+  if (!scatter) {
+    if (!Array.isArray(s.labels) || !s.labels.length) return "chart needs labels: one per data point";
+    const n = s.labels.length;
+    const bad = s.series.findIndex((x: any) => x.data.length !== n);
+    if (bad >= 0) return `series[${bad}] has ${s.series[bad].data.length} values but there are ${n} labels`;
+  }
+  if ((s.type === "pie" || s.type === "donut") && (s.series.length > 1 || s.series[0].data.some((v: unknown) => isNum(v) && v < 0)))
+    return `${s.type} takes one series of values that aren't negative`;
+  return "";
+}
 
 export default function canvas(pi: ExtensionAPI) {
   if (process.env.PI_CANVAS === "0" || process.env.PI_SUBAGENT_CHILD === "1") return;
@@ -1009,6 +1044,9 @@ export default function canvas(pi: ExtensionAPI) {
       "Writes one section per call; the same id replaces it. Kinds: markdown (GFM tables, code, ```mermaid fences), " +
       "html (a self-contained page or fragment, shown in a sandboxed frame), html-plan (a packed /html-plan file via path), " +
       "image (png/jpg/gif/webp/svg via path), mermaid (diagram source), " +
+      'chart (body is a JSON spec: {"type": bar|line|area|scatter|pie|donut, "labels": [one per point], "series": [{"name", "data": [numbers, null for a gap], "color"?}], ' +
+      '"stacked"?, "horizontal"? (bar), "x"?: {"label"}, "y"?: {"label", "unit", "prefix", "min", "max"}, "height"?, "caption"?}; scatter data is [[x, y], ...] and needs no labels; ' +
+      'colours come from the page, so leave "color" out unless it means something: c1-c8, accent, ok, warn, bad), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
       "Use remove: true to delete a section. Returns the page URL; it does not open a browser.",
     promptSnippet: "canvas: put tables, diagrams, plans, screenshots and findings on this session's live web page",
@@ -1025,8 +1063,8 @@ export default function canvas(pi: ExtensionAPI) {
       id: Type.Optional(Type.String({ description: "Stable lowercase slug, e.g. 'hook-points'. Required except for kind 'finding'." })),
       title: Type.Optional(Type.String({ description: "Section heading" })),
       kind: Type.Union(KINDS.map((k) => Type.Literal(k)), { description: "Section kind" }),
-      body: Type.Optional(Type.String({ description: "Markdown, HTML, mermaid source or finding text" })),
-      path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, image, or a patch for diff. Relative to the cwd." })),
+      body: Type.Optional(Type.String({ description: "Markdown, HTML, mermaid source, chart JSON or finding text" })),
+      path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, image, chart JSON, or a patch for diff. Relative to the cwd." })),
       ref: Type.Optional(Type.String({ description: 'diff without body/path: what git compares the working tree to. Default HEAD; a commit; a range like main..branch; or "staged".' })),
       paths: Type.Optional(Type.Array(Type.String(), { description: "diff without body/path: only these files (untracked ones show as new). Default: every change." })),
       repo: Type.Optional(Type.String({ description: "diff without body/path: the repository directory. Default the cwd." })),
@@ -1096,6 +1134,10 @@ export default function canvas(pi: ExtensionAPI) {
             file = `${id}.html`;
           } else if (params.kind === "markdown") {
             file = `${id}.md`;
+          } else if (params.kind === "chart") {
+            const why = checkChart(readFileSync(src, "utf8"));
+            if (why) throw new Error(why);
+            file = `${id}.chart`;
           } else {
             file = `${id}.mmd`;
           }
@@ -1107,7 +1149,11 @@ export default function canvas(pi: ExtensionAPI) {
           const body = String(params.body ?? "");
           if (!body.trim()) throw new Error("body is empty");
           if (Buffer.byteLength(body) > MAX_BODY) throw new Error("body is over 2 MB; write a file and pass path");
-          file = `${id}.${params.kind === "markdown" ? "md" : params.kind === "mermaid" ? "mmd" : "html"}`;
+          if (params.kind === "chart") {
+            const why = checkChart(body);
+            if (why) throw new Error(why);
+          }
+          file = `${id}.${params.kind === "markdown" ? "md" : params.kind === "mermaid" ? "mmd" : params.kind === "chart" ? "chart" : "html"}`;
           if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
           writeAtomic(join(d, file), body);
         }

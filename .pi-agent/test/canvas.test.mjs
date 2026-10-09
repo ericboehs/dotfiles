@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ActivityTracker, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { ActivityTracker, checkChart, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -477,12 +477,32 @@ test("clipTarget clips the real file for a copy, a named copy for a diff, else t
   }
 });
 
+test("checkChart accepts good specs and explains bad ones", () => {
+  const ok = (s) => assert.equal(checkChart(JSON.stringify(s)), "");
+  ok({ type: "bar", labels: ["a", "b"], series: [{ name: "x", data: [1, null] }] });
+  ok({ type: "scatter", series: [{ data: [[1, 2], { x: 3, y: 4 }] }] });
+  ok({ type: "donut", labels: ["a", "b"], series: [{ data: [3, 0] }] });
+  assert.match(checkChart("{nope"), /must be JSON/);
+  assert.match(checkChart("[]"), /JSON object/);
+  assert.match(checkChart('{"type":"radar","series":[]}'), /bar, line, area, scatter, pie, donut/);
+  assert.match(checkChart('{"type":"bar","series":[]}'), /needs series/);
+  assert.match(checkChart('{"type":"line","labels":["a"],"series":[{"data":["1"]}]}'), /must be numbers/);
+  assert.match(checkChart('{"type":"line","labels":["a","b"],"series":[{"data":[1]}]}'), /has 1 values but there are 2 labels/);
+  assert.match(checkChart('{"type":"line","series":[{"data":[1]}]}'), /needs labels/);
+  assert.match(checkChart('{"type":"scatter","series":[{"data":[1,2]}]}'), /\[x, y\] pairs/);
+  assert.match(checkChart('{"type":"pie","labels":["a"],"series":[{"data":[-1]}]}'), /one series of values that aren't negative/);
+});
+
 test("daemon serves pages, state and sections, and refuses bad hosts and paths", async () => {
   const { root, mk } = tempRoot();
   const port = 18790 + Math.floor(Math.random() * 1000);
   mk("s1", { name: "test", pid: process.pid }, {
-    "sections.json": JSON.stringify([{ id: "a", kind: "html", file: "a.html", order: 1, at: "t" }]),
+    "sections.json": JSON.stringify([
+      { id: "a", kind: "html", file: "a.html", order: 1, at: "t" },
+      { id: "c", kind: "chart", file: "c.chart", order: 3, at: "t" },
+    ]),
     "a.html": "<p>hi</p>",
+    "c.chart": '{"type":"bar","labels":["a"],"series":[{"data":[1]}]}',
     "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
     "cur-0123abcd.txt": "<script>alert(1)</script>",
     "base-0123abcd": "secret original",
@@ -510,6 +530,9 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     const sec = await get(port, "/s/s1/f/a.html");
     assert.equal(sec.body, "<p>hi</p>");
     assert.match(sec.headers["content-security-policy"], /connect-src 'none'/);
+    const chart = await get(port, "/s/s1/f/c.chart");
+    assert.equal(chart.headers["content-type"], "application/json; charset=utf-8");
+    assert.equal(JSON.parse(chart.body).type, "bar");
     assert.equal((await get(port, "/s/s1/f/meta.json")).status, 404);
     const patch = await get(port, "/s/s1/f/diff-0123abcd.patch");
     assert.equal(patch.headers["content-type"], "text/plain; charset=utf-8");

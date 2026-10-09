@@ -3,8 +3,8 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 const CSS = `
-:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; }
-@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; --hl-kw:#8fc4e2; --hl-str:#bed59d; --hl-num:#e5c29b; --hl-com:#a5b4c6; --hl-title:#d6b9ed; } }
+:root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; --hl-kw:#8fc4e2; --hl-str:#bed59d; --hl-num:#e5c29b; --hl-com:#a5b4c6; --hl-title:#d6b9ed; --c1:#6ea3ec; --c2:#f08f5c; --c3:#4fc493; --c4:#e36a7c; --c5:#a888e0; --c6:#e0bd4a; --c7:#5cc3d3; --c8:#a8a194; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 #app { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
@@ -115,6 +115,25 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .dv-body { overflow-x: auto; }
 .dv-body > .empty { padding: 10px 12px; }
 .dv-load { margin: 10px 12px; }
+.chart { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.chart-plot { width: 100%; min-height: 40px; }
+.chart svg { display: block; overflow: visible; font: 11px/1 -apple-system, BlinkMacSystemFont, sans-serif; }
+.chart .grid line { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
+.chart .grid line.minor { stroke-dasharray: 2 3; }
+.chart .grid line.zero { stroke: var(--dim); stroke-opacity: 0.55; }
+.chart text { fill: var(--dim); }
+.chart text.al { font-weight: 600; }
+.chart text.total { fill: var(--ink); font-size: 18px; font-weight: 600; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .area { fill-opacity: 0.2; stroke: none; }
+.chart .pt { stroke: var(--card); stroke-width: 1.5; }
+.chart .slice { stroke: var(--card); stroke-width: 2; }
+.chart .hole { fill: var(--card); }
+.chart :is(.bar, .pt, .slice):hover { filter: brightness(1.12); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--ink); }
+.chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.chart-legend em { font-style: normal; color: var(--dim); }
+.chart-cap { font-size: 12.5px; color: var(--dim); }
 .fileview { display: flex; align-items: stretch; min-height: 100%; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .fileview pre { margin: 0; padding: 8px 0; font: inherit; white-space: pre; }
 .fileview .gutter { flex: none; position: sticky; left: 0; padding: 8px 10px 8px 14px; text-align: right; color: var(--dim); user-select: none; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); }
@@ -495,6 +514,8 @@ async function sectionBody(id, sec) {
       return h("img", { class: "shot", src: url, alt: sec.title });
     case "diff":
       return renderDiffView(await (await fetch(url)).text(), { title: sec.title || sec.id, href: rawUrl(id, sec, false) });
+    case "chart":
+      return renderChart(JSON.parse(await (await fetch(url)).text()));
     default:
       return h("div", { class: "empty" }, `unknown kind ${sec.kind}`);
   }
@@ -695,7 +716,7 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (sec.kind === "markdown" || sec.kind === "mermaid" || sec.kind === "diff") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
+  if (sec.kind === "markdown" || sec.kind === "mermaid" || sec.kind === "diff" || sec.kind === "chart") meta.append(copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source"));
   if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
@@ -711,6 +732,272 @@ function sectionCard(id, sec) {
       ),
     WIDGETS.includes(sec.id) ? undefined : sec.at, // widgets never fold by age
   );
+}
+
+// ── charts ─────────────────────────────────────────────────────────────────────
+// A chart section is a small JSON spec drawn here as SVG. Colours are CSS
+// variables (--c1…--c8 and the status colours), so light and dark need no
+// redraw. It redraws on width changes so text stays its real size.
+// { type: bar|line|area|scatter|pie|donut, labels, series: [{ name, data, color }],
+//   stacked, horizontal, x: { label }, y: { label, unit, prefix, min, max }, height, caption }
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null && v !== false) el.setAttribute(k, String(v));
+  for (const k of kids.flat()) if (k != null && k !== false) el.append(typeof k === "string" || typeof k === "number" ? String(k) : k);
+  return el;
+}
+const tip = (text) => svg("title", {}, text);
+const NAMED = new Set(["accent", "ok", "warn", "bad", "ink", "dim"]);
+const seriesColor = (s, i) => (/^c[1-8]$/.test(s?.color) || NAMED.has(s?.color) ? `var(--${s.color})` : `var(--c${(i % 8) + 1})`);
+const textW = (s) => String(s).length * 6.4;
+const clip = (s, n = 18) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
+
+function niceScale(lo, hi, count) {
+  if (!(hi > lo)) [lo, hi] = lo === 0 ? [0, 1] : [Math.min(lo, 0), Math.max(hi, 0) || Math.abs(lo)];
+  const raw = (hi - lo) / Math.max(count, 1);
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / mag;
+  const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+  const a = Math.floor(lo / step + 1e-9) * step;
+  const b = Math.ceil(hi / step - 1e-9) * step;
+  const ticks = [];
+  for (let v = a; v <= b + step / 2; v += step) ticks.push(Number(v.toFixed(10)));
+  return { lo: a, hi: b, ticks };
+}
+
+function fmtValue(v, axis = {}, tick = false) {
+  const abs = Math.abs(v);
+  const opts = abs >= 1e5 ? { notation: "compact", maximumFractionDigits: 1 } : { maximumFractionDigits: abs > 0 && abs < 1 ? 3 : 2 };
+  const unit = axis.unit ? (axis.unit === "%" ? "%" : tick && axis.unit.length > 3 ? "" : `\u2009${axis.unit}`) : "";
+  return `${axis.prefix ?? ""}${new Intl.NumberFormat(undefined, opts).format(v)}${unit}`;
+}
+
+function renderChart(spec) {
+  const pie = spec.type === "pie" || spec.type === "donut";
+  const series = spec.series || [];
+  const legend = pie
+    ? (() => {
+        const data = series[0]?.data || [];
+        const total = data.reduce((a, b) => a + (b || 0), 0) || 1;
+        return (spec.labels || []).map((l, i) => [l, `var(--c${(i % 8) + 1})`, ` ${fmtValue(data[i] ?? 0, spec.y)} · ${Math.round(((data[i] || 0) / total) * 100)}%`]);
+      })()
+    : series.length > 1
+      ? series.map((s, i) => [s.name || `Series ${i + 1}`, seriesColor(s, i), ""])
+      : [];
+  const plot = h("div", { class: "chart-plot" });
+  const wrap = h(
+    "figure",
+    { class: "chart" },
+    legend.length ? h("div", { class: "chart-legend" }, legend.map(([name, color, extra]) => h("span", {}, h("i", { style: `background:${color}` }), name, extra ? h("em", {}, extra) : null))) : null,
+    plot,
+    spec.caption ? h("figcaption", { class: "chart-cap" }, spec.caption) : null,
+  );
+  let lastW = 0;
+  const draw = () => {
+    const w = Math.floor(plot.clientWidth);
+    if (!w || Math.abs(w - lastW) < 2) return;
+    lastW = w;
+    try {
+      plot.replaceChildren(pie ? drawPie(spec, w) : drawXY(spec, w));
+    } catch (e) {
+      plot.replaceChildren(h("div", { class: "err" }, `chart: ${e.message}`));
+    }
+  };
+  new ResizeObserver(draw).observe(plot);
+  return wrap;
+}
+
+function drawXY(spec, W) {
+  const type = spec.type;
+  const series = spec.series;
+  const scatter = type === "scatter";
+  const horiz = type === "bar" && !!spec.horizontal;
+  const stacked = !!spec.stacked && (type === "bar" || type === "area");
+  const labels = scatter ? [] : (spec.labels || []).map(String);
+  const n = labels.length;
+  const ya = spec.y || {};
+  const xa = spec.x || {};
+  const pts = (s) => s.data.map((p) => (Array.isArray(p) ? { x: p[0], y: p[1], label: p[2] } : p)).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+
+  // Value domain, with stacks summed and bars and areas reaching zero.
+  let vals = [];
+  if (scatter) vals = series.flatMap((s) => pts(s).map((p) => p.y));
+  else if (stacked)
+    for (let i = 0; i < n; i++) {
+      let pos = 0;
+      let neg = 0;
+      for (const s of series) (s.data[i] ?? 0) >= 0 ? (pos += s.data[i] ?? 0) : (neg += s.data[i]);
+      vals.push(pos, neg);
+    }
+  else vals = series.flatMap((s) => s.data.filter((v) => Number.isFinite(v)));
+  let lo = Math.min(...vals);
+  let hi = Math.max(...vals);
+  if (type === "bar" || type === "area") (lo = Math.min(0, lo)), (hi = Math.max(0, hi));
+  const H = Math.min(Math.max(spec.height || (horiz ? n * (series.length > 1 && !stacked ? series.length * 13 + 12 : 28) + 44 : 280), 120), 900);
+  const vs = niceScale(ya.min ?? lo, ya.max ?? hi, horiz ? Math.max(2, Math.floor(W / 120)) : Math.max(2, Math.floor(H / 56)));
+  if (ya.min != null) (vs.lo = ya.min), (vs.ticks = vs.ticks.filter((t) => t >= ya.min));
+  if (ya.max != null) (vs.hi = ya.max), (vs.ticks = vs.ticks.filter((t) => t <= ya.max));
+
+  const tickLabels = vs.ticks.map((t) => fmtValue(t, ya, true));
+  const top = 8;
+  const right = 14;
+  let left;
+  let bottom = 22 + (horiz ? (ya.label ? 16 : 0) : xa.label ? 16 : 0);
+  if (horiz) left = Math.min(Math.max(...labels.map((l) => textW(clip(l, 24)))) + 12, W * 0.4);
+  else left = Math.max(...tickLabels.map(textW)) + 10 + (ya.label ? 16 : 0);
+  const pw = Math.max(W - left - right, 40);
+  const ph = Math.max(H - top - bottom, 40);
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img" });
+  const grid = svg("g", { class: "grid" });
+  const axis = svg("g", { class: "axis" });
+  const marks = svg("g", { class: "marks" });
+  root.append(grid, marks, axis);
+  const span = vs.hi - vs.lo || 1;
+  const vpos = horiz ? (v) => left + ((v - vs.lo) / span) * pw : (v) => top + (1 - (v - vs.lo) / span) * ph;
+  const zero = vpos(Math.min(Math.max(0, vs.lo), vs.hi));
+
+  // Value gridlines and their labels.
+  vs.ticks.forEach((t, i) => {
+    const p = vpos(t);
+    const cls = t === 0 ? "zero" : null;
+    if (horiz) {
+      grid.append(svg("line", { x1: p, x2: p, y1: top, y2: top + ph, class: cls }));
+      axis.append(svg("text", { x: p, y: top + ph + 15, "text-anchor": "middle" }, tickLabels[i]));
+    } else {
+      grid.append(svg("line", { x1: left, x2: left + pw, y1: p, y2: p, class: cls }));
+      axis.append(svg("text", { x: left - 6, y: p + 3.5, "text-anchor": "end" }, tickLabels[i]));
+    }
+  });
+  const valueLabel = ya.label;
+  if (valueLabel && horiz) axis.append(svg("text", { class: "al", x: left + pw / 2, y: H - 4, "text-anchor": "middle" }, valueLabel));
+  if (valueLabel && !horiz) axis.append(svg("text", { class: "al", transform: `translate(11 ${top + ph / 2}) rotate(-90)`, "text-anchor": "middle" }, valueLabel));
+  if (xa.label && !horiz) axis.append(svg("text", { class: "al", x: left + pw / 2, y: H - 4, "text-anchor": "middle" }, xa.label));
+
+  if (scatter) {
+    const xs = series.flatMap((s) => pts(s).map((p) => p.x));
+    const xsc = niceScale(xa.min ?? Math.min(...xs), xa.max ?? Math.max(...xs), Math.max(2, Math.floor(pw / 90)));
+    const xspan = xsc.hi - xsc.lo || 1;
+    const xpos = (v) => left + ((v - xsc.lo) / xspan) * pw;
+    for (const t of xsc.ticks) {
+      grid.append(svg("line", { x1: xpos(t), x2: xpos(t), y1: top, y2: top + ph, class: "minor" }));
+      axis.append(svg("text", { x: xpos(t), y: top + ph + 15, "text-anchor": "middle" }, fmtValue(t, xa, true)));
+    }
+    series.forEach((s, si) => {
+      const color = seriesColor(s, si);
+      for (const p of pts(s)) marks.append(svg("circle", { class: "pt", cx: xpos(p.x), cy: vpos(p.y), r: 4, style: `fill:${color}` }, tip(`${p.label ? `${p.label}: ` : ""}${s.name ? `${s.name} · ` : ""}${fmtValue(p.x, xa)}, ${fmtValue(p.y, ya)}`)));
+    });
+    return root;
+  }
+
+  // Categories: one band each, labels thinned to fit.
+  const band = (horiz ? ph : pw) / Math.max(n, 1);
+  const cpos = (i) => (horiz ? top : left) + (i + 0.5) * band;
+  if (horiz) {
+    labels.forEach((l, i) => axis.append(svg("text", { x: left - 6, y: cpos(i) + 3.5, "text-anchor": "end" }, clip(l, 24), l.length > 24 ? tip(l) : null)));
+  } else {
+    const every = Math.max(1, Math.ceil((Math.max(...labels.map((l) => textW(clip(l)))) + 10) / band));
+    labels.forEach((l, i) => i % every === 0 && axis.append(svg("text", { x: cpos(i), y: top + ph + 15, "text-anchor": "middle" }, clip(l), l.length > 18 ? tip(l) : null)));
+  }
+
+  if (type === "bar") {
+    const group = band * (n > 1 ? 0.74 : 0.5);
+    const bw = stacked ? group : group / series.length;
+    const pos = new Array(n).fill(0);
+    const neg = new Array(n).fill(0);
+    series.forEach((s, si) => {
+      const color = seriesColor(s, si);
+      s.data.forEach((v, i) => {
+        if (!Number.isFinite(v)) return;
+        let a = 0;
+        if (stacked) v >= 0 ? ((a = pos[i]), (pos[i] += v)) : ((a = neg[i]), (neg[i] += v));
+        const p0 = vpos(a);
+        const p1 = vpos(a + v);
+        const off = cpos(i) - group / 2 + (stacked ? 0 : si * bw);
+        const thick = Math.max(bw - (stacked || series.length === 1 ? 0 : 1.5), 1);
+        const rect = horiz
+          ? { x: Math.min(p0, p1), y: off, width: Math.max(Math.abs(p1 - p0), 0.5), height: thick }
+          : { x: off, y: Math.min(p0, p1), width: thick, height: Math.max(Math.abs(p1 - p0), 0.5) };
+        marks.append(svg("rect", { class: "bar", ...rect, rx: Math.min(2.5, thick / 4), style: `fill:${color}` }, tip(`${labels[i]}${s.name ? ` · ${s.name}` : ""}: ${fmtValue(v, ya)}`)));
+      });
+    });
+    return root;
+  }
+
+  // Lines and areas: points at band centres, a gap for each null.
+  const base = new Array(n).fill(0);
+  series.forEach((s, si) => {
+    const color = seriesColor(s, si);
+    const tops = s.data.map((v, i) => (Number.isFinite(v) ? (stacked ? base[i] + v : v) : null));
+    const runs = [];
+    let run = [];
+    tops.forEach((v, i) => (v == null ? (run.length && runs.push(run), (run = [])) : run.push(i)));
+    if (run.length) runs.push(run);
+    for (const r of runs) {
+      const line = r.map((i, k) => `${k ? "L" : "M"}${cpos(i).toFixed(1)},${vpos(tops[i]).toFixed(1)}`).join("");
+      if (type === "area") {
+        const back = r
+          .slice()
+          .reverse()
+          .map((i) => `L${cpos(i).toFixed(1)},${(stacked ? vpos(base[i]) : zero).toFixed(1)}`)
+          .join("");
+        marks.append(svg("path", { class: "area", d: `${line}${back}Z`, style: `fill:${color}` }));
+      }
+      marks.append(svg("path", { class: "line", d: line, style: `stroke:${color}` }));
+    }
+    if (n <= 80)
+      s.data.forEach((v, i) => {
+        if (!Number.isFinite(v)) return;
+        marks.append(svg("circle", { class: "pt", cx: cpos(i), cy: vpos(tops[i]), r: n <= 24 ? 3.2 : 2.2, style: `fill:${color}` }, tip(`${labels[i]}${s.name ? ` · ${s.name}` : ""}: ${fmtValue(v, ya)}`)));
+      });
+    if (stacked) tops.forEach((v, i) => v != null && (base[i] = v));
+  });
+  return root;
+}
+
+function drawPie(spec, W) {
+  const data = (spec.series[0]?.data || []).map((v) => (Number.isFinite(v) && v > 0 ? v : 0));
+  const labels = (spec.labels || []).map(String);
+  const total = data.reduce((a, b) => a + b, 0);
+  const H = Math.min(Math.max(spec.height || 240, 120), 900);
+  const r = Math.min(H / 2 - 6, W / 2 - 6);
+  const inner = spec.type === "donut" ? r * 0.6 : 0;
+  const cx = W / 2;
+  const cy = H / 2;
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img" });
+  if (!total) return root;
+  const at = (a, rad) => [cx + rad * Math.sin(a), cy - rad * Math.cos(a)];
+  let a0 = 0;
+  data.forEach((v, i) => {
+    if (!v) return;
+    const a1 = a0 + (v / total) * Math.PI * 2;
+    const color = `var(--c${(i % 8) + 1})`;
+    const label = `${labels[i] ?? ""}: ${fmtValue(v, spec.y)} (${Math.round((v / total) * 100)}%)`;
+    if (v === total) {
+      marks(svg("circle", { class: "slice", cx, cy, r, style: `fill:${color}` }, tip(label)));
+    } else {
+      const big = a1 - a0 > Math.PI ? 1 : 0;
+      const [x0, y0] = at(a0, r);
+      const [x1, y1] = at(a1, r);
+      let d = `M${cx},${cy}L${x0},${y0}A${r},${r} 0 ${big} 1 ${x1},${y1}Z`;
+      if (inner) {
+        const [ix0, iy0] = at(a0, inner);
+        const [ix1, iy1] = at(a1, inner);
+        d = `M${ix0},${iy0}L${x0},${y0}A${r},${r} 0 ${big} 1 ${x1},${y1}L${ix1},${iy1}A${inner},${inner} 0 ${big} 0 ${ix0},${iy0}Z`;
+      }
+      marks(svg("path", { class: "slice", d, style: `fill:${color}` }, tip(label)));
+    }
+    a0 = a1;
+  });
+  if (inner) {
+    if (data.filter(Boolean).length === 1) root.append(svg("circle", { cx, cy, r: inner, class: "hole" }));
+    root.append(svg("text", { class: "total", x: cx, y: cy + 2, "text-anchor": "middle" }, fmtValue(total, spec.y)), svg("text", { x: cx, y: cy + 18, "text-anchor": "middle" }, "total"));
+  }
+  return root;
+  function marks(el) {
+    root.append(el);
+  }
 }
 
 // ── diffs ────────────────────────────────────────────────────────────────────
