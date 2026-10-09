@@ -810,6 +810,15 @@ updates through server-sent events with no reload.
   rebuilt from the session's own history (sends, asks and their answers,
   replies, and agent-link's headers on incoming messages) after each turn,
   when a message arrives, and on startup, so nothing in agent-link changes.
+  A `bash` command still running after 5 s gets a **Running** card (a
+  terminal section, `auto-running`): the command, a ticking elapsed time and
+  the newest 40 of its last 200 lines, rewritten at most once a second from
+  pi's `tool_execution_update` events. When it ends the card becomes **Last
+  long command** with the exit code and duration, until the next long command
+  replaces it; one cut off by a dying pi is marked interrupted on the next
+  start. Commands likely to print secrets (`op read`, `security
+  find-generic-password`, `printenv`, `env`, `gh auth token` and the like)
+  never stream. Haiku neither trims nor sees the Running card.
   `PI_CANVAS_AUTO=0` turns all of this off.
 - **Diffs and lightbox.** Before the agent's first `edit` or `write` to a file,
   the extension copies what the file held (`base-<id>`, never served). After

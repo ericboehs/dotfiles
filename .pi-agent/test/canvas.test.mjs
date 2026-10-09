@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -660,6 +660,27 @@ test("normalizeSpec: steps, json and timeline", () => {
   assert.throws(() => normalizeSpec("timeline", '[{"title":"x","tone":"pink"}]'), /tone must be one of/);
   assert.throws(() => normalizeSpec("timeline", '[{"title":"x","at":{}}]'), /at must be/);
   assert.throws(() => normalizeSpec("timeline", '{"events":[{"title":"x"}],"order":"random"}'), /order must be time or given/);
+});
+
+test("Running: tail, exit code, secret commands and the spec", () => {
+  assert.equal(tailLines("a\nb\nc\nd", 2), "c\nd");
+  assert.equal(tailLines("a\nb", 5), "a\nb");
+  assert.deepEqual(bashExit("built\n\nCommand exited with code 2", true), { output: "built", exit: 2 });
+  assert.deepEqual(bashExit("all good", false), { output: "all good", exit: 0 });
+  assert.deepEqual(bashExit("partial\n\nCommand timed out after 30 seconds", true), { output: "partial\n\nCommand timed out after 30 seconds", exit: undefined });
+  assert.ok(streamable("npm test && make build"));
+  assert.ok(streamable("bin/environment-check"));
+  for (const c of ["op read op://x/y", "security find-generic-password -s x -w", "printenv", "gh auth token", "env | sort", "ls; env"]) assert.ok(!streamable(c), c);
+  const t0 = Date.parse("2026-10-09T12:00:00Z");
+  const live = JSON.parse(runSpec({ command: "make", cwd: "/w", started: t0, output: "1\n2" }));
+  assert.deepEqual(live, { command: "make", cwd: "/w", output: "1\n2", started: "2026-10-09T12:00:00.000Z", running: true });
+  const done = JSON.parse(runSpec({ command: "make", cwd: "/w", started: t0, output: "ok", ended: t0 + 72_400, exit: 0 }));
+  assert.equal(done.running, false);
+  assert.equal(done.duration, 72);
+  assert.equal(done.exit, 0);
+  // The spec survives normalizeSpec with its running fields; a bad start is dropped.
+  assert.equal(JSON.parse(normalizeSpec("terminal", JSON.stringify(live))).running, true);
+  assert.equal(JSON.parse(normalizeSpec("terminal", JSON.stringify({ ...live, started: "soon" }))).running, undefined);
 });
 
 test("compareOptions checks labels and mode", () => {

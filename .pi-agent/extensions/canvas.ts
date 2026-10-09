@@ -423,6 +423,41 @@ export function shotsMarkdown(shots: Shot[], sessionId: string): string {
   return `<div class="gallery">${shots.map((x) => `<figure><a href="${src(x.file)}"><img src="${src(x.file)}" alt="${esc(x.name)}" loading="lazy"></a><figcaption>${esc(x.name)} · ${clockTime(x.at)}</figcaption></figure>`).join("")}</div>`;
 }
 
+// ── Running: a live card for long bash commands ──
+
+/** The last n lines of text. */
+export function tailLines(text: string, n: number): string {
+  const lines = String(text ?? "").split("\n");
+  return lines.length > n ? lines.slice(-n).join("\n") : lines.join("\n");
+}
+
+/** pi's bash result ends with "Command exited with code N" on failure; split that off as the exit code. */
+export function bashExit(text: string, isError: boolean): { output: string; exit: number | undefined } {
+  const m = /\n*Command exited with code (\d+)\s*$/.exec(text);
+  if (m) return { output: text.slice(0, m.index), exit: Number(m[1]) };
+  // A timeout or abort has no code; a success has none either.
+  return { output: text, exit: isError ? undefined : 0 };
+}
+
+/** Commands whose output is likely secret never stream to the page. */
+export function streamable(command: string): boolean {
+  return !/\b(op\s+(read|inject|run|item\s+get|signin)|security\s+find-(generic|internet)-password|printenv|gh\s+auth\s+token|aws\s+(configure\s+get|sts\s+get-session-token)|vault\s+(read|kv\s+get)|kubectl\s+get\s+secrets?)\b|(^|[;&|]\s*)env\s*($|[;&|])/.test(command);
+}
+
+export type Run = { command: string; cwd: string; started: number; output: string; ended?: number; exit?: number; failed?: boolean };
+
+/** The terminal spec for a run: ticking while it goes, then its exit and duration. */
+export function runSpec(run: Run): string {
+  return JSON.stringify({
+    command: run.command,
+    cwd: run.cwd,
+    output: run.output,
+    started: new Date(run.started).toISOString(),
+    running: run.ended == null,
+    ...(run.ended != null ? { duration: Math.round((run.ended - run.started) / 1000), exit: run.exit } : {}),
+  });
+}
+
 // ── Agents: who this session talked to over agent-link ──
 
 /** Live agents from agent-link's registry (~/.claude/sessions/<pid>.json), this process left out. */
@@ -874,7 +909,9 @@ export function normalizeSpec(kind: string, text: string, ext = ""): string {
     optString(s.cwd, "cwd");
     if (s.exit != null && !Number.isInteger(s.exit)) throw new Error("exit must be an integer");
     if (s.duration != null && typeof s.duration !== "string" && !isNum(s.duration)) throw new Error("duration must be seconds or text");
-    return JSON.stringify({ command: s.command, cwd: s.cwd, exit: s.exit, duration: s.duration, output: s.output });
+    // started + running: a command still going (the page ticks its elapsed time).
+    const started = typeof s.started === "string" && !Number.isNaN(Date.parse(s.started)) ? s.started : undefined;
+    return JSON.stringify({ command: s.command, cwd: s.cwd, exit: s.exit, duration: s.duration, output: s.output, ...(started ? { started, running: s.running === true } : {}) });
   }
   if (kind === "stats") {
     const s = parseJson(text, "stats");
@@ -1046,24 +1083,59 @@ export default function canvas(pi: ExtensionAPI) {
     return next;
   };
 
-  /** Add or replace a markdown section; skips identical rewrites so the page does not flash. */
-  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto" }): boolean {
+  /** Add or replace a markdown (or terminal) section; skips identical rewrites so the page does not flash. */
+  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto"; kind?: "markdown" | "terminal" }): boolean {
     const listPath = join(d, "sections.json");
     const list = readJson<Section[]>(listPath, []);
     const old = list.find((x) => x.id === sec.id);
-    const file = `${sec.id}.md`;
+    const kind = sec.kind ?? "markdown";
+    const file = `${sec.id}.${kind === "terminal" ? "term" : "md"}`;
     try {
       if (old && old.file === file && old.title === sec.title && readFileSync(join(d, file), "utf8") === sec.body) return false;
     } catch {}
     if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
     writeAtomic(join(d, file), sec.body);
-    const entry: Section = { id: sec.id, title: sec.title, kind: "markdown", file, at: new Date().toISOString(), ...(sec.by ? { by: sec.by } : {}) };
+    const entry: Section = { id: sec.id, title: sec.title, kind, file, at: new Date().toISOString(), ...(sec.by ? { by: sec.by } : {}) };
     writeAtomic(listPath, JSON.stringify(upsertSection(list, entry), null, 2));
     return true;
   }
 
   const AUTO_SECTIONS_KEPT = 6;
   const WIDGETS = new Set(["auto-agents", "auto-files", "auto-screenshots"]);
+  // Kept out of Haiku's view and its trimming: the side cards and the Running card.
+  const PINNED = new Set([...WIDGETS, "auto-running"]);
+
+  // ── Running ──
+  const RUN_SHOW_AFTER_MS = 5000;
+  const RUN_WRITE_EVERY_MS = 1000;
+  const RUN_LINES = 200;
+  type Live = Run & { shown: boolean; showTimer?: ReturnType<typeof setTimeout>; writeTimer?: ReturnType<typeof setTimeout>; lastWrite: number };
+  const runs = new Map<string, Live>();
+  let runOwner: string | undefined; // the run the card shows; a newer long run takes it over
+
+  function writeRun(ctx: ExtensionContext, callId: string, run: Live) {
+    if (runOwner !== callId) return;
+    clearTimeout(run.writeTimer);
+    run.writeTimer = undefined;
+    run.lastWrite = Date.now();
+    try {
+      putMarkdown(ensureDir(ctx), { id: "auto-running", title: run.ended == null ? "Running" : "Last long command", body: runSpec(run), by: "auto", kind: "terminal" });
+    } catch {}
+  }
+  /** At most one write a second while output streams. */
+  function scheduleRun(ctx: ExtensionContext, callId: string, run: Live) {
+    if (!run.shown || run.writeTimer) return;
+    const wait = Math.max(0, run.lastWrite + RUN_WRITE_EVERY_MS - Date.now());
+    run.writeTimer = setTimeout(() => writeRun(ctx, callId, run), wait);
+  }
+  /** A card left "running" by a pi that died mid-command says it was cut off. */
+  function settleStaleRun(d: string) {
+    const sec = readJson<Section[]>(join(d, "sections.json"), []).find((x) => x.id === "auto-running");
+    if (!sec) return;
+    const spec = readJson<{ running?: boolean } | null>(join(d, sec.file), null);
+    if (!spec?.running) return;
+    putMarkdown(d, { id: "auto-running", title: "Last long command", body: JSON.stringify({ ...spec, running: false, duration: "interrupted" }), by: "auto", kind: "terminal" });
+  }
 
   /** Agents: rebuilt from the branch each time, so it backfills and follows branch switches. */
   function updateAgents(ctx: ExtensionContext) {
@@ -1090,7 +1162,7 @@ export default function canvas(pi: ExtensionAPI) {
     if (current.some((x) => x.by !== "auto" && norm(x.title) === norm(extras.section!.title))) return;
     putMarkdown(d, { id: extras.section.id, title: extras.section.title, body: extras.section.markdown, by: "auto" });
     const list = readJson<Section[]>(listPath, []);
-    const auto = list.filter((x) => x.by === "auto" && !WIDGETS.has(x.id)).sort((a, b) => b.at.localeCompare(a.at));
+    const auto = list.filter((x) => x.by === "auto" && !PINNED.has(x.id)).sort((a, b) => b.at.localeCompare(a.at));
     const drop = new Set(auto.slice(AUTO_SECTIONS_KEPT).map((x) => x.id));
     if (!drop.size) return;
     for (const x of list) if (drop.has(x.id)) rmSync(join(d, x.file), { force: true });
@@ -1197,7 +1269,7 @@ export default function canvas(pi: ExtensionAPI) {
       known = findingTexts(readFileSync(join(d, "findings.md"), "utf8"));
     } catch {}
     const sections = readJson<Section[]>(join(d, "sections.json"), [])
-      .filter((x) => !WIDGETS.has(x.id))
+      .filter((x) => !PINNED.has(x.id))
       .map((x) => ({ id: x.id, title: x.title, kind: x.kind, by: x.by }));
     const digest = turnDigest(turn, prev, { name: pi.getSessionName(), cwd: ctx.cwd, todo, ...(autoOn ? { findings: known, sections } : {}) });
 
@@ -1236,6 +1308,9 @@ export default function canvas(pi: ExtensionAPI) {
       // start begins idle, as pi's own status does.
       if (event.reason !== "reload") writeActivity(true);
       if (autoOn && ctx.hasUI) void serial(() => updateAgents(ctx)).catch(() => {});
+      try {
+        settleStaleRun(dir());
+      } catch {}
     }
     void ensureDaemon();
   });
@@ -1284,7 +1359,44 @@ export default function canvas(pi: ExtensionAPI) {
     void refreshStatus(ctx);
   });
 
+  // Running: a bash command still going after 5 s gets a live card.
+  pi.on("tool_execution_start", (event, ctx) => {
+    try {
+      if (!autoOn || !ctx.hasUI || !sessionId || event.toolName !== "bash") return;
+      const command = String((event.args as { command?: unknown })?.command ?? "");
+      if (!command.trim() || !streamable(command)) return;
+      const run: Live = { command, cwd: ctx.cwd, started: Date.now(), output: "", shown: false, lastWrite: 0 };
+      run.showTimer = setTimeout(() => {
+        run.shown = true;
+        runOwner = event.toolCallId;
+        writeRun(ctx, event.toolCallId, run);
+      }, RUN_SHOW_AFTER_MS);
+      runs.set(event.toolCallId, run);
+    } catch {}
+  });
+  pi.on("tool_execution_update", (event, ctx) => {
+    const run = runs.get(event.toolCallId);
+    if (!run) return;
+    run.output = tailLines(textOf((event.partialResult as { content?: unknown })?.content), RUN_LINES);
+    scheduleRun(ctx, event.toolCallId, run);
+  });
+  pi.on("tool_execution_end", (event, ctx) => {
+    const run = runs.get(event.toolCallId);
+    if (!run) return;
+    runs.delete(event.toolCallId);
+    clearTimeout(run.showTimer);
+    if (!run.shown) return;
+    const done = bashExit(textOf((event.result as { content?: unknown })?.content), event.isError);
+    const code = (event.result as { structuredContent?: { exit_code?: unknown } })?.structuredContent?.exit_code;
+    run.output = tailLines(done.output, RUN_LINES);
+    run.exit = Number.isInteger(code) ? (code as number) : done.exit;
+    run.ended = Date.now();
+    writeRun(ctx, event.toolCallId, run);
+  });
+
   pi.on("session_shutdown", (event) => {
+    for (const r of runs.values()) clearTimeout(r.showTimer), clearTimeout(r.writeTimer);
+    runs.clear();
     inflight?.abort();
     inflight = undefined;
     // /reload keeps the same session in the same process; it is not an end.

@@ -169,6 +169,7 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .term-meta .btn { margin: -4px -6px -4px 0; }
 .term-exit { font-weight: 600; }
 .term-exit.ok { color: var(--ok); } .term-exit.bad { color: var(--bad); }
+.term-running { display: inline-flex; gap: 6px; align-items: center; color: var(--ok); font-variant-numeric: tabular-nums; }
 .term-tools { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .term-tools .btn { margin-left: auto; }
 .term-filter, .tbl-filter { font: 12.5px/1.2 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: min(260px, 50%); }
@@ -1316,8 +1317,26 @@ function renderTerminal(spec) {
   const output = spec.output || "";
   const lines = parseAnsi(output);
   const colored = /\x1b\[[0-9;]*m/.test(output);
+  const running = spec.running && spec.started;
   const count = h("span", { class: "term-count" });
   const filter = lines.length > 15 ? h("input", { class: "term-filter", type: "search", placeholder: "Filter lines", "aria-label": "Filter lines" }) : null;
+  // A command still going: a pulse and an elapsed time that ticks between writes.
+  let clock = null;
+  if (running) {
+    const t0 = Date.parse(spec.started);
+    const label = h("span");
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
+      label.textContent = `running ${s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`}`;
+    };
+    tick();
+    let was = false;
+    const iv = setInterval(() => {
+      if (label.isConnected) (was = true), tick();
+      else if (was) clearInterval(iv); // re-rendered or closed
+    }, 1000);
+    clock = h("span", { class: "term-running" }, h("span", { class: "pulse working" }), label);
+  }
   const head = h(
     "div",
     { class: "term-head" },
@@ -1326,7 +1345,8 @@ function renderTerminal(spec) {
       "span",
       { class: "term-meta" },
       spec.cwd ? h("span", { title: spec.cwd }, tilde(spec.cwd)) : null,
-      spec.duration != null ? h("span", {}, typeof spec.duration === "number" ? fmtSeconds(spec.duration) : spec.duration) : null,
+      clock,
+      !running && spec.duration != null ? h("span", {}, typeof spec.duration === "number" ? fmtSeconds(spec.duration) : spec.duration) : null,
       spec.exit != null ? h("span", { class: `term-exit ${spec.exit === 0 ? "ok" : "bad"}` }, `exit ${spec.exit}`) : null,
       h("span", {}, `${lines.length.toLocaleString()} line${lines.length === 1 ? "" : "s"}`),
     ),
@@ -1365,17 +1385,24 @@ function renderTerminal(spec) {
     }
     count.textContent = "";
     if (expanded || lines.length <= HEAD + TAIL + 10) lines.forEach((l, i) => body.append(lineEl(l, i)));
-    else {
+    else if (running) {
+      // Still going: the newest lines matter, so only the tail shows.
+      const hidden = lines.length - TAIL;
+      body.append(h("button", { class: "term-fold", type: "button", onclick: () => ((expanded = true), draw()) }, `Show ${hidden.toLocaleString()} earlier lines`));
+      lines.slice(-TAIL).forEach((l, k) => body.append(lineEl(l, hidden + k)));
+    } else {
       lines.slice(0, HEAD).forEach((l, i) => body.append(lineEl(l, i)));
       const hidden = lines.length - HEAD - TAIL;
       body.append(h("button", { class: "term-fold", type: "button", onclick: () => ((expanded = true), draw()) }, `Show ${hidden.toLocaleString()} more lines`));
       lines.slice(-TAIL).forEach((l, k) => body.append(lineEl(l, lines.length - TAIL + k)));
     }
-    if (!lines.length) body.append(h("div", { class: "term-none" }, "No output"));
+    if (!lines.length) body.append(h("div", { class: "term-none" }, running ? "No output yet" : "No output"));
   };
   filter?.addEventListener("input", draw);
   draw();
-  return h("div", { class: "term" }, head, tools, body);
+  // Follow the newest line while it runs (once in the page).
+  if (running) requestAnimationFrame(() => (body.scrollTop = body.scrollHeight));
+  return h("div", { class: `term${running ? " running" : ""}` }, head, tools, body);
 }
 
 // ── stats ──────────────────────────────────────────────────────────────────────────
