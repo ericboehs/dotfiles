@@ -751,7 +751,8 @@ updates through server-sent events with no reload.
   each turn, `git diff --no-index` writes `diff-<id>.patch`, the change since
   then, and `cur-<id>.txt` copies the file as it is now (same skips). Files
   changed shows +/− counts, and clicking a path opens it in the modal with
-  Diff and File tabs; the tab you pick holds as you step through files.
+  Diff and File tabs; markdown files get Diff, Preview (rendered, frontmatter
+  as a code block) and Source. The tab you pick holds as you step through files.
   Clicking a screenshot opens it large. Both use one modal: ←/→ step through the card's items, Esc closes, and "Open in new
   tab" (or a ⌘-click) opens the raw file. Code blocks with a named language
   are syntax-highlighted (highlight.js, loaded on first use; no guessing, up to

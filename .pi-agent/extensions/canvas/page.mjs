@@ -120,6 +120,9 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .fileview .gutter { flex: none; position: sticky; left: 0; padding: 8px 10px 8px 14px; text-align: right; color: var(--dim); user-select: none; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); }
 .fileview .src { flex: 1; min-width: 0; overflow-x: auto; padding: 8px 14px; tab-size: 4; }
 .fileview .src code { font: inherit; background: none; padding: 0; }
+.mbody > .md.doc { padding: 18px 26px 26px; max-width: 920px; font-size: 14.5px; line-height: 1.6; }
+.md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+.md li > input[type="checkbox"] { margin: 0 0.45em 0 0; vertical-align: -1px; }
 .toc a { display: flex; gap: 10px; align-items: baseline; padding: 4px 12px; color: var(--ink); text-decoration: none; font-size: 13px; }
 .toc a:hover { background: color-mix(in srgb, var(--soft) 45%, transparent); }
 .toc a .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1078,19 +1081,36 @@ async function renderFileView(url, path) {
   return h("div", { class: "fileview" }, h("pre", { class: "gutter", "aria-hidden": "true" }, lines.map((_, i) => i + 1).join("\n")), h("pre", { class: "src" }, code));
 }
 
-// The tab last picked in a Files changed modal, kept while stepping through rows.
+/** A markdown file rendered, its YAML frontmatter shown as a code block rather than stray text. */
+async function renderMarkdownFile(url) {
+  const text = await fetchText(url);
+  if (!text.trim()) return h("div", { class: "empty" }, "Empty file.");
+  const fm = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  const el = renderMarkdown(fm ? `\`\`\`yaml\n${fm[1]}\n\`\`\`\n\n${text.slice(fm[0].length)}` : text);
+  el.classList.add("doc");
+  return el;
+}
+
+// The tab last picked in a Files changed modal, kept while stepping through
+// rows: "diff", "file" (rendered, for markdown) or "source".
 let fileTab = "diff";
 
 function fileItem(a) {
   const urls = fileLink(a);
   const path = a.textContent.trim();
-  const tab = urls[fileTab] ? fileTab : urls.diff ? "diff" : "file";
-  const view = (t) => (t === "diff" ? fetchText(urls.diff).then((x) => renderDiffView(x, { title: path, href: urls.diff, inModal: true })) : renderFileView(urls.file, path));
+  const md = langFor(path) === "markdown";
+  const names = { diff: "Diff", file: md ? "Preview" : "File", source: "Source" };
+  const have = (t) => (t === "diff" ? !!urls.diff : t === "source" ? md && !!urls.file : !!urls.file);
+  const order = ["diff", "file", "source"].filter(have);
+  const tab = have(fileTab) ? fileTab : fileTab === "source" && have("file") ? "file" : order[0];
+  const view = (t) =>
+    t === "diff" ? fetchText(urls.diff).then((x) => renderDiffView(x, { title: path, href: urls.diff, inModal: true })) : t === "file" && md ? renderMarkdownFile(urls.file) : renderFileView(urls.file, path);
+  const hrefFor = (t) => (t === "diff" ? urls.diff : urls.file);
   let shown = 0;
   const pick = (t, btn) => {
     fileTab = t;
     for (const b of btn.parentNode.children) b.classList.toggle("on", b === btn);
-    dlg.querySelector("a.open").href = urls[t];
+    dlg.querySelector("a.open").href = hrefFor(t);
     const box = dlg.querySelector(".mbody");
     const mine = ++shown;
     box.replaceChildren(h("div", { class: "empty" }, "Loading…"));
@@ -1100,18 +1120,18 @@ function fileItem(a) {
     );
   };
   const tabs =
-    urls.diff && urls.file
+    order.length > 1
       ? h(
           "span",
           { class: "segs" },
-          ["diff", "file"].map((t) => h("button", { class: `seg${t === tab ? " on" : ""}`, type: "button", onclick: (e) => pick(t, e.currentTarget) }, t === "diff" ? "Diff" : "File")),
+          order.map((t) => h("button", { class: `seg${t === tab ? " on" : ""}`, type: "button", onclick: (e) => pick(t, e.currentTarget) }, names[t])),
         )
       : null;
   return {
     kind: "diff",
     title: path,
     sub: a.closest("tr")?.children[1]?.textContent.split(" · ")[1] || "",
-    href: urls[tab],
+    href: hrefFor(tab),
     extra: tabs,
     body: view(tab),
   };
