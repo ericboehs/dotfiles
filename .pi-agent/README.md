@@ -800,13 +800,15 @@ updates through server-sent events with no reload.
   changed** table (paths and edit counts from tool calls; the newest five
   show, the rest behind "Show N more", which stays open across updates) and a
   **Screenshots** gallery of the last 12 images the agent `read`, copied into
-  the session folder. When this session has used agent-link, an **Agents**
+  the session folder (the newest four show, the rest behind "Show N more").
+  When this session has used agent-link, an **Agents**
   card lists each agent it sent to or heard from, newest exchange first: a
   live dot (working, idle, or a hollow ring once it has exited; the page asks
   the daemon every 4 s while the tab is visible, and `GET /api/peers` reads
   agent-link's registry in `~/.claude/sessions` and returns live names and
   statuses only), ↑ sent / ↓ received counts
-  and the last message's first line. A click opens the last six messages and
+  and the last message's first line. Agents that have exited wait behind
+  "Show N inactive" (refolded as the dots change; an open row stays). A click opens the last six messages and
   the agent's folder, with a link to its canvas page if it has one. It's
   rebuilt from the session's own history (sends, asks and their answers,
   replies, and agent-link's headers on incoming messages) after each turn,

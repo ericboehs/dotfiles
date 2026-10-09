@@ -52,7 +52,8 @@ header.top .tools .back { margin-left: 8px; }
 .side .gallery figcaption { font-size: 11px; }
 /* Agents (auto-agents): one expandable row per agent this session talked to */
 .md details.agent { border-top: 1px solid var(--line); padding: 7px 0; }
-.md details.agent:first-child { border-top: 0; padding-top: 0; }
+.md details.agent:first-child, .md details.agent.lead { border-top: 0; padding-top: 0; }
+.agents-none { margin: 0; color: var(--dim); font-size: 13px; }
 .md details.agent > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: auto 1fr auto; column-gap: 7px; align-items: center; }
 .md details.agent > summary::-webkit-details-marker { display: none; }
 .md details.agent .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
@@ -169,7 +170,8 @@ table.diff tr.del mark, table.diff td.del mark { background: color-mix(in srgb, 
 .term-meta .btn { margin: -4px -6px -4px 0; }
 .term-exit { font-weight: 600; }
 .term-exit.ok { color: var(--ok); } .term-exit.bad { color: var(--bad); }
-.files-more { display: block; margin: 6px 0 0; }
+.fold-more { display: block; margin: 6px 0 0; }
+.gallery figure[hidden], details.agent[hidden] { display: none; }
 .term-running { display: inline-flex; gap: 6px; align-items: center; color: var(--ok); font-variant-numeric: tabular-nums; }
 .term-tools { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .term-tools .btn { margin-left: auto; }
@@ -923,22 +925,51 @@ function findingsCard(findings, showAll = false) {
 const rawUrl = (id, sec, bust = true) =>
   `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(sec.file)}${bust ? `?v=${encodeURIComponent(sec.at || "")}` : ""}`;
 
-// Files changed: the newest few rows, the rest behind a toggle that holds across updates.
-const FILES_SHOWN = 5;
-let filesAll = false;
-function foldFiles(body) {
-  const extra = [...body.querySelectorAll("tbody tr")].slice(FILES_SHOWN);
+// Files changed and Screenshots: the newest few, the rest behind a toggle
+// that holds across updates (both lists are newest first).
+const FOLDS = { "auto-files": ["tbody tr", 5], "auto-screenshots": [".gallery figure", 4] };
+const foldOpen = {};
+function foldItems(body, key, selector, shown) {
+  const extra = [...body.querySelectorAll(selector)].slice(shown);
   if (!extra.length) return body;
-  const btn = h("button", { class: "btn files-more", type: "button" });
+  const btn = h("button", { class: "btn fold-more", type: "button" });
   const set = () => {
-    extra.forEach((r) => (r.hidden = !filesAll));
-    btn.textContent = filesAll ? "Show fewer" : `Show ${extra.length} more`;
-    btn.setAttribute("aria-expanded", String(filesAll));
+    extra.forEach((r) => (r.hidden = !foldOpen[key]));
+    btn.textContent = foldOpen[key] ? "Show fewer" : `Show ${extra.length} more`;
+    btn.setAttribute("aria-expanded", String(!!foldOpen[key]));
   };
-  btn.addEventListener("click", () => ((filesAll = !filesAll), set()));
+  btn.addEventListener("click", () => ((foldOpen[key] = !foldOpen[key]), set()));
   set();
   body.append(btn);
   return body;
+}
+
+/** Agents: live ones always show; ones whose session has exited wait behind "Show N inactive". Re-run when the dots change. */
+function foldAgents(root) {
+  const rows = [...root.querySelectorAll("details.agent")];
+  const gone = rows.filter((r) => r.classList.contains("gone") && !r.open);
+  let btn = root.querySelector(".fold-more.agents");
+  if (!gone.length) {
+    btn?.remove();
+    root.querySelector(".agents-none")?.remove();
+    rows.forEach((r) => ((r.hidden = false), r.classList.remove("lead")));
+    return;
+  }
+  if (!btn) {
+    btn = h("button", { class: "btn fold-more agents", type: "button" });
+    btn.addEventListener("click", () => ((foldOpen["auto-agents"] = !foldOpen["auto-agents"]), foldAgents(root)));
+    root.append(btn);
+  }
+  const open = !!foldOpen["auto-agents"];
+  rows.forEach((r) => (r.hidden = !open && gone.includes(r)));
+  // The first row left showing loses its divider; with none left, say so.
+  const first = rows.find((r) => !r.hidden);
+  rows.forEach((r) => r.classList.toggle("lead", r === first));
+  let none = root.querySelector(".agents-none");
+  if (first) none?.remove();
+  else if (!none) btn.before(h("p", { class: "agents-none" }, "None running."));
+  btn.textContent = open ? "Hide inactive" : `Show ${gone.length} inactive`;
+  btn.setAttribute("aria-expanded", String(open));
 }
 
 function sectionCard(id, sec) {
@@ -964,7 +995,10 @@ function sectionCard(id, sec) {
     sec.id,
     () =>
       sectionBody(id, sec).then(
-        (body) => bd.replaceChildren(sec.id === "auto-files" ? foldFiles(body) : body),
+        (body) => {
+          bd.replaceChildren(FOLDS[sec.id] ? foldItems(body, sec.id, ...FOLDS[sec.id]) : body);
+          if (sec.id === "auto-agents") foldAgents(bd);
+        },
         (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
       ),
     WIDGETS.includes(sec.id) ? undefined : sec.at, // widgets never fold by age
@@ -2691,6 +2725,7 @@ async function refreshPeerDots() {
       const dot = row.querySelector(".dot");
       if (dot) dot.title = status ?? "not running";
     }
+    for (const bd of new Set(rows.map((r) => r.closest(".bd")).filter(Boolean))) foldAgents(bd);
   } catch {
   } finally {
     peersBusy = false;
