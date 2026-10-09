@@ -320,6 +320,8 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .md code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 12.5px; }
 .md pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 0; font-size: 12.5px; line-height: 1.5; }
 .md pre code { background: none; padding: 0; }
+/* Prose in a fence (a prompt, a message) wraps; code keeps its lines and scrolls. */
+.md pre code:is(.language-text, .language-txt, .language-plain, .language-plaintext, .language-prompt, .language-markdown, .language-md) { white-space: pre-wrap; overflow-wrap: anywhere; }
 .hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-section, .hljs-name, .hljs-tag { color: var(--hl-kw); }
 .hljs-keyword, .hljs-section { font-weight: 600; }
 .hljs-string, .hljs-regexp, .hljs-quote, .hljs-addition { color: var(--hl-str); }
