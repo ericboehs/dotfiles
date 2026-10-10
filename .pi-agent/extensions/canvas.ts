@@ -1553,6 +1553,8 @@ export default function canvas(pi: ExtensionAPI) {
       "When a reply would contain a table, an option or state matrix, a diagram, a plan (as steps), or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
       "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
         "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
+      "When work runs through other agents (subagents, agent-link handoffs, a pstack run), post it as a pipeline section when it starts, " +
+        "one step per agent or role, and replace the same id as each one starts, finishes or sends work back, so its statuses stay current.",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section, or a compare section when there is a clear before and after.",
       "For a body over ~2 KB, write a file and pass path; the data then stays out of your context.",

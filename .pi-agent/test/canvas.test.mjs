@@ -371,6 +371,7 @@ test("prompt copy points at the newer kinds and keeps bodies out of context", as
   assert.match(rules, /a plan \(as steps\)/);
   assert.match(rules, /or a compare section when there is a clear before and after/);
   assert.match(rules, /over ~2 KB, write a file and pass path/);
+  assert.match(rules, /subagents, agent-link handoffs, a pstack run\), post it as a pipeline section/);
   for (const k of ["terminal", "stats", "table", "compare", "steps", "pipeline", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
 });
 
