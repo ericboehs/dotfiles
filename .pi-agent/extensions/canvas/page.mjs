@@ -259,6 +259,49 @@ ol.steps-list { list-style: none; margin: 0; padding: 0; }
 .s-failed .slabel { color: var(--bad); }
 .snote { font-size: 12.5px; color: var(--dim); margin-top: 1px; }
 .sdetail { margin: 4px 0 0; font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); background: var(--code); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; }
+.pipe-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 6px; }
+.pipe-now { font-size: 12.5px; color: var(--dim); }
+.pipe-now.p-back { color: var(--warn); } .pipe-now.p-failed { color: var(--bad); } .pipe-now.p-active { color: var(--c1); }
+.pipe-legend { margin-left: auto; display: flex; gap: 12px; font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
+.pipe-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; background: currentColor; }
+.pipe-legend .p-active i { background: var(--c1); } .pipe-legend .p-back i { background: var(--warn); } .pipe-legend .p-done i { background: var(--ok); } .pipe-legend .p-failed i { background: var(--bad); }
+.pipe-wrap { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -4px; }
+.pipe-svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.pipe-svg .band { fill: var(--accent); opacity: 0; transition: opacity 0.5s; }
+.pipe-svg .band.on { opacity: 0.09; transition: none; }
+.pipe-svg .lane-box { fill: var(--soft); }
+.pipe-svg .lane-l { font: 600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; fill: var(--dim); }
+.pipe-edges path { fill: none; stroke: var(--line); stroke-width: 3; stroke-linecap: round; }
+.pipe-edges path.on { stroke: var(--c1); }
+.pipe-svg .ring { fill: var(--card); stroke-width: 3; }
+.pipe-svg .p-todo .ring, .pipe-svg .p-skipped .ring { stroke-width: 2; }
+.pipe-svg .p-skipped .ring { stroke-dasharray: 3 3; }
+.pipe-svg .pulse-ring { fill: none; stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: pipe-pulse 1.6s ease-out infinite; }
+@keyframes pipe-pulse { from { transform: scale(1); opacity: 0.7; } to { transform: scale(1.9); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pipe-svg .pulse-ring { animation: none; opacity: 0.35; transform: scale(1.4); } }
+.pipe-svg .pl { font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+.pipe-svg .pn { font-size: 11px; fill: var(--dim); }
+.pipe-svg .pb { font: 600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pipe-svg .loop { fill: none; stroke: var(--warn); stroke-width: 3; stroke-linecap: round; }
+.pipe-svg .loop-l { font-size: 11.5px; font-weight: 600; fill: var(--warn); }
+.pipe-svg .loop-pill { fill: var(--card); stroke: var(--warn); stroke-width: 1.2; }
+.pipe-svg .loop-n { font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: var(--warn); }
+.pipe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pipe-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 12px; cursor: pointer; }
+.pipe-chip:hover { border-color: var(--dim); }
+.pipe-chip .num { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font: 600 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); color: var(--dim); }
+.pipe-chip.p-done .num { background: var(--ok); color: var(--card); }
+.pipe-chip.p-active .num { background: var(--c1); color: var(--card); }
+.pipe-chip.p-back .num { background: var(--warn); color: var(--card); }
+.pipe-chip.p-failed .num { background: var(--bad); color: var(--card); }
+.pipe-chip.p-todo, .pipe-chip.p-skipped { color: var(--dim); }
+.pipe-chip.now { border-color: var(--c1); box-shadow: 0 0 0 1px var(--c1); }
+.pipe-chip.now.p-back { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
+.pipe-chip.now.p-failed { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+.pipe-strip .pipe-now { display: block; margin: 0 0 2px; text-decoration: none; }
+.pipe-strip .pipe-now:hover { text-decoration: underline; }
+.pipe-strip .pipe-chips { margin-top: 6px; gap: 4px; }
+.pipe-strip .pipe-chip { font-size: 11.5px; padding: 2px 8px 2px 3px; }
 .jtools { margin-left: auto; display: flex; gap: 4px; }
 .jt { font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; max-height: 70vh; overflow: auto; }
 .jc { display: none; padding-left: 18px; border-left: 1px solid var(--soft); margin-left: 6px; }
@@ -740,6 +783,8 @@ async function sectionBody(id, sec) {
       return renderTable(JSON.parse(await (await fetch(url)).text()));
     case "steps":
       return renderSteps(JSON.parse(await (await fetch(url)).text()));
+    case "pipeline":
+      return renderPipeline(JSON.parse(await (await fetch(url)).text()));
     case "json":
       return renderJson(await (await fetch(url)).text());
     case "timeline":
@@ -993,7 +1038,7 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "timeline"].includes(sec.kind)) {
+  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "timeline"].includes(sec.kind)) {
     const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source");
     src.dataset.yank = "source"; // yc presses it
     meta.append(src);
@@ -1755,7 +1800,208 @@ function renderSteps(spec) {
   );
 }
 
-// ── json ────────────────────────────────────────────────────────────────────────────
+// ── pipeline ──────────────────────────────────────────────────────────────────────────
+// A live metro map of a multi-stage workflow: stages left to right, each a
+// single node, a row of steps, or parallel lanes, with an optional loop arc
+// ("revise"). Lines are blue where work has reached, nodes coloured by status.
+// Text is drawn at its real size, so a wide pipeline scrolls sideways.
+
+const PIPE_LABEL = { todo: "to do", active: "in progress", done: "approved", back: "sent back", failed: "failed", skipped: "skipped" };
+const PIPE_DONE = new Set(["done", "skipped"]);
+
+/** A stage's status: its own, else what its steps add up to. */
+function stageStatus(g) {
+  if (g.status) return g.status;
+  const all = (g.lanes || []).flatMap((l) => l.steps.map((s) => s.status));
+  if (!all.length) return "todo";
+  for (const s of ["failed", "back", "active"]) if (all.includes(s)) return s;
+  if (all.every((s) => PIPE_DONE.has(s))) return all.every((s) => s === "skipped") ? "skipped" : "done";
+  return all.some((s) => s === "done") ? "active" : "todo";
+}
+const pipelineRunning = (spec) => !(spec.stages || []).every((g) => PIPE_DONE.has(stageStatus(g)));
+
+/** Where the work is: the stage index and a line like "Build › Package 2 › critic: sent back". */
+function pipelineNow(spec) {
+  const stages = spec.stages || [];
+  for (const want of ["failed", "back", "active"]) {
+    for (let i = 0; i < stages.length; i++) {
+      const g = stages[i];
+      for (const ln of g.lanes || []) {
+        const st = ln.steps.find((s) => s.status === want);
+        if (st) return { stage: i, status: want, text: [g.label, ln.label, st.label].filter(Boolean).join(" › ") + (want === "active" ? "" : `: ${PIPE_LABEL[want]}`) };
+      }
+      if (!(g.lanes || []).length && stageStatus(g) === want) return { stage: i, status: want, text: g.label + (want === "active" ? "" : `: ${PIPE_LABEL[want]}`) };
+    }
+  }
+  const next = stages.findIndex((g) => !PIPE_DONE.has(stageStatus(g)));
+  if (next < 0) return { stage: stages.length - 1, status: "done", text: "All stages done" };
+  return { stage: next, status: "todo", text: `Next: ${stages[next].label}` };
+}
+
+/** The stage chips: a numbered pill per stage, coloured by status. */
+function pipelineChips(spec, onPick, current = -1) {
+  return h(
+    "div",
+    { class: "pipe-chips" },
+    (spec.stages || []).map((g, i) => {
+      const st = stageStatus(g);
+      const chip = h("button", { class: `pipe-chip p-${st}${i === current ? " now" : ""}`, type: "button", title: `${g.label}: ${PIPE_LABEL[st]}` }, h("span", { class: "num" }, PIPE_DONE.has(st) && st === "done" ? "✓" : String(i + 1)), g.label);
+      chip.addEventListener("click", () => onPick(i));
+      return chip;
+    }),
+  );
+}
+
+function renderPipeline(spec) {
+  const stages = spec.stages || [];
+  const COL = 128;
+  const GAP = 64;
+  const LANE = stages.some((g) => (g.lanes || []).some((l) => l.label)) ? 100 : 86;
+  const PAD = 40;
+  const anyLoop = stages.some((g) => g.loop);
+  const sizes = stages.map((g) => ({ cols: Math.max(1, ...(g.lanes || []).map((l) => l.steps.length)), lanes: Math.max(1, (g.lanes || []).length) }));
+  const maxLanes = Math.max(...sizes.map((s) => s.lanes));
+  const top = Math.max(34 + (anyLoop ? 58 : 0), LANE === 100 ? 64 : 0);
+  const mainY = top + ((maxLanes - 1) * LANE) / 2;
+  const H = mainY + ((maxLanes - 1) * LANE) / 2 + 44;
+  // x of each stage's left edge
+  const xs = [];
+  let x = PAD;
+  for (const s of sizes) xs.push(x), (x += s.cols * COL + GAP);
+  const W = x - GAP + PAD;
+  const laneY = (i, n) => mainY + (i - (n - 1) / 2) * LANE;
+  const color = (st) => ({ done: "var(--ok)", active: "var(--c1)", back: "var(--warn)", failed: "var(--bad)" })[st] || "var(--dim)";
+  const reached = (st) => st !== "todo" && st !== "skipped";
+
+  const bands = svg("g", { class: "pipe-bands" });
+  const edges = svg("g", { class: "pipe-edges" });
+  const loops = svg("g", { class: "pipe-loops" });
+  const nodes = svg("g", { class: "pipe-nodes" });
+  const edge = (d, on) => edges.append(svg("path", { d, class: on ? "on" : "" }));
+  const label = (cx, y, text, cls, anchor = "middle") => svg("text", { x: cx, y, class: cls, "text-anchor": anchor }, text);
+
+  const node = (cx, cy, st, title) => {
+    const g = svg("g", { class: `pnode p-${st}` }, tip(`${title}: ${PIPE_LABEL[st]}`));
+    if (st === "active") g.append(svg("circle", { cx, cy, r: 9, class: "pulse-ring", style: `stroke:${color(st)}` }));
+    g.append(svg("circle", { cx, cy, r: 8.5, class: "ring", style: `stroke:${color(st)}` }));
+    if (reached(st)) g.append(svg("circle", { cx, cy, r: 3.8, style: `fill:${color(st)}` }));
+    return g;
+  };
+
+  stages.forEach((g, k) => {
+    const st = stageStatus(g);
+    const { cols } = sizes[k];
+    const x0 = xs[k];
+    const w = cols * COL;
+    const jIn = x0 - GAP / 2;
+    const jOut = x0 + w + GAP / 2;
+    const nextOn = k + 1 < stages.length && reached(stageStatus(stages[k + 1]));
+    bands.append(svg("rect", { x: x0 - GAP / 4, y: 4, width: w + GAP / 2, height: H - 8, rx: 10, class: "band", "data-stage": k }));
+    const lanes = g.lanes || [];
+    if (!lanes.length) {
+      // A single node: a bar at either end of the line, a pill in between.
+      const cx = x0 + w / 2;
+      const end = k === 0 || k === stages.length - 1;
+      const box = svg("g", { class: `pnode p-${st}` }, tip(`${g.label}: ${PIPE_LABEL[st]}`));
+      if (end) box.append(svg("rect", { x: cx - 3.5, y: mainY - 18, width: 7, height: 36, rx: 2, style: `fill:${reached(st) ? color(st) : "var(--dim)"}` }));
+      else {
+        if (st === "active") box.append(svg("rect", { x: cx - 30, y: mainY - 14, width: 60, height: 28, rx: 14, class: "pulse-ring", style: `stroke:${color(st)}` }));
+        box.append(svg("rect", { x: cx - 30, y: mainY - 14, width: 60, height: 28, rx: 14, class: "ring", style: `stroke:${color(st)}` }));
+        if (reached(st)) [-10, 0, 10].forEach((d) => box.append(svg("circle", { cx: cx + d, cy: mainY, r: 2.6, style: `fill:${color(st)}` })));
+      }
+      nodes.append(box);
+      nodes.append(label(cx, end ? mainY + 34 : mainY - 24, g.label, "pl"));
+      if (g.note) nodes.append(label(cx, end ? mainY + 49 : mainY + 30, g.note, "pn"));
+      const half = end ? 4 : 30;
+      if (k > 0) edge(`M${jIn},${mainY}L${cx - half},${mainY}`, reached(st));
+      if (k + 1 < stages.length) edge(`M${cx + half},${mainY}L${jOut},${mainY}`, nextOn);
+      return;
+    }
+    lanes.forEach((ln, i) => {
+      const y = laneY(i, lanes.length);
+      const cxs = ln.steps.map((_, j) => x0 + j * COL + COL / 2);
+      // Lanes in a row with the same label share one box (a package of work).
+      if (ln.label && lanes[i - 1]?.label !== ln.label) {
+        let last = i;
+        while (lanes[last + 1]?.label === ln.label) last++;
+        const yEnd = laneY(last, lanes.length);
+        bands.append(svg("rect", { x: x0 + 6, y: y - 58, width: w - 12, height: yEnd - y + 92, rx: 8, class: "lane-box" }));
+        bands.append(label(x0 + w - 14, y - 44, ln.label.toUpperCase(), "lane-l", "end"));
+      }
+      // In from the junction, step to step, out to the next junction.
+      if (k > 0) {
+        const mx = (jIn + cxs[0]) / 2;
+        edge(y === mainY ? `M${jIn},${mainY}L${cxs[0]},${y}` : `M${jIn},${mainY}C${mx},${mainY} ${mx},${y} ${cxs[0]},${y}`, reached(ln.steps[0].status));
+      }
+      for (let j = 1; j < cxs.length; j++) edge(`M${cxs[j - 1]},${y}L${cxs[j]},${y}`, reached(ln.steps[j].status));
+      if (k + 1 < stages.length) {
+        const last = x0 + w - COL / 2;
+        const lx = cxs[cxs.length - 1];
+        const mx = (last + jOut) / 2;
+        edge(`M${lx},${y}L${last},${y}` + (y === mainY ? `L${jOut},${mainY}` : `C${mx},${y} ${mx},${mainY} ${jOut},${mainY}`), nextOn);
+      }
+      // Under a loop arc, labels go below the node and badges out to the side, clear of the arc.
+      const looped = g.loop && i === 0;
+      ln.steps.forEach((s, j) => {
+        nodes.append(node(cxs[j], y, s.status, s.label));
+        nodes.append(label(cxs[j], looped ? y + 26 : y - 17, s.label, "pl"));
+        if (s.badge) {
+          const b = looped ? label(cxs[j] + (j === 0 ? -14 : 14), y - 12, s.badge, "pb", j === 0 ? "end" : "start") : label(cxs[j], y - 33, s.badge, "pb");
+          b.style.fill = s.status === "todo" ? "var(--dim)" : color(s.status);
+          nodes.append(b);
+        }
+        if (s.note) nodes.append(label(cxs[j], looped ? y + 41 : y + 25, s.note, "pn"));
+      });
+    });
+    if (g.loop) {
+      // From the last step of the top lane back to its first.
+      const ln = lanes[0];
+      const y = laneY(0, lanes.length);
+      const x1 = x0 + COL / 2;
+      const x2 = x0 + (ln.steps.length - 1) * COL + COL / 2;
+      const lift = 62;
+      loops.append(svg("path", { d: `M${x2},${y - 9}C${x2},${y - lift} ${x1},${y - lift} ${x1},${y - 9}`, class: "loop" }));
+      const mx = (x1 + x2) / 2;
+      loops.append(label(mx, y - lift + 2, g.loop.label, "loop-l"));
+      if (g.loop.note) {
+        const t = label(mx, y - lift - 15, g.loop.note, "loop-n");
+        const wNote = g.loop.note.length * 6.2 + 16;
+        loops.append(svg("rect", { x: mx - wNote / 2, y: y - lift - 27, width: wNote, height: 18, rx: 9, class: "loop-pill" }), t);
+      }
+    }
+  });
+
+  const map = svg("svg", { class: "pipe-svg", width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": spec.title || "Pipeline" }, bands, edges, loops, nodes);
+  const wrap = h("div", { class: "pipe-wrap" }, map);
+  const now = pipelineNow(spec);
+  const flash = (i) => {
+    const band = map.querySelector(`.band[data-stage="${i}"]`);
+    if (!band) return;
+    const bx = Number(band.getAttribute("x"));
+    wrap.scrollTo({ left: Math.max(0, bx - 24), behavior: "smooth" });
+    band.classList.remove("on");
+    void band.getBoundingClientRect();
+    band.classList.add("on");
+    setTimeout(() => band.classList.remove("on"), 1600);
+  };
+  const used = new Set(stages.flatMap((g) => [stageStatus(g), ...(g.lanes || []).flatMap((l) => l.steps.map((s) => s.status))]));
+  const legend = h(
+    "span",
+    { class: "pipe-legend" },
+    ["active", "back", "done", "failed"].filter((s) => s !== "failed" || used.has(s)).map((s) => h("span", { class: `p-${s}` }, h("i"), PIPE_LABEL[s])),
+  );
+  const el = h(
+    "div",
+    { class: "pipe" },
+    h("div", { class: "pipe-head" }, spec.title ? h("b", {}, spec.title) : null, h("span", { class: `pipe-now p-${now.status}` }, now.text), legend),
+    wrap,
+    pipelineChips(spec, flash, now.status === "done" ? -1 : now.stage),
+  );
+  el.flashStage = flash;
+  return el;
+}
+
+// ── json ──────────────────────────────────────────────────────────────────────────────
 // A collapsible tree, built lazily as nodes open. Two levels open to start;
 // the filter keeps the paths to matching keys and values and opens them.
 // Clicking a key copies its jq-style path.
@@ -2427,11 +2673,12 @@ async function sessionView(id) {
   const sectionsSlot = h("div");
   const findingsSlot = h("div");
   const tocSlot = h("div");
+  const pipeSlot = h("div");
   const widgetSlot = h("div");
   $app.classList.add("session");
   $app.replaceChildren(
     header,
-    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, tocSlot, widgetSlot)),
+    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, pipeSlot, tocSlot, widgetSlot)),
   );
   loadChoices(id);
   const cards = new Map(); // section id → { at, el }
@@ -2458,6 +2705,47 @@ async function sessionView(id) {
     lay(widgetSlot, WIDGETS.map((wid) => sections.find((s) => s.id === wid)).filter((s) => s && aside(s)));
     if (!mainList.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
     renderToc(mainList);
+    renderPipeStrip(mainList);
+  }
+
+  // ── Pipeline strip: the newest pipeline's stages, while it still runs ──
+  let pipeKey = "";
+  async function renderPipeStrip(list) {
+    const sec = wide.matches ? list.filter((s) => s.kind === "pipeline").sort((a, b) => String(b.at).localeCompare(String(a.at)))[0] : null;
+    const key = sec ? `${sec.id}@${sec.at}` : "";
+    if (key === pipeKey) return;
+    pipeKey = key;
+    if (!sec) return pipeSlot.replaceChildren();
+    let spec;
+    try {
+      spec = await (await fetch(`/s/${encodeURIComponent(id)}/f/${encodeURIComponent(sec.file)}?v=${encodeURIComponent(sec.at || "")}`)).json();
+    } catch {
+      return;
+    }
+    if (pipeKey !== key) return; // a newer one arrived meanwhile
+    if (!pipelineRunning(spec)) return pipeSlot.replaceChildren();
+    const now = pipelineNow(spec);
+    const jump = (stage) => {
+      const card = cards.get(sec.id)?.el;
+      if (!card) return;
+      if (card.classList.contains("collapsed")) card.setCollapsed(false);
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+      // The body loads lazily the first time a card opens; flash once it is there.
+      const tryFlash = (n) => {
+        const map = card.querySelector(".pipe");
+        if (map?.flashStage) map.flashStage(stage);
+        else if (n) setTimeout(() => tryFlash(n - 1), 150);
+      };
+      setTimeout(() => tryFlash(10), 350);
+    };
+    pipeSlot.replaceChildren(
+      h(
+        "section",
+        { class: "card pipe-strip", "data-key": "_pipeline" },
+        h("h2", {}, h("span", { class: "title" }, spec.title || sec.title || "Pipeline")),
+        h("div", { class: "bd" }, h("a", { class: `pipe-now p-${now.status}`, href: `#sec-${sec.id}`, onclick: (e) => (e.preventDefault(), jump(now.stage)) }, now.text), pipelineChips(spec, jump, now.stage)),
+      ),
+    );
   }
 
   // ── Contents: every main-column section, a click opens and scrolls to it ──

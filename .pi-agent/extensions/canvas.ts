@@ -855,11 +855,76 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "json", "timeline", "diff", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "pipeline", "json", "timeline", "diff", "finding"] as const;
 
 // Kinds whose body is a JSON spec the page draws, and the extension each is stored under.
 // (Not .json for the json kind: a section called "meta" or "sections" would overwrite the page's own files.)
-const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", json: "jsonv", timeline: "timeline" };
+const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", json: "jsonv", timeline: "timeline" };
+
+export const PIPE_STATUS = ["todo", "active", "done", "back", "failed", "skipped"] as const;
+
+/**
+ * A pipeline: stages left to right, each a single node, one row of steps, or
+ * parallel lanes of steps, with an optional loop (an arc back, like "revise").
+ * `steps` becomes one lane, so the page only ever sees lanes.
+ */
+export function normalizePipeline(s: any): string {
+  const stages = Array.isArray(s) ? s : s?.stages;
+  if (!Array.isArray(stages) || !stages.length) throw new Error("pipeline needs stages: [{ label, steps? | lanes?, status? }]");
+  if (stages.length > 16) throw new Error("a pipeline takes at most 16 stages");
+  const status = (v: unknown, where: string) => {
+    if (v == null) return undefined;
+    if (!(PIPE_STATUS as readonly string[]).includes(v as string)) throw new Error(`${where}.status must be one of ${PIPE_STATUS.join(", ")}`);
+    return v as string;
+  };
+  const label = (v: unknown, where: string, max = 60) => {
+    if (typeof v !== "string" || !v.trim()) throw new Error(`${where} needs a label`);
+    return oneLine(v, max);
+  };
+  const opt = (v: unknown, where: string, max: number) => {
+    optString(v, where);
+    return typeof v === "string" && v.trim() ? oneLine(v, max) : undefined;
+  };
+  const step = (st: any, where: string) => {
+    if (typeof st === "string") st = { label: st };
+    if (!st || typeof st !== "object") throw new Error(`${where} must be an object`);
+    const note = opt(st.note, `${where}.note`, 80);
+    const badge = opt(st.badge, `${where}.badge`, 24);
+    return { label: label(st.label, where), status: status(st.status, where) ?? "todo", ...(note ? { note } : {}), ...(badge ? { badge } : {}) };
+  };
+  const out = stages.map((g: any, i: number) => {
+    const where = `stages[${i}]`;
+    if (!g || typeof g !== "object") throw new Error(`${where} must be an object`);
+    if (g.steps != null && g.lanes != null) throw new Error(`${where} takes steps or lanes, not both`);
+    let lanes: { label?: string; steps: ReturnType<typeof step>[] }[] = [];
+    if (g.steps != null) {
+      if (!Array.isArray(g.steps) || !g.steps.length) throw new Error(`${where}.steps must be a non-empty array`);
+      lanes = [{ steps: g.steps.map((st: unknown, j: number) => step(st, `${where}.steps[${j}]`)) }];
+    } else if (g.lanes != null) {
+      if (!Array.isArray(g.lanes) || !g.lanes.length) throw new Error(`${where}.lanes must be a non-empty array`);
+      if (g.lanes.length > 8) throw new Error(`${where} takes at most 8 lanes`);
+      lanes = g.lanes.map((ln: any, k: number) => {
+        const lw = `${where}.lanes[${k}]`;
+        if (!ln || !Array.isArray(ln.steps) || !ln.steps.length) throw new Error(`${lw} needs steps`);
+        const lbl = opt(ln.label, `${lw}.label`, 40);
+        return { ...(lbl ? { label: lbl } : {}), steps: ln.steps.map((st: unknown, j: number) => step(st, `${lw}.steps[${j}]`)) };
+      });
+    }
+    if (lanes.some((ln) => ln.steps.length > 8)) throw new Error(`${where}: a lane takes at most 8 steps`);
+    const note = opt(g.note, `${where}.note`, 80);
+    let loop: { label: string; note?: string } | undefined;
+    if (g.loop != null) {
+      if (!lanes.length || lanes[0]!.steps.length < 2) throw new Error(`${where}.loop needs at least two steps to loop between`);
+      const ln = typeof g.loop === "string" ? { label: g.loop } : g.loop;
+      const lnote = opt(ln?.note, `${where}.loop.note`, 60);
+      loop = { label: label(ln?.label, `${where}.loop`, 30), ...(lnote ? { note: lnote } : {}) };
+    }
+    const st = status(g.status, where);
+    return { label: label(g.label, where, 40), ...(note ? { note } : {}), ...(st ? { status: st } : {}), lanes, ...(loop ? { loop } : {}) };
+  });
+  const title = Array.isArray(s) ? undefined : opt(s.title, "title", 120);
+  return JSON.stringify({ ...(title ? { title } : {}), stages: out });
+}
 const STEP_STATUS = ["done", "active", "todo", "failed", "skipped", "blocked"];
 const TONES = ["ok", "warn", "bad", "accent", "dim", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
 const TABLE_TYPES = ["text", "number", "bar", "spark", "tag", "link", "code"];
@@ -974,6 +1039,7 @@ export function normalizeSpec(kind: string, text: string, ext = ""): string {
     parseJson(text, "json");
     return text; // kept as written: the page parses it, and key order and spacing stay the agent's
   }
+  if (kind === "pipeline") return normalizePipeline(parseJson(text, "pipeline"));
   if (kind === "timeline") {
     const s = parseJson(text, "timeline");
     const events = Array.isArray(s) ? s : s?.events;
@@ -1471,6 +1537,8 @@ export default function canvas(pi: ExtensionAPI) {
       'a spark cell is an array of numbers, a link cell a URL or {"text", "href"}; types are inferred when left out; or path to a .csv/.tsv), ' +
       'compare (two images with a before/after slider: paths [before, after]; optional body {"labels": [a, b], "mode": slider|side|onion}), ' +
       'steps (a checklist with progress: JSON [{"label", "status": done|active|todo|failed|skipped|blocked, "note"?, "detail"?}] or {"title", "steps"}; plain strings are todo steps; replace the same id as work moves), ' +
+      'pipeline (a live metro map of a multi-stage, multi-agent workflow: JSON {"title"?, "stages": [{"label", "note"?, "status"?, "steps"?: [{"label", "note"?, "badge"? (e.g. "9/10"), "status": todo|active|done|back|failed|skipped}] or "lanes"?: [{"label"?, "steps"}] for parallel work, "loop"?: {"label", "note"?} for a revise arc from the last step back to the first}]}; ' +
+      'a stage with no steps is one node; back means sent back; replace the same id as work moves), ' +
       'json (any JSON as a collapsible, searchable tree: body is the JSON itself, or path to a .json file), ' +
       'timeline (events in time: JSON [{"at" (ISO time or text), "title", "note"?, "tag"?, "tone"?: ok|warn|bad|accent|dim|c1-c8}] or {"events", "caption", "order": time|given}; dated events are sorted and grouped by day), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
@@ -1484,7 +1552,7 @@ export default function canvas(pi: ExtensionAPI) {
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
       "When a reply would contain a table, an option or state matrix, a diagram, a plan (as steps), or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
       "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
-        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
+        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section, or a compare section when there is a clear before and after.",
       "For a body over ~2 KB, write a file and pass path; the data then stays out of your context.",

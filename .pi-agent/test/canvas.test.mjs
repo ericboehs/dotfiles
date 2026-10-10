@@ -371,7 +371,7 @@ test("prompt copy points at the newer kinds and keeps bodies out of context", as
   assert.match(rules, /a plan \(as steps\)/);
   assert.match(rules, /or a compare section when there is a clear before and after/);
   assert.match(rules, /over ~2 KB, write a file and pass path/);
-  for (const k of ["terminal", "stats", "table", "compare", "steps", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
+  for (const k of ["terminal", "stats", "table", "compare", "steps", "pipeline", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
 });
 
 test("parseStatus accepts fenced JSON and clamps lists", () => {
@@ -643,6 +643,34 @@ test("normalizeSpec: table takes rows with or without columns, or CSV/TSV", () =
   const csv = JSON.parse(normalizeSpec("table", 'repo,stars,note\napi,12,"a, b"\nweb,3.5,"say ""hi"""\n', ".csv"));
   assert.deepEqual(csv, { columns: [{ label: "repo" }, { label: "stars" }, { label: "note" }], rows: [["api", 12, "a, b"], ["web", 3.5, 'say "hi"']] });
   assert.deepEqual(parseDelimited("a\tb\r\n1\tx\r\n", "\t"), { columns: [{ label: "a" }, { label: "b" }], rows: [[1, "x"]] });
+});
+
+test("normalizeSpec: pipeline turns steps into one lane and checks statuses, loops and limits", () => {
+  const p = JSON.parse(
+    normalizeSpec(
+      "pipeline",
+      JSON.stringify({
+        title: "T-1",
+        stages: [
+          { label: "Intake", note: "T-1", status: "done" },
+          { label: "Design", steps: ["Architect", { label: "Critic", status: "done", badge: "9/10", extra: 1 }], loop: "revise" },
+          { label: "Build", lanes: [{ label: "Package 1", steps: [{ label: "Impl", status: "back" }] }, { steps: ["Test"] }] },
+        ],
+      }),
+    ),
+  );
+  assert.equal(p.title, "T-1");
+  assert.deepEqual(p.stages[0], { label: "Intake", note: "T-1", status: "done", lanes: [] });
+  assert.deepEqual(p.stages[1].lanes, [{ steps: [{ label: "Architect", status: "todo" }, { label: "Critic", status: "done", badge: "9/10" }] }]);
+  assert.deepEqual(p.stages[1].loop, { label: "revise" });
+  assert.deepEqual(p.stages[2].lanes[0], { label: "Package 1", steps: [{ label: "Impl", status: "back" }] });
+  assert.equal(JSON.parse(normalizeSpec("pipeline", '[{"label":"Only"}]')).stages.length, 1);
+  assert.throws(() => normalizeSpec("pipeline", "[]"), /pipeline needs stages/);
+  assert.throws(() => normalizeSpec("pipeline", '[{"label":"A","steps":[{"label":"x","status":"done-ish"}]}]'), /stages\[0\]\.steps\[0\]\.status must be one of/);
+  assert.throws(() => normalizeSpec("pipeline", '[{"label":"A","steps":["x"],"lanes":[]}]'), /steps or lanes, not both/);
+  assert.throws(() => normalizeSpec("pipeline", '[{"label":"A","steps":["x"],"loop":"again"}]'), /loop needs at least two steps/);
+  assert.throws(() => normalizeSpec("pipeline", '[{"steps":["x"]}]'), /stages\[0\] needs a label/);
+  assert.throws(() => normalizeSpec("pipeline", JSON.stringify(Array.from({ length: 17 }, (_, i) => ({ label: `s${i}` })))), /at most 16 stages/);
 });
 
 test("normalizeSpec: steps, json and timeline", () => {

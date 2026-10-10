@@ -736,7 +736,7 @@ updates through server-sent events with no reload.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
-  `chart`, `terminal`, `stats`, `table`, `compare`, `steps`, `json`,
+  `chart`, `terminal`, `stats`, `table`, `compare`, `steps`, `pipeline`, `json`,
   `timeline`, `diff`, and `finding`
   (one append-only line in the findings log).
   The tool's guidelines tell the agent to pick the lightest kind that fits:
@@ -767,7 +767,17 @@ updates through server-sent events with no reload.
   keys too), side by side, or as an onion skin with an opacity slider.
   `steps` is a checklist (done, active, todo, failed, skipped, blocked, each
   with an optional note and detail) under a progress bar that leaves skipped
-  steps out; the agent replaces the same id as work moves. `json` shows any
+  steps out; the agent replaces the same id as work moves. `pipeline` is a live
+  metro map of a multi-stage, multi-agent workflow: stages left to right, each
+  one node (a bar at the ends, a pill between), a row of steps, or parallel
+  lanes (lanes in a row with the same label share a box, like a package of
+  work), with an optional `loop` arc such as "revise". Steps are todo, active,
+  done, back (sent back), failed or skipped, with an optional note and badge
+  ("9/10"); lines turn blue where work has reached, and the active node pulses.
+  A numbered chip per stage runs along the bottom and highlights its stage.
+  While the newest pipeline still runs, the side panel carries a compact copy:
+  the current step ("Build › Package 2 › critic: sent back") and the chips,
+  which jump to the section. `json` shows any
   JSON (body or a `.json` path, stored as written) as a tree built as nodes
   open: two levels open to start, a filter that keeps and opens the paths to
   matching keys and values, Expand all and Collapse, 200 children at a time,
