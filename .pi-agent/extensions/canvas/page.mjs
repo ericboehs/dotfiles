@@ -299,6 +299,11 @@ ol.steps-list { list-style: none; margin: 0; padding: 0; }
 .pipe-chip.now.p-back { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
 .pipe-chip.now.p-failed { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
 .pipe-strip .pipe-now { display: block; margin: 0 0 2px; text-decoration: none; }
+.pipe-detail { display: none; }
+@media (max-width: 699px) {
+  .pipe .pipe-wrap, .pipe .pipe-legend { display: none; }
+  .pipe-detail:not(:empty) { display: block; margin-top: 8px; font-size: 12.5px; color: var(--dim); line-height: 1.45; }
+}
 .pipe-strip .pipe-now:hover { text-decoration: underline; }
 .pipe-strip .pipe-chips { margin-top: 6px; gap: 4px; }
 .pipe-strip .pipe-chip { font-size: 11.5px; padding: 2px 8px 2px 3px; }
@@ -1820,6 +1825,16 @@ function stageStatus(g) {
 }
 const pipelineRunning = (spec) => !(spec.stages || []).every((g) => PIPE_DONE.has(stageStatus(g)));
 
+const PIPE_MARK = { todo: "○", active: "●", done: "✓", back: "↩", failed: "✗", skipped: "–" };
+/** One line per stage for narrow screens: "Build: Package 1 › Implementer ✓ · critic ✓ · …". */
+function stageSummary(g) {
+  const lanes = g.lanes || [];
+  const st = stageStatus(g);
+  if (!lanes.length) return `${g.label}: ${PIPE_LABEL[st]}${g.note ? ` · ${g.note}` : ""}`;
+  const steps = lanes.flatMap((ln, i) => ln.steps.map((s, j) => `${j === 0 && ln.label && lanes[i - 1]?.label !== ln.label ? `${ln.label} › ` : ""}${s.label} ${PIPE_MARK[s.status]}`));
+  return `${g.label}: ${steps.join(" · ")}${g.loop ? ` (${g.loop.label}${g.loop.note ? `, ${g.loop.note}` : ""})` : ""}`;
+}
+
 /** Where the work is: the stage index and a line like "Build › Package 2 › critic: sent back". */
 function pipelineNow(spec) {
   const stages = spec.stages || [];
@@ -1973,8 +1988,11 @@ function renderPipeline(spec) {
 
   const map = svg("svg", { class: "pipe-svg", width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": spec.title || "Pipeline" }, bands, edges, loops, nodes);
   const wrap = h("div", { class: "pipe-wrap" }, map);
+  // Narrow screens hide the map; a chip then spells out its stage here instead.
+  const detail = h("div", { class: "pipe-detail", "aria-live": "polite" });
   const now = pipelineNow(spec);
   const flash = (i) => {
+    detail.textContent = stageSummary(stages[i]);
     const band = map.querySelector(`.band[data-stage="${i}"]`);
     if (!band) return;
     const bx = Number(band.getAttribute("x"));
@@ -1996,6 +2014,7 @@ function renderPipeline(spec) {
     h("div", { class: "pipe-head" }, spec.title ? h("b", {}, spec.title) : null, h("span", { class: `pipe-now p-${now.status}` }, now.text), legend),
     wrap,
     pipelineChips(spec, flash, now.status === "done" ? -1 : now.stage),
+    detail,
   );
   el.flashStage = flash;
   return el;

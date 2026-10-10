@@ -775,6 +775,9 @@ updates through server-sent events with no reload.
   done, back (sent back), failed or skipped, with an optional note and badge
   ("9/10"); lines turn blue where work has reached, and the active node pulses.
   A numbered chip per stage runs along the bottom and highlights its stage.
+  Under 700px the map and legend drop out, leaving the current step and the
+  chips; a tapped chip spells out its stage in one line ("Build: Package 1 ›
+  Implementer ✓ · critic ↩").
   While the newest pipeline still runs, the side panel carries a compact copy:
   the current step ("Build › Package 2 › critic: sent back") and the chips,
   which jump to the section. `json` shows any
