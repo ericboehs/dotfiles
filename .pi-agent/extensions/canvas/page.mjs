@@ -362,6 +362,8 @@ ol.tline { list-style: none; margin: 0; padding: 0; }
 .toc a.lastturn { box-shadow: inset 2px 0 0 var(--accent); }
 .toc a.lastturn .t { color: var(--ink); font-weight: 600; }
 .findings li.lastturn { box-shadow: inset 3px 0 0 var(--accent); }
+/* Findings: the bar marks rows, so the card itself only gets it on the header. */
+#findings.card.lastturn { box-shadow: none; }
 .turn-filter { display: flex; margin: 8px 12px 4px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; width: max-content; }
 .turn-filter button { font: inherit; font-size: 12px; border: 0; background: var(--card); color: var(--dim); padding: 4px 10px; cursor: pointer; }
 .turn-filter button + button { border-left: 1px solid var(--line); }
