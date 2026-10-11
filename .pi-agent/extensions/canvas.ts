@@ -800,9 +800,11 @@ export function ensureDaemon(): Promise<boolean> {
     return false;
   })();
   const attempt = daemonReady;
-  // A failed attempt is retried on the next call instead of cached.
-  void attempt.then((ok) => {
-    if (!ok && daemonReady === attempt) daemonReady = undefined;
+  // Only the attempt in flight is shared. Once it settles, the next call checks
+  // /health again (one loopback request), so a daemon killed or crashed since
+  // comes back on the next canvas write instead of never.
+  void attempt.finally(() => {
+    if (daemonReady === attempt) daemonReady = undefined;
   });
   return attempt;
 }
