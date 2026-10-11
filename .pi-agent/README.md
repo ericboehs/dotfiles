@@ -736,7 +736,7 @@ updates through server-sent events with no reload.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
-  `chart`, `terminal`, `stats`, `table`, `compare`, `steps`, `pipeline`, `json`,
+  `chart`, `terminal`, `stats`, `table`, `compare`, `steps`, `pipeline`, `kanban`, `json`,
   `timeline`, `diff`, and `finding`
   (one append-only line in the findings log).
   The tool's guidelines tell the agent to pick the lightest kind that fits:
@@ -780,7 +780,14 @@ updates through server-sent events with no reload.
   Implementer ✓ · critic ↩").
   While the newest pipeline still runs, the side panel carries a compact copy:
   the current step ("Build › Package 2 › critic: sent back") and the chips,
-  which jump to the section. `json` shows any
+  which jump to the section. A `kanban` is a board of work items by state:
+  up to 8 columns left to right, each with a tone, an optional WIP `limit`
+  (the count reads `3/2` in amber past it) and `more` ("+6 more" for cards
+  left out); a card has a title and an optional `#id`, note, tag, owner and
+  tone (a stripe down its left edge). In a narrow card (the side panel, a
+  phone) the columns stack, by a container query, so one board fits both.
+  An owner like `pi-a1b2` (the todo tool's name for a session) links to that
+  session's canvas while it runs, or reads "this session". `json` shows any
   JSON (body or a `.json` path, stored as written) as a tree built as nodes
   open: two levels open to start, a filter that keeps and opens the paths to
   matching keys and values, Expand all and Collapse, 200 children at a time,
@@ -819,6 +826,13 @@ updates through server-sent events with no reload.
   the session folder (the newest four show, the rest behind "Show N more";
   captions use the same relative times). On startup and `/reload` these cards
   and Agents are redrawn at once, so new markup shows without waiting a turn.
+  When the project has a `.pi/TODO.md` (the todo tool's shared checklist)
+  with a task in it, a **Tasks** card at the top of the side panel shows it
+  as a kanban: Open, Claimed (with the owner, linked to its session), Blocked
+  (with the reason) and Done (the newest five; dropped ones are only
+  counted). It is built on startup and after each turn, and a watch on
+  `.pi/` redraws it within a second when another session claims or finishes
+  a task. The extension parses the file itself; it doesn't need the todo tool.
   When this session has used agent-link, an **Agents**
   card lists each agent it sent to or heard from, newest exchange first: a
   live dot (working, idle, or a hollow ring once it has exited; the page asks

@@ -216,6 +216,31 @@ td.barc > div { display: flex; align-items: center; gap: 8px; min-width: 140px; 
 .cbar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 td.barc .num { min-width: 4em; }
 .ctag { display: inline-block; font-size: 11.5px; line-height: 1; padding: 3px 7px; border-radius: 999px; background: var(--soft); color: var(--dim); white-space: nowrap; }
+/* kanban: columns side by side; stacked when the card is narrow (side panel, phone) */
+.kanban { container-type: inline-size; display: flex; flex-direction: column; gap: 8px; }
+.kb-head { font-size: 13px; }
+.kb-cols { display: grid; grid-template-columns: repeat(var(--kb-n, 4), minmax(170px, 1fr)); gap: 10px; overflow-x: auto; }
+.kb-col { --tone: var(--line); background: var(--soft); border-radius: 8px; border-top: 3px solid var(--tone); padding: 8px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.kb-col > header { display: flex; align-items: baseline; gap: 6px; padding: 0 2px; font: 600 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ink); }
+.kb-n { color: var(--dim); font-weight: 500; font-variant-numeric: tabular-nums; margin-left: auto; }
+.kb-col.over .kb-n { color: var(--warn); font-weight: 650; }
+.kb-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.kb-card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.kb-card.toned { box-shadow: inset 3px 0 0 var(--card-tone); padding-left: 11px; }
+.kb-id { color: var(--dim); font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; margin-right: 5px; }
+.kb-note { color: var(--dim); font-size: 12px; margin-top: 3px; }
+.kb-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; }
+.kb-owner { font: 500 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); text-decoration: none; }
+a.kb-owner:hover { color: var(--accent); text-decoration: underline; }
+.kb-owner.me { color: color-mix(in srgb, var(--accent) 75%, var(--ink)); }
+.kb-more, .kb-empty { color: var(--dim); font-size: 12px; padding: 0 2px; }
+@container (max-width: 560px) {
+  .kb-cols { grid-template-columns: 1fr; gap: 6px; overflow: visible; }
+  .kb-col { border-top: 0; border-left: 3px solid var(--tone); padding: 6px 8px; }
+  .kb-col.empty { flex-direction: row; }
+  .kb-col.empty > header { flex: 1; color: var(--dim); }
+  .kb-empty { display: none; }
+}
 .ctag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
 .ctag.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
 .ctag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
@@ -804,6 +829,8 @@ async function sectionBody(id, sec) {
       return renderSteps(JSON.parse(await (await fetch(url)).text()));
     case "pipeline":
       return renderPipeline(JSON.parse(await (await fetch(url)).text()));
+    case "kanban":
+      return renderKanban(JSON.parse(await (await fetch(url)).text()));
     case "json":
       return renderJson(await (await fetch(url)).text());
     case "timeline":
@@ -923,7 +950,7 @@ function collapsible(card, key, onOpen, at) {
 }
 
 /** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
-const WIDGETS = ["auto-agents", "auto-files", "auto-screenshots"];
+const WIDGETS = ["auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
 const WIDE = "(min-width: 1200px)";
 
 /** Status and Findings stay on top. Sections follow, newest change first. */
@@ -1082,7 +1109,7 @@ function sectionCard(id, sec) {
     h("span", { class: "tag" }, sec.kind),
     agoEl(sec.at),
   );
-  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "timeline"].includes(sec.kind)) {
+  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "kanban", "timeline"].includes(sec.kind)) {
     const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source");
     src.dataset.yank = "source"; // yc presses it
     meta.append(src);
@@ -2198,6 +2225,81 @@ function fmtGap(ms) {
   const d = Math.floor(m / 1440);
   const hr = Math.round((m % 1440) / 60);
   return `${d}d${hr ? ` ${hr}h` : ""}`;
+}
+
+// ── kanban ─────────────────────────────────────────────────────────────────────────
+// Columns side by side, or stacked when the card is narrow (the side panel,
+// a phone): a container query, so the same board fits both places.
+
+const toneVar = (t) => (/^(ok|warn|bad|accent|dim|c[1-8])$/.test(t || "") ? `var(--${t})` : "");
+
+/**
+ * A todo-tool owner ("pi-" + the last four of a session id) as a live session:
+ * { id, name, me } or null. Anything else (a person's name) stays as text.
+ */
+function ownerSession(owner, sessions = sessionsCache) {
+  const m = /^pi-([A-Za-z0-9]{4})$/.exec(owner || "");
+  if (!m) return null;
+  const hits = sessions.filter((s) => s.live && s.id.endsWith(m[1]));
+  if (hits.length !== 1) return null;
+  return { id: hits[0].id, name: sessionName(hits[0]), me: hits[0].id === currentSession };
+}
+
+function ownerChip(owner) {
+  const s = ownerSession(owner);
+  if (!s) return h("span", { class: "kb-owner", "data-owner": owner }, `@${owner}`);
+  if (s.me) return h("span", { class: "kb-owner me", title: `@${owner}: this session` }, "this session");
+  return h("a", { class: "kb-owner", href: `/s/${encodeURIComponent(s.id)}`, title: `@${owner}: open its canvas` }, s.name);
+}
+
+function renderKanban(spec) {
+  const cols = spec.columns || [];
+  const board = h(
+    "div",
+    { class: "kb-cols", style: `--kb-n:${cols.length}` },
+    cols.map((c) => {
+      const n = (c.cards || []).length + (c.more || 0);
+      const over = c.limit && n > c.limit;
+      return h(
+        "section",
+        { class: `kb-col${over ? " over" : ""}${n ? "" : " empty"}`, style: toneVar(c.tone) ? `--tone:${toneVar(c.tone)}` : null },
+        h(
+          "header",
+          {},
+          h("span", { class: "kb-label" }, c.label),
+          h("span", { class: "kb-n", title: c.limit ? `${n} cards, WIP limit ${c.limit}${over ? " (over)" : ""}` : `${n} cards` }, c.limit ? `${n}/${c.limit}` : String(n)),
+        ),
+        n
+          ? h(
+              "ul",
+              { class: "kb-cards" },
+              (c.cards || []).map((k) =>
+                h(
+                  "li",
+                  { class: `kb-card${toneVar(k.tone) ? " toned" : ""}`, style: toneVar(k.tone) ? `--card-tone:${toneVar(k.tone)}` : null },
+                  h("div", { class: "kb-title" }, k.id ? h("span", { class: "kb-id" }, k.id) : null, k.title),
+                  k.note ? h("div", { class: "kb-note" }, k.note) : null,
+                  k.tag || k.owner ? h("div", { class: "kb-meta" }, k.tag ? h("span", { class: `ctag${/^(ok|warn|bad)$/.test(k.tone) ? ` ${k.tone}` : ""}` }, k.tag) : null, k.owner ? ownerChip(k.owner) : null) : null,
+                ),
+              ),
+            )
+          : h("div", { class: "kb-empty" }, "Nothing here"),
+        c.more ? h("div", { class: "kb-more" }, `+${c.more} more`) : null,
+      );
+    }),
+  );
+  const root = h("div", { class: "kanban" }, spec.title ? h("div", { class: "kb-head" }, h("b", {}, spec.title)) : null, board, spec.caption ? h("div", { class: "chart-cap" }, spec.caption) : null);
+  // Owners render before the session list has loaded on a fresh page: link them once it has.
+  if (root.querySelector(".kb-owner[data-owner]") && !sessionsCache.length) {
+    fetch("/api/sessions")
+      .then((r) => r.json())
+      .then((list) => {
+        if (!sessionsCache.length) sessionsCache = list;
+        for (const el of root.querySelectorAll(".kb-owner[data-owner]")) if (ownerSession(el.dataset.owner)) el.replaceWith(ownerChip(el.dataset.owner));
+      })
+      .catch(() => {});
+  }
+  return root;
 }
 
 function renderTimeline(spec) {

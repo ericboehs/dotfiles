@@ -25,7 +25,7 @@
 
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, type FSWatcher, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -869,11 +869,11 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "pipeline", "json", "timeline", "diff", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "pipeline", "kanban", "json", "timeline", "diff", "finding"] as const;
 
 // Kinds whose body is a JSON spec the page draws, and the extension each is stored under.
 // (Not .json for the json kind: a section called "meta" or "sections" would overwrite the page's own files.)
-const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", json: "jsonv", timeline: "timeline" };
+const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", kanban: "kanban", json: "jsonv", timeline: "timeline" };
 
 export const PIPE_STATUS = ["todo", "active", "done", "back", "failed", "skipped"] as const;
 
@@ -938,6 +938,110 @@ export function normalizePipeline(s: any): string {
   });
   const title = Array.isArray(s) ? undefined : opt(s.title, "title", 120);
   return JSON.stringify({ ...(title ? { title } : {}), stages: out });
+}
+
+/**
+ * A kanban board: columns left to right, each a stack of cards. A plain string
+ * is a card with only a title. `limit` is a WIP limit (the page flags a column
+ * past it); `more` counts cards left out, shown as "+N more".
+ */
+export function normalizeKanban(s: any): string {
+  const cols = Array.isArray(s) ? s : s?.columns;
+  if (!Array.isArray(cols) || !cols.length) throw new Error('kanban needs columns: [{ "label", "cards": ["text" or { "title", ... }] }]');
+  if (cols.length > 8) throw new Error("a kanban takes at most 8 columns");
+  const opt = (v: unknown, where: string, max: number) => {
+    optString(v, where);
+    return typeof v === "string" && v.trim() ? oneLine(v, max) : undefined;
+  };
+  const tone = (v: unknown, where: string) => {
+    if (v == null) return undefined;
+    if (!TONES.includes(v as string)) throw new Error(`${where}.tone must be one of ${TONES.join(", ")}`);
+    return v as string;
+  };
+  const count = (v: unknown, where: string, min: number) => {
+    if (v == null) return undefined;
+    if (!Number.isInteger(v) || (v as number) < min) throw new Error(`${where} must be a whole number of at least ${min}`);
+    return v as number;
+  };
+  const card = (k: any, where: string) => {
+    if (typeof k === "string") k = { title: k };
+    if (!k || typeof k !== "object") throw new Error(`${where} must be a string or an object`);
+    if (typeof k.title !== "string" || !k.title.trim()) throw new Error(`${where} needs a title`);
+    if (k.id != null && typeof k.id !== "string" && !Number.isInteger(k.id)) throw new Error(`${where}.id must be text or a whole number`);
+    const id = k.id != null && String(k.id).trim() ? oneLine(String(k.id), 12) : undefined;
+    const note = opt(k.note, `${where}.note`, 200);
+    const tag = opt(k.tag, `${where}.tag`, 24);
+    const owner = opt(k.owner, `${where}.owner`, 40);
+    const t = tone(k.tone, where);
+    return { title: oneLine(k.title, 160), ...(id ? { id } : {}), ...(note ? { note } : {}), ...(tag ? { tag } : {}), ...(owner ? { owner } : {}), ...(t ? { tone: t } : {}) };
+  };
+  let total = 0;
+  const columns = cols.map((c: any, i: number) => {
+    const where = `columns[${i}]`;
+    if (!c || typeof c !== "object") throw new Error(`${where} must be an object`);
+    if (typeof c.label !== "string" || !c.label.trim()) throw new Error(`${where} needs a label`);
+    const cards = c.cards ?? [];
+    if (!Array.isArray(cards)) throw new Error(`${where}.cards must be an array`);
+    if (cards.length > 50) throw new Error(`${where} takes at most 50 cards (put the rest in "more")`);
+    total += cards.length;
+    const t = tone(c.tone, where);
+    const limit = count(c.limit, `${where}.limit`, 1);
+    const more = count(c.more, `${where}.more`, 0);
+    return { label: oneLine(c.label, 40), ...(t ? { tone: t } : {}), ...(limit ? { limit } : {}), ...(more ? { more } : {}), cards: cards.map((k: unknown, j: number) => card(k, `${where}.cards[${j}]`)) };
+  });
+  if (total > 200) throw new Error("a kanban takes at most 200 cards");
+  const title = Array.isArray(s) ? undefined : opt(s.title, "title", 120);
+  const caption = Array.isArray(s) ? undefined : opt(s.caption, "caption", 200);
+  return JSON.stringify({ ...(title ? { title } : {}), columns, ...(caption ? { caption } : {}) });
+}
+
+const TODO_ITEM = /^\s*[-*] \[([ xX/!-])\](?: (.*))?$/;
+const TODO_TAG = /\s*\[(@[\w.-]+|blocked:[^\]]*)\]$/;
+
+/**
+ * The Tasks board: a project's .pi/TODO.md (the todo tool's checklist) as
+ * kanban columns. Open, Claimed, Blocked and Done; Done keeps the newest few
+ * (lines are appended, so later is newer), dropped ones are only counted.
+ * Null when the file has no tasks.
+ */
+export function todoBoard(text: string, doneShown = 5): Record<string, unknown> | null {
+  type Card = { title: string; id?: string; owner?: string; note?: string };
+  const by: Record<string, Card[]> = { open: [], active: [], blocked: [], done: [] };
+  let dropped = 0;
+  for (const line of String(text || "").split("\n")) {
+    const m = TODO_ITEM.exec(line);
+    if (!m) continue;
+    const mark = m[1]!;
+    if (mark === "-") {
+      dropped++;
+      continue;
+    }
+    let rest = (m[2] ?? "").trim();
+    const card: Card = { title: "" };
+    const idm = /^#(\d+)(?:\s+|$)/.exec(rest);
+    if (idm) (card.id = `#${idm[1]}`), (rest = rest.slice(idm[0].length));
+    for (let t = TODO_TAG.exec(rest); t; t = TODO_TAG.exec(rest)) {
+      if (t[1]!.startsWith("@")) card.owner ??= t[1]!.slice(1);
+      else card.note ??= `Blocked: ${t[1]!.slice("blocked:".length).trim()}`;
+      rest = rest.slice(0, t.index);
+    }
+    card.title = rest.trim() || "(untitled)";
+    const status = mark === " " ? "open" : mark === "/" ? "active" : mark === "!" ? "blocked" : "done";
+    if (status !== "blocked") delete card.note;
+    by[status]!.push(card);
+  }
+  const total = by.open!.length + by.active!.length + by.blocked!.length + by.done!.length;
+  if (!total) return null;
+  const cap = (cards: Card[], n = 50) => ({ cards: cards.slice(0, n), ...(cards.length > n ? { more: cards.length - n } : {}) });
+  return {
+    columns: [
+      { label: "Open", tone: "dim", ...cap(by.open!) },
+      { label: "Claimed", tone: "c1", ...cap(by.active!) },
+      { label: "Blocked", tone: "warn", ...cap(by.blocked!) },
+      { label: "Done", tone: "ok", ...cap([...by.done!].reverse(), doneShown) },
+    ],
+    ...(dropped ? { caption: `${dropped} dropped` } : {}),
+  };
 }
 const STEP_STATUS = ["done", "active", "todo", "failed", "skipped", "blocked"];
 const TONES = ["ok", "warn", "bad", "accent", "dim", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
@@ -1054,6 +1158,7 @@ export function normalizeSpec(kind: string, text: string, ext = ""): string {
     return text; // kept as written: the page parses it, and key order and spacing stay the agent's
   }
   if (kind === "pipeline") return normalizePipeline(parseJson(text, "pipeline"));
+  if (kind === "kanban") return normalizeKanban(parseJson(text, "kanban"));
   if (kind === "timeline") {
     const s = parseJson(text, "timeline");
     const events = Array.isArray(s) ? s : s?.events;
@@ -1184,13 +1289,13 @@ export default function canvas(pi: ExtensionAPI) {
     return next;
   };
 
-  /** Add or replace a markdown (or terminal) section; skips identical rewrites so the page does not flash. */
-  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto"; kind?: "markdown" | "terminal" }): boolean {
+  /** Add or replace a markdown (or terminal, or kanban) section; skips identical rewrites so the page does not flash. */
+  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto"; kind?: "markdown" | "terminal" | "kanban" }): boolean {
     const listPath = join(d, "sections.json");
     const list = readJson<Section[]>(listPath, []);
     const old = list.find((x) => x.id === sec.id);
     const kind = sec.kind ?? "markdown";
-    const file = `${sec.id}.${kind === "terminal" ? "term" : "md"}`;
+    const file = `${sec.id}.${kind === "markdown" ? "md" : SPEC_EXT[kind]}`;
     try {
       if (old && old.file === file && old.title === sec.title && readFileSync(join(d, file), "utf8") === sec.body) return false;
     } catch {}
@@ -1202,7 +1307,7 @@ export default function canvas(pi: ExtensionAPI) {
   }
 
   const AUTO_SECTIONS_KEPT = 6;
-  const WIDGETS = new Set(["auto-agents", "auto-files", "auto-screenshots"]);
+  const WIDGETS = new Set(["auto-tasks", "auto-agents", "auto-files", "auto-screenshots"]);
   // Kept out of Haiku's view and its trimming: the side cards and the Running card.
   const PINNED = new Set([...WIDGETS, "auto-running"]);
 
@@ -1236,6 +1341,42 @@ export default function canvas(pi: ExtensionAPI) {
     const spec = readJson<{ running?: boolean } | null>(join(d, sec.file), null);
     if (!spec?.running) return;
     putMarkdown(d, { id: "auto-running", title: "Last long command", body: JSON.stringify({ ...spec, running: false, duration: "interrupted" }), by: "auto", kind: "terminal" });
+  }
+
+  /**
+   * Tasks: the project's .pi/TODO.md as a board. Shown once the file has a
+   * task; kept current by a watch on .pi/, so claims from other sessions
+   * show without waiting for a turn here.
+   */
+  function updateTasks(ctx: ExtensionContext) {
+    let text: string | null = null;
+    try {
+      text = readFileSync(join(ctx.cwd, ".pi", "TODO.md"), "utf8");
+    } catch {}
+    const board = text == null ? null : todoBoard(text);
+    const shown = existsSync(join(dir(), "auto-tasks.kanban"));
+    if (!board && !shown) return;
+    const body = normalizeKanban(board ?? { columns: [{ label: "Open", tone: "dim" }], caption: "No tasks in .pi/TODO.md" });
+    putMarkdown(ensureDir(ctx), { id: "auto-tasks", title: "Tasks", body, by: "auto", kind: "kanban" });
+  }
+  let tasksWatch: FSWatcher | undefined;
+  let tasksTimer: ReturnType<typeof setTimeout> | undefined;
+  function stopTasksWatch() {
+    clearTimeout(tasksTimer);
+    tasksWatch?.close();
+    tasksWatch = undefined;
+  }
+  function watchTasks(ctx: ExtensionContext) {
+    stopTasksWatch();
+    try {
+      tasksWatch = watch(join(ctx.cwd, ".pi"), (_e, f) => {
+        if (f && f !== "TODO.md") return; // lock and temp files
+        clearTimeout(tasksTimer);
+        tasksTimer = setTimeout(() => void serial(() => updateTasks(ctx)).catch(() => {}), 300);
+      });
+      tasksWatch.on("error", stopTasksWatch);
+      tasksWatch.unref();
+    } catch {} // no .pi/ here; the per-turn refresh still picks a new file up
   }
 
   /** Agents: rebuilt from the branch each time, so it backfills and follows branch switches. */
@@ -1421,6 +1562,10 @@ export default function canvas(pi: ExtensionAPI) {
         settleStaleRun(dir());
       } catch {}
     }
+    if (autoOn && ctx.hasUI) {
+      void serial(() => updateTasks(ctx)).catch(() => {});
+      watchTasks(ctx);
+    }
     void ensureDaemon();
   });
 
@@ -1471,6 +1616,7 @@ export default function canvas(pi: ExtensionAPI) {
       const turn = lastTurn(ctx.sessionManager.getBranch() || []);
       void serial(() => updateWidgets(ctx, turn)).catch(() => {});
       void serial(() => updateAgents(ctx)).catch(() => {});
+      void serial(() => updateTasks(ctx)).catch(() => {});
     }
     if (event.aborted || !statusOn) return;
     void refreshStatus(ctx);
@@ -1512,6 +1658,7 @@ export default function canvas(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (event) => {
+    stopTasksWatch();
     for (const r of runs.values()) clearTimeout(r.showTimer), clearTimeout(r.writeTimer);
     runs.clear();
     inflight?.abort();
@@ -1573,6 +1720,7 @@ export default function canvas(pi: ExtensionAPI) {
       'steps (a checklist with progress: JSON [{"label", "status": done|active|todo|failed|skipped|blocked, "note"?, "detail"?}] or {"title", "steps"}; plain strings are todo steps; replace the same id as work moves), ' +
       'pipeline (a live metro map of a multi-stage, multi-agent workflow: JSON {"title"?, "stages": [{"label", "note"?, "status"?, "steps"?: [{"label", "note"?, "badge"? (e.g. "9/10"), "status": todo|active|done|back|failed|skipped}] or "lanes"?: [{"label"?, "steps"}] for parallel work, "loop"?: {"label", "note"?} for a revise arc from the last step back to the first}]}; ' +
       'a stage with no steps is one node; back means sent back; replace the same id as work moves), ' +
+      'kanban (a board of work items by state: JSON {"title"?, "columns": [{"label", "tone"?, "limit"? (WIP limit), "more"? (cards left out), "cards": ["text" or {"title", "id"?, "note"?, "tag"?, "owner"?, "tone"?}]}], "caption"?}; up to 8 columns; tone: ok|warn|bad|accent|dim|c1-c8), ' +
       'json (any JSON as a collapsible, searchable tree: body is the JSON itself, or path to a .json file), ' +
       'timeline (events in time: JSON [{"at" (ISO time or text), "title", "note"?, "tag"?, "tone"?: ok|warn|bad|accent|dim|c1-c8}] or {"events", "caption", "order": time|given}; dated events are sorted and grouped by day), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
@@ -1586,13 +1734,13 @@ export default function canvas(pi: ExtensionAPI) {
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
       "When a reply would contain a table, an option or state matrix, a diagram, a plan (as steps), or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
       "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
-        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
+        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); kanban for many work items by state (a triage of issues, a review queue); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "When work runs through other agents (subagents, agent-link handoffs, a pstack run), post it as a pipeline section when it starts, " +
         "one step per agent or role, and replace the same id as each one starts, finishes or sends work back, so its statuses stay current.",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section, or a compare section when there is a clear before and after.",
       "For a body over ~2 KB, write a file and pass path; the data then stays out of your context.",
-      "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Haiku notes); leave them alone.",
+      "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Tasks, Haiku notes); leave them alone.",
       "Never put secrets, tokens or passwords on the canvas.",
     ],
     parameters: Type.Object({

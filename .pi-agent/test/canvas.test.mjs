@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -372,7 +372,7 @@ test("prompt copy points at the newer kinds and keeps bodies out of context", as
   assert.match(rules, /or a compare section when there is a clear before and after/);
   assert.match(rules, /over ~2 KB, write a file and pass path/);
   assert.match(rules, /subagents, agent-link handoffs, a pstack run\), post it as a pipeline section/);
-  for (const k of ["terminal", "stats", "table", "compare", "steps", "pipeline", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
+  for (const k of ["terminal", "stats", "table", "compare", "steps", "pipeline", "kanban", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
 });
 
 test("parseStatus accepts fenced JSON and clamps lists", () => {
@@ -690,6 +690,63 @@ test("normalizeSpec: pipeline turns steps into one lane and checks statuses, loo
   assert.throws(() => normalizeSpec("pipeline", JSON.stringify(Array.from({ length: 17 }, (_, i) => ({ label: `s${i}` })))), /at most 16 stages/);
 });
 
+test("normalizeSpec: kanban keeps known card fields and checks tones, limits and sizes", () => {
+  const k = JSON.parse(
+    normalizeSpec(
+      "kanban",
+      JSON.stringify({
+        title: "Triage",
+        columns: [
+          { label: "New", tone: "dim", cards: ["Flaky login test", { title: "Slow index", id: 42, note: "p95 3s", tag: "perf", owner: "pi-a1b2", tone: "warn", href: "javascript:x" }] },
+          { label: "Doing", tone: "c1", limit: 2, more: 3 },
+        ],
+        caption: "from GitHub",
+      }),
+    ),
+  );
+  assert.equal(k.title, "Triage");
+  assert.deepEqual(k.columns[0].cards, [{ title: "Flaky login test" }, { title: "Slow index", id: "42", note: "p95 3s", tag: "perf", owner: "pi-a1b2", tone: "warn" }], "unknown fields like href are dropped");
+  assert.deepEqual(k.columns[1], { label: "Doing", tone: "c1", limit: 2, more: 3, cards: [] });
+  assert.equal(k.caption, "from GitHub");
+  assert.equal(JSON.parse(normalizeSpec("kanban", '[{"label":"Only","cards":["a"]}]')).columns.length, 1, "a bare array of columns");
+  assert.throws(() => normalizeSpec("kanban", "[]"), /kanban needs columns/);
+  assert.throws(() => normalizeSpec("kanban", '[{"cards":[]}]'), /columns\[0\] needs a label/);
+  assert.throws(() => normalizeSpec("kanban", '[{"label":"A","tone":"pink"}]'), /columns\[0\]\.tone must be one of/);
+  assert.throws(() => normalizeSpec("kanban", '[{"label":"A","limit":0}]'), /limit must be a whole number of at least 1/);
+  assert.throws(() => normalizeSpec("kanban", '[{"label":"A","cards":[{"note":"no title"}]}]'), /cards\[0\] needs a title/);
+  assert.throws(() => normalizeSpec("kanban", JSON.stringify(Array.from({ length: 9 }, (_, i) => ({ label: `c${i}` })))), /at most 8 columns/);
+  assert.throws(() => normalizeSpec("kanban", JSON.stringify([{ label: "A", cards: Array(51).fill("x") }])), /at most 50 cards/);
+  assert.throws(() => normalizeSpec("kanban", JSON.stringify(Array.from({ length: 5 }, (_, i) => ({ label: `c${i}`, cards: Array(41).fill("x") })))), /at most 200 cards/);
+});
+
+test("todoBoard turns .pi/TODO.md into Open, Claimed, Blocked and Done columns", () => {
+  const md = [
+    "# Tasks",
+    "",
+    "<!-- Shared by you and pi agents. [ ] open ... -->",
+    "- [ ] #1 Write the README",
+    "- [/] #2 Build the board [@pi-a1b2]",
+    "- [!] #3 Ship it [@eric] [blocked: waiting on review]",
+    "- [x] #4 Old thing [@eric]",
+    "- [-] #5 Dropped idea",
+    "- [x] #6 Newer thing",
+    "  - [ ] Hand-added subtask",
+    "Some note line",
+  ].join("\n");
+  const b = todoBoard(md);
+  assert.deepEqual(b.columns.map((c) => [c.label, c.tone, c.cards.length]), [["Open", "dim", 2], ["Claimed", "c1", 1], ["Blocked", "warn", 1], ["Done", "ok", 2]]);
+  assert.deepEqual(b.columns[0].cards, [{ title: "Write the README", id: "#1" }, { title: "Hand-added subtask" }]);
+  assert.deepEqual(b.columns[1].cards[0], { title: "Build the board", id: "#2", owner: "pi-a1b2" });
+  assert.deepEqual(b.columns[2].cards[0], { title: "Ship it", id: "#3", owner: "eric", note: "Blocked: waiting on review" });
+  assert.deepEqual(b.columns[3].cards.map((c) => c.id), ["#6", "#4"], "Done: newest first");
+  assert.equal(b.caption, "1 dropped");
+  const many = todoBoard(Array.from({ length: 8 }, (_, i) => `- [x] #${i + 1} t${i}`).join("\n"));
+  assert.deepEqual([many.columns[3].cards.length, many.columns[3].more], [5, 3], "Done keeps five, counts the rest");
+  assert.equal(todoBoard("# Tasks\n\nnothing yet\n"), null);
+  assert.equal(todoBoard("- [-] #1 only dropped"), null);
+  assert.doesNotThrow(() => normalizeSpec("kanban", JSON.stringify(todoBoard(md))), "the board is a valid kanban spec");
+});
+
 test("normalizeSpec: steps, json and timeline", () => {
   assert.deepEqual(JSON.parse(normalizeSpec("steps", '["plan",{"label":"build","status":"done","note":"ok"}]')), { steps: [{ label: "plan", status: "todo" }, { label: "build", status: "done", note: "ok" }] });
   assert.equal(JSON.parse(normalizeSpec("steps", '{"title":"Ship","steps":["a"]}')).title, "Ship");
@@ -754,6 +811,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     "t.term": '{"output":"ok"}',
     "j.jsonv": '{"a":1}',
     "s.steps": '{"steps":[]}',
+    "b.kanban": '{"columns":[]}',
     "l.timeline": '{"events":[]}',
     "k.compare": '{"before":"k-before.png","after":"k-after.png"}',
     "k-before.png": "png",
@@ -794,7 +852,7 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.equal(chart.headers["content-type"], "application/json; charset=utf-8");
     assert.equal(JSON.parse(chart.body).type, "bar");
     assert.equal((await get(port, "/s/s1/f/t.term")).headers["content-type"], "application/json; charset=utf-8");
-    for (const f of ["j.jsonv", "s.steps", "l.timeline"]) assert.equal((await get(port, `/s/s1/f/${f}`)).status, 200, f);
+    for (const f of ["j.jsonv", "s.steps", "b.kanban", "l.timeline"]) assert.equal((await get(port, `/s/s1/f/${f}`)).status, 200, f);
     assert.equal(JSON.parse((await get(port, "/s/s1/f/k.compare")).body).after, "k-after.png");
     assert.equal((await get(port, "/s/s1/f/k-before.png")).headers["content-type"], "image/png", "compare images are served");
     for (const a of ["page.mjs", "theme.mjs", "nav.mjs", "theme-boot.js"]) assert.equal((await get(port, `/assets/${a}`)).headers["content-type"], "text/javascript; charset=utf-8", a);
