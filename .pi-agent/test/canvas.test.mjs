@@ -697,7 +697,7 @@ test("normalizeSpec: kanban keeps known card fields and checks tones, limits and
       JSON.stringify({
         title: "Triage",
         columns: [
-          { label: "New", tone: "dim", cards: ["Flaky login test", { title: "Slow index", id: 42, note: "p95 3s", tag: "perf", owner: "pi-a1b2", tone: "warn", href: "javascript:x" }] },
+          { label: "New", tone: "dim", cards: ["Flaky login test", { title: "Slow index", id: 42, note: "p95 3s", tag: "perf", owner: "pi-a1b2", tone: "warn", extra: "x" }] },
           { label: "Doing", tone: "c1", limit: 2, more: 3 },
         ],
         caption: "from GitHub",
@@ -705,7 +705,7 @@ test("normalizeSpec: kanban keeps known card fields and checks tones, limits and
     ),
   );
   assert.equal(k.title, "Triage");
-  assert.deepEqual(k.columns[0].cards, [{ title: "Flaky login test" }, { title: "Slow index", id: "42", note: "p95 3s", tag: "perf", owner: "pi-a1b2", tone: "warn" }], "unknown fields like href are dropped");
+  assert.deepEqual(k.columns[0].cards, [{ title: "Flaky login test" }, { title: "Slow index", id: "42", note: "p95 3s", tag: "perf", owner: "pi-a1b2", tone: "warn" }], "unknown fields are dropped");
   assert.deepEqual(k.columns[1], { label: "Doing", tone: "c1", limit: 2, more: 3, cards: [] });
   assert.equal(k.caption, "from GitHub");
   assert.equal(JSON.parse(normalizeSpec("kanban", '[{"label":"Only","cards":["a"]}]')).columns.length, 1, "a bare array of columns");
@@ -717,6 +717,10 @@ test("normalizeSpec: kanban keeps known card fields and checks tones, limits and
   assert.throws(() => normalizeSpec("kanban", JSON.stringify(Array.from({ length: 9 }, (_, i) => ({ label: `c${i}` })))), /at most 8 columns/);
   assert.throws(() => normalizeSpec("kanban", JSON.stringify([{ label: "A", cards: Array(51).fill("x") }])), /at most 50 cards/);
   assert.throws(() => normalizeSpec("kanban", JSON.stringify(Array.from({ length: 5 }, (_, i) => ({ label: `c${i}`, cards: Array(41).fill("x") })))), /at most 200 cards/);
+  const linked = JSON.parse(normalizeSpec("kanban", JSON.stringify({ progress: true, columns: [{ label: "Done", compact: true, cards: [{ title: "Issue", href: "https://github.com/o/r/issues/1" }] }] })));
+  assert.deepEqual(linked, { progress: true, columns: [{ label: "Done", compact: true, cards: [{ title: "Issue", href: "https://github.com/o/r/issues/1" }] }] });
+  assert.throws(() => normalizeSpec("kanban", '[{"label":"A","cards":[{"title":"x","href":"javascript:alert(1)"}]}]'), /href must be an http\(s\) URL/);
+  assert.equal(JSON.parse(normalizeSpec("kanban", JSON.stringify([{ label: "A", cards: ["y".repeat(400)] }]))).columns[0].cards[0].title.length, 300, "long titles kept to 300");
 });
 
 test("todoBoard turns .pi/TODO.md into Open, Claimed, Blocked and Done columns", () => {
@@ -735,6 +739,8 @@ test("todoBoard turns .pi/TODO.md into Open, Claimed, Blocked and Done columns",
   ].join("\n");
   const b = todoBoard(md);
   assert.deepEqual(b.columns.map((c) => [c.label, c.tone, c.cards.length]), [["Open", "dim", 2], ["Claimed", "c1", 1], ["Blocked", "warn", 1], ["Done", "ok", 2]]);
+  assert.equal(b.progress, true);
+  assert.equal(b.columns[3].compact, true, "Done is compact");
   assert.deepEqual(b.columns[0].cards, [{ title: "Write the README", id: "#1" }, { title: "Hand-added subtask" }]);
   assert.deepEqual(b.columns[1].cards[0], { title: "Build the board", id: "#2", owner: "pi-a1b2" });
   assert.deepEqual(b.columns[2].cards[0], { title: "Ship it", id: "#3", owner: "eric", note: "Blocked: waiting on review" });

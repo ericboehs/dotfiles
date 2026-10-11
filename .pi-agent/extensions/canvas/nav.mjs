@@ -110,3 +110,93 @@ export function matchKeys(seq) {
   if (seq && VIM_KEYS.some((k) => k.keys.startsWith(seq))) return { pending: true };
   return {};
 }
+
+// ── kanban ─────────────────────────────────────────────────────────────────────
+
+/**
+ * `code`, **bold** and [text](http(s) url) in a one-line string, as tokens
+ * for the page to build as DOM; everything else is plain text, so nothing
+ * here can become markup.
+ */
+export function inlineTokens(text) {
+  const s = String(text ?? "");
+  const out = [];
+  let last = 0;
+  for (const m of s.matchAll(/`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
+    if (m.index > last) out.push({ t: "text", v: s.slice(last, m.index) });
+    if (m[1] != null) out.push({ t: "code", v: m[1] });
+    else if (m[2] != null) out.push({ t: "b", v: m[2] });
+    else out.push({ t: "a", v: m[3], href: m[4] });
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) out.push({ t: "text", v: s.slice(last) });
+  return out;
+}
+
+/**
+ * A todo-tool owner ("pi-" + the last four of a session id) as a session:
+ * { session, state, me }, or null for anything else (a person's name) or a
+ * suffix two live sessions share. A live one wins; else the newest ended.
+ */
+export function ownerSession(owner, sessions, currentId) {
+  const m = /^pi-([A-Za-z0-9]{4})$/.exec(owner || "");
+  if (!m) return null;
+  const hits = (sessions || []).filter((s) => String(s.id).endsWith(m[1]));
+  const live = hits.filter((s) => s.live);
+  const when = (s) => Date.parse(s.ended || "") || Number(s.updated) || 0;
+  const s = live.length ? (live.length === 1 ? live[0] : null) : hits.sort((a, b) => when(b) - when(a))[0];
+  if (!s) return null;
+  return { session: s, state: s.live ? s.activity || "done" : "ended", me: s.id === currentId };
+}
+
+const cardKey = (k) => (k.id ? `id:${k.id}` : `t:${k.title}`);
+
+/** Where each card sits: { cardKey: column label }, or null for a key on more than one card. */
+export function boardSnapshot(columns) {
+  const m = {};
+  for (const c of columns || [])
+    for (const k of c.cards || []) {
+      const key = cardKey(k);
+      m[key] = key in m ? null : c.label;
+    }
+  return m;
+}
+
+/**
+ * Cards that are new or in another column since the snapshot `prev`:
+ * { cardKey: "new" | the column it moved to }. Nothing on a first look, and
+ * nothing for a key two cards share (which one moved is a guess).
+ */
+export function boardMoves(prev, columns) {
+  if (!prev) return {};
+  const now = boardSnapshot(columns);
+  const out = {};
+  for (const [key, label] of Object.entries(now)) {
+    if (label === null || prev[key] === null) continue;
+    if (!(key in prev)) out[key] = "new";
+    else if (prev[key] !== label) out[key] = label;
+  }
+  return out;
+}
+export { cardKey };
+
+/**
+ * Moved marks for one board. `saved` is what this browser stored last time
+ * ({ snap, moves, at }, at 0 while no one has seen the marks). Marks stay for
+ * `keepMs` after they were first seen, so a redraw doesn't wipe them, and
+ * marks no one has seen yet carry over into the next change. Returns the
+ * marks to show and the entry to store (null: keep the old one).
+ */
+export function boardMarks(saved, columns, { now = Date.now(), keepMs = 15 * 60e3, visible = true } = {}) {
+  const snap = boardSnapshot(columns);
+  const keys = Object.keys(snap);
+  const same = !!saved?.snap && keys.length === Object.keys(saved.snap).length && keys.every((k) => saved.snap[k] === snap[k]);
+  if (same) {
+    if (!saved.at) return { moves: saved.moves || {}, save: visible ? { ...saved, at: now } : null };
+    return { moves: now - saved.at < keepMs ? saved.moves || {} : {}, save: null };
+  }
+  const carried = {};
+  if (saved && !saved.at) for (const [k, v] of Object.entries(saved.moves || {})) if (k in snap) carried[k] = v;
+  const moves = { ...carried, ...boardMoves(saved?.snap, columns) };
+  return { moves, save: { snap, moves, at: visible ? now : 0 } };
+}

@@ -973,7 +973,10 @@ export function normalizeKanban(s: any): string {
     const tag = opt(k.tag, `${where}.tag`, 24);
     const owner = opt(k.owner, `${where}.owner`, 40);
     const t = tone(k.tone, where);
-    return { title: oneLine(k.title, 160), ...(id ? { id } : {}), ...(note ? { note } : {}), ...(tag ? { tag } : {}), ...(owner ? { owner } : {}), ...(t ? { tone: t } : {}) };
+    optString(k.href, `${where}.href`);
+    if (k.href != null && (!/^https?:\/\/\S+$/i.test(k.href) || k.href.length > 2000)) throw new Error(`${where}.href must be an http(s) URL`);
+    const href = k.href || undefined;
+    return { title: oneLine(k.title, 300), ...(id ? { id } : {}), ...(note ? { note } : {}), ...(tag ? { tag } : {}), ...(owner ? { owner } : {}), ...(t ? { tone: t } : {}), ...(href ? { href } : {}) };
   };
   let total = 0;
   const columns = cols.map((c: any, i: number) => {
@@ -987,12 +990,14 @@ export function normalizeKanban(s: any): string {
     const t = tone(c.tone, where);
     const limit = count(c.limit, `${where}.limit`, 1);
     const more = count(c.more, `${where}.more`, 0);
-    return { label: oneLine(c.label, 40), ...(t ? { tone: t } : {}), ...(limit ? { limit } : {}), ...(more ? { more } : {}), cards: cards.map((k: unknown, j: number) => card(k, `${where}.cards[${j}]`)) };
+    const compact = c.compact === true;
+    return { label: oneLine(c.label, 40), ...(t ? { tone: t } : {}), ...(limit ? { limit } : {}), ...(more ? { more } : {}), ...(compact ? { compact } : {}), cards: cards.map((k: unknown, j: number) => card(k, `${where}.cards[${j}]`)) };
   });
   if (total > 200) throw new Error("a kanban takes at most 200 cards");
   const title = Array.isArray(s) ? undefined : opt(s.title, "title", 120);
   const caption = Array.isArray(s) ? undefined : opt(s.caption, "caption", 200);
-  return JSON.stringify({ ...(title ? { title } : {}), columns, ...(caption ? { caption } : {}) });
+  const progress = !Array.isArray(s) && s.progress === true;
+  return JSON.stringify({ ...(title ? { title } : {}), ...(progress ? { progress } : {}), columns, ...(caption ? { caption } : {}) });
 }
 
 const TODO_ITEM = /^\s*[-*] \[([ xX/!-])\](?: (.*))?$/;
@@ -1034,11 +1039,12 @@ export function todoBoard(text: string, doneShown = 5): Record<string, unknown> 
   if (!total) return null;
   const cap = (cards: Card[], n = 50) => ({ cards: cards.slice(0, n), ...(cards.length > n ? { more: cards.length - n } : {}) });
   return {
+    progress: true,
     columns: [
       { label: "Open", tone: "dim", ...cap(by.open!) },
       { label: "Claimed", tone: "c1", ...cap(by.active!) },
       { label: "Blocked", tone: "warn", ...cap(by.blocked!) },
-      { label: "Done", tone: "ok", ...cap([...by.done!].reverse(), doneShown) },
+      { label: "Done", tone: "ok", compact: true, ...cap([...by.done!].reverse(), doneShown) },
     ],
     ...(dropped ? { caption: `${dropped} dropped` } : {}),
   };
@@ -1720,7 +1726,7 @@ export default function canvas(pi: ExtensionAPI) {
       'steps (a checklist with progress: JSON [{"label", "status": done|active|todo|failed|skipped|blocked, "note"?, "detail"?}] or {"title", "steps"}; plain strings are todo steps; replace the same id as work moves), ' +
       'pipeline (a live metro map of a multi-stage, multi-agent workflow: JSON {"title"?, "stages": [{"label", "note"?, "status"?, "steps"?: [{"label", "note"?, "badge"? (e.g. "9/10"), "status": todo|active|done|back|failed|skipped}] or "lanes"?: [{"label"?, "steps"}] for parallel work, "loop"?: {"label", "note"?} for a revise arc from the last step back to the first}]}; ' +
       'a stage with no steps is one node; back means sent back; replace the same id as work moves), ' +
-      'kanban (a board of work items by state: JSON {"title"?, "columns": [{"label", "tone"?, "limit"? (WIP limit), "more"? (cards left out), "cards": ["text" or {"title", "id"?, "note"?, "tag"?, "owner"?, "tone"?}]}], "caption"?}; up to 8 columns; tone: ok|warn|bad|accent|dim|c1-c8), ' +
+      'kanban (a board of work items by state: JSON {"title"?, "progress"? (true: a bar of counts per column), "columns": [{"label", "tone"?, "limit"? (WIP limit), "more"? (cards left out), "compact"? (true: one-line cards, folded when nothing else is on the board), "cards": ["text" or {"title", "id"?, "note"?, "tag"?, "owner"?, "tone"?, "href"? (http/https)}]}], "caption"?}; titles and notes take `code`, **bold** and [links](https://...); up to 8 columns; tone: ok|warn|bad|accent|dim|c1-c8), ' +
       'json (any JSON as a collapsible, searchable tree: body is the JSON itself, or path to a .json file), ' +
       'timeline (events in time: JSON [{"at" (ISO time or text), "title", "note"?, "tag"?, "tone"?: ok|warn|bad|accent|dim|c1-c8}] or {"events", "caption", "order": time|given}; dated events are sorted and grouped by day), ' +
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +

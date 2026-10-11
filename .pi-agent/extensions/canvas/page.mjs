@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { matchKeys, nextSeen, orderSessions, rankItems, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { boardMarks, cardKey, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -219,9 +219,33 @@ td.barc .num { min-width: 4em; }
 /* kanban: columns side by side; stacked when the card is narrow (side panel, phone) */
 .kanban { container-type: inline-size; display: flex; flex-direction: column; gap: 8px; }
 .kb-head { font-size: 13px; }
-.kb-cols { display: grid; grid-template-columns: repeat(var(--kb-n, 4), minmax(170px, 1fr)); gap: 10px; overflow-x: auto; }
+.kb-cols { display: grid; grid-template-columns: var(--kb-tpl, repeat(4, minmax(170px, 1fr))); gap: 10px; overflow-x: auto; }
 .kb-col { --tone: var(--line); background: var(--soft); border-radius: 8px; border-top: 3px solid var(--tone); padding: 8px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.kb-col > header { display: flex; align-items: baseline; gap: 6px; padding: 0 2px; font: 600 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ink); }
+.kb-col > header, .kb-fold { display: flex; align-items: baseline; gap: 6px; padding: 0 2px; font: 600 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ink); }
+.kb-fold { width: 100%; background: none; border: 0; cursor: pointer; text-align: left; }
+.kb-fold:hover .kb-label { text-decoration: underline; }
+.kb-chev { display: inline-block; width: 8px; color: var(--dim); transition: transform 0.15s; transform: rotate(90deg); }
+.kb-col.folded .kb-chev { transform: none; }
+.kb-col.folded > .kb-cards, .kb-col.folded > .kb-more { display: none; }
+/* an empty column, side by side, is a thin strip with its label running down */
+.kb-col.empty { padding: 8px 6px; align-items: center; }
+.kb-col.empty > header { writing-mode: vertical-rl; flex-direction: row; color: var(--dim); }
+.kb-col.empty > header .kb-n { margin-left: 0; margin-top: 6px; }
+.kb-col.empty > .kb-empty { display: none; }
+.kb-progress { display: flex; flex-direction: column; gap: 4px; }
+.kb-bar { display: flex; gap: 2px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--soft); }
+.kb-bar > i { min-width: 4px; }
+.kb-sum { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.kb-card code { font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--soft); }
+.kb-card a { color: inherit; text-decoration-color: color-mix(in srgb, var(--accent) 60%, transparent); text-underline-offset: 2px; }
+.kb-card a:hover { color: var(--accent); }
+.kb-title { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.kb-col.compact .kb-cards { gap: 2px; }
+.kb-col.compact .kb-card { padding: 3px 8px; border-color: transparent; background: color-mix(in srgb, var(--card) 55%, transparent); color: var(--dim); font-size: 12px; }
+.kb-col.compact .kb-title { -webkit-line-clamp: 1; overflow-wrap: normal; word-break: break-all; }
+.kb-moved { margin-left: 6px; font: 600 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 5px; border-radius: 999px; vertical-align: 1px; white-space: nowrap; color: color-mix(in srgb, var(--accent) 75%, var(--ink)); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.kb-card.moved { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.kb-col.compact .kb-card.moved { border-color: transparent; }
 .kb-n { color: var(--dim); font-weight: 500; font-variant-numeric: tabular-nums; margin-left: auto; }
 .kb-col.over .kb-n { color: var(--warn); font-weight: 650; }
 .kb-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -230,16 +254,20 @@ td.barc .num { min-width: 4em; }
 .kb-id { color: var(--dim); font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; margin-right: 5px; }
 .kb-note { color: var(--dim); font-size: 12px; margin-top: 3px; }
 .kb-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; }
-.kb-owner { font: 500 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); text-decoration: none; }
+.kb-owner { display: inline-flex; align-items: center; gap: 4px; font: 500 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); text-decoration: none; }
+.kb-owner .pulse { width: 6px; height: 6px; }
+.kb-owner .pulse.blocked { box-shadow: none; }
+.kb-owner .pulse.ended { background: transparent; border: 1.5px solid var(--dim); opacity: 0.7; }
 a.kb-owner:hover { color: var(--accent); text-decoration: underline; }
+a.kb-owner.ended { opacity: 0.8; }
 .kb-owner.me { color: color-mix(in srgb, var(--accent) 75%, var(--ink)); }
 .kb-more, .kb-empty { color: var(--dim); font-size: 12px; padding: 0 2px; }
 @container (max-width: 560px) {
   .kb-cols { grid-template-columns: 1fr; gap: 6px; overflow: visible; }
   .kb-col { border-top: 0; border-left: 3px solid var(--tone); padding: 6px 8px; }
-  .kb-col.empty { flex-direction: row; }
-  .kb-col.empty > header { flex: 1; color: var(--dim); }
-  .kb-empty { display: none; }
+  .kb-col.empty, .kb-col.folded { flex-direction: row; align-items: baseline; }
+  .kb-col.empty > header { writing-mode: horizontal-tb; flex: 1; }
+  .kb-col.empty > header .kb-n { margin: 0 0 0 auto; }
 }
 .ctag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
 .ctag.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
@@ -830,7 +858,7 @@ async function sectionBody(id, sec) {
     case "pipeline":
       return renderPipeline(JSON.parse(await (await fetch(url)).text()));
     case "kanban":
-      return renderKanban(JSON.parse(await (await fetch(url)).text()));
+      return renderKanban(JSON.parse(await (await fetch(url)).text()), sec.id);
     case "json":
       return renderJson(await (await fetch(url)).text());
     case "timeline":
@@ -2233,69 +2261,138 @@ function fmtGap(ms) {
 
 const toneVar = (t) => (/^(ok|warn|bad|accent|dim|c[1-8])$/.test(t || "") ? `var(--${t})` : "");
 
-/**
- * A todo-tool owner ("pi-" + the last four of a session id) as a live session:
- * { id, name, me } or null. Anything else (a person's name) stays as text.
- */
-function ownerSession(owner, sessions = sessionsCache) {
-  const m = /^pi-([A-Za-z0-9]{4})$/.exec(owner || "");
-  if (!m) return null;
-  const hits = sessions.filter((s) => s.live && s.id.endsWith(m[1]));
-  if (hits.length !== 1) return null;
-  return { id: hits[0].id, name: sessionName(hits[0]), me: hits[0].id === currentSession };
+const KB_SEEN_KEY = "canvas:kanban-seen"; // localStorage: { "<session>/<section>": { snap, moves, at } }
+const KB_FOLD_KEY = "canvas:kanban-fold"; // sessionStorage: { "<session>/<section>/<column>": folded }
+const KB_SEEN_DAYS = 30;
+
+function readStore(store, key) {
+  try {
+    return JSON.parse(store.getItem(key) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+function writeStore(store, key, v) {
+  try {
+    store.setItem(key, JSON.stringify(v));
+  } catch {}
+}
+function saveBoardMarks(key, entry) {
+  const all = readStore(localStorage, KB_SEEN_KEY);
+  const old = Date.now() - KB_SEEN_DAYS * 864e5;
+  for (const [k, v] of Object.entries(all)) if ((v?.made || 0) < old) delete all[k];
+  all[key] = { ...entry, made: Date.now() };
+  writeStore(localStorage, KB_SEEN_KEY, all);
 }
 
-function ownerChip(owner) {
-  const s = ownerSession(owner);
-  if (!s) return h("span", { class: "kb-owner", "data-owner": owner }, `@${owner}`);
-  if (s.me) return h("span", { class: "kb-owner me", title: `@${owner}: this session` }, "this session");
-  return h("a", { class: "kb-owner", href: `/s/${encodeURIComponent(s.id)}`, title: `@${owner}: open its canvas` }, s.name);
-}
-
-function renderKanban(spec) {
-  const cols = spec.columns || [];
-  const board = h(
-    "div",
-    { class: "kb-cols", style: `--kb-n:${cols.length}` },
-    cols.map((c) => {
-      const n = (c.cards || []).length + (c.more || 0);
-      const over = c.limit && n > c.limit;
-      return h(
-        "section",
-        { class: `kb-col${over ? " over" : ""}${n ? "" : " empty"}`, style: toneVar(c.tone) ? `--tone:${toneVar(c.tone)}` : null },
-        h(
-          "header",
-          {},
-          h("span", { class: "kb-label" }, c.label),
-          h("span", { class: "kb-n", title: c.limit ? `${n} cards, WIP limit ${c.limit}${over ? " (over)" : ""}` : `${n} cards` }, c.limit ? `${n}/${c.limit}` : String(n)),
-        ),
-        n
-          ? h(
-              "ul",
-              { class: "kb-cards" },
-              (c.cards || []).map((k) =>
-                h(
-                  "li",
-                  { class: `kb-card${toneVar(k.tone) ? " toned" : ""}`, style: toneVar(k.tone) ? `--card-tone:${toneVar(k.tone)}` : null },
-                  h("div", { class: "kb-title" }, k.id ? h("span", { class: "kb-id" }, k.id) : null, k.title),
-                  k.note ? h("div", { class: "kb-note" }, k.note) : null,
-                  k.tag || k.owner ? h("div", { class: "kb-meta" }, k.tag ? h("span", { class: `ctag${/^(ok|warn|bad)$/.test(k.tone) ? ` ${k.tone}` : ""}` }, k.tag) : null, k.owner ? ownerChip(k.owner) : null) : null,
-                ),
-              ),
-            )
-          : h("div", { class: "kb-empty" }, "Nothing here"),
-        c.more ? h("div", { class: "kb-more" }, `+${c.more} more`) : null,
-      );
-    }),
+/** Inline `code`, **bold** and links as DOM; links become text inside a card that is itself a link. */
+const inline = (text, links = true) =>
+  inlineTokens(text).map((t) =>
+    t.t === "code" ? h("code", {}, t.v) : t.t === "b" ? h("b", {}, t.v) : t.t === "a" && links ? h("a", { href: t.href, target: "_blank", rel: "noopener noreferrer" }, t.v) : t.v,
   );
-  const root = h("div", { class: "kanban" }, spec.title ? h("div", { class: "kb-head" }, h("b", {}, spec.title)) : null, board, spec.caption ? h("div", { class: "chart-cap" }, spec.caption) : null);
+
+/** An owner chip: a session's name and state dot (linked to its canvas), "this session", or @name. */
+function ownerChip(owner) {
+  const o = ownerSession(owner, sessionsCache, currentSession);
+  if (!o) return h("span", { class: "kb-owner", "data-owner": owner }, `@${owner}`);
+  const dot = h("span", { class: `pulse ${o.state}` });
+  const tip = `@${owner}: ${o.state === "ended" ? "ended" : STATE_LABEL[o.state] || o.state}`;
+  if (o.me) return h("span", { class: "kb-owner me", "data-owner": owner, title: `${tip} (this session)` }, dot, "this session");
+  return h("a", { class: `kb-owner${o.state === "ended" ? " ended" : ""}`, "data-owner": owner, href: `/s/${encodeURIComponent(o.session.id)}`, title: `${tip}; open its canvas` }, dot, sessionName(o.session));
+}
+
+/** Redraw every owner chip on the page from the latest session list (states change, sessions end). */
+function refreshOwners() {
+  for (const el of document.querySelectorAll(".kb-owner[data-owner]")) el.replaceWith(ownerChip(el.dataset.owner));
+}
+
+function renderKanban(spec, secId = "") {
+  const cols = spec.columns || [];
+  const count = (c) => (c.cards || []).length + (c.more || 0);
+  const busy = cols.some((c) => !c.compact && count(c));
+  const key = `${currentSession}/${secId}`;
+  const visible = document.visibilityState === "visible";
+  const marks = secId ? boardMarks(readStore(localStorage, KB_SEEN_KEY)[key], cols, { visible }) : { moves: {}, save: null };
+  if (marks.save) saveBoardMarks(key, marks.save);
+  if (marks.save && !visible) {
+    // Marks drawn in a background tab start their clock once the tab is seen.
+    const seen = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", seen);
+      const cur = readStore(localStorage, KB_SEEN_KEY)[key];
+      if (cur && !cur.at) saveBoardMarks(key, { ...cur, at: Date.now() });
+    };
+    document.addEventListener("visibilitychange", seen);
+  }
+  const folds = readStore(sessionStorage, KB_FOLD_KEY);
+
+  const card = (k, c) => {
+    const mv = marks.moves[cardKey(k)];
+    return h(
+      "li",
+      { class: `kb-card${toneVar(k.tone) ? " toned" : ""}${mv ? " moved" : ""}`, style: toneVar(k.tone) ? `--card-tone:${toneVar(k.tone)}` : null },
+      h(
+        "div",
+        { class: "kb-title", title: c.compact ? k.title : null },
+        k.id ? h("span", { class: "kb-id" }, k.id) : null,
+        k.href ? h("a", { href: k.href, target: "_blank", rel: "noopener noreferrer" }, inline(k.title, false)) : inline(k.title),
+        mv ? h("span", { class: "kb-moved", title: mv === "new" ? "New since you last looked" : `Moved to ${mv} since you last looked` }, mv === "new" ? "new" : `→ ${mv}`) : null,
+      ),
+      k.note && !c.compact ? h("div", { class: "kb-note" }, inline(k.note)) : null,
+      (k.tag || k.owner) && !c.compact ? h("div", { class: "kb-meta" }, k.tag ? h("span", { class: `ctag${/^(ok|warn|bad)$/.test(k.tone) ? ` ${k.tone}` : ""}` }, k.tag) : null, k.owner ? ownerChip(k.owner) : null) : null,
+    );
+  };
+
+  const column = (c) => {
+    const n = count(c);
+    const over = c.limit && n > c.limit;
+    const foldKey = `${key}/${c.label}`;
+    const foldable = c.compact && n > 0;
+    const label = [
+      foldable ? h("span", { class: "kb-chev", "aria-hidden": "true" }, "›") : null,
+      h("span", { class: "kb-label" }, c.label),
+      h("span", { class: "kb-n", title: c.limit ? `${n} cards, WIP limit ${c.limit}${over ? " (over)" : ""}` : `${n} cards` }, c.limit ? `${n}/${c.limit}` : String(n)),
+    ];
+    // A compact column (Done) folds when nothing else is on the board, unless opened by hand.
+    const shut = foldable && (folds[foldKey] ?? !busy);
+    const head = foldable ? h("button", { class: "kb-fold", type: "button", "aria-expanded": String(!shut) }, label) : h("header", {}, label);
+    const col = h(
+      "section",
+      { class: `kb-col${over ? " over" : ""}${n ? "" : " empty"}${c.compact ? " compact" : ""}${shut ? " folded" : ""}`, style: toneVar(c.tone) ? `--tone:${toneVar(c.tone)}` : null },
+      head,
+      n ? h("ul", { class: "kb-cards" }, (c.cards || []).map((k) => card(k, c))) : h("div", { class: "kb-empty" }, "Nothing here"),
+      c.more ? h("div", { class: "kb-more" }, `+${c.more} more`) : null,
+    );
+    if (foldable)
+      head.addEventListener("click", () => {
+        const now = !col.classList.contains("folded");
+        col.classList.toggle("folded", now);
+        head.setAttribute("aria-expanded", String(!now));
+        writeStore(sessionStorage, KB_FOLD_KEY, { ...readStore(sessionStorage, KB_FOLD_KEY), [foldKey]: now });
+      });
+    return col;
+  };
+
+  const parts = cols.map((c) => ({ c, n: count(c) })).filter((p) => p.n);
+  const progress = spec.progress
+    ? h(
+        "div",
+        { class: "kb-progress" },
+        h("div", { class: "kb-bar", "aria-hidden": "true" }, parts.map((p) => h("i", { style: `flex:${p.n};background:${toneVar(p.c.tone) || "var(--line)"}`, title: `${p.c.label}: ${p.n}` }))),
+        h("div", { class: "kb-sum" }, parts.map((p) => `${p.n} ${p.c.label.toLowerCase()}`).join(" · ") || "Nothing on the board"),
+      )
+    : null;
+  // Empty columns shrink to a thin labelled strip when the columns sit side by side.
+  const tpl = cols.map((c) => (count(c) ? "minmax(170px, 1fr)" : "36px")).join(" ");
+  const board = h("div", { class: "kb-cols", style: `--kb-tpl:${tpl}` }, cols.map(column));
+  const root = h("div", { class: "kanban" }, spec.title ? h("div", { class: "kb-head" }, h("b", {}, spec.title)) : null, progress, board, spec.caption ? h("div", { class: "chart-cap" }, spec.caption) : null);
   // Owners render before the session list has loaded on a fresh page: link them once it has.
   if (root.querySelector(".kb-owner[data-owner]") && !sessionsCache.length) {
     fetch("/api/sessions")
       .then((r) => r.json())
       .then((list) => {
         if (!sessionsCache.length) sessionsCache = list;
-        for (const el of root.querySelectorAll(".kb-owner[data-owner]")) if (ownerSession(el.dataset.owner)) el.replaceWith(ownerChip(el.dataset.owner));
+        for (const el of root.querySelectorAll(".kb-owner[data-owner]")) el.replaceWith(ownerChip(el.dataset.owner));
       })
       .catch(() => {});
   }
@@ -3053,7 +3150,7 @@ async function sessionView(id) {
   let bannerTimer = 0;
   const banner = () => {
     clearTimeout(bannerTimer);
-    bannerTimer = setTimeout(() => fetchSessions().then(() => renderWaitbar(waitbar)), 400);
+    bannerTimer = setTimeout(() => fetchSessions().then(() => (renderWaitbar(waitbar), refreshOwners())), 400);
   };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;

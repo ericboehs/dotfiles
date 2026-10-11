@@ -783,11 +783,23 @@ updates through server-sent events with no reload.
   which jump to the section. A `kanban` is a board of work items by state:
   up to 8 columns left to right, each with a tone, an optional WIP `limit`
   (the count reads `3/2` in amber past it) and `more` ("+6 more" for cards
-  left out); a card has a title and an optional `#id`, note, tag, owner and
-  tone (a stripe down its left edge). In a narrow card (the side panel, a
+  left out); a card has a title and an optional `#id`, note, tag, owner,
+  tone (a stripe down its left edge) and `href` (http or https; the title
+  becomes the link). Titles and notes take `` `code` ``, **bold** and
+  `[links](https://...)`, built as DOM so nothing becomes markup; long titles
+  clamp at four lines. `progress: true` adds a bar of counts per column
+  ("2 open · 1 claimed · 10 done"), and a `compact` column has one-line,
+  dim cards and folds when nothing else is on the board (a click opens it,
+  remembered for the tab). Empty columns shrink to a thin strip with the
+  label running down. In a narrow card (the side panel, a
   phone) the columns stack, by a container query, so one board fits both.
-  An owner like `pi-a1b2` (the todo tool's name for a session) links to that
-  session's canvas while it runs, or reads "this session". `json` shows any
+  An owner like `pi-a1b2` (the todo tool's name for a session) shows that
+  session's name and state dot (working, your turn, or a hollow ring once
+  it has ended) and links to its canvas, or reads "this session"; the dots
+  follow the session list as states change. Cards that are **new or moved**
+  since this browser last saw the board get a `new` or `→ Done` badge,
+  kept for 15 minutes after they were first seen (a board that changed in a
+  background tab keeps its marks until you look). `json` shows any
   JSON (body or a `.json` path, stored as written) as a tree built as nodes
   open: two levels open to start, a filter that keeps and opens the paths to
   matching keys and values, Expand all and Collapse, 200 children at a time,
@@ -828,8 +840,9 @@ updates through server-sent events with no reload.
   and Agents are redrawn at once, so new markup shows without waiting a turn.
   When the project has a `.pi/TODO.md` (the todo tool's shared checklist)
   with a task in it, a **Tasks** card at the top of the side panel shows it
-  as a kanban: Open, Claimed (with the owner, linked to its session), Blocked
-  (with the reason) and Done (the newest five; dropped ones are only
+  as a kanban with a progress bar: Open, Claimed (with the owner, linked to
+  its session), Blocked (with the reason) and Done (compact, the newest
+  five, folded when nothing is open; dropped ones are only
   counted). It is built on startup and after each turn, and a watch on
   `.pi/` redraws it within a second when another session claims or finishes
   a task. The extension parses the file itself; it doesn't need the todo tool.

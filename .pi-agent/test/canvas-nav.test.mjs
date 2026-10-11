@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { fuzzyScore, matchKeys, nextSeen, orderSessions, rankItems, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { boardMarks, boardMoves, boardSnapshot, fuzzyScore, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -150,4 +150,64 @@ test("matchKeys: actions, prefixes, misses", () => {
   assert.deepEqual(matchKeys("gj"), {});
   assert.deepEqual(matchKeys("x"), {});
   assert.deepEqual(matchKeys(""), {});
+});
+
+test("inlineTokens: code, bold and http(s) links; everything else stays text", () => {
+  assert.deepEqual(inlineTokens("Fix `web.ts:699` **now**, see [#12](https://x.test/12)"), [
+    { t: "text", v: "Fix " },
+    { t: "code", v: "web.ts:699" },
+    { t: "text", v: " " },
+    { t: "b", v: "now" },
+    { t: "text", v: ", see " },
+    { t: "a", v: "#12", href: "https://x.test/12" },
+  ]);
+  assert.deepEqual(inlineTokens("[x](javascript:alert(1)) <b>hi</b>"), [{ t: "text", v: "[x](javascript:alert(1)) <b>hi</b>" }], "only http(s) links; tags are text");
+  assert.deepEqual(inlineTokens(""), []);
+});
+
+test("ownerSession: live wins, else the newest ended; names and ties are not sessions", () => {
+  const list = [
+    { id: "aaaa-old-b7c2", live: false, ended: "2026-10-01T00:00:00Z" },
+    { id: "aaaa-new-b7c2", live: false, ended: "2026-10-09T00:00:00Z" },
+    { id: "bbbb-kb01", live: true, activity: "working" },
+    { id: "cccc-x1y2", live: true },
+    { id: "dddd-x1y2", live: true },
+  ];
+  assert.equal(ownerSession("pi-b7c2", list).session.id, "aaaa-new-b7c2");
+  assert.equal(ownerSession("pi-b7c2", list).state, "ended");
+  assert.deepEqual(ownerSession("pi-kb01", list, "bbbb-kb01"), { session: list[2], state: "working", me: true });
+  assert.equal(ownerSession("pi-x1y2", list), null, "two live sessions share the suffix");
+  assert.equal(ownerSession("eric", list), null);
+  assert.equal(ownerSession("pi-zzzz", list), null);
+  assert.equal(ownerSession("pi-cccc", [{ id: "s-cccc", live: true }]).state, "done", "live with no activity reads as your turn");
+});
+
+test("boardMoves and boardMarks: new and moved cards, kept for a while, carried while unseen", () => {
+  const before = [{ label: "Open", cards: [{ id: "#1", title: "a" }, { title: "loose" }] }, { label: "Done", cards: [] }];
+  const after = [{ label: "Open", cards: [{ title: "loose" }, { id: "#3", title: "c" }] }, { label: "Done", cards: [{ id: "#1", title: "a" }] }];
+  assert.deepEqual(boardMoves(null, after), {}, "nothing on a first look");
+  assert.deepEqual(boardMoves(boardSnapshot(before), after), { "id:#3": "new", "id:#1": "Done" });
+  const dup = [{ label: "A", cards: [{ id: "#7", title: "x" }] }, { label: "B", cards: [{ id: "#7", title: "y" }] }];
+  assert.deepEqual(boardSnapshot(dup), { "id:#7": null });
+  assert.deepEqual(boardMoves(boardSnapshot(before), dup), {}, "a shared id gets no mark");
+  assert.deepEqual(boardMoves(boardSnapshot(dup), [{ label: "B", cards: [{ id: "#7", title: "y" }] }]), {}, "nor once it is single again");
+
+  const t0 = 1_000_000;
+  const first = boardMarks(undefined, before, { now: t0 });
+  assert.deepEqual(first.moves, {});
+  const second = boardMarks(first.save, after, { now: t0 + 1000 });
+  assert.deepEqual(second.moves, { "id:#3": "new", "id:#1": "Done" });
+  assert.equal(boardMarks(second.save, after, { now: t0 + 60e3 }).save, null, "a redraw stores nothing");
+  assert.deepEqual(boardMarks(second.save, after, { now: t0 + 60e3 }).moves, second.moves, "and keeps the marks");
+  assert.deepEqual(boardMarks(second.save, after, { now: t0 + 16 * 60e3 }).moves, {}, "gone after 15 minutes");
+
+  // In a background tab: the clock waits, and unseen marks survive the next change.
+  const hidden = boardMarks(first.save, after, { now: t0, visible: false });
+  assert.equal(hidden.save.at, 0);
+  const later = [{ label: "Open", cards: [{ title: "loose" }, { id: "#3", title: "c" }, { id: "#4", title: "d" }] }, { label: "Done", cards: [{ id: "#1", title: "a" }] }];
+  const next = boardMarks(hidden.save, later, { now: t0 + 3600e3, visible: false });
+  assert.deepEqual(next.moves, { "id:#3": "new", "id:#1": "Done", "id:#4": "new" });
+  const seen = boardMarks(next.save, later, { now: t0 + 7200e3 });
+  assert.deepEqual(seen.moves, next.moves, "still shown when finally seen");
+  assert.equal(seen.save.at, t0 + 7200e3, "and the clock starts then");
 });
