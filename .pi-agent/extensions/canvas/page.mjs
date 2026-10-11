@@ -356,6 +356,17 @@ ol.tline { list-style: none; margin: 0; padding: 0; }
 .toc li.more { padding: 2px 8px 2px; }
 .toc li.more .btn { margin: 0; }
 .toc a.unseen .t::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+/* Touched this turn (or the last one): an accent bar down the left edge and a pill. */
+.card.lastturn, .card.lastturn > h2 { box-shadow: inset 3px 0 0 var(--accent); }
+.turn-pill { flex: none; font: 600 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: color-mix(in srgb, var(--accent) 75%, var(--ink)); background: var(--tint); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 999px; padding: 3px 7px; margin-left: 8px; white-space: nowrap; }
+.toc a.lastturn { box-shadow: inset 2px 0 0 var(--accent); }
+.toc a.lastturn .t { color: var(--ink); font-weight: 600; }
+.findings li.lastturn { box-shadow: inset 3px 0 0 var(--accent); }
+.turn-filter { display: flex; margin: 8px 12px 4px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; width: max-content; }
+.turn-filter button { font: inherit; font-size: 12px; border: 0; background: var(--card); color: var(--dim); padding: 4px 10px; cursor: pointer; }
+.turn-filter button + button { border-left: 1px solid var(--line); }
+.turn-filter button[aria-pressed="true"] { background: var(--soft); color: var(--ink); font-weight: 600; }
+.turn-filter b { color: var(--accent); }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
 .card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card > h2 .meta { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; display: flex; gap: 6px; align-items: center; flex: none; padding-right: 4px; }
@@ -942,13 +953,38 @@ function statusCard(status, state) {
 
 const FINDINGS_SHOWN = 8;
 
-function findingsCard(findings, showAll = false) {
+/** Hover text for the turn mark: when that turn ran. */
+function turnTitle(turn) {
+  const t = (iso) => clock(new Date(iso));
+  return turn.ended ? `Updated in the last turn (${t(turn.since)}–${t(turn.ended)})` : `Updated since this turn started at ${t(turn.since)}`;
+}
+
+/** Mark a card touched in this (or the last) turn, or clear the mark: an edge bar and a pill after the title. */
+function markTurn(card, turn) {
+  card.classList.toggle("lastturn", !!turn);
+  let pill = card.querySelector(":scope > h2 > .turn-pill");
+  if (!turn) return pill?.remove();
+  if (!pill) card.querySelector(":scope > h2 > .title")?.after((pill = h("span", { class: "turn-pill" })));
+  if (!pill) return;
+  pill.textContent = turn.label;
+  pill.title = turnTitle(turn);
+}
+
+function findingsCard(findings, showAll = false, turn = null) {
   if (!findings?.length) return null;
   const list = h("ul", { class: "findings" });
+  const fresh = turn ? findings.filter((f) => f.at >= turn.since).length : 0;
   const card = h(
     "section",
-    { class: "card", id: "findings" },
-    h("h2", {}, h("span", { class: "title" }, "Findings"), h("span", { class: "n" }, String(findings.length)), h("span", { class: "meta" }, copyButton(() => findings.map((f) => `- ${f.text}`).join("\n"), "Copy all"))),
+    { class: `card${fresh ? " lastturn" : ""}`, id: "findings" },
+    h(
+      "h2",
+      {},
+      h("span", { class: "title" }, "Findings"),
+      h("span", { class: "n" }, String(findings.length)),
+      fresh ? h("span", { class: "turn-pill", title: turnTitle(turn) }, `${fresh} ${turn.label}`) : null,
+      h("span", { class: "meta" }, copyButton(() => findings.map((f) => `- ${f.text}`).join("\n"), "Copy all")),
+    ),
     h("div", { class: "bd flush" }, list),
   );
   // Newest first. findings.md is append-only, so file order is time order.
@@ -964,7 +1000,7 @@ function findingsCard(findings, showAll = false) {
     list.append(
       h(
         "li",
-        {},
+        turn && f.at >= turn.since ? { class: "lastturn" } : {},
         h(
           "span",
           { class: "when" },
@@ -979,7 +1015,7 @@ function findingsCard(findings, showAll = false) {
   const hidden = newest.length - shown.length;
   if (hidden) {
     const more = h("button", { class: "btn", type: "button" }, `Show ${hidden} older`);
-    more.addEventListener("click", () => card.replaceWith(findingsCard(findings, true)));
+    more.addEventListener("click", () => card.replaceWith(findingsCard(findings, true, turn)));
     list.append(h("li", { class: "more" }, more));
   }
   return collapsible(card, "_findings");
@@ -2706,6 +2742,8 @@ async function sessionView(id) {
   let lastStatusAt;
   let lastState;
   let lastFindings = -1;
+  let lastFindingsTurn = "";
+  let turnNow = null; // { since, ended?, label: "this turn" | "last turn" }
 
   // ── placement: widgets go to the sidebar when the screen is wide ──
   function place() {
@@ -2771,20 +2809,31 @@ async function sessionView(id) {
   let tocList = [];
   const tocItems = h("ul", { class: "toc" });
   const tocCount = h("span", { class: "n" });
-  const tocCard = collapsible(h("section", { class: "card" }, h("h2", {}, h("span", { class: "title" }, "Contents"), tocCount), tocItems), "_contents");
+  const turnFilter = h("div", { class: "turn-filter", role: "group", "aria-label": "Show" });
+  const tocCard = collapsible(h("section", { class: "card" }, h("h2", {}, h("span", { class: "title" }, "Contents"), tocCount), turnFilter, tocItems), "_contents");
   const TOC_RECENT = 6;
   let tocAll = false;
+  let tocTurn = false; // the filter: only sections touched this (or the last) turn
   function renderToc(list = tocList) {
     tocList = list;
     if (!wide.matches || !list.length) return tocSlot.replaceChildren();
     tocCount.textContent = String(list.length);
+    const marked = list.filter((sec) => cards.get(sec.id)?.el?.classList.contains("lastturn"));
+    if (!marked.length) tocTurn = false;
+    turnFilter.hidden = !marked.length;
+    if (marked.length) {
+      const opt = (on, ...label) => h("button", { type: "button", "aria-pressed": String(tocTurn === on), onclick: () => ((tocTurn = on), renderToc()) }, ...label);
+      const label = turnNow?.label ?? "last turn";
+      turnFilter.replaceChildren(opt(false, `All ${list.length}`), opt(true, label[0].toUpperCase() + label.slice(1), " ", h("b", {}, String(marked.length))));
+    }
+    if (tocTurn) list = marked;
     // The newest few, plus anything open or changed unseen; older collapsed
     // sections wait behind "Show N older".
     const state = (sec) => cards.get(sec.id)?.el?.classList;
     const keep = list.map((sec, i) => i < TOC_RECENT || !state(sec)?.contains("collapsed") || state(sec)?.contains("unseen"));
     const hidden = keep.filter((k) => !k).length;
-    const fold = hidden > 2 && !tocAll;
-    const toggle = hidden > 2 ? h("li", { class: "more" }, h("button", { class: "btn", type: "button", onclick: () => ((tocAll = !tocAll), renderToc()) }, tocAll ? "Show fewer" : `Show ${hidden} older`)) : null;
+    const fold = hidden > 2 && !tocAll && !tocTurn;
+    const toggle = hidden > 2 && !tocTurn ? h("li", { class: "more" }, h("button", { class: "btn", type: "button", onclick: () => ((tocAll = !tocAll), renderToc()) }, tocAll ? "Show fewer" : `Show ${hidden} older`)) : null;
     // The list is rebuilt on every refresh; keep keyboard focus on the same entry.
     const had = tocItems.contains(document.activeElement) ? document.activeElement.getAttribute("href") || "more" : null;
     tocItems.replaceChildren(
@@ -2792,7 +2841,7 @@ async function sessionView(id) {
         .filter((_, i) => !fold || keep[i])
         .map((sec) => {
           const card = cards.get(sec.id)?.el;
-          const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : ""].join(" ").trim();
+          const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : "", card?.classList.contains("lastturn") ? "lastturn" : ""].join(" ").trim();
           const a = h("a", { class: cls, href: `#sec-${sec.id}`, title: sec.title || sec.id }, h("span", { class: "t" }, sec.title || sec.id), agoEl(sec.at));
           a.addEventListener("click", (e) => {
             e.preventDefault();
@@ -2866,12 +2915,17 @@ async function sessionView(id) {
       }
     }
     lastSections = sections;
+    const t = state.turn;
+    turnNow = t?.started ? { since: t.started, ended: t.ended, label: !t.ended && state.live ? "this turn" : "last turn" } : null;
+    for (const sec of sections) markTurn(cards.get(sec.id).el, turnNow && String(sec.at) >= turnNow.since ? turnNow : null);
     place();
 
-    if (state.findings.length !== lastFindings) {
+    const turnKey = turnNow ? `${turnNow.since}|${turnNow.label}` : "";
+    if (state.findings.length !== lastFindings || turnKey !== lastFindingsTurn) {
       const grew = lastFindings >= 0 && state.findings.length > lastFindings;
       lastFindings = state.findings.length;
-      const card = findingsCard(state.findings);
+      lastFindingsTurn = turnKey;
+      const card = findingsCard(state.findings, false, turnNow);
       if (card && grew) {
         card.classList.add("fresh");
         if (card.classList.contains("collapsed")) card.classList.add("unseen");
@@ -3494,13 +3548,13 @@ function hopColumn(toSide) {
   setCurrent(cards.includes(lastMain) && inView(lastMain) ? lastMain : currentOrTop(cards), !(cards.includes(lastMain) && inView(lastMain)));
 }
 
-/** n / N: the next section with the changed-while-folded dot, wrapping like vim. */
+/** n / N: the next section with the changed-while-folded dot or the turn mark, wrapping like vim. */
 function hopChanged(dir) {
   const cards = mainCards();
   const from = cards.indexOf(currentOrTop(cards));
   const order = dir > 0 ? [...cards.slice(from + 1), ...cards.slice(0, from + 1)] : [...cards.slice(0, Math.max(from, 0)).reverse(), ...cards.slice(Math.max(from, 0)).reverse()];
-  const card = order.find((c) => c.classList.contains("unseen"));
-  if (!card) return toast("No sections changed while folded");
+  const card = order.find((c) => c.classList.contains("unseen") || c.classList.contains("lastturn"));
+  if (!card) return toast("No sections changed while folded or in the last turn");
   card.setCollapsed?.(false);
   setCurrent(card);
 }

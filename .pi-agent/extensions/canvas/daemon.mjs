@@ -166,7 +166,10 @@ export function sessionState(root, id) {
   const activityMessage = live && typeof act?.message === "string" ? act.message.slice(0, 200) : "";
   // When the state last changed: the banner compares it with when you last saw the page.
   const activityAt = live && typeof act?.at === "string" ? act.at : undefined;
-  return { meta: { ...meta, id }, live, activity, activityMessage, activityAt, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
+  // The current or last turn, so the page can mark what it touched.
+  const t = readJson(join(dir, "turn.json"), null);
+  const turn = typeof t?.started === "string" ? { started: t.started, ...(typeof t.ended === "string" ? { ended: t.ended } : {}) } : undefined;
+  return { meta: { ...meta, id }, live, activity, activityMessage, activityAt, turn, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
 }
 
 export function listSessions(root) {

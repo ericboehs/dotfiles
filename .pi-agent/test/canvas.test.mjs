@@ -474,6 +474,22 @@ test("daemon reports pi's program state, done for unknown, ended when pi is gone
   }
 });
 
+test("daemon passes the current or last turn through, and drops a malformed one", () => {
+  const { root, mk } = tempRoot();
+  try {
+    mk("run", { pid: process.pid }, { "turn.json": JSON.stringify({ n: 2, started: "2026-10-09T18:00:00.000Z" }) });
+    mk("done", { pid: process.pid }, { "turn.json": JSON.stringify({ n: 3, started: "2026-10-09T18:00:00.000Z", ended: "2026-10-09T18:04:00.000Z", extra: 1 }) });
+    mk("bad", { pid: process.pid }, { "turn.json": JSON.stringify({ started: 5 }) });
+    mk("none", { pid: process.pid });
+    assert.deepEqual(sessionState(root, "run").turn, { started: "2026-10-09T18:00:00.000Z" });
+    assert.deepEqual(sessionState(root, "done").turn, { started: "2026-10-09T18:00:00.000Z", ended: "2026-10-09T18:04:00.000Z" });
+    assert.equal(sessionState(root, "bad").turn, undefined);
+    assert.equal(sessionState(root, "none").turn, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ActivityTracker follows pi's program status rules", () => {
   const t = new ActivityTracker();
   const run = (...events) => {

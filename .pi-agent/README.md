@@ -872,6 +872,15 @@ updates through server-sent events with no reload.
   collapsed sections wait behind "Show N older"), Agents, Files changed and
   Screenshots. Narrower, those widgets sit among the sections in time
   order.
+- **Last turn.** Sections, findings and side cards written since the current
+  (or last) turn began get an accent bar down the left edge and a pill after
+  the title: "this turn" while pi runs, "last turn" once it settles; hover
+  shows when it ran. Contents bolds those entries and adds an **All N | Last
+  turn M** toggle that lists only them. canvas.ts writes `turn.json`
+  (`started`, then `ended`) at agent_start and agent_settled, so the marks
+  survive a refresh and agree across tabs, and clear when the next turn starts.
+  Auto cards count only when their content changed. Colours come from
+  `--accent` and `--tint`, so they follow the theme.
 - **Waiting on you.** The header row has a chip for each other
   live session that is blocked, done or failed and changed since you last had
   its page in view. Most urgent comes first, and a click opens it. The chips
@@ -894,7 +903,8 @@ updates through server-sent events with no reload.
   through the entries (then on to Agents, Files changed and Screenshots), and Enter or
   `h` opens the highlighted section and moves the ring to it.
   `gg` / `G` top and bottom, `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
-  `N` the next or previous section with the changed-while-folded dot. Enter, `o`
+  `N` the next or previous section with the changed-while-folded dot or the
+  last-turn mark. Enter, `o`
   or `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /
   `zM` open or fold every section. `yy` copies the section's file through
   Clippy and `yc` its source as text (the page link is in Cmd-K). `?` lists them all; the

@@ -85,7 +85,7 @@ export const VIM_KEYS = [
   { group: "Move", keys: "G", action: "bottom", help: "bottom of the page" },
   { group: "Move", keys: "d", action: "halfDown", help: "half a page down (or Ctrl-d)" },
   { group: "Move", keys: "u", action: "halfUp", help: "half a page up (or Ctrl-u)" },
-  { group: "Move", keys: "n", action: "nextChanged", help: "next section changed while folded (the dot)" },
+  { group: "Move", keys: "n", action: "nextChanged", help: "next section changed while folded (the dot) or in the last turn" },
   { group: "Move", keys: "N", action: "prevChanged", help: "previous changed section" },
   { group: "Fold", keys: "o", action: "toggle", help: "open or fold this section (or Enter, za)" },
   { group: "Fold", keys: "Enter", action: "toggle", help: "" },

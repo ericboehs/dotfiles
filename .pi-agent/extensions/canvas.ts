@@ -1131,12 +1131,23 @@ export default function canvas(pi: ExtensionAPI) {
     } catch {}
   }
 
+  // The current or last turn (one prompt's run, start to settle): the page
+  // marks sections and findings written since it started.
+  let turn: { n: number; started: string; ended?: string } | null = null;
+  function writeTurn() {
+    if (!turn || !sessionId || !existsSync(dir())) return;
+    try {
+      writeAtomic(join(dir(), "turn.json"), JSON.stringify(turn));
+    } catch {}
+  }
+
   /** Create the folder and meta.json on first write, never for idle sessions. */
   function ensureDir(ctx: ExtensionContext): string {
     const d = dir();
     const fresh = !existsSync(join(d, "activity.json"));
     mkdirSync(d, { recursive: true });
     if (fresh) writeActivity(true);
+    if (fresh) writeTurn();
     const metaPath = join(d, "meta.json");
     const prev = readJson<Record<string, unknown>>(metaPath, {});
     const meta = {
@@ -1406,7 +1417,11 @@ export default function canvas(pi: ExtensionAPI) {
     tracker.handle(event);
     writeActivity();
   };
-  pi.on("agent_start", track);
+  pi.on("agent_start", (event) => {
+    track(event);
+    turn = { n: (turn?.n ?? 0) + 1, started: new Date().toISOString() };
+    writeTurn();
+  });
   pi.on("message_end", (event, ctx) => {
     track(event);
     // A message from another agent shows in Agents right away, not after the turn it starts.
@@ -1432,6 +1447,10 @@ export default function canvas(pi: ExtensionAPI) {
 
   pi.on("agent_settled", (event, ctx) => {
     track(event);
+    if (turn && !turn.ended) {
+      turn.ended = new Date().toISOString();
+      writeTurn();
+    }
     if (!ctx.hasUI || !sessionId) return;
     if (autoOn) {
       const turn = lastTurn(ctx.sessionManager.getBranch() || []);
