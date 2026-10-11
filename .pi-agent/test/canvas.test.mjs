@@ -14,8 +14,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, clipTarget, listSessions, parseFindings, prune, sessionState, withKit } from "../extensions/canvas/daemon.mjs";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -823,6 +823,71 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     assert.deepEqual(JSON.parse((await get(port, "/api/system-theme")).body), { theme: null }, "no Omarchy here");
     assert.deepEqual(JSON.parse((await get(port, "/api/peers")).body), { peers: [{ name: "reviewer", status: "tool:bash" }] }, "live agents only, name and status only");
   } finally {
+    child.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tmux follow: pane and socket in meta, pane to live session, last-used client", () => {
+  assert.deepEqual(tmuxMeta({ TMUX: "/private/tmp/tmux-501/default,123,4", TMUX_PANE: "%12" }), { tmux: { pane: "%12", socket: "/private/tmp/tmux-501/default" } });
+  assert.deepEqual(tmuxMeta({ TMUX_PANE: "%12" }), {}, "outside tmux");
+  assert.deepEqual(tmuxMeta({ TMUX: "/s,1,2", TMUX_PANE: "%12", PI_CANVAS_TMUX: "0" }), {}, "turned off");
+  assert.deepEqual(tmuxMeta({ TMUX: "/s,1,2", TMUX_PANE: "12; rm -rf" }), {}, "odd pane ids are dropped");
+  assert.equal(tmuxOf({ tmux: { pane: "%1", socket: "relative" } }), null);
+  assert.equal(latestClient("100\t/dev/ttys001\n300\t/dev/ttys006\n200\t/dev/ttys002\n"), "/dev/ttys006");
+  assert.equal(latestClient(""), "", "nobody attached");
+  const { root, mk } = tempRoot();
+  try {
+    const t = (pane, socket = "/sock") => ({ tmux: { pane, socket } });
+    mk("old", { pid: 999999, started: "2026-01-01T00:00:00Z", ...t("%5") });
+    mk("now", { pid: process.pid, started: "2026-01-02T00:00:00Z", ...t("%5") });
+    mk("ended", { pid: process.pid, ended: "2026-01-03T00:00:00Z", ...t("%6") });
+    mk("other", { pid: process.pid, ...t("%7", "/other-server") });
+    assert.equal(sessionForPane(root, "%5"), "now", "a reused pane keeps only the live pi");
+    assert.equal(sessionForPane(root, "%5", "/sock"), "now");
+    assert.equal(sessionForPane(root, "%6"), null, "ended");
+    assert.equal(sessionForPane(root, "%7", "/sock"), null, "same pane id on another tmux server");
+    assert.equal(sessionForPane(root, "%9"), null);
+    assert.equal(sessionForPane(root, "../x"), null);
+    const s = sessionState(root, "now");
+    assert.equal(s.tmux, true);
+    assert.equal(s.meta.tmux, undefined, "the page never sees the socket path");
+    assert.equal(sessionState(root, "old").tmux, false, "not live");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon /follow tells pages which session tmux moved to; /focus and /follow need the header", async () => {
+  const { root, mk } = tempRoot();
+  const port = 18790 + Math.floor(Math.random() * 1000);
+  mk("s1", { pid: process.pid, tmux: { pane: "%5", socket: "/sock" } });
+  mk("s2", { pid: process.pid });
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../extensions/canvas/daemon.mjs", import.meta.url)), "--port", String(port), "--root", root, "--omarchy", join(root, "none"), "--version", "t3"], { stdio: "ignore" });
+  let stream;
+  try {
+    for (let i = 0; i < 50 && !(await get(port, "/health").catch(() => undefined)); i++) await new Promise((r) => setTimeout(r, 100));
+    let events = "";
+    await new Promise((resolve) => {
+      stream = request({ host: "127.0.0.1", port, path: "/api/events", headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        res.on("data", (d) => {
+          events += d;
+          if (events.includes("event: hello")) resolve();
+        });
+      });
+      stream.end();
+    });
+    assert.equal((await post(port, "/follow", { pane: "%5" }, {})).status, 403, "needs the header");
+    assert.equal((await post(port, "/follow", { pane: "%5" }, { "x-canvas": "1", origin: "https://evil.example" })).status, 403, "foreign origin");
+    assert.equal((await post(port, "/s/s1/focus", {}, {})).status, 403, "needs the header");
+    assert.equal((await post(port, "/s/s2/focus", {}, { "x-canvas": "1" })).status, 404, "not in tmux: nothing to run");
+    assert.equal((await post(port, "/follow", { pane: "%9" }, { "x-canvas": "1" })).status, 200, "a non-pi pane is ignored");
+    assert.equal((await post(port, "/follow", { pane: "%5", socket: "/sock" }, { "x-canvas": "1" })).status, 200);
+    for (let i = 0; i < 20 && !events.includes("event: follow"); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.match(events, /event: follow\ndata: \{"id":"s1"\}/);
+    assert.equal(events.match(/event: follow/g).length, 1, "only the pi pane");
+  } finally {
+    stream?.destroy();
     child.kill();
     rmSync(root, { recursive: true, force: true });
   }

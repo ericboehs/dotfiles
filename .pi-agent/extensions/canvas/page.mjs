@@ -380,6 +380,7 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .btn { font: 500 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--dim); background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 4px 7px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
 .btn:hover { color: var(--ink); background: var(--soft); border-color: var(--line); }
 .btn.ok { color: var(--ok); }
+.btn.follow.on { color: color-mix(in srgb, var(--accent) 75%, var(--ink)); background: var(--tint); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .btn.bad { color: #c0392b; }
 .status .goal { font-size: 17px; font-weight: 600; line-height: 1.35; letter-spacing: -.01em; }
 .eyebrow { display: block; color: var(--dim); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 2px; }
@@ -2742,6 +2743,7 @@ async function sessionView(id) {
   const wide = matchMedia(WIDE);
   let lastSections = [];
   let lastStatusAt;
+  let liveTmux = false; // live and in a tmux pane, for focusTmux
   let lastState;
   let lastFindings = -1;
   let lastFindingsTurn = "";
@@ -2871,6 +2873,7 @@ async function sessionView(id) {
       return;
     }
     const name = state.meta.name || id.slice(0, 8);
+    liveTmux = Boolean(state.tmux);
     document.title = `${name} · canvas`;
     header.replaceChildren(
       h("h1", {}, name),
@@ -2882,6 +2885,7 @@ async function sessionView(id) {
         { class: "tools" },
         h("button", { class: "btn", type: "button", onclick: () => setAll(true) }, "Collapse all"),
         h("button", { class: "btn", type: "button", onclick: () => setAll(false) }, "Expand all"),
+        state.tmux || followOn() ? followButton() : null,
         kbdButton(),
         h("a", { class: "back", href: "/" }, "All sessions"),
       ),
@@ -2958,8 +2962,11 @@ async function sessionView(id) {
   await refresh();
   markSeen();
   banner();
+  pageHooks.refresh = refresh;
+  focusTmux(id, liveTmux);
   const es = new EventSource("/api/events");
   es.addEventListener("system-theme", onSystemTheme);
+  es.addEventListener("follow", onFollow);
   es.addEventListener("changed", (e) => {
     let d = {};
     try {
@@ -3287,6 +3294,11 @@ function mainItems() {
       run: () => setPickerMode("theme"),
     },
     { label: "Keyboard shortcuts", sub: "or press ? on the page", run: () => toggleHelp() },
+    (followOn() || sessionsCache.some((s) => s.live && s.tmux)) && {
+      label: followOn() ? "Stop following tmux" : "Follow tmux",
+      sub: "this tab: a pi pane you switch to opens here, and a session opened here switches tmux",
+      run: () => setFollow(!followOn()),
+    },
   ]
     .filter(Boolean)
     .map((a) => ({ group: "Actions", ...a }));
@@ -3705,6 +3717,72 @@ document.addEventListener("keydown", (e) => {
 
 const kbdButton = () => h("button", { class: "btn", type: "button", title: "Sessions, actions and themes (⌘K). Press ? for every key.", onclick: () => openPicker() }, "⌘K");
 
+// ── follow tmux ─────────────────────────────────────────────────────────────────────
+// Per tab (sessionStorage): a tab in follow mode goes to the pi session you
+// switch to in tmux (the daemon's "follow" event, from a tmux hook), and
+// opening a session in it moves tmux to that session's pane.
+
+const FOLLOW_KEY = "canvas:follow-tmux";
+const FOLLOWED_KEY = "canvas:followed"; // the page tmux sent us to, so it doesn't send tmux back
+
+function followOn() {
+  try {
+    return sessionStorage.getItem(FOLLOW_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setFollow(on) {
+  try {
+    if (on) sessionStorage.setItem(FOLLOW_KEY, "1");
+    else sessionStorage.removeItem(FOLLOW_KEY);
+  } catch {}
+  toast(on ? "Following tmux in this tab" : "Stopped following tmux");
+  pageHooks.refresh?.();
+}
+
+const followTitle = () =>
+  followOn() ? "This tab follows tmux: switching to a pi pane opens its page, and opening a session here switches tmux. Click to stop." : "Follow tmux in this tab: switching to a pi pane opens its page, and opening a session here switches tmux";
+
+function followButton() {
+  const on = followOn();
+  return h("button", { class: `btn follow${on ? " on" : ""}`, type: "button", "aria-pressed": String(on), title: followTitle(), onclick: () => setFollow(!followOn()) }, on ? "Following tmux" : "Follow tmux");
+}
+
+/** The daemon's follow event: go to the session tmux moved to. */
+function onFollow(e) {
+  if (!followOn()) return;
+  let d = {};
+  try {
+    d = JSON.parse(e.data);
+  } catch {}
+  if (!d.id || d.id === currentSession) return;
+  try {
+    sessionStorage.setItem(FOLLOWED_KEY, d.id);
+  } catch {}
+  location.href = `/s/${encodeURIComponent(d.id)}`;
+}
+
+/**
+ * A follow-mode tab that opened a session (not because tmux sent it there,
+ * and not on a reload) moves tmux to that session's pane.
+ */
+function focusTmux(id, live) {
+  let followed = "";
+  try {
+    followed = sessionStorage.getItem(FOLLOWED_KEY) || "";
+    sessionStorage.removeItem(FOLLOWED_KEY);
+  } catch {}
+  const nav = performance.getEntriesByType?.("navigation")?.[0]?.type;
+  if (!followOn() || !live || followed === id || nav === "reload") return;
+  fetch(`/s/${encodeURIComponent(id)}/focus`, { method: "POST", headers: { "X-Canvas": "1" } })
+    .then(async (r) => {
+      if (!r.ok) toast(`Couldn't switch tmux: ${(await r.text()).slice(0, 80)}`);
+    })
+    .catch(() => {});
+}
+
 // ── index view ───────────────────────────────────────────────────────────────
 
 async function indexView() {
@@ -3712,6 +3790,7 @@ async function indexView() {
   const groups = h("div");
   const header = h("header", { class: "top" }, h("h1", {}, "Canvas"), h("span", { class: "cwd" }, ""), h("span", { class: "tools" }, kbdButton()));
   $app.replaceChildren(header, groups);
+  const tools = header.querySelector(".tools");
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -3763,6 +3842,7 @@ async function indexView() {
       return;
     }
     const active = sessions.filter((s) => s.live);
+    tools.replaceChildren(...(active.some((s) => s.tmux) || followOn() ? [followButton()] : []), kbdButton());
     const waiting = active.filter((s) => NEEDS_YOU.has(stateOf(s))).length;
     header.querySelector(".cwd").textContent = [plural(sessions.length, "session"), waiting ? `${waiting} waiting on you` : ""].filter(Boolean).join(" · ");
     if (!sessions.length) return groups.replaceChildren(h("section", { class: "card" }, h("div", { class: "bd empty" }, "No sessions yet. A session gets a page on its first status or section.")));
@@ -3783,8 +3863,10 @@ async function indexView() {
   }
 
   await refresh();
+  pageHooks.refresh = refresh;
   const es = new EventSource("/api/events");
   es.addEventListener("system-theme", onSystemTheme);
+  es.addEventListener("follow", onFollow);
   es.addEventListener("changed", refresh);
 }
 

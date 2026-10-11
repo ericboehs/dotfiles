@@ -46,6 +46,18 @@ const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
 export const canvasRoot = () => resolve(process.env.PI_CANVAS_ROOT || join(homedir(), ".pi", "canvas"));
 export const pageUrl = (sessionId: string) => `http://127.0.0.1:${PORT}/s/${encodeURIComponent(sessionId)}`;
 
+/**
+ * The tmux pane pi runs in and its server's socket, for follow mode (the
+ * daemon maps a pane to a session and back). Empty outside tmux or with
+ * PI_CANVAS_TMUX=0. $TMUX is "<socket>,<server pid>,<session index>".
+ */
+export function tmuxMeta(env: NodeJS.ProcessEnv = process.env): { tmux?: { pane: string; socket: string } } {
+  const pane = env.TMUX_PANE || "";
+  const socket = (env.TMUX || "").split(",")[0] || "";
+  if (env.PI_CANVAS_TMUX === "0" || !/^%\d{1,6}$/.test(pane) || !isAbsolute(socket)) return {};
+  return { tmux: { pane, socket } };
+}
+
 // ── pure helpers (tested) ────────────────────────────────────────────────────
 
 export function isSectionId(id: unknown): id is string {
@@ -1158,6 +1170,7 @@ export default function canvas(pi: ExtensionAPI) {
       cwd: ctx.cwd,
       pid: process.pid,
       started: (prev.started as string) || new Date().toISOString(),
+      ...tmuxMeta(),
     };
     // Compare against prev as stored: a stale "ended" from an earlier
     // shutdown must count as a change, so the page shows live again.

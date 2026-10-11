@@ -3,7 +3,9 @@
 //
 //   node daemon.mjs --port 8790 --root ~/.pi/canvas --version <hash>
 //
-// It only reads. Writers (canvas.ts in each pi process) put files in
+// It only reads, apart from three POSTs: /s/<id>/clip (put a file on the
+// clipboard), /follow and /s/<id>/focus (tmux follow mode). Writers (canvas.ts
+// in each pi process) put files in
 // <root>/<session-id>/ and this process watches the tree, serves a page per
 // session and pushes "changed" over server-sent events.
 //
@@ -169,7 +171,81 @@ export function sessionState(root, id) {
   // The current or last turn, so the page can mark what it touched.
   const t = readJson(join(dir, "turn.json"), null);
   const turn = typeof t?.started === "string" ? { started: t.started, ...(typeof t.ended === "string" ? { ended: t.ended } : {}) } : undefined;
-  return { meta: { ...meta, id }, live, activity, activityMessage, activityAt, turn, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
+  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
+}
+
+// ── tmux: follow mode ────────────────────────────────────────────────────────
+// canvas.ts records the pane pi runs in (meta.tmux = { pane, socket }). A
+// tmux hook posts /follow with the pane you moved to, and pages in follow
+// mode go to that session; a page in follow mode posts /s/<id>/focus and the
+// daemon moves tmux to that session's pane. PI_CANVAS_TMUX=0 turns both off.
+
+export const TMUX_ON = process.env.PI_CANVAS_TMUX !== "0";
+const TMUX_PANE = /^%\d{1,6}$/;
+
+/** A session's { pane, socket } when both look sane, else null. */
+export function tmuxOf(meta) {
+  const t = meta?.tmux;
+  return t && TMUX_PANE.test(t.pane || "") && typeof t.socket === "string" && t.socket.startsWith("/") ? { pane: t.pane, socket: t.socket } : null;
+}
+
+/** The page never needs the socket path. */
+function pageMeta(meta) {
+  const { tmux: _t, ...rest } = meta || {};
+  return rest;
+}
+
+/**
+ * The live session running in a tmux pane, or null. Pane ids are per tmux
+ * server, so the socket has to match when the hook sends one. A pane reused
+ * by a later pi keeps only the live one; ties go to the newest start.
+ */
+export function sessionForPane(root, pane, socket) {
+  if (!TMUX_PANE.test(pane || "")) return null;
+  let best = null;
+  let names = [];
+  try {
+    names = readdirSync(root).filter((n) => SESSION_ID.test(n) && !n.startsWith("."));
+  } catch {}
+  for (const id of names) {
+    const meta = readJson(join(root, id, "meta.json"), null);
+    const t = tmuxOf(meta);
+    if (!t || t.pane !== pane || (socket && t.socket !== socket) || meta.ended || !pidAlive(meta.pid)) continue;
+    if (!best || String(meta.started || "") > String(best.started || "")) best = { id, started: meta.started };
+  }
+  return best?.id || null;
+}
+
+const TMUX = ["tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"];
+
+function runTmux(socket, args, i = 0) {
+  return new Promise((ok, fail) =>
+    execFile(TMUX[i], ["-S", socket, ...args], { timeout: 5_000 }, (e, out, err) => {
+      if (!e) return ok(String(out));
+      if (e.code === "ENOENT" && i + 1 < TMUX.length) return runTmux(socket, args, i + 1).then(ok, fail);
+      fail(new Error(String(err || e.message).trim()));
+    }),
+  );
+}
+
+/** "<activity>\t<name>" lines: the client used last, or "" when none is attached. */
+export function latestClient(listing) {
+  let best = { at: -1, name: "" };
+  for (const line of String(listing).split("\n")) {
+    const [at, name] = line.split("\t");
+    if (name && Number(at) > best.at) best = { at: Number(at), name };
+  }
+  return best.name;
+}
+
+/** Move the most recently used tmux client to a pane: its session, window and pane. */
+export async function focusPane({ pane, socket }) {
+  const client = latestClient(await runTmux(socket, ["list-clients", "-F", "#{client_activity}\t#{client_name}"]));
+  if (!client) return { ok: false, reason: "no tmux client attached" };
+  const current = (await runTmux(socket, ["display-message", "-p", "-c", client, "#{pane_id}"])).trim();
+  if (current === pane) return { ok: true, already: true };
+  await runTmux(socket, ["switch-client", "-c", client, "-t", pane, ";", "select-window", "-t", pane, ";", "select-pane", "-t", pane]);
+  return { ok: true };
 }
 
 export function listSessions(root) {
@@ -190,6 +266,7 @@ export function listSessions(root) {
       name: s.meta.name || "",
       cwd: s.meta.cwd || "",
       live: s.live,
+      tmux: s.tmux,
       activity: s.activity,
       activityMessage: s.activityMessage,
       activityAt: s.activityAt,
@@ -391,8 +468,7 @@ function runClippy(path, i = 0) {
 function clip(req, res, id) {
   // Only this page may ask: a cross-site form or fetch can't send this header
   // without a preflight the daemon never answers, and its Origin won't match.
-  const origin = req.headers.origin;
-  if (req.headers["x-canvas-clip"] !== "1" || (origin && origin !== `http://${req.headers.host}`)) return send(res, 403, "forbidden");
+  if (!fromPage(req, "x-canvas-clip")) return send(res, 403, "forbidden");
   let body = "";
   req.on("data", (c) => {
     body += c;
@@ -421,11 +497,72 @@ function clip(req, res, id) {
   });
 }
 
+/**
+ * A POST the page (or the tmux hook) meant to send: a cross-site form or fetch
+ * can't add a custom header without a preflight the daemon never answers, and
+ * its Origin wouldn't match. curl sends no Origin.
+ */
+function fromPage(req, header) {
+  const origin = req.headers.origin;
+  return req.headers[header] === "1" && (!origin || origin === `http://${req.headers.host}`);
+}
+
+/** A small JSON body, or {} (anything over 1 KB drops the connection). */
+function readBody(req) {
+  return new Promise((ok) => {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > 1024) req.destroy();
+    });
+    req.on("end", () => {
+      try {
+        ok(JSON.parse(body) || {});
+      } catch {
+        ok({});
+      }
+    });
+  });
+}
+
+// tmux fires several hooks for one move (window changed, pane selected), so
+// the same follow inside a short window goes out once.
+let lastFollow = { id: "", at: 0 };
+
+/** POST /follow { pane, socket? } from the tmux hook: follow-mode pages go to that pane's session. */
+async function follow(req, res) {
+  if (!fromPage(req, "x-canvas")) return send(res, 403, "forbidden");
+  if (!TMUX_ON) return send(res, 404, "tmux follow is off (PI_CANVAS_TMUX=0)");
+  const { pane, socket } = await readBody(req);
+  const id = sessionForPane(ROOT, String(pane || ""), typeof socket === "string" && socket.startsWith("/") ? socket : undefined);
+  if (id && (id !== lastFollow.id || Date.now() - lastFollow.at > 500)) broadcast("follow", { id });
+  if (id) lastFollow = { id, at: Date.now() };
+  json(res, { id });
+}
+
+/** POST /s/<id>/focus from a follow-mode page: move tmux to that session's pane. */
+async function focus(req, res, id) {
+  if (!fromPage(req, "x-canvas")) return send(res, 403, "forbidden");
+  if (!TMUX_ON) return send(res, 404, "tmux follow is off (PI_CANVAS_TMUX=0)");
+  await readBody(req);
+  const meta = readJson(join(ROOT, id, "meta.json"), null);
+  const t = tmuxOf(meta);
+  if (!t || meta.ended || !pidAlive(meta.pid)) return send(res, 404, "not a live session in tmux");
+  // Tell the hook's echo of this move apart from a move you made in tmux.
+  lastFollow = { id, at: Date.now() };
+  focusPane(t).then(
+    (r) => json(res, r),
+    (e) => send(res, 502, e.message),
+  );
+}
+
 function handler(req, res) {
   if (!loopback(req.socket.remoteAddress)) return send(res, 403, "forbidden");
   if (!allowedHost(req.headers.host)) return send(res, 421, "misdirected");
   const route = new URL(req.url || "/", `http://127.0.0.1:${PORT}`).pathname.split("/").filter(Boolean);
   if (req.method === "POST" && route.length === 3 && route[0] === "s" && route[2] === "clip" && SESSION_ID.test(route[1])) return clip(req, res, route[1]);
+  if (req.method === "POST" && route.length === 1 && route[0] === "follow") return follow(req, res);
+  if (req.method === "POST" && route.length === 3 && route[0] === "s" && route[2] === "focus" && SESSION_ID.test(route[1])) return focus(req, res, route[1]);
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "read only");
 
   const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);

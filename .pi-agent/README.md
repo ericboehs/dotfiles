@@ -881,6 +881,26 @@ updates through server-sent events with no reload.
   survive a refresh and agree across tabs, and clear when the next turn starts.
   Auto cards count only when their content changed. Colours come from
   `--accent` and `--tint`, so they follow the theme.
+- **Follow tmux.** A per-tab mode (the **Follow tmux** button in the header,
+  shown once a live session runs in tmux, or Cmd-K) that keeps the page and
+  tmux on the same pi session. Move to a pi pane in tmux and the tab opens
+  its page. Open a session in the tab (Cmd-K, a waiting chip) and tmux
+  switches to its pane, across tmux sessions if needed, on the client you
+  used last. Panes that aren't running pi leave the page alone, and a reload
+  doesn't move tmux. How it works:
+  - canvas.ts records `$TMUX_PANE` and the server socket in `meta.json`. The
+    page only gets a `tmux: true` flag.
+  - Hooks in `.tmux.conf` (`session-window-changed`, `client-session-changed`,
+    `after-select-pane`) run `~/.tmux/canvas-follow.sh`. It posts the pane
+    to the daemon's `/follow`, which sends a `follow` event to open pages.
+  - A follow-mode page posts `/s/<id>/focus`. The daemon then runs `tmux
+    switch-client`, `select-window` and `select-pane`, and does nothing if
+    that pane is already current.
+  - Both POSTs need an `X-Canvas: 1` header and a matching Origin, like
+    `/clip`.
+  - The mode is saved in `sessionStorage`, so each tab chooses for itself.
+    `PI_CANVAS_TMUX=0` turns it off everywhere: the daemon refuses both
+    routes and pi stops recording panes.
 - **Waiting on you.** The header row has a chip for each other
   live session that is blocked, done or failed and changed since you last had
   its page in view. Most urgent comes first, and a click opens it. The chips
@@ -957,7 +977,8 @@ runtime keeps answers in `localStorage`. Both have a CSP with
 anything the session saw; it is not a redaction layer.
 
 `PI_CANVAS=0` disables everything, `PI_CANVAS_STATUS=0` keeps the tool without
-status runs, and `PI_CANVAS_MODEL=provider/id` changes the status model.
+status runs, `PI_CANVAS_TMUX=0` turns off tmux follow mode, and
+`PI_CANVAS_MODEL=provider/id` changes the status model.
 Subagent children skip the canvas.
 
 ```sh
