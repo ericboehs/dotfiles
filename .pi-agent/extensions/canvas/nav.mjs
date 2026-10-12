@@ -96,6 +96,7 @@ export const VIM_KEYS = [
   { group: "Fold", keys: "zM", action: "foldAll", help: "fold every section" },
   { group: "Yank", keys: "yy", action: "yankFile", help: "copy this section's file (Clippy), to paste as a file" },
   { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source as text" },
+  { group: "Yank", keys: "yC", action: "yankSlack", help: "copy this section's source as Slack markup (⇧-click on copy)" },
   { group: "Other", keys: "p", action: "pin", help: "pin this section to the top of the page, or unpin it" },
   { group: "Other", keys: "K", action: "moveUp", help: "move this side panel card up (or drag its header)" },
   { group: "Other", keys: "J", action: "moveDown", help: "move this side panel card down" },

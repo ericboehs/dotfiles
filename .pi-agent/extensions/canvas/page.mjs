@@ -1440,8 +1440,8 @@ function foldAgents(root) {
 function sectionCard(id, sec) {
   const meta = h("span", { class: "meta" });
   if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "kanban", "timeline"].includes(sec.kind)) {
-    const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source (yc)", "copy");
-    src.dataset.yank = "source"; // yc presses it
+    const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source (yc, yC for Slack)", "copy");
+    src.dataset.yank = "source"; // yc presses it, yC ⇧-presses it
     meta.append(src);
   }
   if (sec.file && sec.kind !== "jobs") meta.append(clipButton(() => rawUrl(id, sec, false), "Copy the file (yy)", "clip"));
@@ -4630,17 +4630,18 @@ function hopChanged(dir) {
 const cardTitle = (card) => card?.querySelector(":scope > h2 .title")?.textContent || "this section";
 
 /** Press a header button of the current section (Copy source, Clippy) and echo its result. */
-async function yankWith(card, selector, what) {
+async function yankWith(card, selector, what, slack = false) {
   const b = card?.querySelector(`:scope > h2 ${selector}`);
   if (!b) return toast(`“${cardTitle(card)}” has no ${what} to copy`);
   setCurrent(card, false);
-  b.click();
+  // As a ⇧-click for Slack markup (yC).
+  b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: slack }));
   const ok = await new Promise((resolve) => {
     const mo = new MutationObserver(() => /\b(ok|bad)\b/.test(b.className) && (clearTimeout(t), mo.disconnect(), resolve(b.className.includes("ok"))));
     const t = setTimeout(() => (mo.disconnect(), resolve(null)), 5000);
     mo.observe(b, { attributes: true, attributeFilter: ["class"] });
   });
-  if (ok === true) toast(what === "file" ? b.title || "File copied" : `Copied the source of “${cardTitle(card)}”`);
+  if (ok === true) toast(what === "file" ? b.title || "File copied" : `Copied the source of “${cardTitle(card)}”${slack ? " for Slack" : ""}`);
   else if (ok === false) toast(`Couldn't copy the ${what}${b.title && what === "file" ? `: ${b.title}` : ""}`);
 }
 
@@ -4702,6 +4703,8 @@ function vimAction(action, e) {
       return pageHooks.setAll?.(true);
     case "yankSource":
       return yankWith(currentOrTop(), "[data-yank=source]", "source");
+    case "yankSlack":
+      return yankWith(currentOrTop(), "[data-yank=source]", "source", true);
     case "yankFile":
       return yankWith(currentOrTop(), ".clip", "file");
     case "pin":
