@@ -375,7 +375,7 @@ ol.steps-list { list-style: none; margin: 0; padding: 0; }
 .pipe-legend { margin-left: auto; display: flex; gap: 12px; font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
 .pipe-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; background: currentColor; }
 .pipe-legend .p-active i { background: var(--c1); } .pipe-legend .p-back i { background: var(--warn); } .pipe-legend .p-done i { background: var(--ok); } .pipe-legend .p-failed i { background: var(--bad); }
-.pipe-wrap { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -4px; }
+.pipe-wrap { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -4px; padding-bottom: 10px; }
 .pipe-svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .pipe-svg .band { fill: var(--accent); opacity: 0; transition: opacity 0.5s; }
 .pipe-svg .band.on { opacity: 0.09; transition: none; }
@@ -2079,6 +2079,28 @@ function stageStatus(g) {
 const pipelineRunning = (spec) => !(spec.stages || []).every((g) => PIPE_DONE.has(stageStatus(g)));
 
 const PIPE_MARK = { todo: "○", active: "●", done: "✓", back: "↩", failed: "✗", skipped: "–" };
+
+/** Text width in px for a CSS font, from an offscreen canvas (a rough guess without one). */
+let measureCtx;
+function textWidth(text, font) {
+  measureCtx ??= document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return String(text).length * 7;
+  measureCtx.font = font;
+  return measureCtx.measureText(String(text)).width;
+}
+/** Text cut with … to fit max px. */
+function fitText(text, max, font) {
+  text = String(text ?? "");
+  if (!(max < Infinity) || textWidth(text, font) <= max) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (textWidth(text.slice(0, mid).trimEnd() + "…", font) <= max) lo = mid;
+    else hi = mid - 1;
+  }
+  return text.slice(0, lo).trimEnd() + "…";
+}
 /** One line per stage for narrow screens: "Build: Package 1 › Implementer ✓ · critic ✓ · …". */
 function stageSummary(g) {
   const lanes = g.lanes || [];
@@ -2122,20 +2144,42 @@ function pipelineChips(spec, onPick, current = -1) {
 
 function renderPipeline(spec) {
   const stages = spec.stages || [];
-  const COL = 128;
   const GAP = 64;
   const LANE = stages.some((g) => (g.lanes || []).some((l) => l.label)) ? 100 : 86;
   const PAD = 40;
   const anyLoop = stages.some((g) => g.loop);
-  const sizes = stages.map((g) => ({ cols: Math.max(1, ...(g.lanes || []).map((l) => l.steps.length)), lanes: Math.max(1, (g.lanes || []).length) }));
+  // Each stage's columns are as wide as its widest text (within limits); longer text is cut with … and shown whole on hover.
+  const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const F = { pl: `600 12.5px ${FONT}`, pn: `11px ${FONT}`, pb: "600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace" };
+  const COL_MIN = 128;
+  const COL_MAX = 210;
+  const colOf = (g) => {
+    const items = g.lanes?.length ? g.lanes.flatMap((l) => l.steps.flatMap((s) => [[s.label, F.pl], [s.note, F.pn]])) : [[g.label, F.pl], [g.note, F.pn]];
+    return Math.min(COL_MAX, Math.max(COL_MIN, ...items.filter(([t]) => t).map(([t, f]) => textWidth(t, f) + 18)));
+  };
+  const sizes = stages.map((g) => ({ cols: Math.max(1, ...(g.lanes || []).map((l) => l.steps.length)), lanes: Math.max(1, (g.lanes || []).length), col: colOf(g) }));
   const maxLanes = Math.max(...sizes.map((s) => s.lanes));
-  const top = Math.max(34 + (anyLoop ? 58 : 0), LANE === 100 ? 64 : 0);
+  // Room above the top lane and below the bottom one for what is actually drawn there.
+  const steps = stages.flatMap((g) => (g.lanes || []).flatMap((l, i) => l.steps.map((s) => ({ s, looped: g.loop && i === 0 }))));
+  const n = stages.length;
+  const ends = stages.filter((g, k) => (k === 0 || k === n - 1) && !g.lanes?.length);
+  const mids = stages.filter((g, k) => k > 0 && k < n - 1 && !g.lanes?.length);
+  const above = Math.max(36, steps.length || mids.length ? 40 : 0, steps.some(({ s, looped }) => s.badge && !looped) ? 52 : 0);
+  const below = Math.max(
+    44,
+    ends.length ? 46 : 0,
+    ends.some((g) => g.note) ? 60 : 0,
+    steps.some(({ s, looped }) => s.note && !looped) || mids.some((g) => g.note) ? 42 : 0,
+    steps.some(({ looped }) => looped) ? 38 : 0,
+    steps.some(({ s, looped }) => s.note && looped) ? 52 : 0,
+  );
+  const top = Math.max(above + (anyLoop ? 58 : 0), LANE === 100 ? 64 : 0);
   const mainY = top + ((maxLanes - 1) * LANE) / 2;
-  const H = mainY + ((maxLanes - 1) * LANE) / 2 + 44;
+  const H = mainY + ((maxLanes - 1) * LANE) / 2 + below;
   // x of each stage's left edge
   const xs = [];
   let x = PAD;
-  for (const s of sizes) xs.push(x), (x += s.cols * COL + GAP);
+  for (const s of sizes) xs.push(x), (x += s.cols * s.col + GAP);
   const W = x - GAP + PAD;
   const laneY = (i, n) => mainY + (i - (n - 1) / 2) * LANE;
   const color = (st) => ({ done: "var(--ok)", active: "var(--c1)", back: "var(--warn)", failed: "var(--bad)" })[st] || "var(--dim)";
@@ -2146,7 +2190,12 @@ function renderPipeline(spec) {
   const loops = svg("g", { class: "pipe-loops" });
   const nodes = svg("g", { class: "pipe-nodes" });
   const edge = (d, on) => edges.append(svg("path", { d, class: on ? "on" : "" }));
-  const label = (cx, y, text, cls, anchor = "middle") => svg("text", { x: cx, y, class: cls, "text-anchor": anchor }, text);
+  const label = (cx, y, text, cls, anchor = "middle", max = Infinity) => {
+    const shown = fitText(text, max, F[cls]);
+    const t = svg("text", { x: cx, y, class: cls, "text-anchor": anchor }, shown);
+    if (shown !== text) t.append(tip(text));
+    return t;
+  };
 
   const node = (cx, cy, st, title) => {
     const g = svg("g", { class: `pnode p-${st}` }, tip(`${title}: ${PIPE_LABEL[st]}`));
@@ -2158,7 +2207,8 @@ function renderPipeline(spec) {
 
   stages.forEach((g, k) => {
     const st = stageStatus(g);
-    const { cols } = sizes[k];
+    const { cols, col: COL } = sizes[k];
+    const fit = COL - 12;
     const x0 = xs[k];
     const w = cols * COL;
     const jIn = x0 - GAP / 2;
@@ -2178,8 +2228,8 @@ function renderPipeline(spec) {
         if (reached(st)) [-10, 0, 10].forEach((d) => box.append(svg("circle", { cx: cx + d, cy: mainY, r: 2.6, style: `fill:${color(st)}` })));
       }
       nodes.append(box);
-      nodes.append(label(cx, end ? mainY + 34 : mainY - 24, g.label, "pl"));
-      if (g.note) nodes.append(label(cx, end ? mainY + 49 : mainY + 30, g.note, "pn"));
+      nodes.append(label(cx, end ? mainY + 34 : mainY - 24, g.label, "pl", "middle", fit));
+      if (g.note) nodes.append(label(cx, end ? mainY + 49 : mainY + 30, g.note, "pn", "middle", fit));
       const half = end ? 4 : 30;
       if (k > 0) edge(`M${jIn},${mainY}L${cx - half},${mainY}`, reached(st));
       if (k + 1 < stages.length) edge(`M${cx + half},${mainY}L${jOut},${mainY}`, nextOn);
@@ -2212,13 +2262,13 @@ function renderPipeline(spec) {
       const looped = g.loop && i === 0;
       ln.steps.forEach((s, j) => {
         nodes.append(node(cxs[j], y, s.status, s.label));
-        nodes.append(label(cxs[j], looped ? y + 26 : y - 17, s.label, "pl"));
+        nodes.append(label(cxs[j], looped ? y + 26 : y - 17, s.label, "pl", "middle", fit));
         if (s.badge) {
           const b = looped ? label(cxs[j] + (j === 0 ? -14 : 14), y - 12, s.badge, "pb", j === 0 ? "end" : "start") : label(cxs[j], y - 33, s.badge, "pb");
           b.style.fill = s.status === "todo" ? "var(--dim)" : color(s.status);
           nodes.append(b);
         }
-        if (s.note) nodes.append(label(cxs[j], looped ? y + 41 : y + 25, s.note, "pn"));
+        if (s.note) nodes.append(label(cxs[j], looped ? y + 41 : y + 25, s.note, "pn", "middle", fit));
       });
     });
     if (g.loop) {
@@ -2239,7 +2289,8 @@ function renderPipeline(spec) {
     }
   });
 
-  const map = svg("svg", { class: "pipe-svg", width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": spec.title || "Pipeline" }, bands, edges, loops, nodes);
+  // Up to 15% narrower before it scrolls; height follows the width.
+  const map = svg("svg", { class: "pipe-svg", viewBox: `0 0 ${W} ${H}`, style: `width:100%;max-width:${W}px;min-width:${Math.round(W * 0.85)}px;height:auto`, role: "img", "aria-label": spec.title || "Pipeline" }, bands, edges, loops, nodes);
   const wrap = h("div", { class: "pipe-wrap" }, map);
   // Narrow screens hide the map; a chip then spells out its stage here instead.
   const detail = h("div", { class: "pipe-detail", "aria-live": "polite" });
@@ -2249,7 +2300,7 @@ function renderPipeline(spec) {
     const band = map.querySelector(`.band[data-stage="${i}"]`);
     if (!band) return;
     const bx = Number(band.getAttribute("x"));
-    wrap.scrollTo({ left: Math.max(0, bx - 24), behavior: "smooth" });
+    wrap.scrollTo({ left: Math.max(0, bx * (map.getBoundingClientRect().width / W) - 24), behavior: "smooth" }); // the map may be drawn smaller
     band.classList.remove("on");
     void band.getBoundingClientRect();
     band.classList.add("on");
