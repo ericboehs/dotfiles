@@ -48,6 +48,10 @@
  *   `req.reply({ id, logPath } | { error })`. Optional per-job overrides: `name`
  *   (widget label), `summary` (wake header instead of the command), and
  *   `tailLines`/`tailMaxChars` (how much of the log the wake carries).
+ *   bg.ts emits "bg:jobs" with a snapshot of its jobs (id, name, command, cwd,
+ *   logPath, startedAt, endedAt, exitCode, signal, killedByUser; foreground
+ *   jobs still racing their budget left out) on every start, adoption and
+ *   exit, and answers pi.events.emit("bg:list", { reply }) with the same.
  *
  * Env knobs:
  *   PI_BG_DIR         log/spool directory (default /tmp/pi-bg-<uid>, mode
@@ -623,6 +627,11 @@ export default function (pi: ExtensionAPI) {
 	const running = () => [...jobs.values()].filter((job) => job.endedAt === undefined);
 	/** Jobs the widget surfaces (quiet foreground-race jobs are invisible until adopted). */
 	const adopted = () => running().filter((job) => !job.quiet);
+	/** What other extensions see (`bg:jobs`, `bg:list`): every job past the foreground race, running or finished. */
+	const snapshot = () =>
+		[...jobs.values()]
+			.filter((job) => !job.quiet)
+			.map(({ id, name, command, cwd, logPath, startedAt, endedAt, exitCode, signal, killedByUser }) => ({ id, name, command, cwd, logPath, startedAt, endedAt, exitCode, signal, killedByUser }));
 
 	function renderWidget(): void {
 		const ctx = ctxRef;
@@ -671,6 +680,8 @@ export default function (pi: ExtensionAPI) {
 			ticker = undefined;
 		}
 		renderWidget();
+		// Every start, adoption and exit passes through here: tell listeners (canvas.ts).
+		pi.events.emit("bg:jobs", snapshot());
 	}
 
 	async function start(
@@ -1122,6 +1133,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ---- event bus: other extensions start jobs through bg.ts ---------------
+	pi.events.on("bg:list", (data) => (data as { reply?: (jobs: unknown) => void } | undefined)?.reply?.(snapshot()));
 	// Subscribing is not a resource (pi tracks and drops it on reload); the job
 	// itself only starts when a request arrives, after session_start.
 	pi.events.on("bg:start", async (data) => {
