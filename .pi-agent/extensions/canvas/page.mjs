@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { asQuote, boardMarks, pipeRows, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, dismissPipe, pipeRows, pipeStripHidden, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -805,6 +805,7 @@ const ICONS = {
   clip: ["M11 5 6.2 9.8a1.4 1.4 0 0 0 2 2l5-5a3 3 0 0 0-4.2-4.2l-5 5a4.6 4.6 0 0 0 6.5 6.5L14 10.6"],
   open: ["M9.5 2.5h4v4", "M13.5 2.5 7.5 8.5", "M12 9.5v4H2.5V4h4"],
   check: ["M3 8.5l3.2 3.2L13 5"],
+  x: ["M4.5 4.5l7 7", "M11.5 4.5l-7 7"],
 };
 function icon(name, size = 14) {
   return svg("svg", { class: "ico", viewBox: "0 0 16 16", width: size, height: size, "aria-hidden": "true" }, ...ICONS[name].map((d) => svg("path", { d })));
@@ -3664,7 +3665,7 @@ async function sessionView(id) {
     return now.includes(secId);
   };
   // Pins made in another tab of this page show here too; the side panel order is shared by every page.
-  addEventListener("storage", (e) => (e.key === PINS_KEY || e.key === SIDE_KEY) && place());
+  addEventListener("storage", (e) => (e.key === PINS_KEY || e.key === SIDE_KEY || e.key === PIPE_HIDDEN_KEY) && place());
 
   // ── Side panel order: drag a header, or J / K on the current card ──
   const sideItem = (node) => [...widgetSlot.children].find((c) => c.contains(node)) || null;
@@ -3725,9 +3726,22 @@ async function sessionView(id) {
   widgetSlot.addEventListener("dragend", clearDrag);
 
   // ── Pipeline strip: the newest pipeline's stages, while it still runs ──
+  // × hides that version for good (per browser); a pipeline nobody updated for 30 minutes hides itself.
+  const PIPE_HIDDEN_KEY = "canvas:pipe-hidden"; // localStorage: { "<session>:<section>": the at it was hidden at }
+  const readPipeHidden = () => {
+    try {
+      return JSON.parse(localStorage.getItem(PIPE_HIDDEN_KEY) || "{}") || {};
+    } catch {
+      return {};
+    }
+  };
   let pipeKey = "";
+  let pipeList = [];
   async function renderPipeStrip(list) {
-    const sec = wide.matches ? list.filter((s) => s.kind === "pipeline").sort((a, b) => String(b.at).localeCompare(String(a.at)))[0] : null;
+    pipeList = list;
+    const newest = wide.matches ? list.filter((s) => s.kind === "pipeline").sort((a, b) => String(b.at).localeCompare(String(a.at)))[0] : null;
+    const hideKey = newest ? `${id}:${newest.id}` : "";
+    const sec = newest && !pipeStripHidden(hideKey, newest.at, readPipeHidden()) ? newest : null;
     const key = sec ? `${sec.id}@${sec.at}` : "";
     if (key === pipeKey) return;
     pipeKey = key;
@@ -3758,7 +3772,31 @@ async function sessionView(id) {
       h(
         "section",
         { class: "card pipe-strip", "data-key": "_pipeline" },
-        h("h2", {}, h("span", { class: "title" }, spec.title || sec.title || "Pipeline")),
+        h(
+          "h2",
+          {},
+          h("span", { class: "title" }, spec.title || sec.title || "Pipeline"),
+          h(
+            "span",
+            { class: "meta" },
+            h(
+              "button",
+              {
+                class: "btn ico",
+                type: "button",
+                title: "Hide this pipeline here (it comes back if it is updated)",
+                "aria-label": "Hide this pipeline",
+                onclick: () => {
+                  try {
+                    localStorage.setItem(PIPE_HIDDEN_KEY, JSON.stringify(dismissPipe(readPipeHidden(), hideKey, sec.at)));
+                  } catch {}
+                  renderPipeStrip(pipeList);
+                },
+              },
+              icon("x"),
+            ),
+          ),
+        ),
         h("div", { class: "bd" }, h("a", { class: `pipe-now p-${now.status}`, href: `#sec-${sec.id}`, onclick: (e) => (e.preventDefault(), jump(now.stage)) }, now.text), pipelineChips(spec, jump, now.stage)),
       ),
     );

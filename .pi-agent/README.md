@@ -798,7 +798,9 @@ updates through server-sent events with no reload.
   Implementer ✓ · critic ↩").
   While the newest pipeline still runs, the side panel carries a compact copy:
   the current step ("Build › Package 2 › critic: sent back") and the chips,
-  which jump to the section. A `kanban` is a board of work items by state:
+  which jump to the section. Its × hides that pipeline from the panel (per
+  browser, kept across reloads) until the agent updates it again, and one
+  nobody updated for 30 minutes leaves by itself. A `kanban` is a board of work items by state:
   up to 8 columns left to right, each with a tone, an optional WIP `limit`
   (the count reads `3/2` in amber past it) and `more` ("+6 more" for cards
   left out); a card has a title and an optional `#id`, note, tag, owner,

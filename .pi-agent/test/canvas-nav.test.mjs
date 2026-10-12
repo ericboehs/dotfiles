@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -293,4 +293,19 @@ test("pipeline wrap: two-line labels and rows that break between stages", () => 
   assert.deepEqual(ks(pipeRows([st(1), st(7), st(1)], 450, 50)), [["0:0-1"], ["1:0-4"], ["1:4-7", "2:0-1"]]);
   // A stage that may not split (lanes, a loop) keeps its own, overflowing row.
   assert.deepEqual(ks(pipeRows([st(1), st(7, false), st(1)], 450, 50)), [["0:0-1"], ["1:0-7"], ["2:0-1"]]);
+});
+
+test("pipeStripHidden: dismissed at this version, or stale after 30 minutes; dismissPipe keeps the newest", () => {
+  const now = Date.parse("2026-10-12T18:00:00.000Z");
+  const at = "2026-10-12T17:50:00.000Z";
+  assert.equal(pipeStripHidden("s:p", at, {}, now), "");
+  assert.equal(pipeStripHidden("s:p", at, { "s:p": at }, now), "dismissed");
+  assert.equal(pipeStripHidden("s:p", "2026-10-12T17:59:00.000Z", { "s:p": at }, now), "", "an update brings it back");
+  assert.equal(pipeStripHidden("s:p", "2026-10-12T17:29:00.000Z", {}, now), "stale");
+  assert.equal(pipeStripHidden("s:p", "2026-10-12T17:31:00.000Z", {}, now), "");
+  assert.equal(pipeStripHidden("s:p", "garbage", null, now), "");
+  let h = {};
+  for (const k of ["a", "b", "c", "d"]) h = dismissPipe(h, k, at, 3);
+  assert.deepEqual(Object.keys(h), ["b", "c", "d"]);
+  assert.deepEqual(Object.keys(dismissPipe(h, "b", "x", 3)), ["c", "d", "b"], "re-dismissed moves to newest");
 });

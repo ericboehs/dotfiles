@@ -377,3 +377,28 @@ export function cardPrompt(k, column, { todo = false, board = "" } = {}) {
   const where = board ? `the "${board}" board, in ${column}` : column;
   return [`Let's work on ${k.id ? `${k.id} ` : ""}${k.title} (from ${where}).`, k.note || "", k.href || ""].filter(Boolean).join("\n");
 }
+
+// ── pipeline strip: dismissed or stale ───────────────────────────────────────
+
+export const PIPE_STALE_MS = 30 * 60_000;
+
+/**
+ * Why the side panel's pipeline strip hides this pipeline, or "": "dismissed"
+ * when its × was pressed at this very version (hidden[key] === sec.at, so an
+ * update brings it back), "stale" when nobody updated it for PIPE_STALE_MS.
+ */
+export function pipeStripHidden(key, at, hidden, now = Date.now()) {
+  if (hidden && hidden[key] === at) return "dismissed";
+  const t = Date.parse(at);
+  return t && now - t > PIPE_STALE_MS ? "stale" : "";
+}
+
+/** Record a dismissal, keeping the newest `max` (an object is insertion-ordered). */
+export function dismissPipe(hidden, key, at, max = 100) {
+  const next = { ...(hidden || {}) };
+  delete next[key];
+  next[key] = at;
+  const keys = Object.keys(next);
+  for (const k of keys.slice(0, Math.max(0, keys.length - max))) delete next[k];
+  return next;
+}
