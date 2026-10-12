@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -249,6 +249,19 @@ test("asQuote: > on every line, a bare > on blank ones, trailing newlines droppe
   assert.equal(asQuote("*Done:* shipped.\n\nNext: docs\n\n"), "> *Done:* shipped.\n>\n> Next: docs");
   assert.equal(asQuote("  indented\n   "), ">   indented\n>");
   assert.equal(asQuote(""), ">");
+});
+
+test("blockquote copy: top-level quotes in page order, markers stripped, nested ones kept inside", () => {
+  const raw1 = "> Posts as **me**.\n>\n> > *Done:* shipped `K`.\n> > Next: docs\n";
+  const tokens = [
+    { type: "paragraph", raw: "intro", tokens: [{ type: "text" }] },
+    { type: "blockquote", raw: raw1, tokens: [{ type: "blockquote", raw: "> *Done:* …" }] },
+    { type: "list", raw: "- a", items: [{ type: "list_item", tokens: [{ type: "blockquote", raw: "   > in a list" }] }] },
+  ];
+  assert.deepEqual(topQuotes(tokens), [raw1, "   > in a list"]);
+  assert.equal(unquote(raw1), "Posts as **me**.\n\n> *Done:* shipped `K`.\n> Next: docs");
+  assert.equal(unquote("   > in a list"), "in a list");
+  assert.equal(unquote(">tight\nlazy line"), "tight\nlazy line");
 });
 
 test("cardPrompt: the todo's next move by column, or a hand-over for other boards", () => {

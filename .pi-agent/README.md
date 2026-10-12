@@ -935,7 +935,10 @@ updates through server-sent events with no reload.
   block, a finding, a prompt) copies the text as a markdown blockquote, `> `
   on every line. Drafts (a Slack post, an email, a PR comment) are written
   as blockquotes, not code fences, so they wrap and read in full colour; the
-  tool's guidance says so. The age has a tooltip, on hover or for 5 s after a
+  tool's guidance says so. Each top-level quote has its own copy icon (on
+  hover): it copies the quote's markdown without the `>` markers (a nested
+  quote keeps its own), so the header copies the whole section and the quote
+  just the draft. The age has a tooltip, on hover or for 5 s after a
   tap (touch has no hover): the kind, "kept up to date by the canvas" for the
   extension's own sections (Tasks, Agents, Files changed, Screenshots), the
   exact time, and the last-turn note. Status's age tells which model wrote

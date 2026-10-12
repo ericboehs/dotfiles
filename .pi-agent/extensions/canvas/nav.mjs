@@ -215,6 +215,28 @@ export function asQuote(text) {
     .join("\n");
 }
 
+/** A blockquote's markdown without its markers: `> ` (or `>`) off each line, up to 3 spaces of indent before it. */
+export function unquote(raw) {
+  return String(raw ?? "")
+    .replace(/\n+$/, "")
+    .split("\n")
+    .map((l) => l.replace(/^ {0,3}> ?/, ""))
+    .join("\n");
+}
+
+/** The raw markdown of each top-level blockquote in marked's tokens, in page order (quotes inside lists count; nested quotes go with their parent). */
+export function topQuotes(tokens) {
+  const out = [];
+  const walk = (list) => {
+    for (const t of list || []) {
+      if (t.type === "blockquote") out.push(t.raw);
+      else (walk(t.tokens), walk(t.items));
+    }
+  };
+  walk(tokens);
+  return out;
+}
+
 /** Pin an unpinned id (at the end, so pins keep the order they were made in), or unpin it. */
 export function togglePin(pins, id) {
   return pins.includes(id) ? pins.filter((x) => x !== id) : [...pins, id];
