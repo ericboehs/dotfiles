@@ -145,6 +145,35 @@ export function lastTurn(branch: unknown[]): Turn {
   return turn;
 }
 
+export const REPLY_MAX = 100_000;
+export const REPLY_PROMPT_MAX = 2_000;
+
+/**
+ * The Status card's "Last response": the text of the newest assistant message
+ * that has any, and the user prompt it answered (the last one that wasn't
+ * from another agent). Null before there is a reply.
+ */
+export function lastReply(branch: unknown[]): { prompt: string; text: string } | null {
+  const entries = (branch || []) as Entry[];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const m = entries[i]?.message;
+    if (entries[i]?.type !== "message" || m?.role !== "assistant") continue;
+    const text = textOf(m.content);
+    if (!text) continue;
+    let prompt = "";
+    for (let j = i - 1; j >= 0; j--) {
+      const u = entries[j]?.message;
+      if (entries[j]?.type !== "message" || u?.role !== "user") continue;
+      const t = textOf(u.content);
+      if (t.startsWith("[cross-agent") || t.startsWith("[reply from")) continue;
+      prompt = t;
+      break;
+    }
+    return { prompt: prompt.slice(0, REPLY_PROMPT_MAX), text: text.slice(0, REPLY_MAX) };
+  }
+  return null;
+}
+
 export type Status = {
   goal: string;
   now: string;
@@ -1312,6 +1341,18 @@ export default function canvas(pi: ExtensionAPI) {
     } catch {}
   }
 
+  // The Status card's "Last response": rewritten only when it changed.
+  function writeReply(ctx: ExtensionContext) {
+    try {
+      const r = lastReply(ctx.sessionManager.getBranch() || []);
+      if (!r || !existsSync(dir())) return;
+      const p = join(dir(), "reply.json");
+      const prev = readJson<{ prompt?: string; text?: string } | null>(p, null);
+      if (prev?.text === r.text && prev?.prompt === r.prompt) return;
+      writeAtomic(p, JSON.stringify({ ...r, at: new Date().toISOString() }));
+    } catch {}
+  }
+
   /** Create the folder and meta.json on first write, never for idle sessions. */
   function ensureDir(ctx: ExtensionContext): string {
     const d = dir();
@@ -1710,6 +1751,7 @@ export default function canvas(pi: ExtensionAPI) {
       try {
         settleStaleRun(dir());
       } catch {}
+      if (ctx.hasUI) writeReply(ctx);
     }
     if (autoOn && ctx.hasUI) {
       void serial(() => updateTasks(ctx)).catch(() => {});
@@ -1768,6 +1810,7 @@ export default function canvas(pi: ExtensionAPI) {
       writeTurn();
     }
     if (!ctx.hasUI || !sessionId) return;
+    writeReply(ctx);
     if (autoOn) {
       const turn = lastTurn(ctx.sessionManager.getBranch() || []);
       void serial(() => updateWidgets(ctx, turn)).catch(() => {});

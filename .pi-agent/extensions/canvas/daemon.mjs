@@ -174,7 +174,14 @@ export function sessionState(root, id) {
   // The current or last turn, so the page can mark what it touched.
   const t = readJson(join(dir, "turn.json"), null);
   const turn = typeof t?.started === "string" ? { started: t.started, ...(typeof t.ended === "string" ? { ended: t.ended } : {}) } : undefined;
-  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, sections: Array.isArray(sections) ? sections : [], findings, watch: readWatch(root), updated: newestMtime(dir) };
+  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, reply: readReply(dir), sections: Array.isArray(sections) ? sections : [], findings, watch: readWatch(root), updated: newestMtime(dir) };
+}
+
+/** The Status card's "Last response" (reply.json, written by canvas.ts): { prompt, text, at }, or null. */
+export function readReply(dir) {
+  const r = readJson(join(dir, "reply.json"), null);
+  if (typeof r?.text !== "string" || !r.text.trim()) return null;
+  return { prompt: typeof r.prompt === "string" ? r.prompt.slice(0, 2_000) : "", text: r.text.slice(0, 100_000), at: typeof r.at === "string" ? r.at : undefined };
 }
 
 /**

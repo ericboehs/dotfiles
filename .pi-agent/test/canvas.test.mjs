@@ -14,8 +14,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readWatch, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -51,6 +51,24 @@ test("lastTurn reads the newest user prompt, tools, files and final reply", () =
   assert.equal(t.tools[1].error, false);
   assert.deepEqual(t.files, ["a.ts", "b.ts"]);
   assert.equal(t.reply, "done");
+});
+
+test("lastReply: the newest assistant message with text, and the user prompt it answered", () => {
+  assert.equal(lastReply([]), null);
+  assert.equal(lastReply([msg("user", "hi")]), null, "no reply yet");
+  const branch = [
+    msg("user", "old prompt"),
+    msg("assistant", [{ type: "text", text: "old reply" }]),
+    msg("user", [{ type: "text", text: "plan the canvas" }]),
+    msg("assistant", [{ type: "text", text: "Checking:" }, { type: "toolCall", id: "c1", name: "bash", arguments: {} }]),
+    msg("toolResult", [{ type: "text", text: "ok" }], { toolCallId: "c1" }),
+    msg("user", "[cross-agent from pi-x] hi"),
+    msg("assistant", [{ type: "text", text: "Done." }, { type: "text", text: "Next steps: …" }]),
+    msg("assistant", [{ type: "toolCall", id: "c2", name: "read", arguments: {} }]),
+  ];
+  // The final message's text, all of it; not the earlier narration; the prompt skips the other agent's message.
+  assert.deepEqual(lastReply(branch), { prompt: "plan the canvas", text: "Done.\nNext steps: …" });
+  assert.equal(lastReply([msg("user", "x".repeat(5000)), msg("assistant", [{ type: "text", text: "y" }])]).prompt.length, 2000);
 });
 
 test("lastTurn on an empty branch is empty", () => {
@@ -492,6 +510,24 @@ test("daemon passes the current or last turn through, and drops a malformed one"
     assert.deepEqual(sessionState(root, "done").turn, { started: "2026-10-09T18:00:00.000Z", ended: "2026-10-09T18:04:00.000Z" });
     assert.equal(sessionState(root, "bad").turn, undefined);
     assert.equal(sessionState(root, "none").turn, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon carries the last response from reply.json", () => {
+  const { root, mk } = tempRoot();
+  try {
+    mk("a", { pid: process.pid });
+    assert.equal(sessionState(root, "a").reply, null);
+    writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z" }));
+    assert.deepEqual(sessionState(root, "a").reply, { prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z" });
+    writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ prompt: 3, text: "x".repeat(200_000) }));
+    const r = readReply(join(root, "a"));
+    assert.equal(r.prompt, "");
+    assert.equal(r.text.length, 100_000);
+    writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ text: "  " }));
+    assert.equal(readReply(join(root, "a")), null, "blank");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

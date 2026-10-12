@@ -557,6 +557,17 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .pulse.idle { background: transparent; border: 1.5px solid var(--dim); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
 .status .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
+.status .reply { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); }
+.status .reply-top { display: flex; align-items: center; gap: 8px; }
+.status .reply-h { display: flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none; cursor: pointer; color: var(--dim); }
+.status .reply-h .eyebrow { margin: 0; }
+.status .reply-h::before { content: ""; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; transition: transform 0.12s; }
+.status .reply-h.shut::before { transform: rotate(-90deg); }
+.status .reply-h:hover { color: var(--ink); }
+.status .reply-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
+.status .reply-prompt { margin: 6px 0 8px; padding: 6px 10px; border-radius: 8px; background: var(--soft); color: var(--dim); font-size: 13px; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.status .reply-prompt.full { display: block; -webkit-line-clamp: unset; }
+.status .reply-bd > .md { font-size: 14px; }
 .status .col h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; color: var(--ink); }
 .status .col ul { list-style: none; margin: 0; padding: 0; }
 .status .col li { position: relative; padding: 3px 0 3px 20px; font-size: 13.5px; line-height: 1.4; }
@@ -1255,13 +1266,14 @@ function watchGrew(prev, next) {
   return [...nums(next)].some((k) => !was.has(k));
 }
 
-function statusCard(status, state) {
+function statusCard(status, state, reply = null) {
   const title = h("h2", {}, h("span", { class: "title" }, "Status"));
   const card = h("section", { class: "card" }, title);
   const bd = h("div", { class: "bd status" });
   card.append(bd);
   if (!status) {
     bd.append(h("div", { class: "empty" }, "No status yet. It appears after the next turn with tool calls."));
+    if (reply) bd.append(replyPart(reply));
     return collapsible(card, "_status");
   }
   title.append(
@@ -1281,7 +1293,48 @@ function statusCard(status, state) {
       items?.length ? h("ul", {}, items.map((i) => h("li", {}, i))) : h("div", { class: "none" }, "—"),
     );
   bd.append(h("div", { class: "cols" }, col("next", "Next", status.next), col("open", "Open", status.open), col("done", "Done", status.done)));
+  if (reply) bd.append(replyPart(reply));
   return collapsible(card, "_status");
+}
+
+/**
+ * The Status card's "Last response": the agent's final message of the last
+ * turn, rendered, under the prompt it answered (clipped; a click shows it
+ * all). The heading folds it, remembered per browser.
+ */
+const REPLY_FOLD_KEY = "canvas:reply-folded";
+function replyPart(reply) {
+  const body = h("div", { class: "reply-bd" });
+  if (reply.prompt) {
+    const p = h("div", { class: "reply-prompt", title: "Your prompt (click to show it all)" }, reply.prompt);
+    p.addEventListener("click", () => p.classList.toggle("full"));
+    body.append(p);
+  }
+  body.append(renderMarkdown(reply.text));
+  let shut = false;
+  try {
+    shut = localStorage.getItem(REPLY_FOLD_KEY) === "1";
+  } catch {}
+  const head = h("button", { class: "reply-h", type: "button" }, h("span", { class: "eyebrow" }, "Last response"));
+  const set = (s) => {
+    body.hidden = s;
+    head.classList.toggle("shut", s);
+    head.setAttribute("aria-expanded", String(!s));
+  };
+  set(shut);
+  head.addEventListener("click", (e) => {
+    e.stopPropagation();
+    set(!body.hidden);
+    try {
+      localStorage.setItem(REPLY_FOLD_KEY, body.hidden ? "1" : "0");
+    } catch {}
+  });
+  return h(
+    "div",
+    { class: "reply" },
+    h("div", { class: "reply-top" }, head, h("span", { class: "reply-meta" }, reply.at ? agoEl(reply.at) : null, copyButton(() => reply.text, "Copy response", "copy"))),
+    body,
+  );
 }
 
 const FINDINGS_SHOWN = 8;
@@ -3652,6 +3705,7 @@ async function sessionView(id) {
   const wide = matchMedia(WIDE);
   let lastSections = [];
   let lastStatusAt;
+  let lastReplyAt;
   let liveTmux = false; // live and in a tmux pane, for focusTmux
   let lastState;
   let lastFindings = -1;
@@ -3922,11 +3976,12 @@ async function sessionView(id) {
         h("a", { class: "back", href: "/" }, "All sessions"),
       ),
     );
-    if (state.status?.at !== lastStatusAt || stateOf(state) !== lastState || !statusSlot.firstChild) {
+    if (state.status?.at !== lastStatusAt || state.reply?.at !== lastReplyAt || stateOf(state) !== lastState || !statusSlot.firstChild) {
       const changed = lastStatusAt !== undefined && state.status?.at !== lastStatusAt;
       lastStatusAt = state.status?.at;
+      lastReplyAt = state.reply?.at;
       lastState = stateOf(state);
-      const card = statusCard(state.status, lastState);
+      const card = statusCard(state.status, lastState, state.reply);
       if (changed) card.classList.add("fresh");
       if (changed && card.classList.contains("collapsed")) card.classList.add("unseen");
       statusSlot.replaceChildren(card);

@@ -745,6 +745,11 @@ updates through server-sent events with no reload.
   `modelRegistry.complete()` call, the same pattern as `auto-session-name.ts`.
   The main model does nothing, and a new turn aborts a run still in progress.
   Each run uses one Copilot premium request; tool-free short replies skip it.
+  Under it, **Last response** shows the agent's final message of the last
+  turn, rendered, below the prompt it answered (clipped to two lines; a click
+  shows it all). canvas.ts writes it to `reply.json` when a turn settles (no
+  model involved), so a short turn updates it too. The heading folds it,
+  remembered per browser.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
