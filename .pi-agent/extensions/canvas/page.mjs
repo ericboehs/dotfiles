@@ -3096,7 +3096,7 @@ function watchGroup(name, label, rows) {
     head.setAttribute("aria-expanded", String(!shut));
     head.classList.toggle("shut", shut);
   };
-  set(!!watchFolds()[name]);
+  set(!!(watchFolds()[name] ?? name === "cleared")); // Cleared starts folded
   head.addEventListener("click", (e) => {
     e.stopPropagation();
     const shut = !body.hidden;

@@ -926,7 +926,8 @@ updates through server-sent events with no reload.
   and any offer. Each row copies `/watch do N` and opens the message in
   Slack; below come offers with no row, **Waiting on** (a maybe-answered
   wait copies `/watch waits close Wn`) and the last hour's **Cleared**; a
-  click on either heading folds it, remembered per browser.
+  click on either heading folds it, remembered per browser (Cleared starts
+  folded).
   The watching session's canvas writes the snapshot to
   `~/.pi/canvas/.watch.json` (mode 600, only when it changed; removed when
   the watcher stops or pi exits) and the daemon adds it to every page's
