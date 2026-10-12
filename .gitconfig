@@ -139,6 +139,15 @@
 	# something that accepts them.
 	event = pre-commit
 	command = "sh -c 'test -x ./bin/pi-ext-precommit || exit 0; exec ./bin/pi-ext-precommit \"$@\"' pi-ext-precommit"
+[hook "pi-managed-clone"]
+	# Warns when a commit or a pull moves a clone pi manages (~/.pi/agent/git)
+	# past the pin in settings: pi loads it happily until the next
+	# `pi update --extensions` resets it to the pin and the work is gone. Global,
+	# so the case statement scopes it before anything else runs; neither event
+	# can fail the commit or merge. git appends hook args, hence the trailing $0.
+	event = post-commit
+	event = post-merge
+	command = "sh -c 'case \"$PWD\" in */.pi/agent/git/*) ;; *) exit 0 ;; esac; p=$(command -v pi-pin) || p=\"$HOME/bin/pi-pin\"; test -x \"$p\" || exit 0; exec \"$p\" --hook' pi-pin-hook"
 [user]
 	signingkey = ~/.ssh/id_ed25519.pub
 [credential "https://github.ec.va.gov"]

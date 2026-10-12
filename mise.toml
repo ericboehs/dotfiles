@@ -787,6 +787,21 @@ trap 'rm -f "$packages" "$sources"' EXIT
 # key aborts jq rather than yielding nothing.
 jq -r '(.packages // [])[] | if type == "string" then . else .source end' \
   "$HOME/.pi/agent/settings.json" > "$sources"
+
+# `pi update --extensions` resets every git clone to its pin. That is right for
+# a stale clone and destructive for one that has moved ahead of its pin: a
+# commit made in the managed checkout, or a pull there, works until this line
+# throws it away without a word. One /update on 2026-09-22 dropped two pushed
+# but unpinned features that way. pi-pin --check names any such clone and the
+# command that keeps it; PI_PIN_DISCARD=1 lets the reset go ahead anyway.
+if [ -x "$root/bin/pi-pin" ] && ! "$root/bin/pi-pin" --check; then
+  if [ "${PI_PIN_DISCARD:-}" = 1 ]; then
+    echo "bootstrap:pi: PI_PIN_DISCARD=1 - resetting those clones to their pins anyway" >&2
+  else
+    echo "bootstrap:pi: refusing to reconcile - pin those commits, or rerun with PI_PIN_DISCARD=1 to drop them" >&2
+    exit 1
+  fi
+fi
 PI_SKIP_VERSION_CHECK=1 pi update --extensions
 
 set --

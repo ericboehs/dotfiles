@@ -4,6 +4,14 @@
 # Usage:
 #   pi-pin                 list every pinned package, and whether the clone on
 #                          disk is the commit the settings ask for
+#   pi-pin --fetch         the same, after fetching each clone's origin, so the
+#                          UPSTREAM column counts what is really out there
+#   pi-pin --check         say nothing and exit 0 when `pi update --extensions`
+#                          is safe; warn and exit 1 when it would roll a clone
+#                          back past commits its pin does not have
+#   pi-pin --hook          the post-commit/post-merge hook: warn when the repo
+#                          git is running in is a pi-managed clone that just
+#                          moved past its pin (always exits 0)
 #   pi-pin NAME            move NAME to the tip of its remote default branch
 #   pi-pin NAME REF        move NAME to a branch, tag or sha
 #
@@ -15,22 +23,44 @@
 # The reason this exists rather than a sed one-liner is the second half. A
 # pinned package is two pieces of state: the sha in settings.<host>.json, and
 # the clone under ~/.pi/agent/git that pi actually loads. Editing the first does
-# not move the second - pi reconciles a clone on `pi update --extensions`, not
-# at startup - so a bumped pin runs the old code, silently, for as long as it
-# takes to notice that a fix you just shipped is not in effect. That cost an
-# evening once: agent-notify learned to stay quiet for a pane being read on the
-# iPad, the pin said so, and every session kept posting because the clone was
-# still at the commit before it.
+# not move the second - pi reconciles a clone on `pi update`, not at startup -
+# so a bumped pin runs the old code, silently, for as long as it takes to
+# notice that a fix you just shipped is not in effect. That cost an evening
+# once: agent-notify learned to stay quiet for a pane being read on the iPad,
+# the pin said so, and every session kept posting because the clone was still
+# at the commit before it.
 #
-# So the bump and the reconcile are one command, and the listing puts the two
-# shas side by side where a stale clone has nowhere to hide.
+# The same gap bites in the other direction, and that one loses work. A clone
+# can move *ahead* of its pin - a commit made right there in the managed
+# checkout, or a `git pull` in it - and everything works, because pi loads
+# whatever is checked out. Then the next `pi update --extensions` (bootstrap:pi
+# runs one, and /update runs bootstrap:pi) resets every clone to its pin, and
+# the feature is gone with no message at all. On 2026-09-22 one reconcile took
+# pi-agent-link's @mention autocomplete and pi-scheduler's failure paging in
+# the same second; both had been pushed, neither had been pinned, and the only
+# trace was a `reset: moving to FETCH_HEAD` in each reflog. The listing used to
+# call that state STALE and advise `pi update --extensions` - the exact command
+# that throws the commits away.
+#
+# So the listing compares by ancestry, not by equality: AHEAD (the pin is
+# behind the clone - bump the pin, do not reconcile), BEHIND (the clone is
+# stale - reconcile), DIVERGED, and UNPUSHED for commits that exist nowhere but
+# this disk. `--check` guards the reconcile in bootstrap:pi, `--hook` warns at
+# the moment a clone moves, and a bump reconciles only the package it moved.
 
 set -uo pipefail
 
+# Run as a git hook, GIT_DIR and friends point at the repo that fired it and
+# would hijack every `git -C` below.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
 # Reached through the ~/bin symlink, so the settings live next to the *target*.
 self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
-SETTINGS_DIR=$(cd "$(dirname "$self")/../.pi-agent" 2>/dev/null && pwd)
+SETTINGS_DIR=${PI_PIN_SETTINGS_DIR:-$(cd "$(dirname "$self")/../.pi-agent" 2>/dev/null && pwd)}
 PI_GIT="$HOME/.pi/agent/git"
+# The settings this host's pi actually reads, and so the pins `pi update`
+# reconciles the clones to. The profiles in SETTINGS_DIR are every host's.
+LIVE_SETTINGS="$HOME/.pi/agent/settings.json"
 CODE="$HOME/Code"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
@@ -45,8 +75,24 @@ list_specs() {
   grep -ho 'git:[^"]*' "$SETTINGS_DIR"/settings*.json 2>/dev/null | sort -u
 }
 
+list_repos() {
+  local spec
+  while read -r spec; do
+    [ -n "$spec" ] && spec_repo "$spec" && printf '\n'
+  done <<<"$(list_specs)" | sort -u
+}
+
 spec_repo() { local s=${1#git:}; printf '%s' "${s%@*}"; }
 spec_ref()  { local s=$1; case $s in *@*) printf '%s' "${s##*@}" ;; esac; }
+
+# The ref this host pins REPO at: empty when unpinned, "-" when this host does
+# not list the package at all.
+live_ref() {
+  local spec
+  spec=$(grep -ho "git:$1\(@[^\"]*\)\{0,1\}\"" "$LIVE_SETTINGS" 2>/dev/null | head -1)
+  spec=${spec%\"}
+  if [ -z "$spec" ]; then printf -- '-'; else spec_ref "$spec"; fi
+}
 
 clone_head() {
   git -C "$PI_GIT/$1" rev-parse HEAD 2>/dev/null
@@ -54,38 +100,190 @@ clone_head() {
 
 short() { printf '%s' "${1:0:7}"; }
 
-# --- listing --------------------------------------------------------------
-if [ $# -eq 0 ]; then
-  printf '%-46s %-9s %-9s %s\n' PACKAGE PINNED CLONE ''
-  stale=0
-  while read -r spec; do
-    [ -n "$spec" ] || continue
-    repo=$(spec_repo "$spec")
-    ref=$(spec_ref "$spec")
-    head=$(clone_head "$repo")
-    if [ -z "$head" ]; then
-      state="not installed"
-    elif [ -z "$ref" ]; then
-      state="unpinned (tracks its branch)"
-    elif [ "$head" = "$ref" ]; then
-      state="ok"
-    else
-      state="STALE - run: pi update --extensions"
-      stale=1
-    fi
-    printf '%-46s %-9s %-9s %s\n' "$repo" "$(short "$ref")" "$(short "$head")" "$state"
-  done <<<"$(list_specs)"
-  exit $stale
+plural() { [ "$1" = 1 ] && printf '%s %s' "$1" "$2" || printf '%s %ss' "$1" "$2"; }
+
+# classify REPO REF - compare the clone of REPO with REF by ancestry. Sets:
+#   state     ok | ahead | behind | diverged | unfetched | missing | unpinned
+#   head pin  the clone's sha and REF resolved to a sha (pin empty if it won't)
+#   ahead behind unpushed  commit counts (unpushed: ahead and on no remote)
+#   lost      commits only the reflog still reaches - work a reset orphaned
+#   upstream  commits on origin's default branch past the pin, from the last
+#             fetch; empty when there is no origin/HEAD to count against
+classify() {
+  local dir="$PI_GIT/$1" ref=$2
+  state="" head="" pin="" ahead=0 behind=0 unpushed=0 lost=0 upstream=""
+
+  head=$(clone_head "$1") || head=""
+  if [ -z "$head" ]; then state=missing; return; fi
+
+  lost=$(git -C "$dir" rev-list --count --reflog --not HEAD --remotes 2>/dev/null || echo 0)
+
+  if [ -z "$ref" ]; then state=unpinned; return; fi
+
+  # Pins are shas in practice, but a tag or branch is legal; a branch only
+  # exists here as origin/<branch>.
+  pin=$(git -C "$dir" rev-parse -q --verify "$ref^{commit}" 2>/dev/null ||
+        git -C "$dir" rev-parse -q --verify "refs/remotes/origin/$ref^{commit}" 2>/dev/null) || pin=""
+  if [ -z "$pin" ]; then state=unfetched; return; fi
+
+  if git -C "$dir" rev-parse -q --verify refs/remotes/origin/HEAD >/dev/null 2>&1; then
+    upstream=$(git -C "$dir" rev-list --count "$pin..refs/remotes/origin/HEAD" 2>/dev/null || echo "")
+  fi
+
+  if [ "$head" = "$pin" ]; then state=ok; return; fi
+
+  ahead=$(git -C "$dir" rev-list --count "$pin..$head")
+  behind=$(git -C "$dir" rev-list --count "$head..$pin")
+  if [ "$behind" -eq 0 ]; then state=ahead
+  elif [ "$ahead" -eq 0 ]; then state=behind
+  else state=diverged
+  fi
+  [ "$ahead" -gt 0 ] &&
+    unpushed=$(git -C "$dir" rev-list --count "$head" --not "$pin" --remotes)
+}
+
+# The short name pi-pin NAME accepts, for the advice it prints.
+short_name() {
+  local repo=$1 base=${1##*/} other n=0
+  while read -r other; do
+    [ "${other##*/}" = "$base" ] && n=$((n + 1))
+  done <<<"$(list_repos)"
+  [ "$n" -le 1 ] && printf '%s' "$base" || printf '%s' "${repo#*/}"
+}
+
+# Explain a clone that `pi update` would roll back. Only meaningful after
+# classify left state at ahead or diverged.
+explain_rollback() {
+  local repo=$1 name
+  name=$(short_name "$repo")
+  warn "pi-pin: $repo is $(plural "$ahead" commit) ahead of its pin $(short "$pin")$( [ "$unpushed" -gt 0 ] && printf ', %s unpushed' "$unpushed")"
+  warn "pi-pin:   pi update --extensions (and bootstrap:pi, and /update) would reset it to $(short "$pin")"
+  if [ "$state" = diverged ]; then
+    warn "pi-pin:   it has also lost $(plural "$behind" commit) the pin has - rebase onto $(short "$pin") first"
+  fi
+  if [ "$unpushed" -gt 0 ]; then
+    warn "pi-pin:   push: git -C $PI_GIT/$repo push origin HEAD:<branch>"
+    warn "pi-pin:   then: pi-pin $name $head"
+  else
+    warn "pi-pin:   keep it: pi-pin $name $head"
+  fi
+}
+
+# --- the post-commit / post-merge hook -------------------------------------
+if [ "${1:-}" = --hook ]; then
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+  # git reports the physical path (/private/var on macOS, or wherever a
+  # symlinked ~/.pi really lives), so compare against the resolved root too.
+  real_git=$(cd "$PI_GIT" 2>/dev/null && pwd -P) || exit 0
+  case "$top/" in
+    "$PI_GIT"/*) repo=${top#"$PI_GIT"/} ;;
+    "$real_git"/*) repo=${top#"$real_git"/} ;;
+    *) exit 0 ;;
+  esac
+  ref=$(live_ref "$repo")
+  [ "$ref" = - ] && exit 0
+  classify "$repo" "$ref"
+  case "$state" in
+    ahead | diverged)
+      warn "pi-pin: this is a pi-managed clone, and pi loads whatever is checked out here"
+      explain_rollback "$repo"
+      ;;
+  esac
+  exit 0
 fi
+
+# --- the reconcile guard --------------------------------------------------
+if [ "${1:-}" = --check ]; then
+  bad=0
+  while read -r repo; do
+    [ -n "$repo" ] || continue
+    ref=$(live_ref "$repo")
+    [ "$ref" = - ] && continue
+    classify "$repo" "$ref"
+    case "$state" in
+      ahead | diverged) explain_rollback "$repo"; bad=1 ;;
+    esac
+  done <<<"$(list_repos)"
+  exit $bad
+fi
+
+# --- listing --------------------------------------------------------------
+if [ $# -eq 0 ] || [ "${1:-}" = --fetch ]; then
+  fetch=0
+  [ "${1:-}" = --fetch ] && fetch=1
+  printf '%-40s %-8s %-8s %-8s %s\n' PACKAGE PINNED CLONE UPSTREAM STATE
+  status=0
+  notes=""
+  while read -r repo; do
+    [ -n "$repo" ] || continue
+    ref=$(live_ref "$repo")
+    name=$(short_name "$repo")
+
+    # Profiles that pin this package somewhere other than this host does.
+    others=""
+    for f in "$SETTINGS_DIR"/settings*.json; do
+      [ -f "$f" ] || continue
+      other=$(grep -o "git:$repo@[^\"]*" "$f" 2>/dev/null | head -1)
+      [ -n "$other" ] || continue
+      other=$(spec_ref "$other")
+      if [ "$other" != "$ref" ]; then
+        profile=$(basename "$f" .json)
+        others="$others ${profile#settings.}=$(short "$other")"
+      fi
+    done
+    [ -n "$others" ] && notes="$notes$repo: other profiles pin${others}"$'\n'
+
+    if [ "$ref" = - ]; then
+      printf '%-40s %-8s %-8s %-8s %s\n' "${repo#github.com/}" - "$(short "$(clone_head "$repo")")" - "not used on this host"
+      continue
+    fi
+
+    [ "$fetch" = 1 ] && [ -d "$PI_GIT/$repo" ] && git -C "$PI_GIT/$repo" fetch -q origin 2>/dev/null
+    classify "$repo" "$ref"
+
+    up=-
+    [ -n "$upstream" ] && [ "$upstream" -gt 0 ] && up="+$upstream"
+    [ -n "$upstream" ] && [ "$upstream" -eq 0 ] && up=tip
+
+    case "$state" in
+      ok)        msg="ok" ;;
+      missing)   msg="not installed - run: pi update git:$repo"; status=1 ;;
+      unpinned)  msg="unpinned (tracks its branch)" ;;
+      unfetched) msg="pin not in the clone - run: pi update git:$repo"; status=1 ;;
+      behind)    msg="BEHIND -$behind - run: pi update git:$repo"; status=1 ;;
+      ahead)
+        if [ "$unpushed" -gt 0 ]; then
+          msg="AHEAD +$ahead, $unpushed UNPUSHED - push, then: pi-pin $name $(short "$head")"
+        else
+          msg="AHEAD +$ahead - pi update would drop it; keep it: pi-pin $name $(short "$head")"
+        fi
+        status=1 ;;
+      diverged)  msg="DIVERGED +$ahead/-$behind - see: pi-pin --check"; status=1 ;;
+    esac
+    [ "$lost" -gt 0 ] &&
+      msg="$msg; $(plural "$lost" commit) only in the reflog: git -C $PI_GIT/$repo log --reflog --not HEAD --remotes"
+
+    printf '%-40s %-8s %-8s %-8s %s\n' "${repo#github.com/}" "$(short "$pin")" "$(short "$head")" "$up" "$msg"
+  done <<<"$(list_repos)"
+
+  if [ -n "$notes" ]; then
+    printf '\n%s' "$notes"
+  fi
+  exit $status
+fi
+
+case "${1:-}" in
+  -h | --help) sed -n '2,16p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -*) die "pi-pin: unknown option $1 (try --help)" ;;
+esac
 
 name=$1
 want=${2:-}
 
 # --- which package -------------------------------------------------------
 repo=""
-while read -r spec; do
-  [ -n "$spec" ] || continue
-  candidate=$(spec_repo "$spec")
+while read -r candidate; do
+  [ -n "$candidate" ] || continue
   case "$candidate" in
     "$name" | */"$name")
       # Two different repos answering to one short name is the one case where
@@ -97,7 +295,7 @@ while read -r spec; do
       repo=$candidate
       ;;
   esac
-done <<<"$(list_specs)"
+done <<<"$(list_repos)"
 
 [ -n "$repo" ] || die "pi-pin: no pinned package matching '$name' in $SETTINGS_DIR"
 
@@ -124,6 +322,17 @@ if [ -d "$CODE/$repo/.git" ]; then
   fi
 fi
 
+# The managed clone is the other place a commit can be stranded, and the
+# reconcile below resets it: anything there that is neither in the new pin nor
+# on a remote would survive only in the reflog.
+if [ -d "$PI_GIT/$repo" ]; then
+  stranded=$(git -C "$PI_GIT/$repo" rev-list --count HEAD --not "$sha" --remotes 2>/dev/null || echo 0)
+  if [ "$stranded" -gt 0 ] && [ "${PI_PIN_DISCARD:-}" != 1 ]; then
+    git -C "$PI_GIT/$repo" log --oneline HEAD --not "$sha" --remotes | sed 's/^/  /' >&2
+    die "pi-pin: $PI_GIT/$repo has $(plural "$stranded" unpushed\ commit) the new pin does not contain - push them, or set PI_PIN_DISCARD=1 to drop them"
+  fi
+fi
+
 # --- rewrite every profile that pins it ----------------------------------
 changed=0
 for f in "$SETTINGS_DIR"/settings*.json; do
@@ -147,14 +356,17 @@ for f in "$SETTINGS_DIR"/settings*.json; do
   changed=1
 done
 
-[ "$changed" = 1 ] || { printf 'nothing to do\n'; exit 0; }
+[ "$changed" = 1 ] || [ "$(clone_head "$repo")" != "$sha" ] || { printf 'nothing to do\n'; exit 0; }
 
 # --- and move the clone pi actually loads --------------------------------
+# Only this package's clone. `pi update --extensions` resets every clone to its
+# pin, so bumping one package that way also rolls back any other clone that has
+# moved ahead of its own pin.
 if command -v pi >/dev/null 2>&1; then
-  pi update --extensions >/dev/null 2>&1 ||
-    warn "pi-pin: pi update --extensions failed; the clone may still be stale"
+  PI_SKIP_VERSION_CHECK=1 pi update "git:$repo" >/dev/null 2>&1 ||
+    warn "pi-pin: pi update git:$repo failed; the clone may still be stale"
 else
-  warn "pi-pin: pi is not on PATH; run 'pi update --extensions' where it is"
+  warn "pi-pin: pi is not on PATH; run 'pi update git:$repo' where it is"
 fi
 
 head=$(clone_head "$repo")
