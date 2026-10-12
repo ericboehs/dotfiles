@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -772,6 +772,27 @@ test("normalizeSpec: steps, json and timeline", () => {
   assert.throws(() => normalizeSpec("timeline", '[{"title":"x","tone":"pink"}]'), /tone must be one of/);
   assert.throws(() => normalizeSpec("timeline", '[{"title":"x","at":{}}]'), /at must be/);
   assert.throws(() => normalizeSpec("timeline", '{"events":[{"title":"x"}],"order":"random"}'), /order must be time or given/);
+});
+
+test("Background jobs: log tails and the card spec", () => {
+  assert.equal(logTail("a\n\x1b[32mb\x1b[0m\nprog 10%\rprog 90%\rprog 100%\n\n"), "a\nb\nprog 100%", "colours dropped, \\r keeps the last state, trailing blanks trimmed");
+  assert.equal(logTail("1\n2\n3\n4", 2), "3\n4");
+  const logs = { "/t/a.log": "one\ntwo", "/t/b.log": "x", "/t/c.log": "secret!" };
+  const read = (p) => logs[p] ?? null;
+  const jobs = [
+    { id: "done1", name: "old", command: "make", logPath: "/t/b.log", startedAt: 1000, endedAt: 5000, exitCode: 0, signal: null },
+    { id: "run2", name: "vite", command: "npx   vite\n --port 3000", logPath: "/t/a.log", startedAt: 3000 },
+    { id: "run1", name: "rspec", command: "bundle exec rspec", logPath: "/t/a.log", startedAt: 2000 },
+    { id: "done2", name: "op", command: "op read op://x/y > /dev/null", logPath: "/t/c.log", startedAt: 1000, endedAt: 9000, exitCode: 1, signal: null, killedByUser: true },
+  ];
+  const spec = jobsSpec(jobs, read);
+  assert.deepEqual(spec.jobs.map((j) => j.id), ["run1", "run2", "done2", "done1"], "running oldest first, then finished newest first");
+  const [r1, r2, d2, d1] = spec.jobs;
+  assert.equal(r2.command, "npx vite --port 3000", "one line");
+  assert.deepEqual([r1.started, r1.ended, r1.tail, r1.hidden], ["1970-01-01T00:00:02.000Z", null, "one\ntwo", false]);
+  assert.deepEqual([d2.tail, d2.hidden, d2.stopped, d2.exit], [null, true, true, 1], "a secret-printing command never shows its log");
+  assert.deepEqual([d1.exit, d1.ended, d1.log], [0, "1970-01-01T00:00:05.000Z", "/t/b.log"]);
+  assert.equal(jobsSpec([{ id: "x", name: "x", command: "x", logPath: "/gone.log", startedAt: 0 }], read).jobs[0].tail, null, "an unreadable log");
 });
 
 test("Running: tail, exit code, secret commands and the spec", () => {

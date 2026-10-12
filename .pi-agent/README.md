@@ -153,7 +153,11 @@ in the footer:
 The widget updates elapsed times without waking the model, shows up to three
 jobs plus an overflow count, and disappears when none remain. Foreground jobs
 stay hidden unless they are moved to the background. `/bg` (or Ctrl+Shift+B in
-a compatible terminal) opens the job list and live logs; `x` stops a job.
+a compatible terminal) opens the job list and live logs; `x` stops a job. The
+session canvas shows the same jobs, with log tails, in a Background jobs card:
+`bg.ts` emits `bg:jobs` on `pi.events` whenever a job starts, is adopted or
+exits, and answers `bg:list`, so other extensions can follow along without
+importing it.
 
 There are no periodic model wakeups. Completion still sends the exit status
 and log tail, controlled by `PI_BG_WAKE=followUp|nextTurn|off` (default
@@ -877,6 +881,20 @@ updates through server-sent events with no reload.
   start. Commands likely to print secrets (`op read`, `security
   find-generic-password`, `printenv`, `env`, `gh auth token` and the like)
   never stream. Haiku neither trims nor sees the Running card.
+  While a background job runs (the `bg.ts` extension: a `bash` call sent to
+  the background or adopted after its budget), a **Background jobs** card
+  (`auto-jobs`) sits at the top of the side panel, above Tasks. Each job is
+  a row: a pulsing dot, its name, a ticking elapsed time and the command;
+  opening it shows the newest 20 lines of its log (colours dropped, a
+  redrawn progress line kept at its last state) and **Copy log path**. A
+  lone running job starts open, and rows stay as you left them while the
+  card is rewritten (every 2 s while a job runs, only when something
+  changed, with no flash). A finished job stays, with ✓ or ✗ and its exit
+  code or signal and duration, until the next turn starts; then the card
+  goes. The extension learns about jobs from `bg.ts`'s `bg:jobs` events and
+  asks with `bg:list` on startup, so neither imports the other. Commands
+  likely to print secrets show no output, as with Running. Haiku neither
+  trims nor sees this card.
   `PI_CANVAS_AUTO=0` turns all of this off.
 - **Diffs and lightbox.** Before the agent's first `edit` or `write` to a file,
   the extension copies what the file held (`base-<id>`, never served). After

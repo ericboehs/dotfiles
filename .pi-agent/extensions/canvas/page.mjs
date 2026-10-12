@@ -261,6 +261,23 @@ td.barc .num { min-width: 4em; }
 .kb-owner .pulse.ended { background: transparent; border: 1.5px solid var(--dim); opacity: 0.7; }
 a.kb-owner:hover { color: var(--accent); text-decoration: underline; }
 a.kb-owner.ended { opacity: 0.8; }
+/* Background jobs (auto-jobs) */
+.jobs { display: flex; flex-direction: column; }
+details.job { border-top: 1px solid var(--line); padding: 7px 0; }
+details.job:first-child { border-top: 0; padding-top: 0; }
+details.job:last-child { padding-bottom: 0; }
+details.job > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 7px; row-gap: 2px; align-items: center; font-size: 13px; }
+details.job > summary::-webkit-details-marker { display: none; }
+details.job > summary b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.job .pulse.ok { background: transparent; border: 1.5px solid var(--ok); }
+.job-el { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.job-el.ok { color: var(--ok); }
+.job-el.bad { color: var(--bad); }
+.job-cmd { grid-column: 2 / 4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--dim); background: none; padding: 0; }
+.job-bd { margin-top: 7px; }
+.job-bd > p { margin: 0; font-size: 12.5px; }
+.job-tail { margin: 0; max-height: 220px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--soft); font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.job-ft { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .kb-card { cursor: pointer; transition: border-color 0.12s; }
 .kb-card:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -919,6 +936,8 @@ async function sectionBody(id, sec) {
       return renderPipeline(JSON.parse(await (await fetch(url)).text()));
     case "kanban":
       return renderKanban(JSON.parse(await (await fetch(url)).text()), sec.id, sec.title);
+    case "jobs":
+      return renderJobs(JSON.parse(await (await fetch(url)).text()));
     case "json":
       return renderJson(await (await fetch(url)).text());
     case "timeline":
@@ -1079,7 +1098,7 @@ function collapsible(card, key, onOpen, at) {
 }
 
 /** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
-const WIDGETS = ["auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
+const WIDGETS = ["auto-jobs", "auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
 const WIDE = "(min-width: 1200px)";
 
 // ── pins: sections kept at the top of the main column, per browser ──
@@ -1280,7 +1299,7 @@ function sectionCard(id, sec) {
     src.dataset.yank = "source"; // yc presses it
     meta.append(src);
   }
-  if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false), "Copy the file (yy)", "clip"));
+  if (sec.file && sec.kind !== "jobs") meta.append(clipButton(() => rawUrl(id, sec, false), "Copy the file (yy)", "clip"));
   meta.append(h("a", { class: "btn ico", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open")));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
@@ -2588,6 +2607,56 @@ function cardDetail(items, i, { todo, board, moves }) {
   });
 }
 
+// ── Background jobs (auto-jobs): bg.ts's jobs, one row each; an open row shows the log tail ──
+const jobsOpen = new Map(); // job id → open: the card is rewritten every few seconds, the rows keep how they were left
+function elapsedText(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+setInterval(() => {
+  for (const t of document.querySelectorAll("[data-since]")) t.textContent = elapsedText(Date.now() - Date.parse(t.dataset.since));
+}, 1000);
+
+function renderJobs(spec) {
+  const jobs = spec.jobs || [];
+  if (!jobs.length) return h("p", { class: "k-muted" }, "No background jobs.");
+  const toBottom = (d) => {
+    const pre = d.querySelector(".job-tail");
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  };
+  return h(
+    "div",
+    { class: "jobs" },
+    jobs.map((j) => {
+      const live = !j.ended;
+      const ok = !live && j.exit === 0 && !j.signal;
+      const state = live ? "live" : j.stopped ? "stopped" : ok ? "ok" : "bad";
+      const took = live ? "" : elapsedText(Date.parse(j.ended) - Date.parse(j.started));
+      const end = live
+        ? h("span", { class: "job-el", "data-since": j.started, title: `Started ${fullDate(j.started)}` }, elapsedText(Date.now() - Date.parse(j.started)))
+        : h("span", { class: `job-el ${state}`, title: `Ended ${fullDate(j.ended)}` }, j.stopped ? `stopped · ${took}` : ok ? `✓ ${took}` : `✗ ${j.signal || `exit ${j.exit}`} · ${took}`);
+      const d = h(
+        "details",
+        { class: `job ${state}`, "data-job": j.id },
+        h("summary", {}, h("span", { class: `pulse ${live ? "working" : state === "ok" ? "ok" : state === "bad" ? "error" : "idle"}` }), h("b", {}, j.name), end, h("code", { class: "job-cmd", title: j.command }, j.command)),
+        h(
+          "div",
+          { class: "job-bd" },
+          j.hidden ? h("p", { class: "k-muted" }, "Output not shown: the command may print secrets.") : j.tail ? h("pre", { class: "job-tail" }, j.tail) : h("p", { class: "k-muted" }, live ? "No output yet." : "No output."),
+          h("div", { class: "job-ft" }, h("span", { class: "k-muted" }, `bg ${j.id}`), copyButton(() => j.log, "Copy log path")),
+        ),
+      );
+      // A lone running job starts open; otherwise rows stay as the reader left them.
+      d.open = jobsOpen.has(j.id) ? jobsOpen.get(j.id) : jobs.length === 1 && live;
+      d.addEventListener("toggle", () => (jobsOpen.set(j.id, d.open), d.open && toBottom(d)));
+      if (d.open) requestAnimationFrame(() => toBottom(d));
+      return d;
+    }),
+  );
+}
+
 function renderTimeline(spec) {
   const toDate = (at) => (typeof at === "number" ? new Date(at) : typeof at === "string" && /\d{4}-\d{2}-\d{2}|^\d{1,2}:\d{2}/.test(at) ? new Date(/^\d{1,2}:\d{2}/.test(at) ? `1970-01-01T${at.padStart(5, "0")}` : at) : null);
   let events = (spec.events || []).map((e, i) => ({ ...e, i, d: toDate(e.at) }));
@@ -3320,8 +3389,16 @@ async function sessionView(id) {
       if (!c || c.at !== sec.at) {
         const el = sectionCard(id, sec);
         if (c) {
-          el.classList.add("fresh");
-          if (el.classList.contains("collapsed")) el.classList.add("unseen");
+          if (sec.id === "auto-jobs") {
+            // Rewritten every few seconds while a job runs: no flash, and the old
+            // rows stay up until the new ones load, so nothing jumps.
+            const old = c.el.querySelector(":scope > .bd");
+            const bd = el.querySelector(":scope > .bd");
+            if (old && bd && !bd.childNodes.length) bd.replaceChildren(...old.childNodes);
+          } else {
+            el.classList.add("fresh");
+            if (el.classList.contains("collapsed")) el.classList.add("unseen");
+          }
           c.el.replaceWith(el);
         }
         c = { at: sec.at, el };

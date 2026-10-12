@@ -25,7 +25,7 @@
 
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, type FSWatcher, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, copyFileSync, existsSync, fstatSync, type FSWatcher, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -466,6 +466,47 @@ export function streamable(command: string): boolean {
   return !/\b(op\s+(read|inject|run|item\s+get|signin)|security\s+find-(generic|internet)-password|printenv|gh\s+auth\s+token|aws\s+(configure\s+get|sts\s+get-session-token)|vault\s+(read|kv\s+get)|kubectl\s+get\s+secrets?)\b|(^|[;&|]\s*)env\s*($|[;&|])/.test(command);
 }
 
+/** A job as bg.ts reports it on `bg:jobs`. */
+export type BgJob = { id: string; name: string; command: string; cwd?: string; logPath: string; startedAt: number; endedAt?: number; exitCode?: number | null; signal?: string | null; killedByUser?: boolean };
+
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+/** The last n lines of a log as plain text: colours dropped, and a line redrawn with \r (a progress bar) keeps only its last state. */
+export function logTail(text: string, n = 20): string {
+  const lines = text
+    .replace(ANSI, "")
+    .split("\n")
+    .map((l) => l.split("\r").filter(Boolean).pop() ?? "");
+  while (lines.length && !lines[lines.length - 1]?.trim()) lines.pop();
+  return lines.slice(-n).join("\n");
+}
+
+/** The Background jobs card: running jobs first (oldest first), then finished ones (newest first). */
+export function jobsSpec(jobs: BgJob[], read: (path: string) => string | null, lines = 20) {
+  const iso = (ms?: number) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
+  const live = (j: BgJob) => j.endedAt == null;
+  const order = [...jobs].sort((a, b) => (live(a) !== live(b) ? (live(a) ? -1 : 1) : live(a) ? a.startedAt - b.startedAt : (b.endedAt ?? 0) - (a.endedAt ?? 0)));
+  return {
+    jobs: order.map((j) => {
+      const hidden = !streamable(j.command);
+      const raw = hidden ? null : read(j.logPath);
+      return {
+        id: j.id,
+        name: j.name,
+        command: j.command.replace(/\s+/g, " ").trim().slice(0, 300),
+        log: j.logPath,
+        started: iso(j.startedAt),
+        ended: iso(j.endedAt),
+        exit: j.exitCode ?? null,
+        signal: j.signal ?? null,
+        stopped: !!j.killedByUser,
+        tail: raw == null ? null : logTail(raw, lines),
+        hidden,
+      };
+    }),
+  };
+}
+
 export type Run = { command: string; cwd: string; started: number; output: string; ended?: number; exit?: number; failed?: boolean };
 
 /** The terminal spec for a run: ticking while it goes, then its exit and duration. */
@@ -873,7 +914,7 @@ const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "te
 
 // Kinds whose body is a JSON spec the page draws, and the extension each is stored under.
 // (Not .json for the json kind: a section called "meta" or "sections" would overwrite the page's own files.)
-const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", kanban: "kanban", json: "jsonv", timeline: "timeline" };
+const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", kanban: "kanban", json: "jsonv", timeline: "timeline", jobs: "jobs" }; // jobs: the Background jobs card only, not a tool kind
 
 export const PIPE_STATUS = ["todo", "active", "done", "back", "failed", "skipped"] as const;
 
@@ -1296,7 +1337,7 @@ export default function canvas(pi: ExtensionAPI) {
   };
 
   /** Add or replace a markdown (or terminal, or kanban) section; skips identical rewrites so the page does not flash. */
-  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto"; kind?: "markdown" | "terminal" | "kanban" }): boolean {
+  function putMarkdown(d: string, sec: { id: string; title: string; body: string; by?: "auto"; kind?: "markdown" | "terminal" | "kanban" | "jobs" }): boolean {
     const listPath = join(d, "sections.json");
     const list = readJson<Section[]>(listPath, []);
     const old = list.find((x) => x.id === sec.id);
@@ -1313,7 +1354,7 @@ export default function canvas(pi: ExtensionAPI) {
   }
 
   const AUTO_SECTIONS_KEPT = 6;
-  const WIDGETS = new Set(["auto-tasks", "auto-agents", "auto-files", "auto-screenshots"]);
+  const WIDGETS = new Set(["auto-jobs", "auto-tasks", "auto-agents", "auto-files", "auto-screenshots"]);
   // Kept out of Haiku's view and its trimming: the side cards and the Running card.
   const PINNED = new Set([...WIDGETS, "auto-running"]);
 
@@ -1348,6 +1389,68 @@ export default function canvas(pi: ExtensionAPI) {
     if (!spec?.running) return;
     putMarkdown(d, { id: "auto-running", title: "Last long command", body: JSON.stringify({ ...spec, running: false, duration: "interrupted" }), by: "auto", kind: "terminal" });
   }
+
+  /**
+   * Background jobs: bg.ts's jobs, from its `bg:jobs` events (no import). A
+   * running job joins the card; a finished one stays, with its exit, until
+   * the next turn starts. Log tails are re-read every 2 s while one runs, and
+   * the card is only rewritten when something changed.
+   */
+  const JOBS_EVERY_MS = 2000;
+  const JOB_TAIL_BYTES = 16384;
+  let bgJobs: BgJob[] = [];
+  const bgShown = new Set<string>();
+  let bgTimer: ReturnType<typeof setInterval> | undefined;
+  let bgCtx: ExtensionContext | undefined;
+  function readLogTail(p: string): string | null {
+    if (!p.endsWith(".log")) return null;
+    try {
+      const fd = openSync(p, "r");
+      try {
+        const size = fstatSync(fd).size;
+        const len = Math.min(size, JOB_TAIL_BYTES);
+        const buf = Buffer.alloc(len);
+        readSync(fd, buf, 0, len, size - len);
+        return buf.toString("utf8");
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  }
+  function writeJobs() {
+    const ctx = bgCtx;
+    if (!ctx || !sessionId) return;
+    const shown = bgJobs.filter((j) => bgShown.has(j.id));
+    if (shown.length) return void putMarkdown(ensureDir(ctx), { id: "auto-jobs", title: "Background jobs", body: JSON.stringify(jobsSpec(shown, readLogTail), null, 2), by: "auto", kind: "jobs" });
+    // None left: drop the card (and never create a page just to say so).
+    const listPath = join(dir(), "sections.json");
+    const list = existsSync(listPath) ? readJson<Section[]>(listPath, []) : [];
+    const old = list.find((s) => s.id === "auto-jobs");
+    if (!old) return;
+    rmSync(join(dir(), old.file), { force: true });
+    writeAtomic(listPath, JSON.stringify(list.filter((s) => s.id !== "auto-jobs"), null, 2));
+  }
+  function syncJobsTimer() {
+    const live = bgJobs.some((j) => j.endedAt == null && bgShown.has(j.id));
+    if (live && !bgTimer) {
+      bgTimer = setInterval(() => void serial(writeJobs).catch(() => {}), JOBS_EVERY_MS);
+      bgTimer.unref?.();
+    } else if (!live && bgTimer) {
+      clearInterval(bgTimer);
+      bgTimer = undefined;
+    }
+  }
+  function onJobs(list: unknown) {
+    if (!Array.isArray(list) || !autoOn || !bgCtx?.hasUI) return;
+    bgJobs = list as BgJob[];
+    for (const j of bgJobs) if (j.endedAt == null) bgShown.add(j.id);
+    for (const id of [...bgShown]) if (!bgJobs.some((j) => j.id === id)) bgShown.delete(id);
+    syncJobsTimer();
+    void serial(writeJobs).catch(() => {});
+  }
+  pi.events?.on?.("bg:jobs", onJobs);
 
   /**
    * Tasks: the project's .pi/TODO.md as a board. Shown once the file has a
@@ -1571,6 +1674,11 @@ export default function canvas(pi: ExtensionAPI) {
     if (autoOn && ctx.hasUI) {
       void serial(() => updateTasks(ctx)).catch(() => {});
       watchTasks(ctx);
+      // Catch up with bg.ts (jobs started before a /reload); with none, a stale card goes.
+      bgCtx = ctx;
+      let answered = false;
+      pi.events?.emit?.("bg:list", { reply: (l: unknown) => ((answered = true), onJobs(l)) });
+      if (!answered) onJobs([]);
     }
     void ensureDaemon();
   });
@@ -1587,6 +1695,12 @@ export default function canvas(pi: ExtensionAPI) {
     track(event);
     turn = { n: (turn?.n ?? 0) + 1, started: new Date().toISOString() };
     writeTurn();
+    // Finished jobs leave the Background jobs card when the next turn starts.
+    const done = bgJobs.filter((j) => j.endedAt != null && bgShown.has(j.id));
+    if (done.length) {
+      for (const j of done) bgShown.delete(j.id);
+      void serial(writeJobs).catch(() => {});
+    }
   });
   pi.on("message_end", (event, ctx) => {
     track(event);
@@ -1665,6 +1779,8 @@ export default function canvas(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (event) => {
     stopTasksWatch();
+    clearInterval(bgTimer);
+    bgTimer = undefined;
     for (const r of runs.values()) clearTimeout(r.showTimer), clearTimeout(r.writeTimer);
     runs.clear();
     inflight?.abort();
