@@ -2355,7 +2355,8 @@ function renderPipeline(spec) {
         const more = lanes.length === 1 && b < lanes[0].steps.length; // the stage goes on in the next row
         const hasIn = k > 0 || a > 0;
         const hasOut = k + 1 < n || more;
-        const nextOn = more ? reached(lanes[0].steps[b].status) : k + 1 < n && reached(stageStatus(stages[k + 1]));
+        // A stretch of line is blue when the node it leads to has been reached (the next stage's first step, not its status).
+        const nextOn = more ? reached(lanes[0].steps[b].status) : k + 1 < n && reached(firstStatus({ k: k + 1, a: 0 }));
         bands.append(rect(x0 - GAP / 4, 4, w + GAP / 2, H - 8, { rx: 10, class: "band", "data-stage": k }));
         if (!lanes.length) {
           // A single node: a bar at either end of the line, a pill in between.
