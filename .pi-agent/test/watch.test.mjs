@@ -71,6 +71,7 @@ import watch, {
 	waitSig,
 	waitsFor,
 	wakePollAt,
+	watchSnapshot,
 	widgetLines,
 	WORK_WORKSPACES,
 } from "../extensions/watch.ts";
@@ -624,6 +625,46 @@ test("widget: top 3 needs, then a +N more line", () => {
 	assert.equal(lines[4], "  +2 more · /watch list");
 	assert.equal(lines.length, 5);
 	for (const l of widgetLines(view({ needs, error: "dsva unread: token expired" }), plain, 40, now)) assert.ok(visibleWidth(l) <= 40);
+});
+
+test("watchSnapshot: plain data for the canvas card, with links, offers on their rows, waits and recent clears", () => {
+	const now = Date.parse("2026-10-06T13:20:00-05:00");
+	const needs = needsList([
+		item({ key: "a", n: 4, why: "ATO date?", text: "x".repeat(400) }),
+		item({ key: "b", n: 5, kind: "mention", channel: "C0EERT", where: "#eert", from: "Alex Teal", why: "review?", ts: "1791302400.000100" }),
+		item({ key: "c", n: 6, kind: "feed-ask", channel: FEED_CHANNEL, where: "#eert-bot-feed", from: "Alex Teal [EERT Comms]", agent: true, why: "Ask for Eric", ts: "1791302500.000100" }),
+	], now);
+	const tags = [
+		{ n: 4, level: "offer", text: "draft from the ATO notes", keys: ["a"] },
+		{ n: "o2", level: "held", text: "prep · Platform Sync held", keys: [] },
+	];
+	const cleared = [
+		item({ key: "d", n: 2, state: "cleared", clearedBy: "read", clearedAt: "2026-10-06T13:00:00-05:00" }),
+		item({ key: "e", n: 1, state: "cleared", clearedBy: "answered", clearedAt: "2026-10-06T11:00:00-05:00" }),
+	];
+	const open = wait({ where: { workspace: "dsva", channel: "C0EERT", threadTs: "1791300000.000100" } });
+	const maybe = wait({ id: "W2", who: "Dana", what: "RITM status", maybeBy: "k" });
+	const s = watchSnapshot(view({ needs, tags, cleared, maybes: [maybe], waitList: [open, maybe], openWaits: 2, snoozed: 1 }), now);
+	assert.equal(s.lastPollAt, new Date(2026, 9, 6, 13, 14).toISOString());
+	assert.equal(s.snoozed, 1);
+	const a = s.needs.find((r) => r.n === 4);
+	assert.equal(a.icon, "✉");
+	assert.equal(a.tone, "accent");
+	assert.equal(a.from, "Lindsey Hattamer");
+	assert.equal(a.text.length, 280, "text clipped");
+	assert.equal(a.link, "https://dsva.slack.com/archives/D0DSVA1/p1791302373000100");
+	assert.deepEqual(a.offers, [{ n: 4, level: "offer", text: "draft from the ATO notes" }]);
+	assert.equal(a.at, new Date(1791302373000).toISOString());
+	const feed = s.needs.find((r) => r.n === 6);
+	assert.deepEqual([feed.from, feed.where, feed.icon, feed.tone], ["Alex Teal (agent)", "bot feed", "!", "warn"]);
+	assert.deepEqual(s.offers, [{ n: "o2", level: "held", text: "prep · Platform Sync held" }], "only the offers with no row");
+	assert.deepEqual(s.waits.map((w) => [w.id, w.maybe, w.link ?? ""]), [
+		["W2", true, ""],
+		["W1", false, "https://dsva.slack.com/archives/C0EERT/p1791300000000100"],
+	]);
+	assert.deepEqual(s.cleared.map((c) => [c.n, c.by]), [[2, "read"]], "cleared over an hour ago drops off");
+	assert.match(s.cleared[0].label, /Lindsey \(dsva DM\)/);
+	assert.doesNotThrow(() => JSON.stringify(s));
 });
 
 test("widget: offers sit under their item; prep and held acts get their own line", () => {

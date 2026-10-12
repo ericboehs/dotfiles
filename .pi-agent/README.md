@@ -444,6 +444,14 @@ in the ledger as noise with the rule's id, before any scout sees them.
 
 The `watch_items` tool does the same from chat ("snooze the Outlook ones till
 Monday"): list, done, snooze and wait run at once, and a mute asks you first.
+
+While the watcher runs, every session's canvas page shows a **Watching** card
+in its side panel (see [Session canvas](#session-canvas)): the same rows as
+the widget, each with its message text, offers, open waits and the last
+hour's clears, a copy button for `/watch do N` and a link to the message in
+Slack. `watch.ts` emits the view as `watch:state` on each render, null when it
+stops, and the canvas asks with `watch:query` on startup, so neither imports
+the other.
 It works only in a turn you typed, never in a watch turn or one started by an
 agent-link or bg message, so text inside an item can't drive it.
 

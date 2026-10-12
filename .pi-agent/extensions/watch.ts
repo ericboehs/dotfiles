@@ -125,6 +125,7 @@ import {
 	type Row,
 	SNOOZES,
 	snoozeEnd,
+	slackLink,
 	TICKET,
 	type Verb,
 	type WaitVerb,
@@ -1260,6 +1261,99 @@ export function widgetLines(v: WidgetView, theme: Pick<Theme, "fg">, width: numb
 	return lines;
 }
 
+// ── canvas ───────────────────────────────────────────────────────────────────
+
+/**
+ * What the canvas's Watching card shows: the widget's view as plain data, no
+ * colours. watch.ts emits it as `watch:state` on each render (null when the
+ * watcher stops); canvas.ts writes it where every session's page reads it.
+ * Times are ISO, so the page works out the ages.
+ */
+export type WatchSnapTag = { n: number | string; level: "offer" | "held"; text: string };
+export type WatchSnapRow = {
+	n?: number;
+	icon: string;
+	tone: "ok" | "warn" | "accent";
+	from: string;
+	where: string;
+	why: string;
+	text: string;
+	at: string;
+	count: number;
+	link?: string;
+	offers: WatchSnapTag[];
+};
+export type WatchSnapshot = {
+	started: boolean;
+	lastPollAt?: string;
+	busy: boolean;
+	error: string;
+	mode: string;
+	meeting: boolean;
+	held: number;
+	notif: string;
+	snoozed: number;
+	needs: WatchSnapRow[];
+	offers: WatchSnapTag[]; // ones with no row on the card
+	waits: { id: string; who: string; what: string; since: string; maybe: boolean; link?: string }[];
+	cleared: { n?: number; icon: string; label: string; by: string; at?: string }[];
+};
+
+const SNAP_TEXT = 280; // message text under a row
+const SNAP_CLEARED_MS = 3600_000; // cleared rows stay on the card for an hour
+const TONE = { success: "ok", warning: "warn", accent: "accent" } as const;
+
+export function watchSnapshot(v: WidgetView, now = Date.now(), snowBase = ""): WatchSnapshot {
+	const tags = v.tags ?? [];
+	const placed = new Set<Tag>();
+	const tagOut = (t: Tag): WatchSnapTag => ({ n: t.n, level: t.level, text: t.text });
+	const needs = bursts(v.needs).map(({ lead: i, items }): WatchSnapRow => {
+		const mine = tags.filter((t) => items.some((x) => t.keys.includes(x.key)));
+		for (const t of mine) placed.add(t);
+		const m = iconOf(i);
+		const link = linkOf(i, snowBase)?.url;
+		const feed = i.channel === FEED_CHANNEL;
+		return {
+			...(i.n ? { n: i.n } : {}),
+			icon: m.ch,
+			tone: TONE[m.color],
+			from: feed ? fromLabel(i) : i.from,
+			where: feed ? "bot feed" : i.where,
+			why: i.why || "",
+			text: clip(i.text || "", SNAP_TEXT),
+			at: tsDate(i.ts).toISOString(),
+			count: items.length,
+			...(link ? { link } : {}),
+			offers: mine.map(tagOut),
+		};
+	});
+	const maybes = new Set(v.maybes.map((w) => w.id));
+	const waits = [...v.maybes, ...(v.waitList ?? []).filter((w) => !maybes.has(w.id))].map((w) => {
+		const at = w.where;
+		const link = at ? (at.threadTs ? slackLink(at.workspace, at.channel, at.threadTs) : `https://${at.workspace}.slack.com/archives/${at.channel}`) : undefined;
+		return { id: w.id, who: w.who, what: w.what, since: w.since, maybe: maybes.has(w.id), ...(link ? { link } : {}) };
+	});
+	const cleared = v.cleared
+		.filter((i) => !i.clearedAt || now - Date.parse(i.clearedAt) < SNAP_CLEARED_MS)
+		.slice(0, 5)
+		.map((i) => ({ ...(i.n ? { n: i.n } : {}), icon: iconOf(i).ch, label: itemLabel(i), by: i.clearedBy ?? "cleared", ...(i.clearedAt ? { at: i.clearedAt } : {}) }));
+	return {
+		started: v.started,
+		...(v.lastPollAt ? { lastPollAt: new Date(v.lastPollAt).toISOString() } : {}),
+		busy: v.busy,
+		error: v.error,
+		mode: v.mode,
+		meeting: v.meeting,
+		held: v.held,
+		notif: v.notif ?? "",
+		snoozed: v.snoozed ?? 0,
+		needs,
+		offers: tags.filter((t) => !placed.has(t)).map(tagOut),
+		waits,
+		cleared,
+	};
+}
+
 // ── runtime ──────────────────────────────────────────────────────────────────
 
 type Watch = {
@@ -1462,6 +1556,8 @@ export default function (pi: ExtensionAPI) {
 		ctxRef = ctx;
 		pi.events.emit("meeting:query", {});
 	});
+	// canvas.ts asks when it (re)starts; answered only while watching.
+	pi.events.on("watch:query", () => render());
 	pi.on("session_shutdown", () => {
 		if (s) stop("session ended", true);
 		ctxRef = undefined;
@@ -1697,6 +1793,7 @@ export default function (pi: ExtensionAPI) {
 		children.clear();
 		dropLock();
 		s = undefined;
+		pi.events.emit("watch:state", null);
 		if (ctxRef?.mode === "tui") ctxRef.ui.setWidget(WIDGET_KEY, undefined);
 	}
 
@@ -1925,7 +2022,7 @@ export default function (pi: ExtensionAPI) {
 	function render() {
 		const w = s;
 		const ctx = ctxRef;
-		if (!w || ctx?.mode !== "tui") return;
+		if (!w) return;
 		const needs = needsList(w.items.values());
 		const view: WidgetView = {
 			needs,
@@ -1953,6 +2050,9 @@ export default function (pi: ExtensionAPI) {
 				keys: x.c.items.map((i) => i.key),
 			})),
 		};
+		// The canvas's Watching card (canvas.ts), on every session's page; no import either way.
+		pi.events.emit("watch:state", watchSnapshot(view, Date.now(), SNOW_URL));
+		if (ctx?.mode !== "tui") return;
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(_tui, theme) => {
