@@ -886,7 +886,7 @@ updates through server-sent events with no reload.
   Diff and File tabs; markdown files get Diff, Preview (rendered, frontmatter
   as a code block) and Source. The tab you pick holds as you step through files.
   Clicking a screenshot opens it large. Both use one modal: ←/→ step through the card's items, Esc closes, and ↗
-  (or a ⌘-click) opens the raw file. **Clippy** (on each section and in the
+  (or a ⌘-click) opens the raw file. **Clippy** (the paperclip on each section, and in the
   modal) puts the file itself on the clipboard via `clippy <file>`, to paste
   into Slack, Mail or Finder: a changed file's real path, a diff as
   `<name>.patch`, else the section's file. It is the daemon's one write
@@ -903,6 +903,11 @@ updates through server-sent events with no reload.
   session (localStorage, dropped after 60 days unused, shared by the page's
   tabs), a pinned Tasks or Files changed card leaves the side panel for the
   top of the page, and Contents lists pins first with a pin glyph.
+  A section's header is the title, its last-turn mark and pin (filled when
+  pinned, shown on hover otherwise), then the age and three quiet icons:
+  copy source, Clippy and open in a new tab. Hovering the header shows the
+  kind beside the title, plus "kept up to date by the canvas" for the
+  extension's own sections (Tasks, Agents, Files changed, Screenshots).
   Click a card's header to collapse it.
   Each browser remembers that choice per session, and Collapse all / Expand all
   sit in the page header. A section nobody has opened or collapsed starts

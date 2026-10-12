@@ -41,7 +41,7 @@ header.top .tools .back { margin-left: 8px; }
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
   .side { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 }
-.side .card > h2 .tag, .side .card > h2 .meta button.btn:not(.pin) { display: none; }
+.side .card > h2 .kind, .side .card > h2 .meta button.btn { display: none; }
 .side .card > .bd { padding: 10px 12px; }
 .side .md table { font-size: 12px; }
 .side .md th, .side .md td { padding: 3px 6px; }
@@ -277,12 +277,25 @@ a.kb-owner.ended { opacity: 0.8; }
 .kb-d-hd { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 4px 10px; border-bottom: 1px solid var(--line); }
 .kb-d-prompt pre { margin: 0; padding: 10px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* pins */
-.btn.pin { padding: 3px 5px; }
+/* Pin: right after the title. Filled when pinned; otherwise it appears on hover (always faint on touch). */
+.card > h2 .btn.pin { padding: 2px 4px; margin-left: -4px; flex: none; }
 .btn.pin .pin-ico { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
 .btn.pin.on { color: color-mix(in srgb, var(--accent) 80%, var(--ink)); }
 .btn.pin.on .pin-ico { fill: currentColor; }
-.card > h2 .btn.pin:not(.on) { opacity: 0.55; }
-.card > h2:hover .btn.pin, .card > h2 .btn.pin:focus-visible { opacity: 1; }
+.card > h2 .btn.pin:not(.on) { opacity: 0; transition: opacity 0.12s; }
+.card > h2:hover .btn.pin:not(.on) { opacity: 0.6; }
+.card > h2 .btn.pin:not(.on):hover, .card > h2 .btn.pin:focus-visible { opacity: 1; }
+@media (hover: none) { .card > h2 .btn.pin:not(.on) { opacity: 0.35; } }
+/* Kind label: by the title, on hover only; it only fills spare room, so it never wraps the row. */
+.card > h2 .kind { color: var(--dim); font: 400 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; opacity: 0; transition: opacity 0.12s; }
+.card > h2:hover .kind { opacity: 1; }
+@media (hover: none) { .card > h2 .kind { display: none; } }
+/* Header icon buttons: quiet until hovered. */
+.btn.ico { padding: 4px 5px; }
+.btn.ico .ico { display: block; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+.card > h2 .meta .btn.ico:not(.ok):not(.bad) { opacity: 0.6; }
+.card > h2 .meta > time { margin-right: 4px; }
+.card > h2 .meta .btn.ico:hover, .card > h2 .meta .btn.ico:focus-visible { opacity: 1; }
 .pin-head { display: flex; align-items: center; gap: 5px; margin: 2px 2px 6px; font: 600 11px/1 -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
 .pin-head .pin-ico, .toc .pin-ico { fill: currentColor; flex: none; }
 .pin-slot:not(:empty) { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed var(--line); }
@@ -450,14 +463,12 @@ ol.tline { list-style: none; margin: 0; padding: 0; }
 .turn-filter button[aria-pressed="true"] { background: var(--soft); color: var(--ink); font-weight: 600; }
 .turn-filter b { color: var(--accent); }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
-.card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card > h2 .meta { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; display: flex; gap: 6px; align-items: center; flex: none; padding-right: 4px; }
-/* Narrow: the title keeps at least ~half the row; the meta wraps under it when it can't fit beside (buttons stay for touch) */
+.card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.card > h2 .meta { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; display: flex; gap: 2px; align-items: center; flex: none; padding-right: 2px; }
+/* Narrow: the meta wraps under the title when it can't fit beside (buttons stay for touch) */
 @media (max-width: 500px) {
   .card > h2 { flex-wrap: wrap; row-gap: 0; }
-  .card > h2 .title { flex: 1 1 0; min-width: 45%; }
   .card > h2 .meta { flex-wrap: wrap; justify-content: flex-end; }
-  .card > h2 .meta .tag:not(.auto) { display: none; }
 }
 .card > .bd { padding: 12px 14px; }
 .card > .bd.flush { padding: 0; }
@@ -692,8 +703,10 @@ async function copyText(text) {
   if (!ok) throw new Error("copy failed");
 }
 
-function copyButton(getText, label = "Copy") {
-  const b = h("button", { class: "btn", type: "button", title: "Copy to clipboard" }, label);
+function copyButton(getText, label = "Copy", ico = null) {
+  const base = ico ? "btn ico" : "btn";
+  const face = (state) => (ico ? (state === "ok" ? icon("check") : state === "bad" ? "✗" : icon(ico)) : state === "ok" ? "Copied" : state === "bad" ? "Failed" : label);
+  const b = h("button", { class: base, type: "button", title: ico ? label : "Copy to clipboard", "aria-label": ico ? label : null }, face());
   let timer;
   b.addEventListener("click", async (e) => {
     e.preventDefault();
@@ -701,15 +714,26 @@ function copyButton(getText, label = "Copy") {
     clearTimeout(timer);
     try {
       await copyText(await getText());
-      b.textContent = "Copied";
-      b.className = "btn ok";
+      b.replaceChildren(face("ok"));
+      b.className = `${base} ok`;
     } catch {
-      b.textContent = "Failed";
-      b.className = "btn bad";
+      b.replaceChildren(face("bad"));
+      b.className = `${base} bad`;
     }
-    timer = setTimeout(() => ((b.textContent = label), (b.className = "btn")), 1400);
+    timer = setTimeout(() => (b.replaceChildren(face()), (b.className = base)), 1400);
   });
   return b;
+}
+
+// Header icons: 16-unit strokes in currentColor.
+const ICONS = {
+  copy: ["M5.5 5.5h7.5v8h-7.5z", "M3 10.5V2.5h7.5"],
+  clip: ["M11 5 6.2 9.8a1.4 1.4 0 0 0 2 2l5-5a3 3 0 0 0-4.2-4.2l-5 5a4.6 4.6 0 0 0 6.5 6.5L14 10.6"],
+  open: ["M9.5 2.5h4v4", "M13.5 2.5 7.5 8.5", "M12 9.5v4H2.5V4h4"],
+  check: ["M3 8.5l3.2 3.2L13 5"],
+};
+function icon(name, size = 14) {
+  return svg("svg", { class: "ico", viewBox: "0 0 16 16", width: size, height: size, "aria-hidden": "true" }, ...ICONS[name].map((d) => svg("path", { d })));
 }
 
 /** /s/<id>/f/<name> as [id, name], or null. */
@@ -723,8 +747,11 @@ function sessionFile(href) {
  * Slack, Mail or Finder as a file. getHref names the session file; for a
  * changed file's copy that means the real file.
  */
-function clipButton(getHref, label = "Clippy") {
-  const b = h("button", { class: "btn clip", type: "button", title: "Copy the file itself (clippy), to paste as a file" }, label);
+function clipButton(getHref, label = "Clippy", ico = null) {
+  const base = ico ? "btn clip ico" : "btn clip";
+  const tip = "Copy the file itself (clippy), to paste as a file";
+  const face = (state) => (ico ? (state === "ok" ? icon("check") : state === "bad" ? "✗" : icon(ico)) : state === "ok" ? "Copied file" : state === "bad" ? "Failed" : label);
+  const b = h("button", { class: base, type: "button", title: tip, "aria-label": ico ? label : null }, face());
   let timer;
   b.addEventListener("click", async (e) => {
     e.preventDefault();
@@ -736,15 +763,15 @@ function clipButton(getHref, label = "Clippy") {
       const r = await fetch(`/s/${encodeURIComponent(at[0])}/clip`, { method: "POST", headers: { "Content-Type": "application/json", "X-Canvas-Clip": "1" }, body: JSON.stringify({ file: at[1] }) });
       if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
       const { name } = await r.json();
-      b.textContent = "Copied file";
+      b.replaceChildren(face("ok"));
       b.title = `On the clipboard: ${name}`;
-      b.className = "btn clip ok";
+      b.className = `${base} ok`;
     } catch (err) {
-      b.textContent = "Failed";
+      b.replaceChildren(face("bad"));
       b.title = String(err.message || err);
-      b.className = "btn clip bad";
+      b.className = `${base} bad`;
     }
-    timer = setTimeout(() => ((b.textContent = label), (b.className = "btn clip")), 1600);
+    timer = setTimeout(() => (b.replaceChildren(face()), (b.className = base), (b.title = tip)), 1600);
   });
   return b;
 }
@@ -1199,24 +1226,19 @@ function foldAgents(root) {
 }
 
 function sectionCard(id, sec) {
-  const meta = h(
-    "span",
-    { class: "meta" },
-    sec.by === "auto" ? h("span", { class: "tag auto", title: "Kept up to date automatically" }, "auto") : null,
-    h("span", { class: "tag" }, sec.kind),
-    agoEl(sec.at),
-  );
+  const meta = h("span", { class: "meta" }, agoEl(sec.at));
   if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "kanban", "timeline"].includes(sec.kind)) {
-    const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source");
+    const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source (yc)", "copy");
     src.dataset.yank = "source"; // yc presses it
     meta.append(src);
   }
-  if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
-  meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
-  meta.prepend(pinButton(sec.id));
+  if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false), "Copy the file (yy)", "clip"));
+  meta.append(h("a", { class: "btn ico", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open")));
+  // The kind (and whether the extension keeps it up to date) shows on hover, by the title.
+  const kind = h("span", { class: "kind" }, sec.by === "auto" ? `${sec.kind} · kept up to date by the canvas` : sec.kind);
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
-  const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), meta), bd);
+  const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), pinButton(sec.id), kind, meta), bd);
   return collapsible(
     el,
     sec.id,
