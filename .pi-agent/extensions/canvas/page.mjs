@@ -317,12 +317,16 @@ dialog.modal.job-log .mbody { display: flex; flex-direction: column; overflow: h
 .w-offer.held { color: var(--dim); }
 .w-acts { display: flex; align-items: flex-start; gap: 0; }
 .w-acts .btn.ico { padding: 2px 4px; }
-.w-h { margin: 10px 0 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); }
+.w-h { display: flex; align-items: center; gap: 6px; width: 100%; margin: 10px 0 2px; padding: 2px 0; border: 0; background: none; cursor: pointer; font: 600 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); text-align: left; }
+.w-h::before { content: ""; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; transition: transform 0.12s; }
+.w-h.shut::before { transform: rotate(-90deg); }
+.w-h:hover { color: var(--ink); }
+.w-h:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.w-hn { font-weight: 500; letter-spacing: 0; padding: 0 6px; border-radius: 9px; background: var(--soft); font-size: 10.5px; }
 .w-sub { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 7px; align-items: baseline; padding: 4px 0; line-height: 1.4; }
 .w-sub.cleared { color: var(--dim); }
 .w-sub .w-ico { color: var(--warn); }
 .w-sub.cleared .w-ico { color: var(--ok); }
-.w-empty { color: var(--dim); padding: 4px 0; }
 .kb-card { cursor: pointer; transition: border-color 0.12s; }
 .kb-card:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -3045,13 +3049,12 @@ function renderWatch(w) {
       ),
     );
   }
-  if (w.started && !needs.length) out.push(h("div", { class: "w-empty" }, "Nothing needs you."));
   for (const o of offers) out.push(h("div", { class: "w-sub" }, h("span", { class: "w-ico" }, o.level === "held" ? "⏸" : "✦"), h("span", {}, o.text), h("span", { class: "w-acts" }, doButton(o.n))));
   if (waits.length) {
-    out.push(h("div", { class: "w-h" }, "Waiting on"));
+    const rows = [];
     for (const x of waits) {
       const link = safeUrl(x.link);
-      out.push(
+      rows.push(
         h(
           "div",
           { class: "w-sub" },
@@ -3061,12 +3064,41 @@ function renderWatch(w) {
         ),
       );
     }
+    out.push(watchGroup("waits", "Waiting on", rows));
   }
   if (cleared.length) {
-    out.push(h("div", { class: "w-h" }, "Cleared"));
-    for (const c of cleared) out.push(h("div", { class: "w-sub cleared" }, h("span", { class: "w-ico" }, "✓"), h("span", {}, `${c.label} · ${c.by} `, c.at ? agoEl(c.at) : null), h("span")));
+    out.push(watchGroup("cleared", "Cleared", cleared.map((c) => h("div", { class: "w-sub cleared" }, h("span", { class: "w-ico" }, "✓"), h("span", {}, `${c.label} · ${c.by} `, c.at ? agoEl(c.at) : null), h("span")))));
   }
   return h("div", { class: "watch" }, out);
+}
+
+/** A Watching group (waits, cleared) whose heading folds it; remembered per browser, as the card is redrawn on every read. */
+const WATCH_FOLDS_KEY = "canvas:watch-folds";
+function watchFolds() {
+  try {
+    return JSON.parse(localStorage.getItem(WATCH_FOLDS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+function watchGroup(name, label, rows) {
+  const body = h("div", { class: "w-body" }, rows);
+  const head = h("button", { class: "w-h", type: "button", "aria-expanded": "true" }, label, h("span", { class: "w-hn" }, String(rows.length)));
+  const set = (shut) => {
+    body.hidden = shut;
+    head.setAttribute("aria-expanded", String(!shut));
+    head.classList.toggle("shut", shut);
+  };
+  set(!!watchFolds()[name]);
+  head.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const shut = !body.hidden;
+    set(shut);
+    try {
+      localStorage.setItem(WATCH_FOLDS_KEY, JSON.stringify({ ...watchFolds(), [name]: shut }));
+    } catch {}
+  });
+  return h("div", { class: "w-group" }, head, body);
 }
 
 function renderTimeline(spec) {
