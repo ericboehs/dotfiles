@@ -3,7 +3,7 @@
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@9d03cfd6ccd99190f6eb4f537686bd4bf29062fc",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
-    "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
+    "git:github.com/ericboehs/pi-scheduler@787fa145547e9dd98e14e651e5ce55ac5d697535",
     "git:github.com/ericboehs/pi-agent-link@cdbb06a2c5f5bfc6e86214da61a3fca613b8db0e",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
