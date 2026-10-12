@@ -923,6 +923,12 @@ updates through server-sent events with no reload.
   session (localStorage, dropped after 60 days unused, shared by the page's
   tabs), a pinned Tasks or Files changed card leaves the side panel for the
   top of the page, and Contents lists pins first with a pin glyph.
+  The side panel (Contents and the automatic cards) can be **reordered**: drag
+  a card by its header (a line shows where it lands), or `K` / `J` (Shift-k,
+  Shift-j) on the current side card, or Move up / down in Cmd-K. The order is
+  one for every session, per browser (localStorage, shared across tabs); a card
+  added later slots in at its default place, and Cmd-K's **Reset side panel
+  order** puts Contents back on top.
   A section's header is the title and its pin (filled when pinned, shown on
   hover otherwise), then the age and three quiet icons: copy source, Clippy
   and open in a new tab. The age has a tooltip, on hover or for 5 s after a

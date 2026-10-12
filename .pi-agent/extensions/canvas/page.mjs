@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { boardMarks, cardKey, cardPrompt, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { boardMarks, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -650,6 +650,11 @@ kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; backgro
 .card.current, .card.current:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .card:focus { outline: none; }
 .side .card.current { outline-offset: -2px; } /* the sidebar scrolls, which would clip an outside ring */
+.side-list .card > h2[draggable="true"] { -webkit-user-drag: element; }
+.side-list .card.dragging { opacity: 0.45; }
+/* Where a dragged card will land: a line in the middle of the gap above (or below) a card (page colour over accent). */
+.side-list .card.drop-before { box-shadow: 0 -4px 0 0 var(--bg), 0 -8px 0 0 var(--accent); }
+.side-list .card.drop-after { box-shadow: 0 4px 0 0 var(--bg), 0 8px 0 0 var(--accent); }
 .side .toc a:focus { outline: none; background: var(--tint); box-shadow: inset 2px 0 0 var(--accent); color: var(--ink); }
 .keyhint { position: fixed; right: 16px; bottom: 16px; z-index: 55; padding: 4px 10px; border-radius: 6px; background: var(--ink); color: var(--card); font: 600 13px ui-monospace, Menlo, monospace; opacity: .9; }
 .cmdk.keys { width: min(760px, calc(100vw - 32px)); padding: 14px 18px 16px; }
@@ -1117,6 +1122,24 @@ function collapsible(card, key, onOpen, at) {
 /** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
 const WIDGETS = ["auto-jobs", "auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
 const WIDE = "(min-width: 1200px)";
+
+// ── side panel order: one for every session, per browser (drag a header, J / K) ──
+const SIDE_KEY = "canvas:side-order"; // localStorage: ["_contents", widget ids…]
+const SIDE_DEFAULT = ["_contents", ...WIDGETS];
+function readSideOrder() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(SIDE_KEY) || "null");
+  } catch {}
+  return mergeOrder(SIDE_DEFAULT, saved);
+}
+const sideOrderSaved = () => !!localStorage.getItem(SIDE_KEY);
+function writeSideOrder(order) {
+  try {
+    if (order) localStorage.setItem(SIDE_KEY, JSON.stringify(order));
+    else localStorage.removeItem(SIDE_KEY);
+  } catch {}
+}
 
 // ── pins: sections kept at the top of the main column, per browser ──
 const PINS_KEY = "canvas:pins"; // localStorage: { "<session>": { ids: [section ids in pin order], at } }
@@ -3330,13 +3353,13 @@ async function sessionView(id) {
   const pinSlot = h("div", { class: "pin-slot" });
   const sectionsSlot = h("div");
   const findingsSlot = h("div");
-  const tocSlot = h("div");
+  const tocSlot = h("div", { "data-side": "_contents" });
   const pipeSlot = h("div");
-  const widgetSlot = h("div");
+  const widgetSlot = h("div", { class: "side-list" }, tocSlot); // Contents and the widgets, in the saved order
   $app.classList.add("session");
   $app.replaceChildren(
     header,
-    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, pinHead, pinSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, pipeSlot, tocSlot, widgetSlot)),
+    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, pinHead, pinSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, pipeSlot, widgetSlot)),
   );
   loadChoices(id);
   const cards = new Map(); // section id → { at, el }
@@ -3354,13 +3377,13 @@ async function sessionView(id) {
     const sections = lastSections;
     const { pinned, rest } = splitPinned(sections, readPins(id));
     const aside = (s) => wide.matches && WIDGETS.includes(s.id);
-    const lay = (slot, list) =>
-      list.forEach((sec, i) => {
+    const lay = (slot, els) =>
+      els.forEach((el, i) => {
         // Move a card only when its place changed: moving a frame reloads it.
-        const el = cards.get(sec.id).el;
         const here = slot.children[i];
         if (here !== el) slot.insertBefore(el, here || null);
       });
+    const elsOf = (list) => list.map((s) => cards.get(s.id).el);
     for (const sec of sections) {
       const el = cards.get(sec.id).el;
       const on = pinned.includes(sec);
@@ -3371,10 +3394,19 @@ async function sessionView(id) {
     // A pinned widget leaves the side panel for the top of the main column.
     const mainList = rest.filter((s) => !aside(s));
     sectionsSlot.querySelector(":scope > p.empty")?.remove();
-    lay(pinSlot, pinned);
+    lay(pinSlot, elsOf(pinned));
     pinHead.hidden = !pinned.length;
-    lay(sectionsSlot, mainList);
-    lay(widgetSlot, WIDGETS.map((wid) => rest.find((s) => s.id === wid)).filter((s) => s && aside(s)));
+    lay(sectionsSlot, elsOf(mainList));
+    const sideEls = readSideOrder()
+      .map((sid) => (sid === "_contents" ? tocSlot : rest.find((s) => s.id === sid && aside(s)) && cards.get(sid).el))
+      .filter(Boolean);
+    lay(widgetSlot, sideEls);
+    // Side panel cards move by their header; elsewhere a header only folds.
+    for (const [sid, { el }] of cards) {
+      el.dataset.side = sideEls.includes(el) ? sid : "";
+      const h2 = el.querySelector(":scope > h2");
+      if (h2) h2.draggable = sideEls.includes(el);
+    }
     if (!mainList.length && !pinned.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
     renderToc([...pinned, ...mainList]);
     renderPipeStrip([...pinned, ...mainList]);
@@ -3385,8 +3417,66 @@ async function sessionView(id) {
     place();
     return now.includes(secId);
   };
-  // Pins made in another tab of this page show here too.
-  addEventListener("storage", (e) => e.key === PINS_KEY && place());
+  // Pins made in another tab of this page show here too; the side panel order is shared by every page.
+  addEventListener("storage", (e) => (e.key === PINS_KEY || e.key === SIDE_KEY) && place());
+
+  // ── Side panel order: drag a header, or J / K on the current card ──
+  const sideItem = (node) => [...widgetSlot.children].find((c) => c.contains(node)) || null;
+  const sideIdOf = (item) => item?.dataset.side || null;
+  pageHooks.moveSide = (card, dir) => {
+    const sid = sideIdOf(sideItem(card));
+    if (!sid) return null;
+    const order = readSideOrder();
+    const next = moveAmong(order, sid, dir, [...widgetSlot.children].map(sideIdOf));
+    if (next.join() === order.join()) return false;
+    writeSideOrder(next);
+    place();
+    return true;
+  };
+  pageHooks.resetSide = () => (writeSideOrder(null), place());
+  let dragId = null;
+  const dropMarks = () => widgetSlot.querySelectorAll(".drop-before, .drop-after");
+  const clearDrag = () => {
+    dragId = null;
+    for (const el of dropMarks()) el.classList.remove("drop-before", "drop-after");
+    widgetSlot.querySelector(".dragging")?.classList.remove("dragging");
+  };
+  /** The item the pointer is above (null: past the last one). */
+  const dropBefore = (y) => [...widgetSlot.children].find((c) => c.dataset.side !== dragId && y < c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2) || null;
+  widgetSlot.addEventListener("dragstart", (e) => {
+    const item = e.target.closest?.("h2") && sideItem(e.target);
+    if (!item || !sideIdOf(item)) return;
+    dragId = sideIdOf(item);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragId);
+    const card = item.classList.contains("card") ? item : item.querySelector(".card");
+    if (card) e.dataTransfer.setDragImage(card, 24, 18);
+    requestAnimationFrame(() => card?.classList.add("dragging"));
+  });
+  widgetSlot.addEventListener("dragover", (e) => {
+    if (!dragId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const before = dropBefore(e.clientY);
+    const target = before || [...widgetSlot.children].filter((c) => c.dataset.side !== dragId).at(-1);
+    const card = target && (target.classList.contains("card") ? target : target.querySelector(".card"));
+    const cls = before ? "drop-before" : "drop-after";
+    for (const el of dropMarks()) if (el !== card || !el.classList.contains(cls)) el.classList.remove("drop-before", "drop-after");
+    card?.classList.add(cls);
+  });
+  widgetSlot.addEventListener("dragleave", (e) => {
+    if (!widgetSlot.contains(e.relatedTarget)) for (const el of dropMarks()) el.classList.remove("drop-before", "drop-after");
+  });
+  widgetSlot.addEventListener("drop", (e) => {
+    if (!dragId) return;
+    e.preventDefault();
+    const moved = dragId;
+    const next = placeBefore(readSideOrder(), moved, sideIdOf(dropBefore(e.clientY)));
+    clearDrag();
+    writeSideOrder(next);
+    place();
+  });
+  widgetSlot.addEventListener("dragend", clearDrag);
 
   // ── Pipeline strip: the newest pipeline's stages, while it still runs ──
   let pipeKey = "";
@@ -3433,7 +3523,7 @@ async function sessionView(id) {
   const tocItems = h("ul", { class: "toc" });
   const tocCount = h("span", { class: "n" });
   const turnFilter = h("div", { class: "turn-filter", role: "group", "aria-label": "Show" });
-  const tocCard = collapsible(h("section", { class: "card" }, h("h2", {}, h("span", { class: "title" }, "Contents"), tocCount), turnFilter, tocItems), "_contents");
+  const tocCard = collapsible(h("section", { class: "card" }, h("h2", { draggable: "true" }, h("span", { class: "title" }, "Contents"), tocCount), turnFilter, tocItems), "_contents");
   const TOC_RECENT = 6;
   let tocAll = false;
   let tocTurn = false; // the filter: only sections touched this (or the last) turn
@@ -3913,6 +4003,16 @@ function mainItems() {
       const c = currentSession ? currentOrTop() : null;
       return c?.id?.startsWith("sec-") && { label: `${c.classList.contains("pinned") ? "Unpin" : "Pin"} “${cardTitle(c)}”`, sub: "keep it at the top of the page, in this browser (p)", run: () => pinCard(c) };
     })(),
+    ...(() => {
+      const c = currentSession ? currentOrTop() : null;
+      if (!inSide(c)) return [];
+      const sub = "side panel order, for every page in this browser";
+      return [
+        { label: `Move “${cardTitle(c)}” up`, sub: `${sub} (K)`, run: () => moveSideCard(c, -1) },
+        { label: `Move “${cardTitle(c)}” down`, sub: `${sub} (J)`, run: () => moveSideCard(c, 1) },
+      ];
+    })(),
+    currentSession && sideOrderSaved() && { label: "Reset side panel order", sub: "Contents first, then the cards as they come", run: () => (pageHooks.resetSide?.(), toast("Side panel order reset")) },
     {
       label: "Copy link to this page",
       run: () => navigator.clipboard.writeText(location.href).then(() => toast("Link copied"), () => toast("Couldn't copy the link")),
@@ -4221,6 +4321,15 @@ async function yankWith(card, selector, what) {
   else if (ok === false) toast(`Couldn't copy the ${what}${b.title && what === "file" ? `: ${b.title}` : ""}`);
 }
 
+/** Move a side panel card up or down: the order is kept for every page in this browser. */
+function moveSideCard(card, dir) {
+  const moved = inSide(card) ? pageHooks.moveSide?.(card, dir) : null;
+  if (moved == null) return toast("Only side panel cards move (J / K, or drag the header)");
+  if (!moved) return toast(dir < 0 ? "Already at the top" : "Already at the bottom");
+  setCurrent(card);
+  card.scrollIntoView({ block: "nearest" });
+}
+
 /** Pin or unpin a section card; Status, Findings and Contents aren't sections, so they stay put. */
 function pinCard(card) {
   const secId = card?.id?.startsWith("sec-") ? card.id.slice(4) : null;
@@ -4274,6 +4383,9 @@ function vimAction(action, e) {
       return yankWith(currentOrTop(), ".clip", "file");
     case "pin":
       return pinCard(currentOrTop());
+    case "moveUp":
+    case "moveDown":
+      return moveSideCard(currentOrTop(), action === "moveUp" ? -1 : 1);
     case "help":
       return toggleHelp();
   }

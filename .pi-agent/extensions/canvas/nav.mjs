@@ -97,6 +97,8 @@ export const VIM_KEYS = [
   { group: "Yank", keys: "yy", action: "yankFile", help: "copy this section's file (Clippy), to paste as a file" },
   { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source as text" },
   { group: "Other", keys: "p", action: "pin", help: "pin this section to the top of the page, or unpin it" },
+  { group: "Other", keys: "K", action: "moveUp", help: "move this side panel card up (or drag its header)" },
+  { group: "Other", keys: "J", action: "moveDown", help: "move this side panel card down" },
   { group: "Other", keys: "?", action: "help", help: "this list" },
 ];
 
@@ -216,6 +218,46 @@ export function splitPinned(list, pins) {
     pinned: list.filter((s) => at.has(s.id)).sort((a, b) => at.get(a.id) - at.get(b.id)),
     rest: list.filter((s) => !at.has(s.id)),
   };
+}
+
+// ── side panel order ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * The side panel's order: the saved one, with any card it doesn't know yet
+ * (a widget added later) at its default place, right after the default card
+ * before it.
+ */
+export function mergeOrder(defaults, saved) {
+  const out = [...new Set((Array.isArray(saved) ? saved : []).filter((id) => defaults.includes(id)))];
+  defaults.forEach((id, i) => {
+    if (out.includes(id)) return;
+    const prev = defaults.slice(0, i).reverse().find((p) => out.includes(p));
+    out.splice(prev ? out.indexOf(prev) + 1 : 0, 0, id);
+  });
+  return out;
+}
+
+/**
+ * Move one card up (dir < 0) or down past the next card that is on the page
+ * (`present`); cards not shown keep their places. Unchanged at either end.
+ */
+export function moveAmong(order, id, dir, present = order) {
+  const shown = order.filter((x) => present.includes(x) || x === id);
+  const i = shown.indexOf(id);
+  const other = shown[i + (dir < 0 ? -1 : 1)];
+  if (i < 0 || !other) return order;
+  const out = order.filter((x) => x !== id);
+  out.splice(out.indexOf(other) + (dir < 0 ? 0 : 1), 0, id);
+  return out;
+}
+
+/** Put a card just before another (or at the end when `before` is null): a drop. */
+export function placeBefore(order, id, before) {
+  if (id === before) return order;
+  const out = order.filter((x) => x !== id);
+  const at = before == null ? -1 : out.indexOf(before);
+  out.splice(at < 0 ? out.length : at, 0, id);
+  return out;
 }
 
 /**

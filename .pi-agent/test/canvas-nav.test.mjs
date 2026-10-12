@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -222,6 +222,27 @@ test("pins: toggle keeps pin order; split puts pinned first in that order", () =
   assert.deepEqual(rest.map((s) => s.id), ["mid"]);
   assert.deepEqual(splitPinned(list, []).rest, list);
   assert.equal(matchKeys("p").action, "pin");
+});
+
+test("side panel order: saved order kept, new cards at their default place, moves skip absent cards", () => {
+  const D = ["_contents", "jobs", "tasks", "agents", "files"];
+  assert.deepEqual(mergeOrder(D, null), D);
+  assert.deepEqual(mergeOrder(D, "junk"), D);
+  // "jobs" is new since the order was saved: it lands after its default neighbour (Contents); unknown ids drop.
+  assert.deepEqual(mergeOrder(D, ["agents", "_contents", "gone", "tasks", "files", "agents"]), ["agents", "_contents", "jobs", "tasks", "files"]);
+  assert.deepEqual(mergeOrder(D, ["files"]), D);
+  // J / K step past the next card on the page; a card not shown keeps its slot.
+  assert.deepEqual(moveAmong(D, "agents", -1), ["_contents", "jobs", "agents", "tasks", "files"]);
+  assert.deepEqual(moveAmong(D, "agents", -1, ["_contents", "jobs", "agents", "files"]), ["_contents", "agents", "jobs", "tasks", "files"]);
+  assert.deepEqual(moveAmong(D, "_contents", 1, ["_contents", "agents"]), ["jobs", "tasks", "agents", "_contents", "files"]);
+  assert.equal(moveAmong(D, "_contents", -1), D);
+  assert.equal(moveAmong(D, "files", 1), D);
+  // A drop: before a card, or at the end.
+  assert.deepEqual(placeBefore(D, "files", "jobs"), ["_contents", "files", "jobs", "tasks", "agents"]);
+  assert.deepEqual(placeBefore(D, "_contents", null), ["jobs", "tasks", "agents", "files", "_contents"]);
+  assert.equal(placeBefore(D, "jobs", "jobs"), D);
+  assert.equal(matchKeys("J").action, "moveDown");
+  assert.equal(matchKeys("K").action, "moveUp");
 });
 
 test("cardPrompt: the todo's next move by column, or a hand-over for other boards", () => {
