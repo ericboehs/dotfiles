@@ -82,6 +82,7 @@ export const VIM_KEYS = [
   { group: "Move", keys: "h", action: "toMain", help: "left, back to the main column (from a Contents entry: open that section)" },
   { group: "Move", keys: "l", action: "toSide", help: "right, over to the side panel, on this section's Contents entry (j / k step through it)" },
   { group: "Move", keys: "gg", action: "top", help: "top of the page" },
+  { group: "Move", keys: "gr", action: "lastReply", help: "the agent's last response (in Status), opened" },
   { group: "Move", keys: "G", action: "bottom", help: "bottom of the page" },
   { group: "Move", keys: "d", action: "halfDown", help: "half a page down (or Ctrl-d)" },
   { group: "Move", keys: "u", action: "halfUp", help: "half a page up (or Ctrl-u)" },

@@ -1051,7 +1051,8 @@ the agent's last response.
   lands on the current section's entry in Contents; there `j` / `k` step
   through the entries (then on to Agents, Files changed and Screenshots), and Enter or
   `h` opens the highlighted section and moves the ring to it.
-  `gg` / `G` top and bottom, `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
+  `gg` / `G` top and bottom, `gr` the agent's last response (Status opens and
+  scrolls to it), `d` / `u` or Ctrl-d / Ctrl-u half a page, `n` /
   `N` the next or previous section with the changed-while-folded dot or the
   last-turn mark. Enter, `o`
   or `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /

@@ -4041,6 +4041,16 @@ async function sessionView(id) {
     for (const card of $app.querySelectorAll(".card[data-key]")) card.setCollapsed?.(shut);
   }
   pageHooks.setAll = setAll;
+  // gr: the Status card's Last response, opened (card and part) and scrolled to.
+  pageHooks.showReply = () => {
+    const card = statusSlot.querySelector(":scope > .card");
+    const reply = card?.querySelector(".reply");
+    if (!reply) return toast("No last response yet");
+    if (card.classList.contains("collapsed")) card.setCollapsed(false);
+    if (reply.querySelector(".reply-bd")?.hidden) reply.querySelector(".reply-h").click();
+    setCurrent(card, false);
+    reply.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   // One stream for every session: this page refreshes on its own changes, and
   // the banner on anyone's (a second stream per tab would eat into the
@@ -4734,6 +4744,8 @@ function vimAction(action, e) {
     case "top":
       setCurrent(null);
       return window.scrollTo({ top: 0, behavior: "smooth" });
+    case "lastReply":
+      return pageHooks.showReply?.();
     case "bottom":
       setCurrent(null);
       return window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
