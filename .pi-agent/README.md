@@ -892,7 +892,7 @@ updates through server-sent events with no reload.
   through the jobs. The modal follows the log while the card is rewritten
   (every 2 s while a job runs, only when something changed, with no flash on
   the card), staying at the bottom unless you scrolled up. A finished job stays, with ✓ or ✗ and its exit
-  code or signal and duration, until the next turn starts; then the card
+  code or signal and duration, for 10 minutes; when no job is left the card
   goes. The extension learns about jobs from `bg.ts`'s `bg:jobs` events and
   asks with `bg:list` on startup, so neither imports the other. Commands
   likely to print secrets show no output, as with Running. Haiku neither

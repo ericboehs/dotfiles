@@ -1397,11 +1397,12 @@ export default function canvas(pi: ExtensionAPI) {
 
   /**
    * Background jobs: bg.ts's jobs, from its `bg:jobs` events (no import). A
-   * running job joins the card; a finished one stays, with its exit, until
-   * the next turn starts. Log tails are re-read every 2 s while one runs, and
+   * running job joins the card; a finished one stays, with its exit, for 10
+   * minutes. Log tails are re-read every 2 s while the card shows a job, and
    * the card is only rewritten when something changed.
    */
   const JOBS_EVERY_MS = 2000;
+  const JOBS_KEEP_MS = 10 * 60_000; // how long a finished job stays on the card
   const JOB_TAIL_BYTES = 65536; // enough for the modal's 200 lines
   let bgJobs: BgJob[] = [];
   const bgShown = new Set<string>();
@@ -1427,6 +1428,9 @@ export default function canvas(pi: ExtensionAPI) {
   function writeJobs() {
     const ctx = bgCtx;
     if (!ctx || !sessionId) return;
+    const stale = Date.now() - JOBS_KEEP_MS;
+    for (const j of bgJobs) if (j.endedAt != null && j.endedAt < stale) bgShown.delete(j.id);
+    syncJobsTimer();
     const shown = bgJobs.filter((j) => bgShown.has(j.id));
     if (shown.length) return void putMarkdown(ensureDir(ctx), { id: "auto-jobs", title: "Background jobs", body: JSON.stringify(jobsSpec(shown, readLogTail), null, 2), by: "auto", kind: "jobs" });
     // None left: drop the card (and never create a page just to say so).
@@ -1438,7 +1442,8 @@ export default function canvas(pi: ExtensionAPI) {
     writeAtomic(listPath, JSON.stringify(list.filter((s) => s.id !== "auto-jobs"), null, 2));
   }
   function syncJobsTimer() {
-    const live = bgJobs.some((j) => j.endedAt == null && bgShown.has(j.id));
+    // Ticks while the card shows any job: running ones for their logs, finished ones to leave after JOBS_KEEP_MS.
+    const live = bgJobs.some((j) => bgShown.has(j.id));
     if (live && !bgTimer) {
       bgTimer = setInterval(() => void serial(writeJobs).catch(() => {}), JOBS_EVERY_MS);
       bgTimer.unref?.();
@@ -1700,12 +1705,6 @@ export default function canvas(pi: ExtensionAPI) {
     track(event);
     turn = { n: (turn?.n ?? 0) + 1, started: new Date().toISOString() };
     writeTurn();
-    // Finished jobs leave the Background jobs card when the next turn starts.
-    const done = bgJobs.filter((j) => j.endedAt != null && bgShown.has(j.id));
-    if (done.length) {
-      for (const j of done) bgShown.delete(j.id);
-      void serial(writeJobs).catch(() => {});
-    }
   });
   pi.on("message_end", (event, ctx) => {
     track(event);
