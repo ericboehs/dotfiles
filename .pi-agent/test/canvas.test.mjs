@@ -314,6 +314,12 @@ test("agentsMarkdown: newest exchange first, live state, escaped text, a link to
   assert.match(rows[2], /<span class="pv">↓ Yes, ship it\.<\/span>/);
   assert.match(rows[2], /<p class="where">\/x\/repo · <a href="\/s\/sess-r">canvas page<\/a><\/p>/);
   assert.ok(!md.includes("\n\n"), "no blank lines: each row stays one HTML block");
+  // The modal shows each message whole: newlines kept as &#10;, the last 30.
+  const many = Array.from({ length: 35 }, (_, i) => ({ who: "w", dir: i % 2 ? "in" : "out", at: `2026-10-09T12:${String(i).padStart(2, "0")}:00Z`, mode: "send", text: i === 34 ? "line 1\n\nline <2>" : `m${i}` }));
+  const md2 = agentsMarkdown(many, []);
+  assert.equal((md2.match(/<li /g) || []).length, 30);
+  assert.match(md2, /<\/span>line 1&#10;&#10;line &lt;2&gt;<\/li>/);
+  assert.ok(!md2.includes("\n"), "one line");
 });
 
 test("readPeers keeps live registry entries and drops dead ones and this process", () => {

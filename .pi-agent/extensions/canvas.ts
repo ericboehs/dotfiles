@@ -482,7 +482,7 @@ export function logTail(text: string, n = 20): string {
 }
 
 /** The Background jobs card: running jobs first (oldest first), then finished ones (newest first). */
-export function jobsSpec(jobs: BgJob[], read: (path: string) => string | null, lines = 20) {
+export function jobsSpec(jobs: BgJob[], read: (path: string) => string | null, lines = 200) {
   const iso = (ms?: number) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
   const live = (j: BgJob) => j.endedAt == null;
   const order = [...jobs].sort((a, b) => (live(a) !== live(b) ? (live(a) ? -1 : 1) : live(a) ? a.startedAt - b.startedAt : (b.endedAt ?? 0) - (a.endedAt ?? 0)));
@@ -625,10 +625,15 @@ export function agentsMarkdown(traffic: AgentMsg[], peers: Peer[], hasCanvas: (s
       const up = msgs.filter((m) => m.dir === "out").length;
       const down = msgs.length - up;
       const arrow = (m: AgentMsg) => (m.dir === "out" ? "↑" : "↓");
+      // The modal shows the list: the last 30, each in full (newlines as &#10;, so the row stays one HTML block).
+      const full = (t: string) => {
+        const s = t.replace(/\r/g, "").trim();
+        return esc(s.length > 4000 ? `${s.slice(0, 4000)}…` : s).replace(/\n/g, "&#10;");
+      };
       const items = msgs
-        .slice(-6)
+        .slice(-30)
         .reverse() // newest first
-        .map((m) => `<li class="${m.dir}${m.failed ? " failed" : ""}"><span class="when">${arrow(m)} ${when(m.at)} · ${m.mode}${m.failed ? " (failed)" : ""}</span>${esc(oneLine(m.text, 240))}</li>`)
+        .map((m) => `<li class="${m.dir}${m.failed ? " failed" : ""}"><span class="when">${arrow(m)} ${when(m.at)} · ${m.mode}${m.failed ? " (failed)" : ""}</span>${full(m.text)}</li>`)
         .join("");
       const where = peer ? [esc(peer.cwd.replace(homedir(), "~")), peer.sessionId && hasCanvas(peer.sessionId) ? `<a href="/s/${encodeURIComponent(peer.sessionId)}">canvas page</a>` : ""].filter(Boolean).join(" · ") : "";
       return (
@@ -1397,7 +1402,7 @@ export default function canvas(pi: ExtensionAPI) {
    * the card is only rewritten when something changed.
    */
   const JOBS_EVERY_MS = 2000;
-  const JOB_TAIL_BYTES = 16384;
+  const JOB_TAIL_BYTES = 65536; // enough for the modal's 200 lines
   let bgJobs: BgJob[] = [];
   const bgShown = new Set<string>();
   let bgTimer: ReturnType<typeof setInterval> | undefined;

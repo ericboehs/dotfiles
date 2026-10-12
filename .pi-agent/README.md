@@ -867,8 +867,9 @@ updates through server-sent events with no reload.
   and the last message's first line. Agents that have exited wait behind
   "Show N inactive" (refolded as the dots change; an open row stays). Times
   within the last 18 h read "4m ago" and stay current; older ones show the
-  date and time. A click opens the last six messages (newest first) and
-  the agent's folder, with a link to its canvas page if it has one. It's
+  date and time. A click opens the agent full screen: its last 30 messages
+  (newest first, each in full) and its folder, with a link to its canvas
+  page if it has one; ← / → step through the agents. It's
   rebuilt from the session's own history (sends, asks and their answers,
   replies, and agent-link's headers on incoming messages) after each turn,
   when a message arrives, and on startup, so nothing in agent-link changes.
@@ -884,12 +885,13 @@ updates through server-sent events with no reload.
   While a background job runs (the `bg.ts` extension: a `bash` call sent to
   the background or adopted after its budget), a **Background jobs** card
   (`auto-jobs`) sits at the top of the side panel, above Tasks. Each job is
-  a row: a pulsing dot, its name, a ticking elapsed time and the command;
-  opening it shows the newest 20 lines of its log (colours dropped, a
-  redrawn progress line kept at its last state) and **Copy log path**. A
-  lone running job starts open, and rows stay as you left them while the
-  card is rewritten (every 2 s while a job runs, only when something
-  changed, with no flash). A finished job stays, with ✓ or ✗ and its exit
+  a row: a pulsing dot, its name, a ticking elapsed time and the command.
+  A click (or Enter) opens the job full screen: the whole command, when it
+  started and ended, its newest 200 log lines (colours dropped, a redrawn
+  progress line kept at its last state) and **Copy log path**; ← / → step
+  through the jobs. The modal follows the log while the card is rewritten
+  (every 2 s while a job runs, only when something changed, with no flash on
+  the card), staying at the bottom unless you scrolled up. A finished job stays, with ✓ or ✗ and its exit
   code or signal and duration, until the next turn starts; then the card
   goes. The extension learns about jobs from `bg.ts`'s `bg:jobs` events and
   asks with `bg:list` on startup, so neither imports the other. Commands
