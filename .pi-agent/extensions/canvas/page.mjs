@@ -425,6 +425,13 @@ ol.tline { list-style: none; margin: 0; padding: 0; }
 .card > h2 { margin: 0; padding: 6px 8px 6px 12px; min-height: 34px; font-size: 13px; font-weight: 600; letter-spacing: -.005em; background: color-mix(in srgb, var(--soft) 40%, var(--card)); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
 .card > h2 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card > h2 .meta { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; display: flex; gap: 6px; align-items: center; flex: none; padding-right: 4px; }
+/* Narrow: the title keeps at least ~half the row; the meta wraps under it when it can't fit beside (buttons stay for touch) */
+@media (max-width: 500px) {
+  .card > h2 { flex-wrap: wrap; row-gap: 0; }
+  .card > h2 .title { flex: 1 1 0; min-width: 45%; }
+  .card > h2 .meta { flex-wrap: wrap; justify-content: flex-end; }
+  .card > h2 .meta .tag:not(.auto) { display: none; }
+}
 .card > .bd { padding: 12px 14px; }
 .card > .bd.flush { padding: 0; }
 .tag { font: 500 10.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 0 6px; border-radius: 4px; background: var(--soft); color: var(--dim); }
