@@ -1867,6 +1867,7 @@ export default function canvas(pi: ExtensionAPI) {
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section, or a compare section when there is a clear before and after.",
       "For a body over ~2 KB, write a file and pass path; the data then stays out of your context.",
+      "Put a draft (a Slack post, an email, a PR or issue comment, a reply) in a markdown blockquote, with > on every line, not in a code fence: a fence shows as unwrapped code.",
       "Sections with ids starting auto- are maintained automatically (Files changed, Screenshots, Tasks, Haiku notes); leave them alone.",
       "Never put secrets, tokens or passwords on the canvas.",
     ],

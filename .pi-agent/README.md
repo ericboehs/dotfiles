@@ -931,7 +931,11 @@ updates through server-sent events with no reload.
   order** puts Contents back on top.
   A section's header is the title and its pin (filled when pinned, shown on
   hover otherwise), then the age and three quiet icons: copy source, Clippy
-  and open in a new tab. The age has a tooltip, on hover or for 5 s after a
+  and open in a new tab. ⌥-click on any copy button (the source, a code
+  block, a finding, a prompt) copies the text as a markdown blockquote, `> `
+  on every line. Drafts (a Slack post, an email, a PR comment) are written
+  as blockquotes, not code fences, so they wrap and read in full colour; the
+  tool's guidance says so. The age has a tooltip, on hover or for 5 s after a
   tap (touch has no hover): the kind, "kept up to date by the canvas" for the
   extension's own sections (Tasks, Agents, Files changed, Screenshots), the
   exact time, and the last-turn note. Status's age tells which model wrote

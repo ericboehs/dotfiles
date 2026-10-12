@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { boardMarks, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -561,7 +561,7 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .codeblock .btn { position: absolute; top: 4px; right: 4px; background: var(--card); border-color: var(--line); opacity: 0; transition: opacity .12s; }
 .codeblock:hover .btn, .codeblock .btn:focus-visible, .codeblock .btn.ok { opacity: 1; }
 @media (hover: none) { .codeblock .btn { opacity: 1; } }
-.md blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--dim); }
+.md blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); } /* full ink: drafts arrive as blockquotes */
 .mmd { overflow-x: auto; text-align: center; }
 .mmd svg { max-width: 100%; height: auto; }
 iframe { display: block; width: 100%; border: 0; background: #fff; }
@@ -744,14 +744,17 @@ async function copyText(text) {
 function copyButton(getText, label = "Copy", ico = null) {
   const base = ico ? "btn ico" : "btn";
   const face = (state) => (ico ? (state === "ok" ? icon("check") : state === "bad" ? "✗" : icon(ico)) : state === "ok" ? "Copied" : state === "bad" ? "Failed" : label);
-  const b = h("button", { class: base, type: "button", title: ico ? label : "Copy to clipboard", "aria-label": ico ? label : null }, face());
+  const tip = `${ico ? label : "Copy to clipboard"} · ⌥-click: as a > quote`;
+  const b = h("button", { class: base, type: "button", title: tip, "aria-label": ico ? label : null }, face());
   let timer;
   b.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
     clearTimeout(timer);
+    const quote = e.altKey;
     try {
-      await copyText(await getText());
+      const text = await getText();
+      await copyText(quote ? asQuote(text) : text);
       b.replaceChildren(face("ok"));
       b.className = `${base} ok`;
     } catch {

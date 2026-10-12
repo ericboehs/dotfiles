@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -243,6 +243,12 @@ test("side panel order: saved order kept, new cards at their default place, move
   assert.equal(placeBefore(D, "jobs", "jobs"), D);
   assert.equal(matchKeys("J").action, "moveDown");
   assert.equal(matchKeys("K").action, "moveUp");
+});
+
+test("asQuote: > on every line, a bare > on blank ones, trailing newlines dropped", () => {
+  assert.equal(asQuote("*Done:* shipped.\n\nNext: docs\n\n"), "> *Done:* shipped.\n>\n> Next: docs");
+  assert.equal(asQuote("  indented\n   "), ">   indented\n>");
+  assert.equal(asQuote(""), ">");
 });
 
 test("cardPrompt: the todo's next move by column, or a hand-over for other boards", () => {

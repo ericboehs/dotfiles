@@ -206,6 +206,15 @@ export function boardMarks(saved, columns, { now = Date.now(), keepMs = 15 * 60e
 
 // ── pins ─────────────────────────────────────────────────────────────────────────────
 
+/** Text as a markdown blockquote (⌥-click on a copy button): "> " on every line, a bare ">" on blank ones. */
+export function asQuote(text) {
+  return String(text ?? "")
+    .replace(/\n+$/, "")
+    .split("\n")
+    .map((l) => (l.trim() ? `> ${l}` : ">"))
+    .join("\n");
+}
+
 /** Pin an unpinned id (at the end, so pins keep the order they were made in), or unpin it. */
 export function togglePin(pins, id) {
   return pins.includes(id) ? pins.filter((x) => x !== id) : [...pins, id];
