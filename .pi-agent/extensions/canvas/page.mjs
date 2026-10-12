@@ -9,6 +9,7 @@ const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
 @media (prefers-color-scheme: dark) { :root { --bg:#1f1e1c; --card:#282725; --ink:#ecebe7; --dim:#9a958a; --line:#3a3834; --soft:#312f2c; --accent:#e08a5a; --ok:#5cc495; --warn:#e2b257; --bad:#ef6f5e; --code:#211f1d; --tint:#33291f; --hl-kw:#8fc4e2; --hl-str:#bed59d; --hl-num:#e5c29b; --hl-com:#a5b4c6; --hl-title:#d6b9ed; --c1:#6ea3ec; --c2:#f08f5c; --c3:#4fc493; --c4:#e36a7c; --c5:#a888e0; --c6:#e0bd4a; --c7:#5cc3d3; --c8:#a8a194; } }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* a class's display (flex, grid) would otherwise beat the hidden attribute */
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 #app { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
 a { color: var(--accent); }
