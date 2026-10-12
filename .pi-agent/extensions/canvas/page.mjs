@@ -2247,7 +2247,7 @@ function pipeObserve(wrap) {
 function renderPipeline(spec) {
   const stages = spec.stages || [];
   const GAP = 64;
-  const LANE = stages.some((g) => (g.lanes || []).some((l) => l.label)) ? 100 : 86;
+  const labelledLanes = stages.some((g) => (g.lanes || []).some((l) => l.label));
   const PAD = 40;
   // Wrapped rows: the line U-turns TURN px in from the card's edge.
   const WPAD = 52;
@@ -2268,6 +2268,8 @@ function renderPipeline(spec) {
   const plWidth = (t) => textWidth(t, F.pl);
   const twoOf = stages.map((g, k) => (g.lanes?.length ? g.lanes.flatMap((l) => l.steps.map((s) => s.label)) : [g.label]).some((t) => wrapLabel(t, sizes[k].col - 12, plWidth).length > 1));
   const n = stages.length;
+  // Lane spacing: labelled lanes each get a box, which grows with two-line step labels; keep a gap between boxes.
+  const LANE = labelledLanes ? 100 + (twoOf.some(Boolean) ? LH : 0) : 86;
   /** A row's height and line: room above the top lane and below the bottom one for what is drawn there. */
   const geomOf = (units) => {
     const two = units.some((u) => twoOf[u.k]) ? LH : 0;
@@ -2286,7 +2288,7 @@ function renderPipeline(spec) {
       steps.some(({ s, looped }) => s.note && looped) ? 52 : 0,
     );
     const labelled = units.some((u) => (stages[u.k].lanes || []).some((l) => l.label));
-    const top = Math.max(above + (units.some((u) => stages[u.k].loop) ? 58 : 0), labelled && LANE === 100 ? 64 + two : 0);
+    const top = Math.max(above + (units.some((u) => stages[u.k].loop) ? 58 : 0), labelled ? 64 + two : 0);
     const mainY = top + ((maxLanes - 1) * LANE) / 2;
     return { two, mainY, H: mainY + ((maxLanes - 1) * LANE) / 2 + below };
   };
@@ -2391,14 +2393,17 @@ function renderPipeline(spec) {
             bands.append(rect(x0 + 6, y - 58 - two, w - 12, yEnd - y + 92 + two, { rx: 8, class: "lane-box" }));
             bands.append(label(x0 + w - 14, y - 44 - two, ln.label.toUpperCase(), "lane-l", "end"));
           }
-          // In from the junction, step to step, out to the next junction.
+          // In from the junction, step to step, out to the next junction. Boxed (labelled) lanes run straight to
+          // their box's edge and bend only in the gap outside it, clear of the lane labels.
+          const boxed = lanes.some((l) => l.label);
           if (hasIn) {
-            const mx = (jIn + cxs[0]) / 2;
-            edge(y === mainY ? `M${P(jIn, mainY)}L${P(cxs[0], y)}` : `M${P(jIn, mainY)}C${P(mx, mainY)} ${P(mx, y)} ${P(cxs[0], y)}`, reached(part[0].status));
+            const a0 = boxed ? x0 + 6 : cxs[0];
+            const mx = (jIn + a0) / 2;
+            edge(y === mainY ? `M${P(jIn, mainY)}L${P(cxs[0], y)}` : `M${P(jIn, mainY)}C${P(mx, mainY)} ${P(mx, y)} ${P(a0, y)}L${P(cxs[0], y)}`, reached(part[0].status));
           }
           for (let j = 1; j < cxs.length; j++) edge(`M${P(cxs[j - 1], y)}L${P(cxs[j], y)}`, reached(part[j].status));
           if (hasOut) {
-            const last = x0 + w - COL / 2;
+            const last = boxed ? x0 + w - 6 : x0 + w - COL / 2;
             const lx = cxs[cxs.length - 1];
             const mx = (last + jOut) / 2;
             edge(`M${P(lx, y)}L${P(last, y)}` + (y === mainY ? `L${P(jOut, mainY)}` : `C${P(mx, y)} ${P(mx, mainY)} ${P(jOut, mainY)}`), nextOn);
