@@ -24,7 +24,8 @@
     "git:github.com/ericboehs/pi-agent-link@d094743a18a9a099bac48ee03bb795e886260588"
   ],
   "extensions": [
-    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts"
+    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts",
+    "-extensions/web-chat.ts"
   ],
   "lastChangelogVersion": "0.85.1"
 }

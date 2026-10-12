@@ -8,7 +8,8 @@
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
   "extensions": [
-    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts"
+    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts",
+    "-extensions/web-chat.ts"
   ],
   "skills": [
     "~/Code/github.com/ericboehs/agent-plugins/plugins/git-utils/skills",

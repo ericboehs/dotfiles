@@ -11,6 +11,9 @@
     "showTerminalProgress": true
   },
   "enableInstallTelemetry": false,
+  "extensions": [
+    "-extensions/web-chat.ts"
+  ],
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@384d523123d006bfa7e1445ce29190f14c832e64",
     "git:github.com/ericboehs/pi-agent-link@d094743a18a9a099bac48ee03bb795e886260588",
