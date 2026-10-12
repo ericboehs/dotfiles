@@ -913,6 +913,22 @@ updates through server-sent events with no reload.
   asks with `bg:list` on startup, so neither imports the other. Commands
   likely to print secrets show no output, as with Running. Haiku neither
   trims nor sees this card.
+  While `/watch` runs, in this session or another, a **Watching** card
+  (`auto-watch`) sits at the top of every session's side panel, above
+  Background jobs: the watcher
+  is one per Mac, so it is not a section of one session. The status line
+  (how many need you, offers, waits, snoozed, a meeting, when it last read,
+  errors), then each "needs you" row: its #, icon, sender, where, the
+  scout's why, age, `×3` for a burst, up to three lines of the message
+  text (clipped to 280 characters, ICNs and codes masked as in the ledger)
+  and any offer. Each row copies `/watch do N` and opens the message in
+  Slack; below come offers with no row, **Waiting on** (a maybe-answered
+  wait copies `/watch waits close Wn`) and the last hour's **Cleared**.
+  The watching session's canvas writes the snapshot to
+  `~/.pi/canvas/.watch.json` (mode 600, only when it changed; removed when
+  the watcher stops or pi exits) and the daemon adds it to every page's
+  state while that pi lives; a change refreshes every open page. The card
+  flashes only when a new item arrives. Haiku neither trims nor sees it.
   `PI_CANVAS_AUTO=0` turns all of this off.
 - **Diffs and lightbox.** Before the agent's first `edit` or `write` to a file,
   the extension copies what the file held (`base-<id>`, never served). After

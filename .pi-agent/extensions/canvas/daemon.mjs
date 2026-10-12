@@ -151,6 +151,7 @@ export function parseFindings(text) {
 }
 
 const ACTIVITY_STATES = new Set(["working", "blocked", "done", "error", "idle"]);
+export const WATCH_FILE = ".watch.json";
 
 export function sessionState(root, id) {
   const dir = join(root, id);
@@ -173,7 +174,19 @@ export function sessionState(root, id) {
   // The current or last turn, so the page can mark what it touched.
   const t = readJson(join(dir, "turn.json"), null);
   const turn = typeof t?.started === "string" ? { started: t.started, ...(typeof t.ended === "string" ? { ended: t.ended } : {}) } : undefined;
-  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, sections: Array.isArray(sections) ? sections : [], findings, updated: newestMtime(dir) };
+  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, sections: Array.isArray(sections) ? sections : [], findings, watch: readWatch(root), updated: newestMtime(dir) };
+}
+
+/**
+ * The watcher's snapshot for the Watching card, on every session's page:
+ * <root>/.watch.json, written by the canvas.ts of the session running /watch.
+ * Null when there is none or its pi is gone (a crash leaves the file behind).
+ */
+export function readWatch(root) {
+  const w = readJson(join(root, WATCH_FILE), null);
+  if (!w || typeof w !== "object" || !pidAlive(w.pid)) return null;
+  const { pid: _p, ...rest } = w;
+  return rest;
 }
 
 // ── tmux: follow mode ────────────────────────────────────────────────────────
@@ -671,6 +684,15 @@ const pending = new Map();
 
 function onChange(relPath) {
   if (!relPath) return;
+  // The watcher's snapshot shows on every page: tell them all.
+  if (relPath === WATCH_FILE) {
+    clearTimeout(pending.get(WATCH_FILE));
+    pending.set(
+      WATCH_FILE,
+      setTimeout(() => (pending.delete(WATCH_FILE), publish("*", { watch: true })), 120),
+    );
+    return;
+  }
   const id = relPath.split(/[\\/]/)[0];
   if (!id || id.startsWith(".") || !SESSION_ID.test(id)) return;
   clearTimeout(pending.get(id));

@@ -296,6 +296,33 @@ dialog.modal.job-log .mbody { display: flex; flex-direction: column; overflow: h
 .job-m-logbox { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .job-m-log { flex: 1; min-height: 0; margin: 0; overflow: auto; padding: 12px 16px; background: var(--soft); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
 .job-m-none { margin: 0; padding: 18px 16px; color: var(--dim); font-size: 13px; }
+/* Watching (auto-watch): the /watch watcher's items, on every session's page */
+.watch { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.w-status { color: var(--dim); font-size: 12.5px; line-height: 1.45; padding-bottom: 6px; }
+.w-status.bad { color: var(--bad); }
+.w-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 7px; vertical-align: 1px; }
+.w-dot.warn { background: var(--warn); }
+.w-dot.bad { background: var(--bad); }
+.w-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 7px; padding: 7px 0; border-top: 1px solid var(--line); }
+.w-ico { color: var(--accent); text-align: center; line-height: 1.45; }
+.w-ico.ok { color: var(--ok); }
+.w-ico.warn { color: var(--warn); }
+.w-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; line-height: 1.45; }
+.w-n { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
+.w-where, .w-head time, .w-sub time { color: var(--dim); font-size: 12px; }
+.w-count { color: var(--warn); font-size: 12px; font-weight: 600; }
+.w-why { line-height: 1.4; }
+.w-text { margin-top: 2px; color: var(--dim); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.w-offer { margin-top: 3px; font-size: 12.5px; color: var(--warn); }
+.w-offer.held { color: var(--dim); }
+.w-acts { display: flex; align-items: flex-start; gap: 0; }
+.w-acts .btn.ico { padding: 2px 4px; }
+.w-h { margin: 10px 0 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); }
+.w-sub { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 7px; align-items: baseline; padding: 4px 0; line-height: 1.4; }
+.w-sub.cleared { color: var(--dim); }
+.w-sub .w-ico { color: var(--warn); }
+.w-sub.cleared .w-ico { color: var(--ok); }
+.w-empty { color: var(--dim); padding: 4px 0; }
 .kb-card { cursor: pointer; transition: border-color 0.12s; }
 .kb-card:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -945,6 +972,7 @@ window.addEventListener("message", (e) => {
 });
 
 async function sectionBody(id, sec) {
+  if (sec.kind === "watch") return renderWatch(sec.data || {});
   const url = `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(sec.file)}?v=${encodeURIComponent(sec.at || "")}`;
   switch (sec.kind) {
     case "markdown":
@@ -1142,7 +1170,7 @@ function collapsible(card, key, onOpen, at) {
 }
 
 /** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
-const WIDGETS = ["auto-jobs", "auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
+const WIDGETS = ["auto-watch", "auto-jobs", "auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
 const WIDE = "(min-width: 1200px)";
 
 // ── side panel order: one for every session, per browser (drag a header, J / K) ──
@@ -1201,6 +1229,18 @@ function pinButton(secId) {
 /** Status and Findings stay on top. Sections follow, newest change first. */
 function sortSections(list) {
   return [...list].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+
+/** The watcher's snapshot as the auto-watch widget, on every session's page while /watch runs. */
+function withWatch(sections, watch) {
+  if (!watch || typeof watch !== "object") return sections;
+  return [...sections.filter((s) => s.id !== "auto-watch"), { id: "auto-watch", title: "Watching", kind: "watch", by: "auto", at: watch.at, data: watch }];
+}
+/** A new needs-you item since the last snapshot: worth the flash the other rewrites skip. */
+function watchGrew(prev, next) {
+  const nums = (s) => new Set((s?.data?.needs || []).map((r) => `${r.n ?? r.at}`));
+  const was = nums(prev);
+  return [...nums(next)].some((k) => !was.has(k));
 }
 
 function statusCard(status, state) {
@@ -1393,7 +1433,7 @@ function sectionCard(id, sec) {
     meta.append(src);
   }
   if (sec.file && sec.kind !== "jobs") meta.append(clipButton(() => rawUrl(id, sec, false), "Copy the file (yy)", "clip"));
-  meta.append(h("a", { class: "btn ico", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open")));
+  if (sec.file) meta.append(h("a", { class: "btn ico", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open")));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
   const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), pinButton(sec.id), meta), bd);
@@ -2939,6 +2979,95 @@ function renderJobs(spec) {
   );
 }
 
+// ── Watching (auto-watch): the /watch watcher, from <root>/.watch.json via the session state ──
+// Not a section file: the daemon puts the one watcher's snapshot (watch.ts
+// watchSnapshot) in every page's state, and refresh() shows it as a widget.
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+function watchLink(url, label) {
+  return h("a", { class: "btn ico", href: url, target: "_blank", rel: "noopener noreferrer", title: label, "aria-label": label }, icon("open"));
+}
+const safeUrl = (u) => (typeof u === "string" && /^https:\/\//.test(u) ? u : null);
+
+function renderWatch(w) {
+  const needs = Array.isArray(w.needs) ? w.needs : [];
+  const waits = Array.isArray(w.waits) ? w.waits : [];
+  const cleared = Array.isArray(w.cleared) ? w.cleared : [];
+  const offers = Array.isArray(w.offers) ? w.offers : [];
+  const offerCount = [...offers, ...needs.flatMap((r) => r.offers || [])].filter((o) => o.level === "offer").length;
+  const status = [
+    !w.started ? "first read…" : needs.length ? `${plural(needs.length, "needs", "need")} you` : "nothing needs you",
+    offerCount ? plural(offerCount, "offer") : "",
+    waits.length ? plural(waits.length, "wait") : "",
+    w.snoozed ? `${w.snoozed} snoozed` : "",
+    w.mode && w.mode !== "active" ? w.mode : "",
+    w.meeting ? `in a meeting${w.held ? `, ${w.held} held` : ""}` : "",
+    w.notif || "",
+  ].filter(Boolean);
+  const tone = w.error ? "bad" : w.notif || w.meeting ? "warn" : "";
+  const out = [
+    h(
+      "div",
+      { class: `w-status${w.error ? " bad" : ""}` },
+      h("span", { class: `w-dot ${tone}`, title: w.busy ? "Reading now" : null }),
+      h("span", {}, status.join(" · ")),
+      w.lastPollAt ? " · read " : null,
+      w.lastPollAt ? agoEl(w.lastPollAt) : null,
+      w.error ? ` · error: ${w.error}` : null,
+    ),
+  ];
+  const doButton = (n) => (n != null ? copyButton(() => `/watch do ${n}`, `Copy /watch do ${n}`, "copy") : null);
+  const offerLine = (o) => h("div", { class: `w-offer${o.level === "held" ? " held" : ""}` }, `${o.level === "held" ? "⏸" : "✦"} ${o.text}`);
+  for (const r of needs) {
+    const link = safeUrl(r.link);
+    out.push(
+      h(
+        "div",
+        { class: "w-row" },
+        h("span", { class: `w-ico ${r.tone || ""}` }, r.icon || "·"),
+        h(
+          "div",
+          { class: "w-main" },
+          h(
+            "div",
+            { class: "w-head" },
+            r.n ? h("span", { class: "w-n" }, `#${r.n}`) : null,
+            h("b", {}, r.from || "?"),
+            r.where ? h("span", { class: "w-where" }, r.where) : null,
+            r.count > 1 ? h("span", { class: "w-count", title: `${r.count} messages` }, `×${r.count}`) : null,
+            r.at ? agoEl(r.at) : null,
+          ),
+          r.why ? h("div", { class: "w-why" }, r.why) : null,
+          r.text ? h("div", { class: "w-text", title: r.text }, r.text) : null,
+          (r.offers || []).map(offerLine),
+        ),
+        h("span", { class: "w-acts" }, doButton(r.n), link ? watchLink(link, "Open in Slack") : null),
+      ),
+    );
+  }
+  if (w.started && !needs.length) out.push(h("div", { class: "w-empty" }, "Nothing needs you."));
+  for (const o of offers) out.push(h("div", { class: "w-sub" }, h("span", { class: "w-ico" }, o.level === "held" ? "⏸" : "✦"), h("span", {}, o.text), h("span", { class: "w-acts" }, doButton(o.n))));
+  if (waits.length) {
+    out.push(h("div", { class: "w-h" }, "Waiting on"));
+    for (const x of waits) {
+      const link = safeUrl(x.link);
+      out.push(
+        h(
+          "div",
+          { class: "w-sub" },
+          h("span", { class: "w-ico", title: x.maybe ? "Maybe answered" : "Open wait" }, x.maybe ? "?" : "⧗"),
+          h("span", {}, h("span", { class: "w-n" }, x.id), " ", h("b", {}, x.who), ` · ${x.what} `, x.since ? agoEl(x.since) : null, x.maybe ? h("span", { class: "w-where" }, ` · maybe answered`) : null),
+          h("span", { class: "w-acts" }, x.maybe ? copyButton(() => `/watch waits close ${x.id}`, `Copy /watch waits close ${x.id}`, "copy") : null, link ? watchLink(link, "Open in Slack") : null),
+        ),
+      );
+    }
+  }
+  if (cleared.length) {
+    out.push(h("div", { class: "w-h" }, "Cleared"));
+    for (const c of cleared) out.push(h("div", { class: "w-sub cleared" }, h("span", { class: "w-ico" }, "✓"), h("span", {}, `${c.label} · ${c.by} `, c.at ? agoEl(c.at) : null), h("span")));
+  }
+  return h("div", { class: "watch" }, out);
+}
+
 function renderTimeline(spec) {
   const toDate = (at) => (typeof at === "number" ? new Date(at) : typeof at === "string" && /\d{4}-\d{2}-\d{2}|^\d{1,2}:\d{2}/.test(at) ? new Date(/^\d{1,2}:\d{2}/.test(at) ? `1970-01-01T${at.padStart(5, "0")}` : at) : null);
   let events = (spec.events || []).map((e, i) => ({ ...e, i, d: toDate(e.at) }));
@@ -3730,7 +3859,7 @@ async function sessionView(id) {
       if (by && state.status) by.textContent = statusBy(state.status);
     }
 
-    const sections = sortSections(state.sections);
+    const sections = sortSections(withWatch(state.sections, state.watch));
     const keep = new Set(sections.map((s) => s.id));
     for (const [sid, c] of cards) if (!keep.has(sid)) (c.el.remove(), cards.delete(sid));
     for (const sec of sections) {
@@ -3738,8 +3867,8 @@ async function sessionView(id) {
       if (!c || c.at !== sec.at) {
         const el = sectionCard(id, sec);
         if (c) {
-          if (sec.id === "auto-jobs") {
-            // Rewritten every few seconds while a job runs: no flash, and the old
+          if (sec.id === "auto-jobs" || (sec.id === "auto-watch" && !watchGrew(c.sec, sec))) {
+            // Rewritten every few seconds while a job runs (the watcher: every read): no flash, and the old
             // rows stay up until the new ones load, so nothing jumps.
             const old = c.el.querySelector(":scope > .bd");
             const bd = el.querySelector(":scope > .bd");
@@ -3750,7 +3879,7 @@ async function sessionView(id) {
           }
           c.el.replaceWith(el);
         }
-        c = { at: sec.at, el };
+        c = { at: sec.at, el, sec };
         cards.set(sec.id, c);
       }
     }
@@ -3806,7 +3935,7 @@ async function sessionView(id) {
     try {
       d = JSON.parse(e.data);
     } catch {}
-    if (d.id === id) refresh().then(markSeen);
+    if (d.id === id || d.watch) refresh().then(markSeen);
     banner();
   });
   setInterval(refresh, 30_000);

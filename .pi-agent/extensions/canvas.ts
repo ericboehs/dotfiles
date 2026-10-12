@@ -1463,6 +1463,36 @@ export default function canvas(pi: ExtensionAPI) {
   pi.events?.on?.("bg:jobs", onJobs);
 
   /**
+   * Watching: watch.ts's snapshot, from its `watch:state` events (no import).
+   * One watcher per machine, so it goes to <root>/.watch.json for every
+   * session's page, not to this session's sections; the daemon serves it while
+   * this process lives. Mode 600: it holds Slack and notification text.
+   * Rewritten only when it changed; null (the watcher stopped) removes it.
+   */
+  const watchFile = () => join(canvasRoot(), ".watch.json");
+  let watchLast = "";
+  function dropWatch() {
+    watchLast = "";
+    try {
+      if (readJson<{ pid?: number }>(watchFile(), {}).pid === process.pid) rmSync(watchFile(), { force: true });
+    } catch {}
+  }
+  function onWatch(snap: unknown) {
+    if (!autoOn) return;
+    if (!snap || typeof snap !== "object") return dropWatch();
+    const body = JSON.stringify(snap);
+    if (body === watchLast) return;
+    watchLast = body;
+    try {
+      mkdirSync(canvasRoot(), { recursive: true });
+      const tmp = `${watchFile()}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), ...snap }), { mode: 0o600 });
+      renameSync(tmp, watchFile());
+    } catch {}
+  }
+  pi.events?.on?.("watch:state", onWatch);
+
+  /**
    * Tasks: the project's .pi/TODO.md as a board. Shown once the file has a
    * task; kept current by a watch on .pi/, so claims from other sessions
    * show without waiting for a turn here.
@@ -1689,6 +1719,8 @@ export default function canvas(pi: ExtensionAPI) {
       let answered = false;
       pi.events?.emit?.("bg:list", { reply: (l: unknown) => ((answered = true), onJobs(l)) });
       if (!answered) onJobs([]);
+      // And with watch.ts: a watcher that was already running shows again.
+      pi.events?.emit?.("watch:query", {});
     }
     void ensureDaemon();
   });
@@ -1783,6 +1815,7 @@ export default function canvas(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (event) => {
     stopTasksWatch();
+    dropWatch();
     clearInterval(bgTimer);
     bgTimer = undefined;
     for (const r of runs.values()) clearTimeout(r.showTimer), clearTimeout(r.writeTimer);

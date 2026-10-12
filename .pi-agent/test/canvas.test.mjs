@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
+import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readWatch, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -493,6 +493,56 @@ test("daemon passes the current or last turn through, and drops a malformed one"
     assert.equal(sessionState(root, "bad").turn, undefined);
     assert.equal(sessionState(root, "none").turn, undefined);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("daemon shows the watcher's snapshot on every page while its pi lives", () => {
+  const { root, mk } = tempRoot();
+  try {
+    mk("a", { pid: process.pid });
+    mk("b", { pid: process.pid });
+    assert.equal(sessionState(root, "a").watch, null, "no watcher");
+    writeFileSync(join(root, ".watch.json"), JSON.stringify({ pid: process.pid, at: "2026-10-12T15:00:00.000Z", started: true, needs: [{ n: 3, from: "Dana" }] }));
+    for (const id of ["a", "b"]) assert.deepEqual(sessionState(root, id).watch, { at: "2026-10-12T15:00:00.000Z", started: true, needs: [{ n: 3, from: "Dana" }] }, `page ${id}, without the pid`);
+    assert.equal(readWatch(root).needs[0].from, "Dana");
+    assert.ok(!listSessions(root).some((s) => s.id.startsWith(".")), "not a session");
+    writeFileSync(join(root, ".watch.json"), JSON.stringify({ pid: 999999, started: true }));
+    assert.equal(readWatch(root), null, "its pi is gone");
+    writeFileSync(join(root, ".watch.json"), "{nope");
+    assert.equal(readWatch(root), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("canvas.ts writes watch:state to <root>/.watch.json (mode 600) and removes it on null", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-watch-"));
+  const was = process.env.PI_CANVAS_ROOT;
+  process.env.PI_CANVAS_ROOT = root;
+  try {
+    const on = {};
+    const events = { on: (name, fn) => (on[name] = fn), emit: () => {} };
+    const pi = new Proxy({}, { get: (_, k) => (k === "events" ? events : k === "getSessionName" ? () => "" : () => {}) });
+    await canvasExtension(pi);
+    const file = join(root, ".watch.json");
+    on["watch:state"]({ started: true, needs: [{ n: 1, from: "Dana", text: "hi" }] });
+    const w = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(w.pid, process.pid);
+    assert.equal(w.needs[0].from, "Dana");
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    const at = w.at;
+    await new Promise((r) => setTimeout(r, 5));
+    on["watch:state"]({ started: true, needs: [{ n: 1, from: "Dana", text: "hi" }] });
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).at, at, "unchanged: not rewritten");
+    on["watch:state"](null);
+    assert.equal(existsSync(file), false);
+    writeFileSync(file, JSON.stringify({ pid: 999999 }));
+    on["watch:state"](null);
+    assert.equal(existsSync(file), true, "another pi's file stays");
+  } finally {
+    if (was === undefined) delete process.env.PI_CANVAS_ROOT;
+    else process.env.PI_CANVAS_ROOT = was;
     rmSync(root, { recursive: true, force: true });
   }
 });
