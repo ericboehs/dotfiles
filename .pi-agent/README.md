@@ -779,6 +779,12 @@ updates through server-sent events with no reload.
   done, back (sent back), failed or skipped, with an optional note and badge
   ("9/10"); lines turn blue where work has reached, and the active node pulses.
   A numbered chip per stage runs along the bottom and highlights its stage.
+  A map too wide for its card (past 15% smaller) wraps into rows that snake:
+  the second row runs right to left, joined by a U-turn at the edge, and so
+  on. Rows break between stages; a stage too wide for a row on its own spreads
+  over rows in even chunks of steps (one with lanes or a loop stays whole and
+  scrolls). Each row is as tall as what it holds, step labels take up to two
+  lines, and the map lays out again as the card changes width.
   Under 700px the map and legend drop out, leaving the current step and the
   chips; a tapped chip spells out its stage in one line ("Build: Package 1 ›
   Implementer ✓ · critic ↩").

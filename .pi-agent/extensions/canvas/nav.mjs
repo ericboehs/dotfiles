@@ -206,6 +206,74 @@ export function boardMarks(saved, columns, { now = Date.now(), keepMs = 15 * 60e
 
 // ── pins ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A pipeline label in up to two lines of max px (measure gives a string's
+ * width): whole words first, characters when one word is too long; the second
+ * line ends in … when text is left over.
+ */
+export function wrapLabel(text, max, measure) {
+  const s = String(text ?? "");
+  if (!(max < Infinity) || measure(s) <= max) return [s];
+  const fit = (t, ell) => {
+    let lo = 0;
+    let hi = t.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (measure(t.slice(0, mid).trimEnd() + (ell ? "…" : "")) <= max) lo = mid;
+      else hi = mid - 1;
+    }
+    return t.slice(0, lo);
+  };
+  let first = "";
+  for (const w of s.split(" ")) {
+    const next = first ? `${first} ${w}` : w;
+    if (measure(next) > max) break;
+    first = next;
+  }
+  if (!first) first = fit(s, false) || s[0];
+  const rest = s.slice(first.length).trim();
+  if (!rest) return [first];
+  return [first, measure(rest) <= max ? rest : `${fit(rest, true).trimEnd()}…`];
+}
+
+/**
+ * Rows for a pipeline too wide for its card. sizes: per stage, {cols, col (px
+ * per column), split (one lane, no loop: may break between its steps)}; inner:
+ * the row width; gap: px between stages. Rows break between stages; a stage
+ * wider than a row on its own starts a row and, when it may split, spreads over
+ * rows in even chunks (the last chunk shares its row with what follows).
+ * Returns rows of {k: stage, a, b: its columns a..b-1}.
+ */
+export function pipeRows(sizes, inner, gap) {
+  const rows = [];
+  let row = [];
+  let used = 0;
+  const width = (u) => (u.b - u.a) * sizes[u.k].col;
+  const flush = () => {
+    if (row.length) rows.push(row);
+    row = [];
+    used = 0;
+  };
+  const put = (u) => {
+    used += (row.length ? gap : 0) + width(u);
+    row.push(u);
+  };
+  sizes.forEach((s, k) => {
+    const u = { k, a: 0, b: s.cols };
+    if (used + (row.length ? gap : 0) + width(u) <= inner) return put(u);
+    flush();
+    if (width(u) <= inner || !s.split) return put(u);
+    const per = Math.max(1, Math.floor(inner / s.col));
+    const size = Math.ceil(s.cols / Math.ceil(s.cols / per));
+    for (let a = 0; a < s.cols; a += size) {
+      if (a) flush();
+      put({ k, a, b: Math.min(s.cols, a + size) });
+    }
+  });
+  flush();
+  return rows;
+}
+
 /** Text as a markdown blockquote (⌥-click on a copy button): "> " on every line, a bare ">" on blank ones. */
 export function asQuote(text) {
   return String(text ?? "")

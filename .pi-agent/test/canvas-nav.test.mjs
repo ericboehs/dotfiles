@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -276,4 +276,21 @@ test("cardPrompt: the todo's next move by column, or a hand-over for other board
     'Let\'s work on #212 Coupon before tax (from the "Cart bugs" board, in New).\np95 3s\nhttps://x.test/212',
   );
   assert.equal(cardPrompt({ title: "Loose" }, "Doing"), "Let's work on Loose (from Doing).");
+});
+
+test("pipeline wrap: two-line labels and rows that break between stages", () => {
+  const m = (s) => s.length * 10; // 10px a character
+  assert.deepEqual(wrapLabel("short", 100, m), ["short"]);
+  assert.deepEqual(wrapLabel("allowBypass false start", 120, m), ["allowBypass", "false start"]);
+  assert.deepEqual(wrapLabel("one two three four five six", 100, m), ["one two", "three fou…"]);
+  assert.deepEqual(wrapLabel("app.host=vaww.example", 100, m), ["app.host=v", "aww.examp…"]);
+  // Whole stages fill rows; a stage that doesn't fit starts the next row.
+  const st = (cols, split = true) => ({ cols, col: 100, split });
+  const ks = (rows) => rows.map((r) => r.map((u) => `${u.k}:${u.a}-${u.b}`));
+  assert.deepEqual(ks(pipeRows([st(1), st(2), st(1)], 1000, 50)), [["0:0-1", "1:0-2", "2:0-1"]]);
+  assert.deepEqual(ks(pipeRows([st(3), st(3), st(1)], 600, 50)), [["0:0-3"], ["1:0-3", "2:0-1"]]);
+  // Wider than a row: even chunks on rows of their own; the last one shares with what follows.
+  assert.deepEqual(ks(pipeRows([st(1), st(7), st(1)], 450, 50)), [["0:0-1"], ["1:0-4"], ["1:4-7", "2:0-1"]]);
+  // A stage that may not split (lanes, a loop) keeps its own, overflowing row.
+  assert.deepEqual(ks(pipeRows([st(1), st(7, false), st(1)], 450, 50)), [["0:0-1"], ["1:0-7"], ["2:0-1"]]);
 });

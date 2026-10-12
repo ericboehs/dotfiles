@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { asQuote, boardMarks, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, pipeRows, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -2235,12 +2235,24 @@ function pipelineChips(spec, onPick, current = -1) {
   );
 }
 
+/** Wrapped pipelines lay out again when their card changes width; one observer serves them all. */
+const pipeWraps = new Set();
+const pipeRO = typeof ResizeObserver === "function" ? new ResizeObserver((es) => es.forEach((e) => e.target.relayout?.())) : null;
+function pipeObserve(wrap) {
+  for (const w of pipeWraps) if (w.seen && !w.isConnected) (pipeRO?.unobserve(w), pipeWraps.delete(w));
+  pipeWraps.add(wrap);
+  pipeRO?.observe(wrap);
+}
+
 function renderPipeline(spec) {
   const stages = spec.stages || [];
   const GAP = 64;
   const LANE = stages.some((g) => (g.lanes || []).some((l) => l.label)) ? 100 : 86;
   const PAD = 40;
-  const anyLoop = stages.some((g) => g.loop);
+  // Wrapped rows: the line U-turns TURN px in from the card's edge.
+  const WPAD = 52;
+  const TURN = WPAD - GAP / 2;
+  const LH = 15; // a label's second line
   // Each stage's columns are as wide as its widest text (within limits); longer text is cut with … and shown whole on hover.
   const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   const F = { pl: `600 12.5px ${FONT}`, pn: `11px ${FONT}`, pb: "600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace" };
@@ -2250,154 +2262,231 @@ function renderPipeline(spec) {
     const items = g.lanes?.length ? g.lanes.flatMap((l) => l.steps.flatMap((s) => [[s.label, F.pl], [s.note, F.pn]])) : [[g.label, F.pl], [g.note, F.pn]];
     return Math.min(COL_MAX, Math.max(COL_MIN, ...items.filter(([t]) => t).map(([t, f]) => textWidth(t, f) + 18)));
   };
-  const sizes = stages.map((g) => ({ cols: Math.max(1, ...(g.lanes || []).map((l) => l.steps.length)), lanes: Math.max(1, (g.lanes || []).length), col: colOf(g) }));
-  const maxLanes = Math.max(...sizes.map((s) => s.lanes));
-  // Room above the top lane and below the bottom one for what is actually drawn there.
-  const steps = stages.flatMap((g) => (g.lanes || []).flatMap((l, i) => l.steps.map((s) => ({ s, looped: g.loop && i === 0 }))));
+  // split: one lane and no loop, so a row may break between its steps.
+  const sizes = stages.map((g) => ({ cols: Math.max(1, ...(g.lanes || []).map((l) => l.steps.length)), lanes: Math.max(1, (g.lanes || []).length), col: colOf(g), split: (g.lanes || []).length === 1 && !g.loop }));
+  // Step and stage labels take up to two lines; a row with any makes room for it.
+  const plWidth = (t) => textWidth(t, F.pl);
+  const twoOf = stages.map((g, k) => (g.lanes?.length ? g.lanes.flatMap((l) => l.steps.map((s) => s.label)) : [g.label]).some((t) => wrapLabel(t, sizes[k].col - 12, plWidth).length > 1));
   const n = stages.length;
-  const ends = stages.filter((g, k) => (k === 0 || k === n - 1) && !g.lanes?.length);
-  const mids = stages.filter((g, k) => k > 0 && k < n - 1 && !g.lanes?.length);
-  const above = Math.max(36, steps.length || mids.length ? 40 : 0, steps.some(({ s, looped }) => s.badge && !looped) ? 52 : 0);
-  const below = Math.max(
-    44,
-    ends.length ? 46 : 0,
-    ends.some((g) => g.note) ? 60 : 0,
-    steps.some(({ s, looped }) => s.note && !looped) || mids.some((g) => g.note) ? 42 : 0,
-    steps.some(({ looped }) => looped) ? 38 : 0,
-    steps.some(({ s, looped }) => s.note && looped) ? 52 : 0,
-  );
-  const top = Math.max(above + (anyLoop ? 58 : 0), LANE === 100 ? 64 : 0);
-  const mainY = top + ((maxLanes - 1) * LANE) / 2;
-  const H = mainY + ((maxLanes - 1) * LANE) / 2 + below;
-  // x of each stage's left edge
-  const xs = [];
-  let x = PAD;
-  for (const s of sizes) xs.push(x), (x += s.cols * s.col + GAP);
-  const W = x - GAP + PAD;
-  const laneY = (i, n) => mainY + (i - (n - 1) / 2) * LANE;
+  /** A row's height and line: room above the top lane and below the bottom one for what is drawn there. */
+  const geomOf = (units) => {
+    const two = units.some((u) => twoOf[u.k]) ? LH : 0;
+    const maxLanes = Math.max(...units.map((u) => sizes[u.k].lanes));
+    const steps = units.flatMap(({ k, a, b }) => (stages[k].lanes || []).flatMap((l, i) => l.steps.slice(a, b).map((s) => ({ s, looped: stages[k].loop && i === 0 }))));
+    const single = units.filter((u) => !stages[u.k].lanes?.length);
+    const ends = single.filter((u) => u.k === 0 || u.k === n - 1).map((u) => stages[u.k]);
+    const mids = single.filter((u) => u.k > 0 && u.k < n - 1).map((u) => stages[u.k]);
+    const above = two + Math.max(36, steps.length || mids.length ? 40 : 0, steps.some(({ s, looped }) => s.badge && !looped) ? 52 : 0);
+    const below = two + Math.max(
+      44,
+      ends.length ? 46 : 0,
+      ends.some((g) => g.note) ? 60 : 0,
+      steps.some(({ s, looped }) => s.note && !looped) || mids.some((g) => g.note) ? 42 : 0,
+      steps.some(({ looped }) => looped) ? 38 : 0,
+      steps.some(({ s, looped }) => s.note && looped) ? 52 : 0,
+    );
+    const labelled = units.some((u) => (stages[u.k].lanes || []).some((l) => l.label));
+    const top = Math.max(above + (units.some((u) => stages[u.k].loop) ? 58 : 0), labelled && LANE === 100 ? 64 + two : 0);
+    const mainY = top + ((maxLanes - 1) * LANE) / 2;
+    return { two, mainY, H: mainY + ((maxLanes - 1) * LANE) / 2 + below };
+  };
   const color = (st) => ({ done: "var(--ok)", active: "var(--c1)", back: "var(--warn)", failed: "var(--bad)" })[st] || "var(--dim)";
   const reached = (st) => st !== "todo" && st !== "skipped";
+  const unitW = (u) => (u.b - u.a) * sizes[u.k].col;
+  const rowW = (row) => row.reduce((s, u, i) => s + unitW(u) + (i ? GAP : 0), 0);
+  const whole = sizes.map((s, k) => ({ k, a: 0, b: s.cols }));
+  const naturalW = rowW(whole) + 2 * PAD;
+  const firstStatus = ({ k, a }) => ((stages[k].lanes || []).length === 1 ? (stages[k].lanes[0].steps[a]?.status ?? stageStatus(stages[k])) : stageStatus(stages[k]));
 
-  const bands = svg("g", { class: "pipe-bands" });
-  const edges = svg("g", { class: "pipe-edges" });
-  const loops = svg("g", { class: "pipe-loops" });
-  const nodes = svg("g", { class: "pipe-nodes" });
-  const edge = (d, on) => edges.append(svg("path", { d, class: on ? "on" : "" }));
-  const label = (cx, y, text, cls, anchor = "middle", max = Infinity) => {
-    const shown = fitText(text, max, F[cls]);
-    const t = svg("text", { x: cx, y, class: cls, "text-anchor": anchor }, shown);
-    if (shown !== text) t.append(tip(text));
-    return t;
-  };
+  /**
+   * The map for a card A px wide (0: not known yet). It stays one row while it
+   * fits at 85% scale; past that it wraps into rows that snake: odd rows run
+   * right to left (every x mirrored), joined by a U-turn at the edge.
+   */
+  function build(A) {
+    const wrapped = A > 0 && naturalW * 0.85 > A;
+    const pad = wrapped ? WPAD : PAD;
+    const rows = wrapped ? pipeRows(sizes, A - 2 * pad, GAP) : [whole];
+    const W = wrapped ? Math.max(A, ...rows.map((r) => rowW(r) + 2 * pad)) : naturalW;
+    const geoms = rows.map(geomOf);
+    const offs = geoms.map((_, r) => geoms.slice(0, r).reduce((s, g) => s + g.H, 0));
+    const bands = svg("g", { class: "pipe-bands" });
+    const edges = svg("g", { class: "pipe-edges" });
+    const loops = svg("g", { class: "pipe-loops" });
+    const nodes = svg("g", { class: "pipe-nodes" });
+    const edge = (d, on) => edges.append(svg("path", { d, class: on ? "on" : "" }));
 
-  const node = (cx, cy, st, title) => {
-    const g = svg("g", { class: `pnode p-${st}` }, tip(`${title}: ${PIPE_LABEL[st]}`));
-    if (st === "active") g.append(svg("circle", { cx, cy, r: 9, class: "pulse-ring", style: `stroke:${color(st)}` }));
-    g.append(svg("circle", { cx, cy, r: 8.5, class: "ring", style: `stroke:${color(st)}` }));
-    if (reached(st)) g.append(svg("circle", { cx, cy, r: 3.8, style: `fill:${color(st)}` }));
-    return g;
-  };
+    rows.forEach((row, r) => {
+      const dir = r % 2 ? -1 : 1;
+      const { two, mainY, H } = geoms[r];
+      const laneY = (i, m) => mainY + (i - (m - 1) / 2) * LANE;
+      const X = (x) => (dir > 0 ? x : W - x);
+      const Y = (y) => offs[r] + y;
+      const P = (x, y) => `${X(x)},${Y(y)}`;
+      const rect = (x, y, w, hh, attrs) => svg("rect", { x: dir > 0 ? x : W - x - w, y: Y(y), width: w, height: hh, ...attrs });
+      const anc = (a) => (dir > 0 || a === "middle" ? a : a === "end" ? "start" : "end");
+      // stack: 0 one line; -1 two lines growing up (above a node); 1 growing down. .extra is the px it grew.
+      const label = (cx, y, text, cls, anchor = "middle", max = Infinity, stack = 0) => {
+        const ls = stack ? wrapLabel(text, max, (t) => textWidth(t, F[cls])) : [fitText(text, max, F[cls])];
+        const t = svg("text", { x: X(cx), y: Y(stack < 0 ? y - LH * (ls.length - 1) : y), class: cls, "text-anchor": anc(anchor) }, ls[0]);
+        if (ls[1]) t.append(svg("tspan", { x: X(cx), dy: LH }, ls[1]));
+        if (ls.length > 1 || ls[0] !== text) t.append(tip(text));
+        t.extra = (ls.length - 1) * LH;
+        return t;
+      };
+      const node = (cx, cy, st, title) => {
+        const g = svg("g", { class: `pnode p-${st}` }, tip(`${title}: ${PIPE_LABEL[st]}`));
+        if (st === "active") g.append(svg("circle", { cx: X(cx), cy: Y(cy), r: 9, class: "pulse-ring", style: `stroke:${color(st)}` }));
+        g.append(svg("circle", { cx: X(cx), cy: Y(cy), r: 8.5, class: "ring", style: `stroke:${color(st)}` }));
+        if (reached(st)) g.append(svg("circle", { cx: X(cx), cy: Y(cy), r: 3.8, style: `fill:${color(st)}` }));
+        return g;
+      };
 
-  stages.forEach((g, k) => {
-    const st = stageStatus(g);
-    const { cols, col: COL } = sizes[k];
-    const fit = COL - 12;
-    const x0 = xs[k];
-    const w = cols * COL;
-    const jIn = x0 - GAP / 2;
-    const jOut = x0 + w + GAP / 2;
-    const nextOn = k + 1 < stages.length && reached(stageStatus(stages[k + 1]));
-    bands.append(svg("rect", { x: x0 - GAP / 4, y: 4, width: w + GAP / 2, height: H - 8, rx: 10, class: "band", "data-stage": k }));
-    const lanes = g.lanes || [];
-    if (!lanes.length) {
-      // A single node: a bar at either end of the line, a pill in between.
-      const cx = x0 + w / 2;
-      const end = k === 0 || k === stages.length - 1;
-      const box = svg("g", { class: `pnode p-${st}` }, tip(`${g.label}: ${PIPE_LABEL[st]}`));
-      if (end) box.append(svg("rect", { x: cx - 3.5, y: mainY - 18, width: 7, height: 36, rx: 2, style: `fill:${reached(st) ? color(st) : "var(--dim)"}` }));
-      else {
-        if (st === "active") box.append(svg("rect", { x: cx - 30, y: mainY - 14, width: 60, height: 28, rx: 14, class: "pulse-ring", style: `stroke:${color(st)}` }));
-        box.append(svg("rect", { x: cx - 30, y: mainY - 14, width: 60, height: 28, rx: 14, class: "ring", style: `stroke:${color(st)}` }));
-        if (reached(st)) [-10, 0, 10].forEach((d) => box.append(svg("circle", { cx: cx + d, cy: mainY, r: 2.6, style: `fill:${color(st)}` })));
-      }
-      nodes.append(box);
-      nodes.append(label(cx, end ? mainY + 34 : mainY - 24, g.label, "pl", "middle", fit));
-      if (g.note) nodes.append(label(cx, end ? mainY + 49 : mainY + 30, g.note, "pn", "middle", fit));
-      const half = end ? 4 : 30;
-      if (k > 0) edge(`M${jIn},${mainY}L${cx - half},${mainY}`, reached(st));
-      if (k + 1 < stages.length) edge(`M${cx + half},${mainY}L${jOut},${mainY}`, nextOn);
-      return;
-    }
-    lanes.forEach((ln, i) => {
-      const y = laneY(i, lanes.length);
-      const cxs = ln.steps.map((_, j) => x0 + j * COL + COL / 2);
-      // Lanes in a row with the same label share one box (a package of work).
-      if (ln.label && lanes[i - 1]?.label !== ln.label) {
-        let last = i;
-        while (lanes[last + 1]?.label === ln.label) last++;
-        const yEnd = laneY(last, lanes.length);
-        bands.append(svg("rect", { x: x0 + 6, y: y - 58, width: w - 12, height: yEnd - y + 92, rx: 8, class: "lane-box" }));
-        bands.append(label(x0 + w - 14, y - 44, ln.label.toUpperCase(), "lane-l", "end"));
-      }
-      // In from the junction, step to step, out to the next junction.
-      if (k > 0) {
-        const mx = (jIn + cxs[0]) / 2;
-        edge(y === mainY ? `M${jIn},${mainY}L${cxs[0]},${y}` : `M${jIn},${mainY}C${mx},${mainY} ${mx},${y} ${cxs[0]},${y}`, reached(ln.steps[0].status));
-      }
-      for (let j = 1; j < cxs.length; j++) edge(`M${cxs[j - 1]},${y}L${cxs[j]},${y}`, reached(ln.steps[j].status));
-      if (k + 1 < stages.length) {
-        const last = x0 + w - COL / 2;
-        const lx = cxs[cxs.length - 1];
-        const mx = (last + jOut) / 2;
-        edge(`M${lx},${y}L${last},${y}` + (y === mainY ? `L${jOut},${mainY}` : `C${mx},${y} ${mx},${mainY} ${jOut},${mainY}`), nextOn);
-      }
-      // Under a loop arc, labels go below the node and badges out to the side, clear of the arc.
-      const looped = g.loop && i === 0;
-      ln.steps.forEach((s, j) => {
-        nodes.append(node(cxs[j], y, s.status, s.label));
-        nodes.append(label(cxs[j], looped ? y + 26 : y - 17, s.label, "pl", "middle", fit));
-        if (s.badge) {
-          const b = looped ? label(cxs[j] + (j === 0 ? -14 : 14), y - 12, s.badge, "pb", j === 0 ? "end" : "start") : label(cxs[j], y - 33, s.badge, "pb");
-          b.style.fill = s.status === "todo" ? "var(--dim)" : color(s.status);
-          nodes.append(b);
+      // One stage, or the steps a..b-1 of one split across rows; gIn/gOut: the gaps either side.
+      const drawUnit = ({ k, a, b }, x0, gIn, gOut) => {
+        const g = stages[k];
+        const st = stageStatus(g);
+        const COL = sizes[k].col;
+        const fit = COL - 12;
+        const w = (b - a) * COL;
+        const jIn = x0 - gIn / 2;
+        const jOut = x0 + w + gOut / 2;
+        const lanes = g.lanes || [];
+        const more = lanes.length === 1 && b < lanes[0].steps.length; // the stage goes on in the next row
+        const hasIn = k > 0 || a > 0;
+        const hasOut = k + 1 < n || more;
+        const nextOn = more ? reached(lanes[0].steps[b].status) : k + 1 < n && reached(stageStatus(stages[k + 1]));
+        bands.append(rect(x0 - GAP / 4, 4, w + GAP / 2, H - 8, { rx: 10, class: "band", "data-stage": k }));
+        if (!lanes.length) {
+          // A single node: a bar at either end of the line, a pill in between.
+          const cx = x0 + w / 2;
+          const end = k === 0 || k === n - 1;
+          const box = svg("g", { class: `pnode p-${st}` }, tip(`${g.label}: ${PIPE_LABEL[st]}`));
+          if (end) box.append(rect(cx - 3.5, mainY - 18, 7, 36, { rx: 2, style: `fill:${reached(st) ? color(st) : "var(--dim)"}` }));
+          else {
+            if (st === "active") box.append(rect(cx - 30, mainY - 14, 60, 28, { rx: 14, class: "pulse-ring", style: `stroke:${color(st)}` }));
+            box.append(rect(cx - 30, mainY - 14, 60, 28, { rx: 14, class: "ring", style: `stroke:${color(st)}` }));
+            if (reached(st)) [-10, 0, 10].forEach((d) => box.append(svg("circle", { cx: X(cx + d), cy: Y(mainY), r: 2.6, style: `fill:${color(st)}` })));
+          }
+          nodes.append(box);
+          const l = label(cx, end ? mainY + 34 : mainY - 24, g.label, "pl", "middle", fit, end ? 1 : -1);
+          nodes.append(l);
+          if (g.note) nodes.append(label(cx, end ? mainY + 49 + l.extra : mainY + 30, g.note, "pn", "middle", fit));
+          const half = end ? 4 : 30;
+          if (hasIn) edge(`M${P(jIn, mainY)}L${P(cx - half, mainY)}`, reached(st));
+          if (hasOut) edge(`M${P(cx + half, mainY)}L${P(jOut, mainY)}`, nextOn);
+          return;
         }
-        if (s.note) nodes.append(label(cxs[j], looped ? y + 41 : y + 25, s.note, "pn", "middle", fit));
-      });
-    });
-    if (g.loop) {
-      // From the last step of the top lane back to its first.
-      const ln = lanes[0];
-      const y = laneY(0, lanes.length);
-      const x1 = x0 + COL / 2;
-      const x2 = x0 + (ln.steps.length - 1) * COL + COL / 2;
-      const lift = 62;
-      loops.append(svg("path", { d: `M${x2},${y - 9}C${x2},${y - lift} ${x1},${y - lift} ${x1},${y - 9}`, class: "loop" }));
-      const mx = (x1 + x2) / 2;
-      loops.append(label(mx, y - lift + 2, g.loop.label, "loop-l"));
-      if (g.loop.note) {
-        const t = label(mx, y - lift - 15, g.loop.note, "loop-n");
-        const wNote = g.loop.note.length * 6.2 + 16;
-        loops.append(svg("rect", { x: mx - wNote / 2, y: y - lift - 27, width: wNote, height: 18, rx: 9, class: "loop-pill" }), t);
-      }
-    }
-  });
+        lanes.forEach((ln, i) => {
+          const y = laneY(i, lanes.length);
+          const part = ln.steps.slice(a, b);
+          if (!part.length) return;
+          const cxs = part.map((_, j) => x0 + j * COL + COL / 2);
+          // Lanes in a row with the same label share one box (a package of work).
+          if (ln.label && lanes[i - 1]?.label !== ln.label) {
+            let last = i;
+            while (lanes[last + 1]?.label === ln.label) last++;
+            const yEnd = laneY(last, lanes.length);
+            bands.append(rect(x0 + 6, y - 58 - two, w - 12, yEnd - y + 92 + two, { rx: 8, class: "lane-box" }));
+            bands.append(label(x0 + w - 14, y - 44 - two, ln.label.toUpperCase(), "lane-l", "end"));
+          }
+          // In from the junction, step to step, out to the next junction.
+          if (hasIn) {
+            const mx = (jIn + cxs[0]) / 2;
+            edge(y === mainY ? `M${P(jIn, mainY)}L${P(cxs[0], y)}` : `M${P(jIn, mainY)}C${P(mx, mainY)} ${P(mx, y)} ${P(cxs[0], y)}`, reached(part[0].status));
+          }
+          for (let j = 1; j < cxs.length; j++) edge(`M${P(cxs[j - 1], y)}L${P(cxs[j], y)}`, reached(part[j].status));
+          if (hasOut) {
+            const last = x0 + w - COL / 2;
+            const lx = cxs[cxs.length - 1];
+            const mx = (last + jOut) / 2;
+            edge(`M${P(lx, y)}L${P(last, y)}` + (y === mainY ? `L${P(jOut, mainY)}` : `C${P(mx, y)} ${P(mx, mainY)} ${P(jOut, mainY)}`), nextOn);
+          }
+          // Under a loop arc, labels go below the node and badges out to the side, clear of the arc.
+          const looped = g.loop && i === 0;
+          part.forEach((s, j) => {
+            nodes.append(node(cxs[j], y, s.status, s.label));
+            const l = label(cxs[j], looped ? y + 26 : y - 17, s.label, "pl", "middle", fit, looped ? 1 : -1);
+            nodes.append(l);
+            if (s.badge) {
+              const bl = looped ? label(cxs[j] + (j === 0 ? -14 : 14), y - 12, s.badge, "pb", j === 0 ? "end" : "start") : label(cxs[j], y - 33 - l.extra, s.badge, "pb");
+              bl.style.fill = s.status === "todo" ? "var(--dim)" : color(s.status);
+              nodes.append(bl);
+            }
+            if (s.note) nodes.append(label(cxs[j], looped ? y + 41 + l.extra : y + 25, s.note, "pn", "middle", fit));
+          });
+        });
+        if (g.loop) {
+          // From the last step of the top lane back to its first (a looping stage never splits).
+          const ln = lanes[0];
+          const y = laneY(0, lanes.length);
+          const x1 = x0 + COL / 2;
+          const x2 = x0 + (ln.steps.length - 1) * COL + COL / 2;
+          const lift = 62;
+          loops.append(svg("path", { d: `M${P(x2, y - 9)}C${P(x2, y - lift)} ${P(x1, y - lift)} ${P(x1, y - 9)}`, class: "loop" }));
+          const mx = (x1 + x2) / 2;
+          loops.append(label(mx, y - lift + 2, g.loop.label, "loop-l"));
+          if (g.loop.note) {
+            const t = label(mx, y - lift - 15, g.loop.note, "loop-n");
+            const wNote = g.loop.note.length * 6.2 + 16;
+            loops.append(rect(mx - wNote / 2, y - lift - 27, wNote, 18, { rx: 9, class: "loop-pill" }), t);
+          }
+        }
+      };
 
-  // Up to 15% narrower before it scrolls; height follows the width.
-  const map = svg("svg", { class: "pipe-svg", viewBox: `0 0 ${W} ${H}`, style: `width:100%;max-width:${W}px;min-width:${Math.round(W * 0.85)}px;height:auto`, role: "img", "aria-label": spec.title || "Pipeline" }, bands, edges, loops, nodes);
-  const wrap = h("div", { class: "pipe-wrap" }, map);
+      // Every row but the last spreads its stages over the full width.
+      const spare = W - 2 * pad - rowW(row);
+      const gap = r < rows.length - 1 && row.length > 1 ? GAP + Math.min(spare / (row.length - 1), GAP * 2) : GAP;
+      let x = pad;
+      // Into and out of a turn, the line meets the curve (TURN + 18 from the edge) rather than running under it.
+      const EDGE = 2 * (pad - TURN - 18);
+      row.forEach((u, i) => {
+        drawUnit(u, x, i ? gap : wrapped ? EDGE : GAP, i < row.length - 1 ? gap : wrapped ? EDGE : GAP);
+        x += unitW(u) + gap;
+      });
+      if (r < rows.length - 1) {
+        // Out to the edge, down, and into the next row going the other way.
+        const xt = X(W - TURN);
+        const y1 = Y(mainY);
+        const y2 = offs[r + 1] + geoms[r + 1].mainY;
+        const c = 18 * dir;
+        edge(`M${X(x - gap + EDGE / 2)},${y1}L${xt - c},${y1}Q${xt},${y1} ${xt},${y1 + 18}L${xt},${y2 - 18}Q${xt},${y2} ${xt - c},${y2}`, reached(firstStatus(rows[r + 1][0])));
+      }
+    });
+
+    // One row may draw up to 15% narrower before it scrolls; wrapped rows are drawn at the card's width.
+    const style = wrapped ? `width:${W}px;max-width:none;height:auto` : `width:100%;max-width:${W}px;min-width:${Math.round(W * 0.85)}px;height:auto`;
+    const map = svg("svg", { class: "pipe-svg", viewBox: `0 0 ${W} ${offs[rows.length - 1] + geoms[rows.length - 1].H}`, style, role: "img", "aria-label": spec.title || "Pipeline" }, bands, edges, loops, nodes);
+    return { map, W, key: wrapped ? `w${W}` : "one" };
+  }
+
+  let built = build(0);
+  const wrap = h("div", { class: "pipe-wrap" }, built.map);
+  wrap.relayout = () => {
+    wrap.seen = true;
+    const A = Math.floor(wrap.clientWidth);
+    if (A < 160) return; // hidden (narrow screens show the chips alone)
+    const next = build(A);
+    if (next.key === built.key) return;
+    built.map.replaceWith(next.map);
+    built = next;
+  };
+  pipeObserve(wrap);
   // Narrow screens hide the map; a chip then spells out its stage here instead.
   const detail = h("div", { class: "pipe-detail", "aria-live": "polite" });
   const now = pipelineNow(spec);
   const flash = (i) => {
     detail.textContent = stageSummary(stages[i]);
-    const band = map.querySelector(`.band[data-stage="${i}"]`);
-    if (!band) return;
-    const bx = Number(band.getAttribute("x"));
-    wrap.scrollTo({ left: Math.max(0, bx * (map.getBoundingClientRect().width / W) - 24), behavior: "smooth" }); // the map may be drawn smaller
-    band.classList.remove("on");
-    void band.getBoundingClientRect();
-    band.classList.add("on");
-    setTimeout(() => band.classList.remove("on"), 1600);
+    const all = [...built.map.querySelectorAll(`.band[data-stage="${i}"]`)]; // a split stage has one per row
+    if (!all.length) return;
+    const bx = Number(all[0].getAttribute("x"));
+    wrap.scrollTo({ left: Math.max(0, bx * (built.map.getBoundingClientRect().width / built.W) - 24), behavior: "smooth" }); // the map may be drawn smaller
+    for (const band of all) {
+      band.classList.remove("on");
+      void band.getBoundingClientRect();
+      band.classList.add("on");
+      setTimeout(() => band.classList.remove("on"), 1600);
+    }
   };
   const used = new Set(stages.flatMap((g) => [stageStatus(g), ...(g.lanes || []).flatMap((l) => l.steps.map((s) => s.status))]));
   const legend = h(
