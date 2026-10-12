@@ -747,8 +747,9 @@ the agent's last response.
   `modelRegistry.complete()` call, the same pattern as `auto-session-name.ts`.
   The main model does nothing, and a new turn aborts a run still in progress.
   Each run uses one Copilot premium request; tool-free short replies skip it.
-  Under it, **Last response** shows the agent's final message of the last
-  turn, rendered, below the prompt it answered (clipped to two lines; a click
+  Between Now and the Next / Open / Done columns, **Last response** shows the
+  agent's final message of the last turn, without its closing "Next steps"
+  block (the status has its own Next), rendered, below the prompt it answered (clipped to two lines; a click
   shows it all). canvas.ts writes it to `reply.json` when a turn settles (no
   model involved), so a short turn updates it too. The heading folds it,
   remembered per browser.

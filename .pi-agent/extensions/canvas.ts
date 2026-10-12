@@ -169,9 +169,21 @@ export function lastReply(branch: unknown[]): { prompt: string; text: string } |
       prompt = t;
       break;
     }
-    return { prompt: prompt.slice(0, REPLY_PROMPT_MAX), text: text.slice(0, REPLY_MAX) };
+    return { prompt: prompt.slice(0, REPLY_PROMPT_MAX), text: withoutNextSteps(text).slice(0, REPLY_MAX) };
   }
   return null;
+}
+
+/**
+ * A reply without its closing "Next steps:" block (the status already shows
+ * what's next): from the last line that starts with it (as a heading or in
+ * bold too) to the end. Kept whole when that is all there is.
+ */
+export function withoutNextSteps(text: string): string {
+  let cut = -1;
+  for (const m of text.matchAll(/^[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*|__)?next steps\b/gim)) cut = m.index;
+  const head = cut > 0 ? text.slice(0, cut).trimEnd() : text;
+  return head || text;
 }
 
 export type Status = {

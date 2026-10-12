@@ -557,7 +557,7 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .pulse.idle { background: transparent; border: 1.5px solid var(--dim); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
 .status .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; }
-.status .reply { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); }
+.status .reply { margin: 0 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .status .reply-top { display: flex; align-items: center; gap: 8px; }
 .status .reply-h { display: flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none; cursor: pointer; color: var(--dim); }
 .status .reply-h .eyebrow { margin: 0; }
@@ -1287,6 +1287,7 @@ function statusCard(status, state, reply = null) {
   );
   bd.append(h("div", { class: "goal" }, h("span", { class: "eyebrow" }, "Goal"), status.goal || "—"));
   bd.append(h("div", { class: "now" }, h("span", { class: `pulse ${state}` }), h("span", { class: "eyebrow" }, "Now"), h("span", {}, status.now || "—")));
+  if (reply) bd.append(replyPart(reply));
   const col = (kind, label, items) =>
     h(
       "div",
@@ -1295,7 +1296,6 @@ function statusCard(status, state, reply = null) {
       items?.length ? h("ul", {}, items.map((i) => h("li", {}, i))) : h("div", { class: "none" }, "—"),
     );
   bd.append(h("div", { class: "cols" }, col("next", "Next", status.next), col("open", "Open", status.open), col("done", "Done", status.done)));
-  if (reply) bd.append(replyPart(reply));
   return collapsible(card, "_status");
 }
 

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
 import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
@@ -66,9 +66,20 @@ test("lastReply: the newest assistant message with text, and the user prompt it 
     msg("assistant", [{ type: "text", text: "Done." }, { type: "text", text: "Next steps: …" }]),
     msg("assistant", [{ type: "toolCall", id: "c2", name: "read", arguments: {} }]),
   ];
-  // The final message's text, all of it; not the earlier narration; the prompt skips the other agent's message.
-  assert.deepEqual(lastReply(branch), { prompt: "plan the canvas", text: "Done.\nNext steps: …" });
+  // The final message's text (its Next steps block cut), not the earlier narration; the prompt skips the other agent's message.
+  assert.deepEqual(lastReply(branch), { prompt: "plan the canvas", text: "Done." });
   assert.equal(lastReply([msg("user", "x".repeat(5000)), msg("assistant", [{ type: "text", text: "y" }])]).prompt.length, 2000);
+  assert.equal(lastReply([msg("user", "q"), msg("assistant", [{ type: "text", text: "Done.\n\nNext steps:\n1. Push" }])]).text, "Done.", "Next steps cut");
+});
+
+test("withoutNextSteps: the closing Next steps block goes; all of it stays when that is all there is", () => {
+  assert.equal(withoutNextSteps("Done.\n\nNext steps:\n1. Push\n2. More"), "Done.");
+  assert.equal(withoutNextSteps("Done.\n\n**Next steps:**\n1. a"), "Done.");
+  assert.equal(withoutNextSteps("Done.\n\n## Next steps\n- a"), "Done.");
+  assert.equal(withoutNextSteps("Plan: next steps first.\nNext steps are below.\n\nNext steps:\n1. a"), "Plan: next steps first.\nNext steps are below.", "the last one");
+  assert.equal(withoutNextSteps("Next steps:\n1. a"), "Next steps:\n1. a");
+  assert.equal(withoutNextSteps("The next stepsister."), "The next stepsister.");
+  assert.equal(withoutNextSteps("No list here."), "No list here.");
 });
 
 test("lastTurn on an empty branch is empty", () => {
