@@ -841,7 +841,9 @@ updates through server-sent events with no reload.
   root cause, gotcha or decision, a section for tables, diagrams and
   command lists, plans as a `steps` checklist, work run through other agents
   (subagents, agent-link handoffs, pstack) as a `pipeline` kept current as
-  each one starts, finishes or sends work back, and a file `path` instead of
+  each one starts, finishes or sends work back (independent items that move
+  at once, like several PRs, as parallel lanes of one stage rather than
+  stages in a row), and a file `path` instead of
   an inline body over ~2 KB so the data stays out of its context. The status
   digest names each canvas post by kind and id, and lists the page's
   sections with their kinds so Haiku doesn't restate one in another form.

@@ -1863,6 +1863,7 @@ export default function canvas(pi: ExtensionAPI) {
         "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); kanban for many work items by state (a triage of issues, a review queue); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
       "When work runs through other agents (subagents, agent-link handoffs, a pstack run), post it as a pipeline section when it starts, " +
         "one step per agent or role, and replace the same id as each one starts, finishes or sends work back, so its statuses stay current.",
+      "A pipeline's stages run in order, one after another. Put independent work items that move at the same time (several PRs, packages, repos) in parallel lanes of one stage, a labelled lane per item with its own steps, not in stages of their own; for many items, a kanban may fit better.",
       "Start a new section for each new topic, with a stable id; replace that id as the topic changes instead of stacking versions.",
       "After verifying UI work with screenshots, add the one that shows the result as an image section, or a compare section when there is a clear before and after.",
       "For a body over ~2 KB, write a file and pass path; the data then stays out of your context.",
