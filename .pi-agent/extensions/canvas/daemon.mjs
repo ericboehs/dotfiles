@@ -177,6 +177,28 @@ export function sessionState(root, id) {
   return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, reply: readReply(dir), sections: Array.isArray(sections) ? sections : [], findings, watch: readWatch(root), updated: newestMtime(dir) };
 }
 
+/**
+ * A reply as one line of plain text for the session list: fenced code,
+ * images and table rules dropped, links as their text, markdown marks off,
+ * whitespace collapsed, at most `max` characters.
+ */
+export function replyPreview(md, max = 240) {
+  const t = String(md ?? "")
+    .slice(0, 4000)
+    .replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^\s*\1[^\n]*$|(?![\s\S]))/gm, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s*\|?\s*:?-{2,}.*$/gm, "")
+    .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/(\*\*|__|~~|`)/g, "")
+    .replace(/(^|\W)[*_](?=\S)(.+?)(?<=\S)[*_](?=\W|$)/g, "$1$2")
+    .replace(/([^\s.!?:…])[ \t]*\n\s*(?=\S)/g, "$1 · ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}
+
 /** The Status card's "Last response" (reply.json, written by canvas.ts): { prompt, text, at }, or null. */
 export function readReply(dir) {
   const r = readJson(join(dir, "reply.json"), null);
@@ -296,6 +318,7 @@ export function listSessions(root) {
       ended: s.meta.ended,
       updated: s.updated,
       now: s.status?.now || "",
+      reply: s.reply ? replyPreview(s.reply.text) : "",
       goal: s.status?.goal || "",
       open: Array.isArray(s.status?.open) ? s.status.open.length : 0,
       next: Array.isArray(s.status?.next) ? s.status.next.length : 0,

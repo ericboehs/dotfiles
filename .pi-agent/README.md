@@ -737,7 +737,9 @@ node --test .pi-agent/test/web-chat.test.mjs
 that is too wide or long for the terminal. One shared daemon
 (`extensions/canvas/daemon.mjs`) serves `http://127.0.0.1:8790`: an index of
 sessions at `/`, and one page per session at `/s/<session-id>`. The page
-updates through server-sent events with no reload.
+updates through server-sent events with no reload. Each row of the index
+shows the session's goal, its Now line and a one-line plain-text preview of
+the agent's last response.
 
 - **Status.** After each settled turn that ran tools, Claude Haiku 5.5 on
   Copilot rewrites the status block (goal, now, done, open, next) from a

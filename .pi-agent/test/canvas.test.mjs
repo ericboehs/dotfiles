@@ -15,7 +15,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
+import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -522,6 +522,7 @@ test("daemon carries the last response from reply.json", () => {
     assert.equal(sessionState(root, "a").reply, null);
     writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z" }));
     assert.deepEqual(sessionState(root, "a").reply, { prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z" });
+    assert.equal(listSessions(root).find((s) => s.id === "a").reply, "Because.", "the list gets a preview");
     writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ prompt: 3, text: "x".repeat(200_000) }));
     const r = readReply(join(root, "a"));
     assert.equal(r.prompt, "");
@@ -531,6 +532,15 @@ test("daemon carries the last response from reply.json", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("replyPreview: one line of plain text for the session list", () => {
+  assert.equal(replyPreview("Added **Last response**.\n\n- Renders [as markdown](https://x.y)\n- Copy `it`\n\n| A | B |\n|---|---|\n| 1 | 2 |"), "Added Last response. Renders as markdown · Copy it · A B · 1 2");
+  assert.equal(replyPreview("## Done\n\n```sh\nmake deploy\n```\n\nsnake_case and 2*3*4 stay; _it_ *it* ~~gone~~ ![img](u)"), "Done · snake_case and 2*3*4 stay; it it gone");
+  assert.equal(replyPreview("```\nunclosed\nfence"), "");
+  assert.equal(replyPreview("x".repeat(300)).length, 240);
+  assert.ok(replyPreview("x".repeat(300)).endsWith("…"));
+  assert.equal(replyPreview(null), "");
 });
 
 test("daemon shows the watcher's snapshot on every page while its pi lives", () => {

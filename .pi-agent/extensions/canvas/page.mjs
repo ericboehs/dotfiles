@@ -647,6 +647,8 @@ img.shot { display: block; max-width: 100%; margin: 0 auto; border-radius: 6px; 
 .sessions .row .goal.none { color: var(--dim); font-style: italic; }
 .sessions .row .nowline { margin-top: 3px; color: var(--dim); font-size: 12.5px; line-height: 1.4; display: flex; gap: 7px; align-items: baseline; }
 .sessions .row .nowline .eyebrow { margin: 0; flex: none; font-size: 9.5px; }
+.sessions .row .replyline { min-width: 0; }
+.sessions .row .replyline .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sessions .row .chips { margin-top: 6px; display: flex; gap: 5px; flex-wrap: wrap; }
 .chip { font-size: 11px; line-height: 1.6; padding: 0 7px; border-radius: 9px; background: var(--soft); color: var(--dim); white-space: nowrap; }
 .chip.open { background: color-mix(in srgb, var(--warn) 16%, var(--card)); color: var(--warn); font-weight: 600; }
@@ -4953,6 +4955,7 @@ async function indexView() {
         h("div", { class: `goal${s.goal ? "" : " none"}` }, s.goal || "No status yet"),
         s.now && st !== "ended" ? h("div", { class: "nowline" }, h("span", { class: "eyebrow" }, "Now"), h("span", {}, s.now)) : null,
         s.now && st === "ended" ? h("div", { class: "nowline" }, h("span", { class: "eyebrow" }, "Last"), h("span", {}, s.now)) : null,
+        s.reply ? h("div", { class: "nowline replyline", title: s.reply }, h("span", { class: "eyebrow" }, "Reply"), h("span", { class: "txt" }, s.reply)) : null,
         chips.length ? h("div", { class: "chips" }, chips) : null,
       ),
       h("div", { class: "side" }, st === "ended" ? "" : stateBadge(s), when),
