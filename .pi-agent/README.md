@@ -799,7 +799,15 @@ updates through server-sent events with no reload.
   follow the session list as states change. Cards that are **new or moved**
   since this browser last saw the board get a `new` or `→ Done` badge,
   kept for 15 minutes after they were first seen (a board that changed in a
-  background tab keeps its marks until you look). `json` shows any
+  background tab keeps its marks until you look). A click on a card (or
+  Enter on a focused one) opens its **details** over the page: the full
+  title and note, tag, owner and link, and a prompt to paste into pi with
+  a Copy prompt button; ← / → step through the board's cards. On the Tasks
+  board the prompt is the todo's next move for its column ("Claim todo #5
+  (...) and start on it.", "Help unblock todo #6 (...): it's blocked on
+  ..."); on any other board it hands over the card with the board and
+  column. The daemon never writes to the project, so the page can't move
+  cards; the prompt is how a card becomes work. `json` shows any
   JSON (body or a `.json` path, stored as written) as a tree built as nodes
   open: two levels open to start, a filter that keeps and opens the paths to
   matching keys and values, Expand all and Collapse, 200 children at a time,
@@ -889,7 +897,13 @@ updates through server-sent events with no reload.
   files over 1 MB, or secret-looking names (`.env`, `*.pem`, `~/.ssh/…`,
   `*token*`); their row says why. Changes made through `bash` aren't tracked.
 - **Layout.** Status and Findings stay on top, and findings read newest first.
-  Sections follow, newest change first. Click a card's header to collapse it.
+  Sections follow, newest change first. **Pinned** sections sit between Status
+  and Findings, in the order they were pinned: the pin in a card's header,
+  `p` on the current section, or Pin in Cmd-K. Pins are per browser and per
+  session (localStorage, dropped after 60 days unused, shared by the page's
+  tabs), a pinned Tasks or Files changed card leaves the side panel for the
+  top of the page, and Contents lists pins first with a pin glyph.
+  Click a card's header to collapse it.
   Each browser remembers that choice per session, and Collapse all / Expand all
   sit in the page header. A section nobody has opened or collapsed starts
   collapsed once its last change is over an hour old. A collapsed section isn't
@@ -954,7 +968,8 @@ updates through server-sent events with no reload.
   last-turn mark. Enter, `o`
   or `za` folds or opens the current section, `zo` / `zc` open or fold it, `zR` /
   `zM` open or fold every section. `yy` copies the section's file through
-  Clippy and `yc` its source as text (the page link is in Cmd-K). `?` lists them all; the
+  Clippy and `yc` its source as text (the page link is in Cmd-K), `p` pins or
+  unpins it. `?` lists them all; the
   list and the handler share one table (`VIM_KEYS` in `canvas/nav.mjs`).
 - **Themes.** All of Omarchy's first-party themes are bundled
   (`canvas/themes.json`, MIT; `node canvas/build-themes.mjs [sha]` rebuilds

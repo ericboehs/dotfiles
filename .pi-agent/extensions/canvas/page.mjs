@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { boardMarks, cardKey, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { boardMarks, cardKey, cardPrompt, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -41,7 +41,7 @@ header.top .tools .back { margin-left: 8px; }
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
   .side { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 }
-.side .card > h2 .tag, .side .card > h2 .meta button.btn { display: none; }
+.side .card > h2 .tag, .side .card > h2 .meta button.btn:not(.pin) { display: none; }
 .side .card > .bd { padding: 10px 12px; }
 .side .md table { font-size: 12px; }
 .side .md th, .side .md td { padding: 3px 6px; }
@@ -74,6 +74,7 @@ dialog.modal { padding: 0; border: 1px solid var(--line); border-radius: 12px; b
 dialog.modal[open] { display: flex; flex-direction: column; }
 dialog.modal.image { width: auto; }
 dialog.modal.diff { height: min(92vh, 960px); }
+dialog.modal.kb-detail { width: min(600px, 94vw); }
 dialog.modal:focus, dialog.modal:focus-visible { outline: none; }
 dialog.modal::backdrop { background: rgba(24, 20, 16, .58); }
 dialog.modal > header { display: flex; gap: 10px; align-items: center; padding: 6px 8px 6px 14px; min-height: 40px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); font-size: 13px; }
@@ -260,6 +261,32 @@ td.barc .num { min-width: 4em; }
 .kb-owner .pulse.ended { background: transparent; border: 1.5px solid var(--dim); opacity: 0.7; }
 a.kb-owner:hover { color: var(--accent); text-decoration: underline; }
 a.kb-owner.ended { opacity: 0.8; }
+.kb-card { cursor: pointer; transition: border-color 0.12s; }
+.kb-card:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kb-detail { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 10px; border-left: 3px solid var(--tone, var(--line)); overflow-y: auto; }
+.kb-d-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kb-d-col { font: 600 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--tone, var(--dim)); text-transform: uppercase; letter-spacing: 0.04em; }
+.kb-d-title { margin: 0; font-size: 15px; line-height: 1.45; font-weight: 600; overflow-wrap: anywhere; }
+.kb-d-note { margin: 0; color: var(--dim); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.kb-detail code { font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--soft); }
+.kb-d-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.kb-d-owner { display: inline-flex; align-items: center; gap: 6px; }
+.kb-detail .k { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+.kb-d-prompt { border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.kb-d-hd { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 4px 10px; border-bottom: 1px solid var(--line); }
+.kb-d-prompt pre { margin: 0; padding: 10px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* pins */
+.btn.pin { padding: 3px 5px; }
+.btn.pin .pin-ico { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
+.btn.pin.on { color: color-mix(in srgb, var(--accent) 80%, var(--ink)); }
+.btn.pin.on .pin-ico { fill: currentColor; }
+.card > h2 .btn.pin:not(.on) { opacity: 0.55; }
+.card > h2:hover .btn.pin, .card > h2 .btn.pin:focus-visible { opacity: 1; }
+.pin-head { display: flex; align-items: center; gap: 5px; margin: 2px 2px 6px; font: 600 11px/1 -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+.pin-head .pin-ico, .toc .pin-ico { fill: currentColor; flex: none; }
+.pin-slot:not(:empty) { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed var(--line); }
+.toc a .pin-ico { width: 10px; height: 10px; margin-right: 5px; color: var(--dim); }
 .kb-owner.me { color: color-mix(in srgb, var(--accent) 75%, var(--ink)); }
 .kb-more, .kb-empty { color: var(--dim); font-size: 12px; padding: 0 2px; }
 @container (max-width: 560px) {
@@ -865,7 +892,7 @@ async function sectionBody(id, sec) {
     case "pipeline":
       return renderPipeline(JSON.parse(await (await fetch(url)).text()));
     case "kanban":
-      return renderKanban(JSON.parse(await (await fetch(url)).text()), sec.id);
+      return renderKanban(JSON.parse(await (await fetch(url)).text()), sec.id, sec.title);
     case "json":
       return renderJson(await (await fetch(url)).text());
     case "timeline":
@@ -987,6 +1014,41 @@ function collapsible(card, key, onOpen, at) {
 /** Automatic widgets: the sidebar on wide screens, in time order otherwise. */
 const WIDGETS = ["auto-tasks", "auto-agents", "auto-files", "auto-screenshots"];
 const WIDE = "(min-width: 1200px)";
+
+// ── pins: sections kept at the top of the main column, per browser ──
+const PINS_KEY = "canvas:pins"; // localStorage: { "<session>": { ids: [section ids in pin order], at } }
+const PINS_DAYS = 60;
+
+function readPins(session = currentSession) {
+  try {
+    const ids = JSON.parse(localStorage.getItem(PINS_KEY) || "{}")?.[session]?.ids;
+    return Array.isArray(ids) ? ids.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function writePins(ids, session = currentSession) {
+  let all = {};
+  try {
+    all = JSON.parse(localStorage.getItem(PINS_KEY) || "{}") || {};
+  } catch {}
+  const old = Date.now() - PINS_DAYS * 864e5;
+  for (const [k, v] of Object.entries(all)) if (!(v?.at > old)) delete all[k];
+  if (ids.length) all[session] = { ids, at: Date.now() };
+  else delete all[session];
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+const pinIcon = () =>
+  svg("svg", { class: "pin-ico", viewBox: "0 0 16 16", width: 13, height: 13, "aria-hidden": "true" }, svg("path", { d: "M10 1.8 14.2 6l-1.6.6-2.3 2.3.3 3.1-1.1 1.1L6.7 10.3 3 14H2v-1l3.7-3.7-2.8-2.8L4 5.4l3.1.3L9.4 3.4Z" }));
+
+/** The header's pin toggle; place() keeps its state in step with the stored pins. */
+function pinButton(secId) {
+  const on = readPins().includes(secId);
+  return h("button", { class: `btn pin${on ? " on" : ""}`, type: "button", "aria-pressed": String(on), title: on ? "Unpin (p)" : "Pin to the top (p)", onclick: () => pageHooks.togglePin?.(secId) }, pinIcon());
+}
 
 /** Status and Findings stay on top. Sections follow, newest change first. */
 function sortSections(list) {
@@ -1151,6 +1213,7 @@ function sectionCard(id, sec) {
   }
   if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false)));
   meta.append(h("a", { class: "btn", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab" }, "↗"));
+  meta.prepend(pinButton(sec.id));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
   const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), meta), bd);
@@ -2313,8 +2376,11 @@ function refreshOwners() {
   for (const el of document.querySelectorAll(".kb-owner[data-owner]")) el.replaceWith(ownerChip(el.dataset.owner));
 }
 
-function renderKanban(spec, secId = "") {
+function renderKanban(spec, secId = "", secTitle = "") {
   const cols = spec.columns || [];
+  const flat = cols.flatMap((c) => (c.cards || []).map((k) => ({ k, c })));
+  const boardName = spec.title || secTitle || "Board";
+  const todo = secId === "auto-tasks";
   const count = (c) => (c.cards || []).length + (c.more || 0);
   const busy = cols.some((c) => !c.compact && count(c));
   const key = `${currentSession}/${secId}`;
@@ -2335,9 +2401,9 @@ function renderKanban(spec, secId = "") {
 
   const card = (k, c) => {
     const mv = marks.moves[cardKey(k)];
-    return h(
+    const li = h(
       "li",
-      { class: `kb-card${toneVar(k.tone) ? " toned" : ""}${mv ? " moved" : ""}`, style: toneVar(k.tone) ? `--card-tone:${toneVar(k.tone)}` : null },
+      { class: `kb-card${toneVar(k.tone) ? " toned" : ""}${mv ? " moved" : ""}`, style: toneVar(k.tone) ? `--card-tone:${toneVar(k.tone)}` : null, tabindex: "0", "aria-haspopup": "dialog" },
       h(
         "div",
         { class: "kb-title", title: c.compact ? k.title : null },
@@ -2348,6 +2414,16 @@ function renderKanban(spec, secId = "") {
       k.note && !c.compact ? h("div", { class: "kb-note" }, inline(k.note)) : null,
       (k.tag || k.owner) && !c.compact ? h("div", { class: "kb-meta" }, k.tag ? h("span", { class: `ctag${/^(ok|warn|bad)$/.test(k.tone) ? ` ${k.tone}` : ""}` }, k.tag) : null, k.owner ? ownerChip(k.owner) : null) : null,
     );
+    // A click (not on a link, not a text selection) or Enter opens the card's details.
+    const open = () => cardDetail(flat, flat.findIndex((x) => x.k === k), { todo, board: boardName, moves: marks.moves });
+    li.addEventListener("click", (e) => !e.target.closest("a, button") && !String(getSelection?.() || "") && open());
+    li.addEventListener("keydown", (e) => {
+      if (e.target !== li || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      open();
+    });
+    return li;
   };
 
   const column = (c) => {
@@ -2404,6 +2480,42 @@ function renderKanban(spec, secId = "") {
       .catch(() => {});
   }
   return root;
+}
+
+/** A kanban card's details in the modal: full text, owner, link, and a prompt to paste into pi. ← / → step through the board. */
+function cardDetail(items, i, { todo, board, moves }) {
+  showModal(items, Math.max(i, 0), ({ k, c }) => {
+    const prompt = cardPrompt(k, c.label, { todo, board });
+    const mv = moves[cardKey(k)];
+    return {
+      kind: "kb-detail",
+      title: board,
+      sub: c.label,
+      body: h(
+        "div",
+        { class: "kb-detail", style: toneVar(c.tone) ? `--tone:${toneVar(c.tone)}` : null },
+        h(
+          "div",
+          { class: "kb-d-top" },
+          h("span", { class: "kb-d-col" }, c.label),
+          k.id ? h("span", { class: "kb-id" }, k.id) : null,
+          k.tag ? h("span", { class: `ctag${/^(ok|warn|bad)$/.test(k.tone) ? ` ${k.tone}` : ""}` }, k.tag) : null,
+          mv ? h("span", { class: "kb-moved" }, mv === "new" ? "new" : `→ ${mv}`) : null,
+        ),
+        h("p", { class: "kb-d-title" }, inline(k.title)),
+        k.note ? h("p", { class: "kb-d-note" }, inline(k.note)) : null,
+        k.owner || k.href
+          ? h(
+              "div",
+              { class: "kb-d-meta" },
+              k.owner ? h("span", { class: "kb-d-owner" }, h("span", { class: "k" }, "Owner"), ownerChip(k.owner)) : null,
+              k.href ? h("a", { class: "btn", href: k.href, target: "_blank", rel: "noopener noreferrer", title: k.href }, "Open link ↗") : null,
+            )
+          : null,
+        h("div", { class: "kb-d-prompt" }, h("div", { class: "kb-d-hd" }, h("span", { class: "k" }, "Prompt for pi"), copyButton(async () => prompt, "Copy prompt")), h("pre", {}, prompt)),
+      ),
+    };
+  });
 }
 
 function renderTimeline(spec) {
@@ -2785,8 +2897,7 @@ function showModal(items, i, render) {
           { class: "tools" },
           extra ?? null,
           items.length > 1 ? [step(-1, "←", "Previous (←)"), h("span", { class: "pos" }, `${i + 1} / ${items.length}`), step(1, "→", "Next (→)")] : null,
-          clipButton(() => raw.href),
-          raw,
+          href ? [clipButton(() => raw.href), raw] : null,
           h("button", { class: "btn", type: "button", title: "Close (Esc)", onclick: () => d.close() }, "✕"),
         ),
       ),
@@ -2934,6 +3045,8 @@ async function sessionView(id) {
   const waitbar = h("div", { class: "waitbar" });
   const header = h("header", { class: "top" });
   const statusSlot = h("div");
+  const pinHead = h("div", { class: "pin-head", hidden: true }, pinIcon(), "Pinned");
+  const pinSlot = h("div", { class: "pin-slot" });
   const sectionsSlot = h("div");
   const findingsSlot = h("div");
   const tocSlot = h("div");
@@ -2942,7 +3055,7 @@ async function sessionView(id) {
   $app.classList.add("session");
   $app.replaceChildren(
     header,
-    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, pipeSlot, tocSlot, widgetSlot)),
+    h("div", { class: "layout" }, h("div", { class: "main-col" }, statusSlot, pinHead, pinSlot, findingsSlot, sectionsSlot), h("aside", { class: "side" }, pipeSlot, tocSlot, widgetSlot)),
   );
   loadChoices(id);
   const cards = new Map(); // section id → { at, el }
@@ -2958,6 +3071,7 @@ async function sessionView(id) {
   // ── placement: widgets go to the sidebar when the screen is wide ──
   function place() {
     const sections = lastSections;
+    const { pinned, rest } = splitPinned(sections, readPins(id));
     const aside = (s) => wide.matches && WIDGETS.includes(s.id);
     const lay = (slot, list) =>
       list.forEach((sec, i) => {
@@ -2966,14 +3080,32 @@ async function sessionView(id) {
         const here = slot.children[i];
         if (here !== el) slot.insertBefore(el, here || null);
       });
-    const mainList = sections.filter((s) => !aside(s));
+    for (const sec of sections) {
+      const el = cards.get(sec.id).el;
+      const on = pinned.includes(sec);
+      el.classList.toggle("pinned", on);
+      const b = el.querySelector(":scope > h2 .pin");
+      if (b) (b.classList.toggle("on", on), b.setAttribute("aria-pressed", String(on)), (b.title = on ? "Unpin (p)" : "Pin to the top (p)"));
+    }
+    // A pinned widget leaves the side panel for the top of the main column.
+    const mainList = rest.filter((s) => !aside(s));
     sectionsSlot.querySelector(":scope > p.empty")?.remove();
+    lay(pinSlot, pinned);
+    pinHead.hidden = !pinned.length;
     lay(sectionsSlot, mainList);
-    lay(widgetSlot, WIDGETS.map((wid) => sections.find((s) => s.id === wid)).filter((s) => s && aside(s)));
-    if (!mainList.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
-    renderToc(mainList);
-    renderPipeStrip(mainList);
+    lay(widgetSlot, WIDGETS.map((wid) => rest.find((s) => s.id === wid)).filter((s) => s && aside(s)));
+    if (!mainList.length && !pinned.length) sectionsSlot.append(h("p", { class: "empty" }, "No sections yet."));
+    renderToc([...pinned, ...mainList]);
+    renderPipeStrip([...pinned, ...mainList]);
   }
+  pageHooks.togglePin = (secId) => {
+    const now = togglePin(readPins(id), secId);
+    writePins(now, id);
+    place();
+    return now.includes(secId);
+  };
+  // Pins made in another tab of this page show here too.
+  addEventListener("storage", (e) => e.key === PINS_KEY && place());
 
   // ── Pipeline strip: the newest pipeline's stages, while it still runs ──
   let pipeKey = "";
@@ -3051,8 +3183,8 @@ async function sessionView(id) {
         .filter((_, i) => !fold || keep[i])
         .map((sec) => {
           const card = cards.get(sec.id)?.el;
-          const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : "", card?.classList.contains("lastturn") ? "lastturn" : ""].join(" ").trim();
-          const a = h("a", { class: cls, href: `#sec-${sec.id}`, title: sec.title || sec.id }, h("span", { class: "t" }, sec.title || sec.id), agoEl(sec.at));
+          const cls = ["", card?.classList.contains("collapsed") ? "shut" : "", card?.classList.contains("unseen") ? "unseen" : "", card?.classList.contains("lastturn") ? "lastturn" : "", card?.classList.contains("pinned") ? "pinned" : ""].join(" ").trim();
+          const a = h("a", { class: cls, href: `#sec-${sec.id}`, title: sec.title || sec.id }, card?.classList.contains("pinned") ? pinIcon() : null, h("span", { class: "t" }, sec.title || sec.id), agoEl(sec.at));
           a.addEventListener("click", (e) => {
             e.preventDefault();
             if (!card) return;
@@ -3488,6 +3620,10 @@ function mainItems() {
   const actions = [
     currentSession && { label: "Fold all sections", run: () => pageHooks.setAll?.(true) },
     currentSession && { label: "Open all sections", run: () => pageHooks.setAll?.(false) },
+    (() => {
+      const c = currentSession ? currentOrTop() : null;
+      return c?.id?.startsWith("sec-") && { label: `${c.classList.contains("pinned") ? "Unpin" : "Pin"} “${cardTitle(c)}”`, sub: "keep it at the top of the page, in this browser (p)", run: () => pinCard(c) };
+    })(),
     {
       label: "Copy link to this page",
       run: () => navigator.clipboard.writeText(location.href).then(() => toast("Link copied"), () => toast("Couldn't copy the link")),
@@ -3796,6 +3932,15 @@ async function yankWith(card, selector, what) {
   else if (ok === false) toast(`Couldn't copy the ${what}${b.title && what === "file" ? `: ${b.title}` : ""}`);
 }
 
+/** Pin or unpin a section card; Status, Findings and Contents aren't sections, so they stay put. */
+function pinCard(card) {
+  const secId = card?.id?.startsWith("sec-") ? card.id.slice(4) : null;
+  if (!secId || !pageHooks.togglePin) return toast("Only sections can be pinned");
+  const on = pageHooks.togglePin(secId);
+  toast(`${on ? "Pinned" : "Unpinned"} “${cardTitle(card)}”`);
+  setCurrent(card);
+}
+
 function vimAction(action, e) {
   const smooth = e?.repeat ? "auto" : "smooth";
   switch (action) {
@@ -3838,6 +3983,8 @@ function vimAction(action, e) {
       return yankWith(currentOrTop(), "[data-yank=source]", "source");
     case "yankFile":
       return yankWith(currentOrTop(), ".clip", "file");
+    case "pin":
+      return pinCard(currentOrTop());
     case "help":
       return toggleHelp();
   }

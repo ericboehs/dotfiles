@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { boardMarks, boardMoves, boardSnapshot, fuzzyScore, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
+import { boardMarks, boardMoves, boardSnapshot, cardPrompt, fuzzyScore, inlineTokens, matchKeys, nextSeen, orderSessions, ownerSession, rankItems, splitPinned, togglePin, VIM_KEYS, waitingSessions } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -210,4 +210,30 @@ test("boardMoves and boardMarks: new and moved cards, kept for a while, carried 
   const seen = boardMarks(next.save, later, { now: t0 + 7200e3 });
   assert.deepEqual(seen.moves, next.moves, "still shown when finally seen");
   assert.equal(seen.save.at, t0 + 7200e3, "and the clock starts then");
+});
+
+test("pins: toggle keeps pin order; split puts pinned first in that order", () => {
+  assert.deepEqual(togglePin([], "a"), ["a"]);
+  assert.deepEqual(togglePin(["a", "b"], "c"), ["a", "b", "c"], "a new pin goes last");
+  assert.deepEqual(togglePin(["a", "b", "c"], "b"), ["a", "c"]);
+  const list = [{ id: "new" }, { id: "mid" }, { id: "old" }];
+  const { pinned, rest } = splitPinned(list, ["old", "gone", "new"]);
+  assert.deepEqual(pinned.map((s) => s.id), ["old", "new"], "pin order, missing ids skipped");
+  assert.deepEqual(rest.map((s) => s.id), ["mid"]);
+  assert.deepEqual(splitPinned(list, []).rest, list);
+  assert.equal(matchKeys("p").action, "pin");
+});
+
+test("cardPrompt: the todo's next move by column, or a hand-over for other boards", () => {
+  const t = { id: "#5", title: "Write the README" };
+  assert.equal(cardPrompt(t, "Open", { todo: true }), "Claim todo #5 (Write the README) and start on it.");
+  assert.equal(cardPrompt({ ...t, owner: "pi-b7c2" }, "Claimed", { todo: true }), "Continue todo #5 (Write the README), claimed by @pi-b7c2.");
+  assert.equal(cardPrompt({ ...t, note: "Blocked: waiting on review" }, "Blocked", { todo: true }), "Help unblock todo #5 (Write the README): it's blocked on waiting on review.");
+  assert.equal(cardPrompt(t, "Done", { todo: true }), "Review the work on todo #5 (Write the README).");
+  assert.equal(cardPrompt({ title: "No id" }, "Open", { todo: true }), 'Claim the todo "No id" and start on it.');
+  assert.equal(
+    cardPrompt({ id: "#212", title: "Coupon before tax", note: "p95 3s", href: "https://x.test/212" }, "New", { board: "Cart bugs" }),
+    'Let\'s work on #212 Coupon before tax (from the "Cart bugs" board, in New).\np95 3s\nhttps://x.test/212',
+  );
+  assert.equal(cardPrompt({ title: "Loose" }, "Doing"), "Let's work on Loose (from Doing).");
 });

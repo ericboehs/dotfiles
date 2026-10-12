@@ -96,6 +96,7 @@ export const VIM_KEYS = [
   { group: "Fold", keys: "zM", action: "foldAll", help: "fold every section" },
   { group: "Yank", keys: "yy", action: "yankFile", help: "copy this section's file (Clippy), to paste as a file" },
   { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source as text" },
+  { group: "Other", keys: "p", action: "pin", help: "pin this section to the top of the page, or unpin it" },
   { group: "Other", keys: "?", action: "help", help: "this list" },
 ];
 
@@ -199,4 +200,39 @@ export function boardMarks(saved, columns, { now = Date.now(), keepMs = 15 * 60e
   if (saved && !saved.at) for (const [k, v] of Object.entries(saved.moves || {})) if (k in snap) carried[k] = v;
   const moves = { ...carried, ...boardMoves(saved?.snap, columns) };
   return { moves, save: { snap, moves, at: visible ? now : 0 } };
+}
+
+// ── pins ─────────────────────────────────────────────────────────────────────────────
+
+/** Pin an unpinned id (at the end, so pins keep the order they were made in), or unpin it. */
+export function togglePin(pins, id) {
+  return pins.includes(id) ? pins.filter((x) => x !== id) : [...pins, id];
+}
+
+/** Split sections into the pinned ones, in pin order, and the rest as given. */
+export function splitPinned(list, pins) {
+  const at = new Map(pins.map((id, i) => [id, i]));
+  return {
+    pinned: list.filter((s) => at.has(s.id)).sort((a, b) => at.get(a.id) - at.get(b.id)),
+    rest: list.filter((s) => !at.has(s.id)),
+  };
+}
+
+/**
+ * What to paste into pi about a kanban card. On the Tasks board (the todo
+ * tool's list) it names the todo and the next move for its column; on any
+ * other board it hands over the card with where it sits.
+ */
+export function cardPrompt(k, column, { todo = false, board = "" } = {}) {
+  const n = String(k.id || "").replace(/^#/, "");
+  if (todo) {
+    const what = n ? `todo #${n} (${k.title})` : `the todo "${k.title}"`;
+    const why = String(k.note || "").replace(/^Blocked:\s*/, "");
+    if (column === "Open") return `Claim ${what} and start on it.`;
+    if (column === "Claimed") return `Continue ${what}${k.owner ? `, claimed by @${k.owner}` : ""}.`;
+    if (column === "Blocked") return `Help unblock ${what}${why ? `: it's blocked on ${why}` : ""}.`;
+    if (column === "Done") return `Review the work on ${what}.`;
+  }
+  const where = board ? `the "${board}" board, in ${column}` : column;
+  return [`Let's work on ${k.id ? `${k.id} ` : ""}${k.title} (from ${where}).`, k.note || "", k.href || ""].filter(Boolean).join("\n");
 }
