@@ -968,7 +968,11 @@ updates through server-sent events with no reload.
   hover otherwise), then the age and three quiet icons: copy source, Clippy
   and open in a new tab. ⌥-click on any copy button (the source, a code
   block, a finding, a prompt) copies the text as a markdown blockquote, `> `
-  on every line. Drafts (a Slack post, an email, a PR comment) are written
+  on every line. ⇧-click copies it as Slack markup for the composer
+  (`**b**` → `*b*`, `*i*` → `_i_`, `~~s~~` → `~s~`, a heading → a bold
+  line, `-` items → `•`, a table → an aligned code block; links, code and
+  quotes stay), and a code block or command output in a ``` block; ⇧⌥-click
+  does the same, quoted. Drafts (a Slack post, an email, a PR comment) are written
   as blockquotes, not code fences, so they wrap and read in full colour; the
   tool's guidance says so. Each top-level quote has its own copy icon (on
   hover): it copies the quote's markdown without the `>` markers (a nested

@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { asQuote, boardMarks, dismissPipe, pipeRows, pipeStripHidden, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, dismissPipe, pipeRows, pipeStripHidden, slackText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -778,10 +778,16 @@ async function copyText(text) {
   if (!ok) throw new Error("copy failed");
 }
 
-function copyButton(getText, label = "Copy", ico = null) {
+/**
+ * A copy button. A plain click copies getText(); ⌥ copies it as a > quote,
+ * ⇧ as Slack markup (slackText; code and output, slack: "code", go in a
+ * ``` block instead), ⇧⌥ as Slack markup quoted.
+ */
+function copyButton(getText, label = "Copy", ico = null, { slack = "markdown" } = {}) {
   const base = ico ? "btn ico" : "btn";
   const face = (state) => (ico ? (state === "ok" ? icon("check") : state === "bad" ? "✗" : icon(ico)) : state === "ok" ? "Copied" : state === "bad" ? "Failed" : label);
-  const tip = `${ico ? label : "Copy to clipboard"} · ⌥-click: as a > quote`;
+  const tip = `${ico ? label : "Copy to clipboard"} · ⌥-click: as a > quote · ⇧-click: for Slack · ⇧⌥-click: for Slack, quoted`;
+  const forSlack = (text) => (slack === "code" ? `\`\`\`\n${String(text).replace(/\n+$/, "")}\n\`\`\`` : slackText(text));
   const b = h("button", { class: base, type: "button", title: tip, "aria-label": ico ? label : null }, face());
   let timer;
   b.addEventListener("click", async (e) => {
@@ -790,7 +796,8 @@ function copyButton(getText, label = "Copy", ico = null) {
     clearTimeout(timer);
     const quote = e.altKey;
     try {
-      const text = await getText();
+      const raw = await getText();
+      const text = e.shiftKey ? forSlack(raw) : raw;
       await copyText(quote ? asQuote(text) : text);
       b.replaceChildren(face("ok"));
       b.className = `${base} ok`;
@@ -945,7 +952,7 @@ function renderMarkdown(text) {
     const lang = [...code.classList].find((c) => c.startsWith("language-"))?.slice(9);
     const wrap = h("div", { class: "codeblock" });
     pre.replaceWith(wrap);
-    wrap.append(lang ? h("span", { class: "lang" }, lang) : "", pre, copyButton(() => code.textContent.replace(/\n$/, "")));
+    wrap.append(lang ? h("span", { class: "lang" }, lang) : "", pre, copyButton(() => code.textContent.replace(/\n$/, ""), "Copy", null, { slack: "code" }));
     if (lang) highlightInto(code, lang);
   }
   // Top-level quotes (drafts, mostly) copy their markdown without the > markers; ⌥-click keeps them.
@@ -1858,7 +1865,7 @@ function renderTerminal(spec) {
       h("span", {}, `${lines.length.toLocaleString()} line${lines.length === 1 ? "" : "s"}`),
     ),
   );
-  const copy = copyButton(() => lines.map((l) => l.plain).join("\n"), "Copy output");
+  const copy = copyButton(() => lines.map((l) => l.plain).join("\n"), "Copy output", null, { slack: "code" });
   const tools = filter ? h("div", { class: "term-tools" }, filter, count, copy) : null;
   if (!filter) head.lastChild.append(copy);
   const body = h("div", { class: "term-body" });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -308,4 +308,24 @@ test("pipeStripHidden: dismissed at this version, or stale after 30 minutes; dis
   for (const k of ["a", "b", "c", "d"]) h = dismissPipe(h, k, at, 3);
   assert.deepEqual(Object.keys(h), ["b", "c", "d"]);
   assert.deepEqual(Object.keys(dismissPipe(h, "b", "x", 3)), ["c", "d", "b"], "re-dismissed moves to newest");
+});
+
+test("slackText: markdown as Slack markup; links, code and quotes kept; tables as code blocks", () => {
+  assert.equal(slackText("## Status: **done**"), "*Status: done*");
+  assert.equal(slackText("**b**, *i*, _i_, ~~s~~"), "*b*, _i_, _i_, ~s~");
+  assert.equal(slackText("`co**de**` and [a **b**](https://x.y/a_b*c) and https://z.q/**x**"), "`co**de**` and [a **b**](https://x.y/a_b*c) and https://z.q/**x**");
+  assert.equal(slackText("<https://a.b> ![shot](https://i.png) ![](https://j.png)"), "https://a.b [shot](https://i.png) https://j.png");
+  assert.equal(slackText("- one\n  * two **b**\n- [ ] todo\n- [x] done\n1. first"), "• one\n  • two *b*\n☐ todo\n☑ done\n1. first");
+  assert.equal(slackText("a\n\n---\n\nb"), "a\n\n———\n\nb");
+  assert.equal(slackText("> quoted **b**\n> - item"), "> quoted *b*\n> • item");
+  assert.equal(slackText("2*3*4 and x * y, a<br>b"), "2*3*4 and x * y, a\nb", "a bare * is not emphasis");
+  // Fenced code: untouched but its language; a ~~~ fence becomes ```.
+  assert.equal(slackText('```ruby\nputs "**raw**"\n- not a bullet\n```\n~~~\nx\n~~~'), '```\nputs "**raw**"\n- not a bullet\n```\n```\nx\n```');
+  // A table: aligned in a code block, cells as plain text, a link as "text (url)", an escaped pipe kept.
+  assert.equal(
+    slackText("| Name | Count | Link |\n|---|---:|---|\n| **Alpha** | 3 | [docs](https://d.e) |\n| Beta \\| two | 12 | |\n\nafter"),
+    ["```", "Name        Count  Link", "----------  -----  ------------------", "Alpha       3      docs (https://d.e)", "Beta | two  12", "```", "", "after"].join("\n"),
+  );
+  assert.equal(slackText("| not | a table |"), "| not | a table |", "pipes without a separator row stay");
+  assert.equal(asQuote(slackText("# Hi\n\n**x**\n")), "> *Hi*\n>\n> *x*");
 });

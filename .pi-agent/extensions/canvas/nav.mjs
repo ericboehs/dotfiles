@@ -283,6 +283,91 @@ export function asQuote(text) {
     .join("\n");
 }
 
+/**
+ * Markdown as Slack markup (⇧-click on a copy button), for pasting into the
+ * composer: **b** → *b*, *i* or _i_ → _i_, ~~s~~ → ~s~, a heading → a *bold*
+ * line, - / * / + items → • (task boxes → ☐ / ☑), --- → a rule, a
+ * table → an aligned code block, <br> → a newline, an image → its link.
+ * Links ([t](u), which Slack takes), code spans, fenced code (its language
+ * dropped), quotes and numbered items stay as they are.
+ */
+export function slackText(md) {
+  const lines = String(md ?? "").replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  const out = [];
+  const isRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+  const isSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const fence = l.match(/^(\s*)(`{3,}|~{3,})/);
+    if (fence) {
+      // Through the closing fence, untouched but the language.
+      out.push(`${fence[1]}\`\`\``);
+      for (i++; i < lines.length && !lines[i].trimStart().startsWith(fence[2]); i++) out.push(lines[i]);
+      out.push(`${fence[1]}\`\`\``);
+      continue;
+    }
+    if (isRow(l) && i + 1 < lines.length && isSep(lines[i + 1])) {
+      const rows = [];
+      for (; i < lines.length && isRow(lines[i]); i++) if (!isSep(lines[i])) rows.push(tableCells(lines[i]).map(plainInline));
+      i--;
+      out.push("```", ...alignRows(rows), "```");
+      continue;
+    }
+    out.push(slackLine(l));
+  }
+  return out.join("\n");
+}
+
+function tableCells(row) {
+  return row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
+function alignRows(rows) {
+  const n = Math.max(...rows.map((r) => r.length));
+  const w = Array.from({ length: n }, (_, k) => Math.max(...rows.map((r) => [...(r[k] ?? "")].length)));
+  const line = (r) => r.map((c, k) => (k === n - 1 ? c : c + " ".repeat(w[k] - [...c].length))).join("  ").trimEnd();
+  const [head, ...body] = rows;
+  return [line(head), w.map((x) => "-".repeat(x)).join("  "), ...body.map((r) => line(Array.from({ length: n }, (_, k) => r[k] ?? "")))];
+}
+/** A table cell as plain text (it goes in a code block): no emphasis marks, a link as "text (url)". */
+function plainInline(s) {
+  return s
+    .replace(/!?\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (_, t, u) => (t && t !== u ? `${t} (${u})` : u))
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, "$1$2")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1");
+}
+
+function slackLine(l) {
+  if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(l)) return "———";
+  const head = l.match(/^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/);
+  if (head) return `*${slackInline(head[1]).replace(/\*/g, "")}*`;
+  const item = l.match(/^(\s*)[-*+]\s+(?:\[([ xX])\]\s+)?(.*)$/);
+  if (item) return `${item[1]}${item[2] == null ? "•" : item[2] === " " ? "☐" : "☑"} ${slackInline(item[3])}`;
+  const quote = l.match(/^(\s*(?:>\s?)+)(.*)$/);
+  if (quote) return quote[1] + slackLine(quote[2]);
+  return slackInline(l);
+}
+
+function slackInline(s) {
+  // Code spans and links are kept whole: set aside, then put back.
+  const kept = [];
+  const keep = (x) => `\u0000${kept.push(x) - 1}\u0000`;
+  let t = s
+    .replace(/`[^`]+`/g, keep)
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (_, a, u) => keep(a ? `[${a}](${u})` : u))
+    .replace(/\[[^\]]+\]\([^)\s]+[^)]*\)/g, keep)
+    .replace(/<(https?:\/\/[^>\s]+)>/g, (_, u) => keep(u))
+    .replace(/https?:\/\/[^\s\u0000]+/g, keep)
+    .replace(/<br\s*\/?>/gi, "\n");
+  t = t
+    .replace(/(\*\*|__)(?!\s)(.+?)(?<!\s)\1/g, "\u0001$2\u0001")
+    .replace(/(^|[^\w*\u0001])\*(?![\s*])(.+?)(?<![\s*])\*(?![\w*])/g, "$1_$2_")
+    .replace(/~~(.+?)~~/g, "~$1~")
+    .replace(/\u0001/g, "*");
+  return t.replace(/\u0000(\d+)\u0000/g, (_, k) => kept[Number(k)]);
+}
+
 /** A blockquote's markdown without its markers: `> ` (or `>`) off each line, up to 3 spaces of indent before it. */
 export function unquote(raw) {
   return String(raw ?? "")
