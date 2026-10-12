@@ -41,7 +41,7 @@ header.top .tools .back { margin-left: 8px; }
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
   .side { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 }
-.side .card > h2 .kind, .side .card > h2 .meta button.btn { display: none; }
+.side .card > h2 .meta button.btn { display: none; }
 .side .card > .bd { padding: 10px 12px; }
 .side .md table { font-size: 12px; }
 .side .md th, .side .md td { padding: 3px 6px; }
@@ -286,10 +286,10 @@ a.kb-owner.ended { opacity: 0.8; }
 .card > h2:hover .btn.pin:not(.on) { opacity: 0.6; }
 .card > h2 .btn.pin:not(.on):hover, .card > h2 .btn.pin:focus-visible { opacity: 1; }
 @media (hover: none) { .card > h2 .btn.pin:not(.on) { opacity: 0.35; } }
-/* Kind label: by the title, on hover only; it only fills spare room, so it never wraps the row. */
-.card > h2 .kind { color: var(--dim); font: 400 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; opacity: 0; transition: opacity 0.12s; }
-.card > h2:hover .kind { opacity: 1; }
-@media (hover: none) { .card > h2 .kind { display: none; } }
+/* The age's tooltip (hover, or a tap that holds it 5 s): kind, exact time, last-turn note. */
+.card > h2 .has-tip { cursor: help; }
+.tip-pop { position: fixed; z-index: 60; max-width: min(320px, calc(100vw - 16px)); padding: 6px 9px; border-radius: 7px; background: var(--ink); color: var(--card); font: 400 12px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); pointer-events: none; }
+.tip-pop > div:first-child { font-weight: 600; }
 /* Header icon buttons: quiet until hovered. */
 .btn.ico { padding: 4px 5px; }
 .btn.ico .ico { display: block; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
@@ -451,7 +451,6 @@ ol.tline { list-style: none; margin: 0; padding: 0; }
 .toc a.unseen .t::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 /* Touched this turn (or the last one): an accent bar down the left edge and a pill. */
 .card.lastturn, .card.lastturn > h2 { box-shadow: inset 3px 0 0 var(--accent); }
-.turn-pill { flex: none; font: 600 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: color-mix(in srgb, var(--accent) 75%, var(--ink)); background: var(--tint); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 999px; padding: 3px 7px; margin-left: 8px; white-space: nowrap; }
 .toc a.lastturn { box-shadow: inset 2px 0 0 var(--accent); }
 .toc a.lastturn .t { color: var(--ink); font-weight: 600; }
 .findings li.lastturn { box-shadow: inset 3px 0 0 var(--accent); }
@@ -963,7 +962,48 @@ function stateBadge(s) {
   );
 }
 
-const statusBy = (status) => `${status.model || "?"} · ${ago(status.at)}`;
+const statusBy = (status) => ago(status.at);
+
+// ── header tooltips ──
+// A header's age carries the details that used to be tags and pills: hover
+// shows them, and a tap (touch has no hover) shows them for 5 s.
+let tipEl = null;
+let tipTimer = 0;
+let tipFor = null;
+function showTip(anchor, lines, ms = 0) {
+  if (!tipEl) document.body.append((tipEl = h("div", { class: "tip-pop", role: "tooltip" })));
+  tipEl.replaceChildren(...lines.filter(Boolean).map((l) => h("div", {}, l)));
+  tipEl.hidden = false;
+  tipFor = anchor;
+  const r = anchor.getBoundingClientRect();
+  const w = tipEl.offsetWidth;
+  const ht = tipEl.offsetHeight;
+  tipEl.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
+  tipEl.style.top = `${r.bottom + 6 + ht > innerHeight ? r.top - ht - 6 : r.bottom + 6}px`;
+  clearTimeout(tipTimer);
+  if (ms) tipTimer = setTimeout(hideTip, ms);
+}
+function hideTip() {
+  clearTimeout(tipTimer);
+  if (tipEl) tipEl.hidden = true;
+  tipFor = null;
+}
+addEventListener("scroll", hideTip, { passive: true, capture: true });
+
+/** Give el the details tooltip; lines() runs at show time, so it reads the current state. */
+function withTip(el, lines) {
+  el.classList.add("has-tip");
+  el.removeAttribute("title");
+  const hover = matchMedia("(hover: hover)");
+  el.addEventListener("mouseenter", () => hover.matches && showTip(el, lines()));
+  el.addEventListener("mouseleave", () => hover.matches && tipFor === el && hideTip());
+  el.addEventListener("click", (e) => {
+    e.stopPropagation(); // not a fold
+    if (tipFor === el && !hover.matches) return hideTip();
+    showTip(el, lines(), hover.matches ? 0 : 5000);
+  });
+  return el;
+}
 
 // ── collapsing ───────────────────────────────────────────────────────────────
 // Opening or collapsing a card is a choice remembered per session in
@@ -1091,7 +1131,13 @@ function statusCard(status, state) {
     bd.append(h("div", { class: "empty" }, "No status yet. It appears after the next turn with tool calls."));
     return collapsible(card, "_status");
   }
-  title.append(h("span", { class: "meta" }, h("span", { class: "by" }, statusBy(status))));
+  title.append(
+    h(
+      "span",
+      { class: "meta" },
+      withTip(h("span", { class: "by" }, statusBy(status)), () => [status.model ? `Written by ${status.model}` : "Written by the status model", `Updated ${fullDate(status.at)}`]),
+    ),
+  );
   bd.append(h("div", { class: "goal" }, h("span", { class: "eyebrow" }, "Goal"), status.goal || "—"));
   bd.append(h("div", { class: "now" }, h("span", { class: `pulse ${state}` }), h("span", { class: "eyebrow" }, "Now"), h("span", {}, status.now || "—")));
   const col = (kind, label, items) =>
@@ -1110,24 +1156,22 @@ const FINDINGS_SHOWN = 8;
 /** Hover text for the turn mark: when that turn ran. */
 function turnTitle(turn) {
   const t = (iso) => clock(new Date(iso));
-  return turn.ended ? `Updated in the last turn (${t(turn.since)}–${t(turn.ended)})` : `Updated since this turn started at ${t(turn.since)}`;
+  return turn.ended ? `Changed in the last turn (${t(turn.since)}–${t(turn.ended)})` : `Changed since this turn started at ${t(turn.since)}`;
 }
 
-/** Mark a card touched in this (or the last) turn, or clear the mark: an edge bar and a pill after the title. */
+/** Mark a card touched in this (or the last) turn, or clear the mark: an edge bar, and a line in the age's tooltip. */
 function markTurn(card, turn) {
   card.classList.toggle("lastturn", !!turn);
-  let pill = card.querySelector(":scope > h2 > .turn-pill");
-  if (!turn) return pill?.remove();
-  if (!pill) card.querySelector(":scope > h2 > .title")?.after((pill = h("span", { class: "turn-pill" })));
-  if (!pill) return;
-  pill.textContent = turn.label;
-  pill.title = turnTitle(turn);
+  if (turn) card.dataset.turn = turnTitle(turn);
+  else delete card.dataset.turn;
 }
 
 function findingsCard(findings, showAll = false, turn = null) {
   if (!findings?.length) return null;
   const list = h("ul", { class: "findings" });
   const fresh = turn ? findings.filter((f) => f.at >= turn.since).length : 0;
+  const latest = findings[findings.length - 1];
+  const n = findings.length;
   const card = h(
     "section",
     { class: `card${fresh ? " lastturn" : ""}`, id: "findings" },
@@ -1135,9 +1179,13 @@ function findingsCard(findings, showAll = false, turn = null) {
       "h2",
       {},
       h("span", { class: "title" }, "Findings"),
-      h("span", { class: "n" }, String(findings.length)),
-      fresh ? h("span", { class: "turn-pill", title: turnTitle(turn) }, `${fresh} ${turn.label}`) : null,
-      h("span", { class: "meta" }, copyButton(() => findings.map((f) => `- ${f.text}`).join("\n"), "Copy all")),
+      h("span", { class: "n" }, String(n)),
+      h(
+        "span",
+        { class: "meta" },
+        latest?.at ? withTip(agoEl(latest.at), () => [`${n} finding${n === 1 ? "" : "s"}${fresh ? `, ${fresh} new in the ${turn.label}` : ""}`, `Newest ${fullDate(latest.at)}`, fresh ? turnTitle(turn) : null]) : null,
+        copyButton(() => findings.map((f) => `- ${f.text}`).join("\n"), "Copy all findings", "copy"),
+      ),
     ),
     h("div", { class: "bd flush" }, list),
   );
@@ -1226,7 +1274,7 @@ function foldAgents(root) {
 }
 
 function sectionCard(id, sec) {
-  const meta = h("span", { class: "meta" }, agoEl(sec.at));
+  const meta = h("span", { class: "meta" });
   if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "kanban", "timeline"].includes(sec.kind)) {
     const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source (yc)", "copy");
     src.dataset.yank = "source"; // yc presses it
@@ -1234,11 +1282,11 @@ function sectionCard(id, sec) {
   }
   if (sec.file) meta.append(clipButton(() => rawUrl(id, sec, false), "Copy the file (yy)", "clip"));
   meta.append(h("a", { class: "btn ico", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open")));
-  // The kind (and whether the extension keeps it up to date) shows on hover, by the title.
-  const kind = h("span", { class: "kind" }, sec.by === "auto" ? `${sec.kind} · kept up to date by the canvas` : sec.kind);
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
-  const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), pinButton(sec.id), kind, meta), bd);
+  const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), pinButton(sec.id), meta), bd);
+  // The age's tooltip: the kind, whether the canvas keeps it up to date, when, and the last-turn mark.
+  meta.prepend(withTip(agoEl(sec.at), () => [sec.by === "auto" ? `${sec.kind} · kept up to date by the canvas` : sec.kind, `Updated ${fullDate(sec.at)}`, el.dataset.turn || null]));
   return collapsible(
     el,
     sec.id,

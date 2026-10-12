@@ -903,11 +903,14 @@ updates through server-sent events with no reload.
   session (localStorage, dropped after 60 days unused, shared by the page's
   tabs), a pinned Tasks or Files changed card leaves the side panel for the
   top of the page, and Contents lists pins first with a pin glyph.
-  A section's header is the title, its last-turn mark and pin (filled when
-  pinned, shown on hover otherwise), then the age and three quiet icons:
-  copy source, Clippy and open in a new tab. Hovering the header shows the
-  kind beside the title, plus "kept up to date by the canvas" for the
-  extension's own sections (Tasks, Agents, Files changed, Screenshots).
+  A section's header is the title and its pin (filled when pinned, shown on
+  hover otherwise), then the age and three quiet icons: copy source, Clippy
+  and open in a new tab. The age has a tooltip, on hover or for 5 s after a
+  tap (touch has no hover): the kind, "kept up to date by the canvas" for the
+  extension's own sections (Tasks, Agents, Files changed, Screenshots), the
+  exact time, and the last-turn note. Status's age tells which model wrote
+  it; Findings' age is the newest finding's, and its tooltip counts the ones
+  new this turn. Copy all is a copy icon there too.
   Click a card's header to collapse it.
   Each browser remembers that choice per session, and Collapse all / Expand all
   sit in the page header. A section nobody has opened or collapsed starts
@@ -919,9 +922,9 @@ updates through server-sent events with no reload.
   Screenshots. Narrower, those widgets sit among the sections in time
   order.
 - **Last turn.** Sections, findings and side cards written since the current
-  (or last) turn began get an accent bar down the left edge and a pill after
-  the title: "this turn" while pi runs, "last turn" once it settles; hover
-  shows when it ran. Contents bolds those entries and adds an **All N | Last
+  (or last) turn began get an accent bar down the left edge, and the age's
+  tooltip says when that turn ran ("Changed in the last turn (7:10–7:24
+  PM)"). Contents bolds those entries and adds an **All N | Last
   turn M** toggle that lists only them. canvas.ts writes `turn.json`
   (`started`, then `ended`) at agent_start and agent_settled, so the marks
   survive a refresh and agree across tabs, and clear when the next turn starts.
