@@ -13,7 +13,7 @@
   "enableInstallTelemetry": false,
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@384d523123d006bfa7e1445ce29190f14c832e64",
-    "git:github.com/ericboehs/pi-agent-link@cdbb06a2c5f5bfc6e86214da61a3fca613b8db0e",
+    "git:github.com/ericboehs/pi-agent-link@b8453dcf7e0c827963644037289456f9abd338f9",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
     "git:github.com/ericboehs/pi-scheduler@787fa145547e9dd98e14e651e5ce55ac5d697535",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
