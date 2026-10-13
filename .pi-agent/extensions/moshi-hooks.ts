@@ -617,6 +617,11 @@ export default function moshiPiHook(pi: ExtensionAPI): void {
 
 
   pi.on("before_agent_start", (event, ctx) => {
+    // pi 1.2 split this into a user prompt and an idle custom message, and
+    // only the user event has prompt. Custom turns are not user submits.
+    // `"prompt" in event` still typechecks on pi 1.0, where prompt was
+    // always present and messageType did not exist yet.
+    if (!("prompt" in event) || typeof event.prompt !== "string") return
     send("UserPromptSubmit", event, ctx, { prompt: event.prompt })
   })
 
