@@ -1,22 +1,45 @@
 #!/bin/bash
 # Search VA acronyms database
-# Usage: va-wtf [-a|--all] [-r|--refresh] <search-term>
+# Usage: va-wtf [-a|--all] [-s|--short] [-r|--refresh] <search-term>
 #
 # Source repo is configured locally (not in dotfiles) as host/owner/repo:
 #   VA_WTF_REPO=<host>/<owner>/<repo>   (env var, or in ~/.config/va-wtf)
 #
 # The CSV is cached for 24h under $XDG_CACHE_HOME/va-wtf (default ~/.cache).
 # If a refresh fails, a stale cache is used with a warning.
+#
+# Personal entries can be added to a local CSV that is merged into results:
+#   ~/.config/va-wtf.local.csv  (override with VA_WTF_LOCAL)
+# Same columns as upstream (Title,Meaning,Context,Notes); the header row is
+# optional, and blank lines and # comments are ignored. A local entry with the
+# same Title and Meaning as an upstream one is hidden, so entries that get
+# merged upstream don't show up twice.
 
 config="${XDG_CONFIG_HOME:-$HOME/.config}/va-wtf"
+local_csv="${VA_WTF_LOCAL:-${XDG_CONFIG_HOME:-$HOME/.config}/va-wtf.local.csv}"
 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/va-wtf"
 cache="$cache_dir/acronyms.csv"
 cache_max_age_min=1440
 
 usage() {
-  echo "Usage: va-wtf [-a|--all] [-r|--refresh] <search-term>"
+  echo "Usage: va-wtf [-a|--all] [-s|--short] [-r|--refresh] <search-term>"
   echo "  -a, --all      Search acronyms, definitions, and notes"
+  echo "  -s, --short    Hide notes; show only acronym and definition"
   echo "  -r, --refresh  Force re-download of the cached CSV (term optional)"
+  echo "Local entries in $local_csv are merged into results."
+}
+
+# Upstream cache + local CSV as one sorted stream, minus headers, comments,
+# blank lines, and local rows that duplicate an upstream Title+Meaning.
+merged_csv() {
+  local sources=()
+  [[ -s "$cache" ]] && sources+=("$cache")
+  [[ -s "$local_csv" ]] && sources+=("$local_csv")
+  awk -F',' '
+    FNR == 1 && /^Title,/ { next }
+    /^[[:space:]]*(#|$)/ { next }
+    !seen[tolower($1 FS $2)]++
+  ' "${sources[@]}" | LC_ALL=C sort -f
 }
 
 fetch_csv() {
@@ -43,10 +66,12 @@ fetch_csv() {
 }
 
 search_all=false
+short=false
 refresh=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -a|--all) search_all=true; shift ;;
+    -s|--short) short=true; shift ;;
     -r|--refresh) refresh=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) term="$1"; shift ;;
@@ -63,6 +88,8 @@ if [[ "$refresh" == true || -z "$(find "$cache" -mmin -"$cache_max_age_min" 2>/d
   if ! fetch_csv; then
     if [[ -s "$cache" ]]; then
       echo "va-wtf: refresh failed; using stale cache" >&2
+    elif [[ -s "$local_csv" ]]; then
+      echo "va-wtf: could not fetch acronyms; searching local entries only" >&2
     else
       echo "va-wtf: could not fetch acronyms and no cache exists" >&2
       exit 1
@@ -79,8 +106,8 @@ else
   filter="awk -F',' 'tolower(\$1) ~ /$lc_term/'"
 fi
 
-eval "$filter" < "$cache" \
-  | awk -F',' -v term="$term" '
+merged_csv | eval "$filter" \
+  | awk -F',' -v term="$term" -v short="$short" '
     function highlight(str, pat,    result, lc_str, lc_pat, idx, len) {
       result = ""
       lc_pat = tolower(pat)
@@ -108,7 +135,7 @@ eval "$filter" < "$cache" \
       printf "\033[1m%-10s\033[0m %s\n", acronym, definition
 
       # Print notes indented on next line if present
-      if (notes != "") {
+      if (notes != "" && short != "true") {
         notes = highlight(notes, term)
         printf "           \033[2m%s\033[0m\n", notes
       }
