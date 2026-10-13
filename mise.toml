@@ -135,6 +135,10 @@ REPO_PATH = "ericboehs/dotfiles"
 # inert — it reads the macOS accessibility API, and [bootstrap.repos] takes no
 # `os` filter the way [bootstrap.packages] does.
 "~/Code/github.com/ericboehs/meeting-capture" = { url = "https://github.com/ericboehs/meeting-capture" }
+# bin/va-wtf links into ~/Code/va.ghe.com/software/acronyms, but that clone is
+# the bootstrap:va-wtf task's job, not this table's: a failed clone here stops
+# the whole bootstrap before dotfiles are linked, and an internal repo fails on
+# every host not yet logged in to va.ghe.com.
 
 # ---------------------------------------------------------------------------
 # Dotfiles
@@ -465,7 +469,7 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:va-context", "bootstrap:claude", "bootstrap:herdr"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:va-context", "bootstrap:va-wtf", "bootstrap:claude", "bootstrap:herdr"]
 
 [tasks."bootstrap:herdr"]
 description = "Install Herdr integrations for available coding agents"
@@ -1102,6 +1106,44 @@ if [ -e "$target" ] && [ ! -L "$target" ]; then
 fi
 ln -sfn "$source_file" "$target"
 echo "bootstrap:va-context: linked $target from $source_file"
+'''
+
+[tasks."bootstrap:va-wtf"]
+description = "Clone the VA acronyms repo that bin/va-wtf links into, when logged in to va.ghe.com"
+run = '''
+# bin/va-wtf is a symlink into this checkout, so without it ~/bin/va-wtf
+# dangles. It isn't in [bootstrap.repos] because a failed clone there exits 1
+# and stops the bootstrap before dotfiles are linked, and this repo is
+# internal: it fails on every fresh machine until `gh auth login -h va.ghe.com`,
+# and always on a host without VA access. Here those cases skip, and the next
+# `mise run bootstrap` after logging in clones it.
+#
+# Tasks run outside a login shell, so add Homebrew for gh on macOS.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+repo="software/acronyms"
+dest="$HOME/Code/va.ghe.com/$repo"
+
+if [ -d "$dest/.git" ]; then
+  echo "bootstrap:va-wtf: $dest is already cloned"
+  exit 0
+fi
+if ! command -v gh >/dev/null; then
+  echo "bootstrap:va-wtf: gh is not installed, skipping"
+  exit 0
+fi
+if ! gh auth status -h va.ghe.com >/dev/null 2>&1; then
+  echo "bootstrap:va-wtf: not logged in to va.ghe.com, skipping (gh auth login -h va.ghe.com, then mise run bootstrap:va-wtf)"
+  exit 0
+fi
+
+mkdir -p "$(dirname "$dest")"
+# A clone that fails despite a login (no access to the repo, say) leaves only
+# va-wtf broken, so warn rather than fail the rest of the bootstrap.
+if GH_HOST=va.ghe.com GIT_TERMINAL_PROMPT=0 gh repo clone "$repo" "$dest" -- --quiet; then
+  echo "bootstrap:va-wtf: cloned va.ghe.com/$repo to $dest"
+else
+  echo "bootstrap:va-wtf: could not clone va.ghe.com/$repo; bin/va-wtf won't work until it's at $dest" >&2
+fi
 '''
 
 [tasks."bootstrap:claude"]
