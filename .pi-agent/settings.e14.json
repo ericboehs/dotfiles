@@ -56,7 +56,8 @@
     "openai-codex/gpt-6.1-sol",
     "opencode-go/glm-5.3",
     "opencode-go/deepseek-v4.1-flash",
-    "opencode-go/muse-spark-1.3-contributor"
+    "opencode-go/muse-spark-1.3-contributor",
+    "opencode-go/cat-jam-free"
   ],
   "retry": {
     "enabled": true,

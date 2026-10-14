@@ -501,6 +501,8 @@ test("model aliases are lowercased, unknown ids pass through", async () => {
     ["GLM-4.6", "GLM-4.6"],
     ["space-bunny-free", "🪐🐰"],
     ["space-bunny", "🪐🐰"],
+    ["cat-jam-free", "🐱🎵"],
+    ["cat-jam", "🐱🎵"],
   ];
   for (const [id, expected] of cases) {
     const ui = await mount({ model: { id, provider: "omlx", reasoning: false } });
@@ -685,6 +687,11 @@ test("cost formatting and subscription providers", async () => {
     model: { id: "space-bunny-free", provider: "opencode", reasoning: true },
   });
   assert.doesNotMatch(freePreview.plain()[0], /\$/, "free OpenCode model hides cost");
+
+  const catJam = await mount({
+    model: { id: "cat-jam-free", provider: "opencode", reasoning: true },
+  });
+  assert.doesNotMatch(catJam.plain()[0], /\$/, "Cat Jam Free hides cost");
 
   const opencodePaid = await mount({
     model: { id: "glm-5.3", provider: "opencode", reasoning: true },

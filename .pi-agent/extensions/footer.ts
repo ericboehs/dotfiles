@@ -118,6 +118,7 @@ const HIDE_COST_PROVIDERS = new Set(["openai-codex", "github-copilot", "omlx", "
 const HIDE_COST_MODELS = new Set([
   "muse-spark-1.3-contributor-free",
   "space-bunny-free",
+  "cat-jam-free",
 ]);
 
 /**
@@ -626,9 +627,10 @@ function shortModel(model: string | undefined, provider?: string): string {
   // chip already supplies the family context, while the model chip identifies
   // the exact current release. Older/newer releases keep their versioned name.
   if (provider === "xai" && /^grok-4\.7$/i.test(base)) return "grok";
-  // The stealth preview is announced by a name, not an id: 🪐🐰 reads as
-  // Space Bunny in two columns, where "space-bunny-free" would eat nine.
+  // Stealth previews are announced by a name, not an id. Two emoji fit the
+  // chip; the -free ids would eat the rest of the footer.
   if (/^space-bunny(-free)?$/i.test(base)) return "🪐🐰";
+  if (/^cat-jam(-free)?$/i.test(base)) return "🐱🎵";
   // claude-bridge can omit versions for the other Claude families, but Opus
   // remains versioned unless it is the exact current Copilot release below.
   if (provider === "claude-bridge") {
