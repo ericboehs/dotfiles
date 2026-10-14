@@ -175,7 +175,12 @@ if [[ "$MODE" != "--typecheck-only" ]]; then
     status=1
   # A test that never returns used to sit until the job timeout, which
   # cancels the step without naming it. 30s is far above a healthy test.
-  elif (cd "$PI_AGENT" && node --test --test-timeout=30000 test/*.test.mjs); then
+  # The spec reporter only names a test after it finishes, so a blocked
+  # event loop never shows up. The start reporter writes the name first.
+  elif (cd "$PI_AGENT" && node --test --test-timeout=30000 \
+      --test-reporter=spec --test-reporter-destination=stdout \
+      --test-reporter="$REPO/bin/pi-ext-test-start.mjs" --test-reporter-destination=stderr \
+      test/*.test.mjs); then
     echo -e "${GREEN}✅ tests passed${NC}"
   else
     echo -e "${RED}❌ tests failed${NC}"
