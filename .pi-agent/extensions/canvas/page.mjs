@@ -631,6 +631,7 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .talk { margin: 0 0 16px; }
 .talk-row { display: flex; align-items: flex-end; gap: 8px; }
 .talk-in { flex: 1; min-height: 34px; max-height: 220px; resize: none; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.4; }
+.talk-in::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .talk-in:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .talk-in:disabled { background: var(--soft); cursor: not-allowed; }
 .talk-send { height: 34px; padding: 0 14px; font-size: 13px; color: #fff; background: var(--accent); border-color: var(--accent); }
@@ -1421,7 +1422,9 @@ function statusCard(status, state, reply = null) {
       h("h3", {}, label, h("span", { class: "n" }, String(items?.length || 0))),
       items?.length ? h("ul", {}, items.map((i) => h("li", {}, i))) : h("div", { class: "none" }, "—"),
     );
-  bd.append(h("div", { class: "cols" }, col("next", "Next", status.next), col("open", "Open", status.open), col("done", "Done", status.done)));
+  // The reply's Next steps already show as buttons above; Haiku's Next would repeat them.
+  const cols = [reply?.next?.length ? null : col("next", "Next", status.next), col("open", "Open", status.open), col("done", "Done", status.done)];
+  bd.append(h("div", { class: "cols" }, cols));
   return collapsible(card, "_status");
 }
 
@@ -1521,7 +1524,9 @@ function talkBox() {
 function talkState() {
   if (!talk.input) return;
   talk.input.disabled = talk.btn.disabled = !talk.live;
-  talk.input.placeholder = !talk.live ? "This session has ended" : talk.busy ? "Message pi… Enter steers the running turn, ⌥Enter queues it for after" : "Message pi… Enter sends, ⇧Enter for a new line";
+  // A phone has room for the short form only; the hint wraps into a clipped second line otherwise.
+  const narrow = matchMedia("(max-width: 640px)").matches;
+  talk.input.placeholder = !talk.live ? "This session has ended" : narrow ? (talk.busy ? "Steer pi… (⌥Enter: after)" : "Message pi…") : talk.busy ? "Message pi… Enter steers the running turn, ⌥Enter queues it for after" : "Message pi… Enter sends, ⇧Enter for a new line";
   talk.btn.title = talk.busy ? "Steer the running turn (⌥-click: queue it for after)" : "Send to pi";
 }
 

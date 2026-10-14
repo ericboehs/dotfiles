@@ -749,11 +749,12 @@ the agent's last response.
   Each run uses one Copilot premium request; tool-free short replies skip it.
   Between Now and the Next / Open / Done columns, **Last response** shows the
   agent's final message of the last turn, without its closing "Next steps"
-  block (the status has its own Next), rendered, below the prompt it answered (clipped to two lines; a click
+  block, rendered, below the prompt it answered (clipped to two lines; a click
   shows it all). canvas.ts writes it to `reply.json` when a turn settles (no
   model involved), so a short turn updates it too. The heading folds it,
   remembered per browser. The reply's Next steps options show under it as
-  buttons; a click sends that option to pi (see Talk-back).
+  buttons; a click sends that option to pi (see Talk-back). When they are
+  there, the status's own Next column is left out, as it would repeat them.
 - **Talk-back.** Under Last response, a message box writes to this
   session's pi (`i` focuses it, Esc leaves). Enter sends; while a turn runs
   Enter steers it and ⌥Enter queues the message for after, ⇧Enter is a new
