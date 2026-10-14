@@ -90,8 +90,12 @@ jobs:
           after=$(find "$HOME" -maxdepth 3 -type l 2>/dev/null | sort | sha256sum)
           [ "$before" = "$after" ] || { echo "dry-run modified state"; exit 1; }
 
+  # A healthy run finishes in about two minutes. Without a timeout the check
+  # step has sat for hours with no log (GitHub's default is 6h), and a cancel
+  # is the only way to end it. Ten minutes is slack, not a budget.
   pi-extensions:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read # checkout
     steps:
