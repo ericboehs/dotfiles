@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel, buildTree, codeLayout, lineLabel, optionPrompt, optionsText, treeText, fenceFor, reviewLabel, reviewMessage } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel, buildTree, codeLayout, lineLabel, optionPrompt, optionsText, treeText, fenceFor, reviewLabel, reviewMessage, fmtBytes, fmtCount, gitSummary, infoRows, uniichatSummary } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -405,4 +405,48 @@ test("reviewMessage: verdict and count, summary, then each comment with its line
   const long = reviewMessage({ comments: [{ file: "f", start: { side: "", n: 1 }, end: { side: "", n: 40 }, quote: Array.from({ length: 40 }, (_, i) => `l${i}`), text: "t" }] });
   assert.match(long, /l29\n…\n```/);
   assert.doesNotMatch(long, /l30/);
+});
+
+test("fmtCount and fmtBytes", () => {
+  assert.deepEqual([fmtCount(950), fmtCount(9600), fmtCount(96000), fmtCount(200000), fmtCount(1250000), fmtCount(null)], ["950", "9.6k", "96k", "200k", "1.25M", "?"]);
+  assert.deepEqual([fmtBytes(900), fmtBytes(94208), fmtBytes(3.4 * 1048576), fmtBytes(undefined)], ["900 B", "92 KB", "3.4 MB", "?"]);
+});
+
+test("gitSummary: branch, ahead/behind, dirt or clean", () => {
+  const g = { branch: "master", oid: "abcdef123", upstream: "origin/master", ahead: 1, behind: 0, staged: 0, modified: 2, untracked: 4, conflicts: 0 };
+  assert.equal(gitSummary(g), "master ↑1 · 2 modified, 4 untracked");
+  assert.equal(gitSummary({ ...g, ahead: 0, modified: 0, untracked: 0 }), "master · clean");
+  assert.equal(gitSummary({ ...g, branch: "(detached)", upstream: "", ahead: 0, behind: 3, modified: 0, untracked: 0, conflicts: 1 }), "detached at abcdef1 ↓3 (no upstream) · 1 conflicted");
+  assert.equal(gitSummary(null), "");
+});
+
+test("uniichatSummary: on with stats, off, loaded without stats", () => {
+  assert.equal(uniichatSummary({ enabled: true, viewLines: 412, viewBytes: 94208, viewLowBytes: 65536, viewHighBytes: 131072, messages: 1203, logBytes: 3.4 * 1048576, queued: 0, inFlight: 1, requests: 12, failures: 0 }), "on · view 412 lines, 92 KB (target 64 KB–128 KB) · log 1,203 messages, 3.4 MB · queue 0 (1 in flight) · 12 requests");
+  assert.equal(uniichatSummary({ enabled: false }), "off (/uniichat on to start)");
+  assert.equal(uniichatSummary(null), "loaded, no stats");
+  assert.equal(uniichatSummary(undefined), "");
+});
+
+test("infoRows: the panel's rows from /info", () => {
+  const d = {
+    live: true,
+    started: "S",
+    info: { model: { provider: "anthropic", id: "claude-opus-5", name: "Opus 5", reasoning: true }, thinking: "high", context: { tokens: 96000, window: 200000, percent: 48.4 }, prompts: 37, replies: 1, cost: 4.123, at: "A" },
+    git: { branch: "master", upstream: "o/m", ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, last: { sha: "78e0392", subject: "fix it", date: "D" } },
+  };
+  const ago = (t) => `<${t}>`;
+  assert.deepEqual(infoRows(d, ago), [
+    { key: "model", label: "Model", value: "Opus 5 · thinking high", note: "anthropic · claude-opus-5" },
+    { key: "context", label: "Context", value: "48% · 96k / 200k", percent: 48.4 },
+    { key: "session", label: "Session", value: "37 prompts · 1 reply · $4.12", note: "started <S> · as of <A>" },
+    { key: "repo", label: "Repo", value: "master · clean", note: "78e0392 fix it · <D>" },
+    { key: "uniichat", label: "UniiChat", value: "not loaded in this session" },
+  ]);
+  const bare = infoRows({ live: true, info: { model: { id: "m", reasoning: false }, context: { tokens: null, window: 128000, percent: null }, prompts: 0, replies: 0, cost: 0, uniichat: { enabled: false } }, git: null }, ago);
+  assert.equal(bare[0].value, "m · no thinking");
+  assert.deepEqual(bare[1], { key: "context", label: "Context", value: "? · ? / 128k", note: "unknown until the next reply (just compacted)" });
+  assert.equal(bare[2].value, "0 prompts · 0 replies");
+  assert.equal(bare[3].value, "not a git repo");
+  assert.equal(bare[4].value, "off (/uniichat on to start)");
+  assert.deepEqual(infoRows({ live: true, info: null, git: null }).map((r) => r.key), ["repo"]);
 });

@@ -99,6 +99,7 @@ export const VIM_KEYS = [
   { group: "Yank", keys: "yc", action: "yankSource", help: "copy this section's source as text" },
   { group: "Yank", keys: "yC", action: "yankSlack", help: "copy this section's source as Slack markup (⇧-click on copy)" },
   { group: "Other", keys: "i", action: "compose", help: "write to pi: the message box in Status (Esc leaves it)" },
+  { group: "Other", keys: "I", action: "info", help: "session info: model, context, usage, repo, UniiChat (or click the session name)" },
   { group: "Other", keys: "p", action: "pin", help: "pin this section to the top of the page, or unpin it" },
   { group: "Other", keys: "K", action: "moveUp", help: "move this side panel card up (or drag its header)" },
   { group: "Other", keys: "J", action: "moveDown", help: "move this side panel card down" },
@@ -642,4 +643,77 @@ export function reviewMessage({ verdict = "comment", summary = "", comments = []
     out.push(String(c.text || "").trim());
   }
   return out.join("\n");
+}
+
+// ── session info panel ──
+
+/** 96000 → "96k", 1250000 → "1.25M". */
+export function fmtCount(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "?";
+  if (n >= 1e6) return `${+(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${+(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}k`;
+  return String(Math.round(n));
+}
+
+/** 94208 → "92 KB". */
+export function fmtBytes(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "?";
+  if (n >= 1 << 30) return `${+(n / (1 << 30)).toFixed(1)} GB`;
+  if (n >= 1 << 20) return `${+(n / (1 << 20)).toFixed(1)} MB`;
+  if (n >= 1 << 10) return `${Math.round(n / (1 << 10))} KB`;
+  return `${n} B`;
+}
+
+const plural = (n, one, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+
+/** The repo row's line: branch, ahead/behind, then what's dirty, or "clean". */
+export function gitSummary(g) {
+  if (!g) return "";
+  const head = g.branch === "(detached)" ? `detached at ${String(g.oid).slice(0, 7)}` : g.branch || "?";
+  const ab = [g.ahead ? `↑${g.ahead}` : "", g.behind ? `↓${g.behind}` : ""].filter(Boolean).join(" ");
+  const dirt = [g.conflicts ? `${g.conflicts} conflicted` : "", g.staged ? `${g.staged} staged` : "", g.modified ? `${g.modified} modified` : "", g.untracked ? `${g.untracked} untracked` : ""].filter(Boolean);
+  return `${head}${ab ? ` ${ab}` : ""}${g.upstream ? "" : " (no upstream)"} · ${dirt.length ? dirt.join(", ") : "clean"}`;
+}
+
+/** The UniiChat row's line, from canvas.ts's cut of its snapshot. */
+export function uniichatSummary(u) {
+  if (u === undefined) return "";
+  if (u === null) return "loaded, no stats";
+  if (!u.enabled) return "off (/uniichat on to start)";
+  const parts = ["on"];
+  if (u.viewLines != null) parts.push(`view ${plural(u.viewLines, "line")}, ${fmtBytes(u.viewBytes)}${u.viewLowBytes && u.viewHighBytes ? ` (target ${fmtBytes(u.viewLowBytes)}–${fmtBytes(u.viewHighBytes)})` : ""}`);
+  if (u.messages != null) parts.push(`log ${plural(u.messages, "message")}${u.logBytes != null ? `, ${fmtBytes(u.logBytes)}` : ""}`);
+  if (u.queued != null) parts.push(`queue ${u.queued}${u.inFlight ? ` (${u.inFlight} in flight)` : ""}`);
+  if (u.requests != null) parts.push(`${plural(u.requests, "request")}${u.failures ? `, ${plural(u.failures, "failure")}` : ""}`);
+  return parts.join(" · ");
+}
+
+/**
+ * The info panel as rows of { key, label, value, note?, percent? }, from
+ * GET /api/s/<id>/info. `ago` turns an ISO time into "3m ago". Rows with
+ * nothing to say are left out.
+ */
+export function infoRows(d, ago = (t) => t) {
+  const i = d?.info || {};
+  const rows = [];
+  if (i.model) {
+    const m = i.model;
+    rows.push({ key: "model", label: "Model", value: `${m.name || m.id || "?"}${i.thinking ? ` · thinking ${i.thinking}` : m.reasoning ? "" : " · no thinking"}`, note: [m.provider, m.name && m.id && m.name !== m.id ? m.id : ""].filter(Boolean).join(" · ") });
+  }
+  if (i.context) {
+    const c = i.context;
+    const pct = typeof c.percent === "number" ? Math.max(0, Math.min(100, c.percent)) : null;
+    rows.push({ key: "context", label: "Context", value: `${pct == null ? "?" : `${Math.round(pct)}%`} · ${fmtCount(c.tokens)} / ${fmtCount(c.window)}`, ...(pct == null ? { note: "unknown until the next reply (just compacted)" } : { percent: pct }) });
+  }
+  if (d?.info) {
+    const cost = typeof i.cost === "number" && i.cost > 0 ? ` · $${i.cost.toFixed(i.cost < 1 ? 3 : 2)}` : "";
+    rows.push({ key: "session", label: "Session", value: `${plural(i.prompts || 0, "prompt")} · ${plural(i.replies || 0, "reply", "replies")}${cost}`, note: [d.started ? `started ${ago(d.started)}` : "", i.at ? `as of ${ago(i.at)}` : ""].filter(Boolean).join(" · ") });
+  }
+  if (d?.git) {
+    const g = d.git;
+    rows.push({ key: "repo", label: "Repo", value: gitSummary(g), note: [g.last ? `${g.last.sha} ${g.last.subject}` : "no commits yet", g.last?.date ? ago(g.last.date) : ""].filter(Boolean).join(" · ") });
+  } else if (d) rows.push({ key: "repo", label: "Repo", value: "not a git repo" });
+  if (i.uniichat !== undefined) rows.push({ key: "uniichat", label: "UniiChat", value: uniichatSummary(i.uniichat), note: i.uniichat?.compactor ? `compactor ${i.uniichat.compactor}` : "" });
+  else if (d?.info) rows.push({ key: "uniichat", label: "UniiChat", value: "not loaded in this session" });
+  return rows;
 }

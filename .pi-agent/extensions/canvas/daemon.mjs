@@ -35,6 +35,8 @@ export const ROOT = resolve(arg("root", process.env.PI_CANVAS_ROOT || join(homed
 export const OMARCHY = resolve(arg("omarchy", process.env.PI_CANVAS_OMARCHY || join(homedir(), ".local", "state", "omarchy", "current")));
 /** agent-link's registry (shared with Claude Code): one <pid>.json per live agent. */
 export const PEERS = resolve(arg("peers", process.env.PI_CANVAS_PEERS || join(homedir(), ".claude", "sessions")));
+/** provider-usage.ts's shared cache: one entry per usage driver, for the info panel. */
+export const USAGE_CACHE = resolve(arg("usage", process.env.PI_CANVAS_USAGE || join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "usage-cache.json")));
 const VERSION = arg("version", "dev");
 const RETAIN_DAYS = Number(process.env.PI_CANVAS_RETAIN_DAYS || 30);
 
@@ -715,6 +717,7 @@ function handler(req, res) {
     const id = parts[2];
     if (parts.length === 3) return json(res, sessionState(ROOT, id));
     if (parts.length === 4 && parts[3] === "events") return subscribe(id, req, res);
+    if (parts.length === 4 && parts[3] === "info") return void sessionInfoOf(ROOT, id).then((d) => json(res, d), () => send(res, 500, "info failed"));
   }
   // Section bodies: /s/<id>/f/<name>, flat names only, never a path.
   if (parts[0] === "s" && parts.length === 4 && parts[2] === "f" && SESSION_ID.test(parts[1]) && FILE_NAME.test(parts[3])) {
@@ -747,6 +750,112 @@ export function readSystemTheme(dir = OMARCHY) {
   } catch {
     return null;
   }
+}
+
+/**
+ * provider-usage.ts's drivers: cache key → the pi provider it meters and a
+ * label. Keep in step with DRIVERS there; an unknown key shows under its own name.
+ */
+export const USAGE_DRIVERS = {
+  "codex-window": ["openai-codex", "Codex"],
+  "claude-bridge-window": ["claude-bridge", "Claude"],
+  "copilot-window": ["github-copilot", "Copilot"],
+  "grok-window": ["xai", "Grok"],
+  "cerebras-window": ["cerebras", "Cerebras"],
+  "ollama-usage": ["ollama", "Ollama"],
+  "opencode-go-window": ["opencode-go", "OpenCode Go"],
+  "baseten-usage": ["baseten", "Baseten"],
+  "openrouter-usage": ["openrouter", "OpenRouter"],
+};
+const USAGE_MAX_AGE = 7 * 86400_000;
+const plain = (v, max) => String(v).replace(/\x1b\[[0-9;]*m/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").slice(0, max);
+
+/**
+ * The usage cache as panel rows: the session's own provider first, then the
+ * rest by label; entries older than a week left out. Text only (ANSI and
+ * control characters stripped), so nothing but what the footer shows.
+ */
+export function usageRows(cache, provider, now = Date.now()) {
+  if (!cache || typeof cache !== "object" || Array.isArray(cache)) return [];
+  const rows = [];
+  for (const [key, e] of Object.entries(cache)) {
+    if (!e || typeof e.value !== "string" || typeof e.fetchedAt !== "number" || now - e.fetchedAt > USAGE_MAX_AGE) continue;
+    const [prov, label] = USAGE_DRIVERS[key] || ["", key];
+    rows.push({
+      label,
+      value: plain(e.value, 200),
+      ...(typeof e.commandText === "string" && e.commandText !== e.value ? { detail: plain(e.commandText, 2000) } : {}),
+      ...(typeof e.resetMs === "number" ? { resetAt: new Date(e.resetMs).toISOString() } : typeof e.resetDate === "string" ? { resetDate: plain(e.resetDate, 20) } : {}),
+      fetchedAt: new Date(e.fetchedAt).toISOString(),
+      ...(prov && prov === provider ? { current: true } : {}),
+    });
+  }
+  return rows.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0) || a.label.localeCompare(b.label));
+}
+
+/**
+ * `git status --porcelain=v2 --branch` as counts: branch, upstream,
+ * ahead/behind, and staged, modified, untracked and conflicted files.
+ */
+export function parseGitStatus(text) {
+  const g = { branch: "", oid: "", upstream: "", ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 };
+  for (const line of String(text).split("\n")) {
+    if (line.startsWith("# branch.head ")) g.branch = line.slice(14);
+    else if (line.startsWith("# branch.oid ")) g.oid = line.slice(13);
+    else if (line.startsWith("# branch.upstream ")) g.upstream = line.slice(18);
+    else if (line.startsWith("# branch.ab ")) {
+      const m = line.match(/\+(\d+) -(\d+)/);
+      if (m) [g.ahead, g.behind] = [Number(m[1]), Number(m[2])];
+    } else if (line.startsWith("1 ") || line.startsWith("2 ")) {
+      const xy = line.slice(2, 4);
+      if (xy[0] !== ".") g.staged++;
+      if (xy[1] !== ".") g.modified++;
+    } else if (line.startsWith("u ")) g.conflicts++;
+    else if (line.startsWith("? ")) g.untracked++;
+  }
+  return g;
+}
+
+const GIT = ["git", "/usr/bin/git", "/opt/homebrew/bin/git"];
+/** Read-only git in `cwd`; GIT_OPTIONAL_LOCKS=0 so a status never takes the index lock from a running commit. */
+function runGit(cwd, args, i = 0) {
+  return new Promise((done) => {
+    execFile(GIT[i], ["-C", cwd, ...args], { timeout: 3000, maxBuffer: 4 << 20, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }, (err, stdout) => {
+      if (err?.code === "ENOENT" && i + 1 < GIT.length) return done(runGit(cwd, args, i + 1));
+      done(err ? null : String(stdout));
+    });
+  });
+}
+
+/** The repo row: null when cwd is gone or isn't in a git repo. */
+export async function gitInfo(cwd) {
+  if (typeof cwd !== "string" || !cwd.startsWith("/")) return null;
+  try {
+    if (!statSync(cwd).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const [st, log, top] = await Promise.all([runGit(cwd, ["status", "--porcelain=v2", "--branch"]), runGit(cwd, ["log", "-1", "--format=%h%x00%s%x00%cI"]), runGit(cwd, ["rev-parse", "--show-toplevel"])]);
+  if (st == null) return null;
+  const [sha = "", subject = "", date = ""] = (log || "").trim().split("\0");
+  return { ...parseGitStatus(st), root: (top || "").trim(), ...(sha ? { last: { sha, subject: subject.slice(0, 200), date } } : {}) };
+}
+
+/** GET /api/s/<id>/info: what pi last wrote, the usage cache, and git as of now. */
+export async function sessionInfoOf(root, id, usagePath = USAGE_CACHE) {
+  const dir = join(root, id);
+  const meta = readJson(join(dir, "meta.json"), { id });
+  const info = readJson(join(dir, "info.json"), null);
+  const live = !meta.ended && pidAlive(meta.pid);
+  return {
+    live,
+    pid: live ? meta.pid : undefined,
+    cwd: typeof meta.cwd === "string" ? meta.cwd : "",
+    started: typeof meta.started === "string" ? meta.started : undefined,
+    info,
+    usage: usageRows(readJson(usagePath, null), info?.model?.provider),
+    git: await gitInfo(meta.cwd),
+  };
 }
 
 /**

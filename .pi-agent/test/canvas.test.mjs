@@ -7,15 +7,15 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, normalizeCode, normalizeOptions, normalizeTree, parseLineRange, nextSteps, claimInbox, ackInbox, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, byteRange, clipTarget, latestClient, listSessions, parseFindings, prune, queueMessage, readAcks, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, sessionInfo, uniichatInfo, lastTurn, normalizeCode, normalizeOptions, normalizeTree, parseLineRange, nextSteps, claimInbox, ackInbox, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { allowedHost, byteRange, clipTarget, latestClient, listSessions, parseFindings, prune, queueMessage, readAcks, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit, parseGitStatus, usageRows, gitInfo, sessionInfoOf } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -1284,6 +1284,92 @@ test("daemon follows the Omarchy theme: serves it, and tells pages when it switc
   } finally {
     stream?.destroy();
     child.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sessionInfo: model, thinking only for reasoning models, context, prompts, replies and cost", () => {
+  const branch = [
+    { type: "message", message: { role: "user", content: "a" } },
+    { type: "message", message: { role: "assistant", content: [], usage: { cost: { total: 0.01234 } } } },
+    { type: "compaction" },
+    { type: "message", message: { role: "user", content: "b" } },
+    { type: "message", message: { role: "assistant", content: [], usage: { cost: { total: "x" } } } },
+  ];
+  const model = { provider: "anthropic", id: "claude-opus-5", name: "Opus 5", reasoning: true, contextWindow: 200000, apiKey: "never" };
+  const info = sessionInfo(branch, { model, thinking: "high", usage: { tokens: 96000, contextWindow: 200000, percent: 48 } });
+  assert.deepEqual(info, { model: { provider: "anthropic", id: "claude-opus-5", name: "Opus 5", reasoning: true }, thinking: "high", context: { tokens: 96000, window: 200000, percent: 48 }, prompts: 2, replies: 2, cost: 0.0123 });
+  assert.equal(sessionInfo([], { model: { ...model, reasoning: false }, thinking: "high" }).thinking, undefined);
+  assert.deepEqual(sessionInfo([], { usage: { tokens: null, contextWindow: 0, percent: null }, model }).context, { tokens: null, window: 200000, percent: null });
+  assert.equal("uniichat" in sessionInfo([], {}), false, "no uniichat key when it isn't loaded");
+  assert.equal(sessionInfo([], { uniichat: undefined }).uniichat, null, "loaded but no snapshot");
+});
+
+test("uniichatInfo: known fields only, typed", () => {
+  assert.deepEqual(uniichatInfo({ enabled: true, messages: 12, viewBytes: 90000, queued: "3", dir: "/secret/path", compactor: "x/y at low" }), { enabled: true, messages: 12, viewBytes: 90000, compactor: "x/y at low" });
+  assert.deepEqual(uniichatInfo({ enabled: "yes" }), { enabled: false });
+  assert.equal(uniichatInfo(null), undefined);
+});
+
+test("parseGitStatus: branch, upstream, ahead/behind and file counts", () => {
+  const text = ["# branch.oid abc123", "# branch.head master", "# branch.upstream origin/master", "# branch.ab +2 -1", "1 M. N... 100644 100644 100644 a b x.rb", "1 .M N... 100644 100644 100644 a b y.rb", "1 MM N... 100644 100644 100644 a b z.rb", "2 R. N... 100644 100644 100644 a b R100 n.rb	o.rb", "u UU N... 1 2 3 4 a b c w.rb", "? new.rb", "? other.rb", ""].join("\n");
+  assert.deepEqual(parseGitStatus(text), { branch: "master", oid: "abc123", upstream: "origin/master", ahead: 2, behind: 1, staged: 3, modified: 2, untracked: 2, conflicts: 1 });
+  assert.deepEqual(parseGitStatus("# branch.oid (initial)\n# branch.head main\n"), { branch: "main", oid: "(initial)", upstream: "", ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 });
+});
+
+test("usageRows: the session's provider first, stale entries dropped, text cleaned", () => {
+  const now = Date.parse("2026-05-01T12:00:00Z");
+  const cache = {
+    "copilot-window": { value: "61% \x1b[31mpremium\x1b[0m", commandText: "Premium: 61%\nResets: Jun 1", resetMs: Date.parse("2026-06-01T00:00:00Z"), fetchedAt: now - 60000 },
+    "claude-bridge-window": { value: "5h 20%", fetchedAt: now - 120000, resetDate: "2026-05-03" },
+    "codex-window": { value: "old", fetchedAt: now - 8 * 86400000 },
+    "mystery": { value: "7", commandText: "7", fetchedAt: now },
+    "broken": { value: 3, fetchedAt: now },
+  };
+  assert.deepEqual(usageRows(cache, "claude-bridge", now), [
+    { label: "Claude", value: "5h 20%", resetDate: "2026-05-03", fetchedAt: "2026-05-01T11:58:00.000Z", current: true },
+    { label: "Copilot", value: "61% premium", detail: "Premium: 61%\nResets: Jun 1", resetAt: "2026-06-01T00:00:00.000Z", fetchedAt: "2026-05-01T11:59:00.000Z" },
+    { label: "mystery", value: "7", fetchedAt: "2026-05-01T12:00:00.000Z" },
+  ]);
+  assert.deepEqual(usageRows(null, "x"), []);
+  assert.deepEqual(usageRows([], "x"), []);
+});
+
+test("gitInfo and sessionInfoOf: a real repo, a plain folder, a missing one", async () => {
+  const realpathOf = (p) => realpathSync(p);
+  const root = mkdtempSync(join(tmpdir(), "canvas-info-"));
+  try {
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const git = (...a) => execFileSync("git", ["-C", repo, ...a], { stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "1");
+    git("add", "a.txt");
+    git("-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "first commit");
+    writeFileSync(join(repo, "a.txt"), "2");
+    writeFileSync(join(repo, "b.txt"), "new");
+    const g = await gitInfo(repo);
+    assert.equal(g.branch, "main");
+    assert.equal(g.modified, 1);
+    assert.equal(g.untracked, 1);
+    assert.equal(g.last.subject, "first commit");
+    assert.equal(realpathOf(g.root), realpathOf(repo));
+    assert.equal(await gitInfo(join(root)), null, "not a repo");
+    assert.equal(await gitInfo(join(root, "gone")), null);
+    assert.equal(await gitInfo("relative/path"), null);
+
+    const sroot = join(root, "canvas");
+    mkdirSync(join(sroot, "s1"), { recursive: true });
+    writeFileSync(join(sroot, "s1", "meta.json"), JSON.stringify({ id: "s1", cwd: repo, pid: process.pid, started: "2026-05-01T00:00:00Z" }));
+    writeFileSync(join(sroot, "s1", "info.json"), JSON.stringify({ model: { provider: "github-copilot", id: "m" }, prompts: 1 }));
+    writeFileSync(join(root, "usage.json"), JSON.stringify({ "copilot-window": { value: "10%", fetchedAt: Date.now() } }));
+    const d = await sessionInfoOf(sroot, "s1", join(root, "usage.json"));
+    assert.equal(d.live, true);
+    assert.equal(d.pid, process.pid);
+    assert.equal(d.info.prompts, 1);
+    assert.equal(d.usage[0].current, true);
+    assert.equal(d.git.branch, "main");
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

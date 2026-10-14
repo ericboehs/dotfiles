@@ -148,6 +148,62 @@ export function lastTurn(branch: unknown[]): Turn {
 export const REPLY_MAX = 100_000;
 export const REPLY_PROMPT_MAX = 2_000;
 
+/** Where pi-uniichat publishes its live stats (same pi process). */
+export const UNIICHAT_KEY = Symbol.for("pi-uniichat");
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const str = (v: unknown, max = 200) => (typeof v === "string" && v ? v.slice(0, max) : undefined);
+
+/**
+ * pi-uniichat's snapshot, cut to the fields the info panel shows and checked
+ * for type, so a newer or odd version can't put anything else on disk.
+ */
+export function uniichatInfo(snap: unknown): Record<string, unknown> | undefined {
+  if (!snap || typeof snap !== "object") return undefined;
+  const s = snap as Record<string, unknown>;
+  const out: Record<string, unknown> = { enabled: s.enabled === true };
+  for (const k of ["messages", "logBytes", "viewLines", "viewBytes", "viewLowBytes", "viewHighBytes", "queued", "inFlight", "requests", "failures"]) {
+    const v = num(s[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  const c = str(s.compactor);
+  if (c) out.compactor = c;
+  return out;
+}
+
+/**
+ * The info panel's session facts: model, thinking level, context use, and the
+ * branch's prompt count and cost. Pure, so it can be tested; `live` holds what
+ * only pi knows right now.
+ */
+export function sessionInfo(
+  branch: unknown[],
+  live: { model?: { provider?: string; id?: string; name?: string; reasoning?: boolean; contextWindow?: number }; thinking?: string; usage?: { tokens: number | null; contextWindow: number; percent: number | null }; uniichat?: unknown },
+): Record<string, unknown> {
+  let prompts = 0;
+  let replies = 0;
+  let cost = 0;
+  for (const e of (branch || []) as Entry[]) {
+    const m = e?.type === "message" ? e.message : undefined;
+    if (m?.role === "user") prompts++;
+    if (m?.role !== "assistant") continue;
+    replies++;
+    const c = num((m as { usage?: { cost?: { total?: unknown } } }).usage?.cost?.total);
+    if (c) cost += c;
+  }
+  const m = live.model;
+  const u = live.usage;
+  return {
+    ...(m ? { model: { provider: str(m.provider), id: str(m.id), name: str(m.name), reasoning: m.reasoning === true } } : {}),
+    ...(m?.reasoning && live.thinking ? { thinking: str(live.thinking, 20) } : {}),
+    ...(u ? { context: { tokens: num(u.tokens) ?? null, window: num(u.contextWindow) || num(m?.contextWindow) || null, percent: num(u.percent) ?? null } } : {}),
+    prompts,
+    replies,
+    cost: Math.round(cost * 10000) / 10000,
+    ...("uniichat" in live ? { uniichat: uniichatInfo(live.uniichat) ?? null } : {}),
+  };
+}
+
 /**
  * The Status card's "Last response": the text of the newest assistant message
  * that has any, and the user prompt it answered (the last one that wasn't
@@ -1598,6 +1654,29 @@ export default function canvas(pi: ExtensionAPI) {
   }
 
   // The Status card's "Last response": rewritten only when it changed.
+  /** info.json for the info panel; cheap, so it is rewritten on every event that can change it. */
+  function writeInfo(ctx: ExtensionContext) {
+    try {
+      if (!sessionId || !ctx.hasUI || !existsSync(dir())) return;
+      const uni = (globalThis as Record<symbol, { snapshot?: () => unknown } | undefined>)[UNIICHAT_KEY];
+      let snap: unknown;
+      try {
+        snap = uni?.snapshot?.();
+      } catch {}
+      const info = sessionInfo(ctx.sessionManager.getBranch() || [], {
+        model: ctx.model,
+        thinking: pi.getThinkingLevel(),
+        usage: ctx.getContextUsage(),
+        ...(uni ? { uniichat: snap } : {}),
+      });
+      const body = JSON.stringify(info);
+      const p = join(dir(), "info.json");
+      const prev = readJson<Record<string, unknown> | null>(p, null);
+      if (prev && JSON.stringify({ ...prev, at: undefined }) === body) return;
+      writeAtomic(p, JSON.stringify({ ...info, at: new Date().toISOString() }));
+    } catch {}
+  }
+
   function writeReply(ctx: ExtensionContext) {
     try {
       const r = lastReply(ctx.sessionManager.getBranch() || []);
@@ -2063,6 +2142,7 @@ export default function canvas(pi: ExtensionAPI) {
         settleStaleRun(dir());
       } catch {}
       if (ctx.hasUI) writeReply(ctx);
+      writeInfo(ctx);
     }
     if (ctx.hasUI) watchInbox(ctx);
     if (autoOn && ctx.hasUI) {
@@ -2096,12 +2176,18 @@ export default function canvas(pi: ExtensionAPI) {
     track(event);
     // A message from another agent shows in Agents right away, not after the turn it starts.
     const m = (event as { message?: { role?: string; content?: unknown } }).message;
+    if (m?.role === "assistant") writeInfo(ctx); // context use and cost move with each reply
     if (!autoOn || !ctx.hasUI || !sessionId || m?.role !== "user") return;
     const t = textOf(m.content);
     if (t.startsWith("[cross-agent") || t.startsWith("[reply from")) void serial(() => updateAgents(ctx)).catch(() => {});
   });
   pi.on("session_before_compact", track);
-  pi.on("session_compact", track);
+  pi.on("session_compact", (event, ctx) => {
+    track(event);
+    writeInfo(ctx);
+  });
+  pi.on("model_select", (_e, ctx) => writeInfo(ctx));
+  pi.on("thinking_level_select", (_e, ctx) => writeInfo(ctx));
   pi.on("session_compact_failed", track);
   pi.on("ui_prompt_start", track);
   pi.on("ui_prompt_end", track);
@@ -2123,6 +2209,7 @@ export default function canvas(pi: ExtensionAPI) {
     }
     if (!ctx.hasUI || !sessionId) return;
     writeReply(ctx);
+    writeInfo(ctx);
     if (autoOn) {
       const turn = lastTurn(ctx.sessionManager.getBranch() || []);
       void serial(() => updateWidgets(ctx, turn)).catch(() => {});

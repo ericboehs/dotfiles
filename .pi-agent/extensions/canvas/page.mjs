@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { asQuote, boardMarks, buildTree, codeLayout, dismissPipe, lineLabel, optionLetter, optionPrompt, optionsText, pipeRows, pipeStripHidden, REVIEW_VERDICTS, reviewLabel, reviewMessage, slackText, treeText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, buildTree, codeLayout, dismissPipe, lineLabel, optionLetter, optionPrompt, optionsText, pipeRows, pipeStripHidden, REVIEW_VERDICTS, reviewLabel, reviewMessage, infoRows, slackText, treeText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -90,6 +90,28 @@ dialog.modal[open] { display: flex; flex-direction: column; }
 dialog.modal.image { width: auto; }
 dialog.modal.diff { height: min(92vh, 960px); }
 dialog.modal.kb-detail { width: min(600px, 94vw); }
+dialog.modal.info { width: min(680px, 94vw); }
+header.top h1 .name-btn { all: unset; cursor: pointer; border-radius: 6px; padding: 0 4px; margin: 0 -4px; }
+header.top h1 .name-btn:hover { background: var(--soft); }
+header.top h1 .name-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.info-panel { padding: 12px 16px 16px; font-size: 13.5px; }
+.info-note { margin: 0 0 10px; color: var(--dim); font-style: italic; }
+.info-grid { display: grid; grid-template-columns: max-content 1fr; gap: 10px 16px; margin: 0; }
+.info-grid dt { color: var(--dim); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+.info-grid dd { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.info-grid .iv { overflow-wrap: anywhere; }
+.info-grid .iv.mono { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.info-grid .in { color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+.info-bar { width: 100%; max-width: 360px; height: 6px; border-radius: 3px; background: var(--soft); overflow: hidden; }
+.info-bar > i { display: block; height: 100%; background: var(--accent); }
+.info-bar.warn > i { background: var(--warn); }
+.info-bar.bad > i { background: var(--bad); }
+.info-usage { gap: 8px !important; }
+.info-use { display: flex; flex-direction: column; gap: 1px; }
+.info-use:not(.current) .iv { color: var(--dim); }
+.info-use .ctag { margin-left: 6px; }
+.info-use details summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+.info-use pre { margin: 4px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--soft); font-size: 11.5px; white-space: pre-wrap; }
 dialog.modal:focus, dialog.modal:focus-visible { outline: none; }
 dialog.modal::backdrop { background: rgba(24, 20, 16, .58); }
 dialog.modal > header { display: flex; gap: 10px; align-items: center; padding: 6px 8px 6px 14px; min-height: 40px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 40%, var(--card)); font-size: 13px; }
@@ -4290,6 +4312,82 @@ function showModal(items, i, render) {
   show(i);
 }
 
+// ── session info: a click on the session name, or I ──
+
+const infoUrl = (id) => `/api/s/${encodeURIComponent(id)}/info`;
+const shortDate = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString([], { month: "short", day: "numeric" });
+};
+
+/** The panel's body: facts from pi (info.json), git as of now, and the usage cache. Read-only. */
+function infoBody(d) {
+  const wrap = h("div", { class: "info-panel" });
+  if (!d.live) wrap.append(h("p", { class: "info-note" }, "This session has ended; what follows is as of its last turn."));
+  else if (!d.info) wrap.append(h("p", { class: "info-note" }, "Model and context show after pi's next reply."));
+  const grid = h("dl", { class: "info-grid" });
+  const row = (key, label, ...dd) => grid.append(h("dt", {}, label), h("dd", { class: `info-${key}` }, ...dd));
+  for (const r of infoRows(d, ago)) {
+    const tone = r.percent >= 85 ? " bad" : r.percent >= 65 ? " warn" : "";
+    row(r.key, r.label, h("div", { class: "iv" }, r.value), r.percent != null ? h("div", { class: `info-bar${tone}`, role: "meter", "aria-valuenow": Math.round(r.percent), "aria-valuemin": 0, "aria-valuemax": 100 }, h("i", { style: `width:${r.percent}%` })) : null, r.note ? h("div", { class: "in" }, r.note) : null);
+  }
+  if (d.usage?.length)
+    row(
+      "usage",
+      "Usage",
+      ...d.usage.map((u) =>
+        h(
+          "div",
+          { class: `info-use${u.current ? " current" : ""}` },
+          h(
+            "div",
+            { class: "iv" },
+            h("b", {}, u.label),
+            " ",
+            u.value,
+            u.current ? h("span", { class: "ctag" }, "this session") : null,
+          ),
+          h("div", { class: "in" }, [u.resetAt ? `resets ${shortDate(u.resetAt)}` : u.resetDate ? `resets ${u.resetDate}` : "", `fetched ${ago(u.fetchedAt)}`].filter(Boolean).join(" · ")),
+          u.detail ? h("details", {}, h("summary", {}, "Details"), h("pre", {}, u.detail)) : null,
+        ),
+      ),
+    );
+  const paths = [d.cwd, d.git?.root && d.git.root !== d.cwd ? `repo ${d.git.root}` : "", d.pid ? `pid ${d.pid}` : ""].filter(Boolean);
+  if (paths.length) row("paths", "Paths", h("div", { class: "iv mono" }, paths.join(" · ")), d.cwd ? copyButton(() => d.cwd, "Copy folder") : null);
+  wrap.append(grid);
+  return wrap;
+}
+
+function openInfo(id, name) {
+  showModal([id], 0, () => ({
+    kind: "info",
+    title: name,
+    sub: "Session info",
+    body: fetch(infoUrl(id), { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(infoBody),
+  }));
+}
+
+/** While the panel is open, a change to the session redraws it in place (no Loading… flash). */
+let infoTimer;
+function infoRefresh(id) {
+  if (!dlg?.open || !dlg.classList.contains("info")) return;
+  clearTimeout(infoTimer);
+  infoTimer = setTimeout(() => {
+    fetch(infoUrl(id), { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const box = dlg.open && dlg.classList.contains("info") && dlg.querySelector(".mbody");
+        if (!d || !box) return;
+        const open = [...box.querySelectorAll("details")].map((x) => x.open);
+        box.replaceChildren(infoBody(d));
+        box.querySelectorAll("details").forEach((x, i) => (x.open = Boolean(open[i])));
+      })
+      .catch(() => {});
+  }, 400);
+}
+
 const imageItem = (a) => ({
   kind: "image",
   title: a.closest("figure")?.querySelector("figcaption")?.textContent || a.querySelector("img")?.alt || "Image",
@@ -4689,9 +4787,10 @@ async function sessionView(id) {
     const name = state.meta.name || id.slice(0, 8);
     liveTmux = Boolean(state.tmux);
     talkUpdate(state);
+    infoRefresh(id);
     document.title = `${name} · canvas`;
     header.replaceChildren(
-      h("h1", {}, name),
+      h("h1", {}, h("button", { class: "name-btn", type: "button", title: "Session info: model, context, usage, repo (I)", onclick: () => openInfo(id, name) }, name)),
       h("span", { class: "cwd" }, tilde(state.meta.cwd)),
       stateBadge(state),
       waitbar,
@@ -4782,6 +4881,8 @@ async function sessionView(id) {
     setCurrent(card, false);
     reply.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  // I: the session info panel.
+  pageHooks.info = () => openInfo(id, document.querySelector("header.top h1")?.textContent || id);
   // i: the message box, focused (the Status card opened if folded).
   pageHooks.compose = () => {
     const card = statusSlot.querySelector(":scope > .card");
@@ -5488,6 +5589,8 @@ function vimAction(action, e) {
       return pageHooks.showReply?.();
     case "compose":
       return pageHooks.compose?.();
+    case "info":
+      return pageHooks.info?.();
     case "bottom":
       setCurrent(null);
       return window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });

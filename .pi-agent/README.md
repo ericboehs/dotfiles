@@ -790,6 +790,18 @@ the agent's last response.
   Sent comments stay on their lines, dashed and marked Sent, until their
   section is replaced. On an ended session Send becomes Copy review. The
   Files changed modal's diffs don't take comments.
+- **Session info.** Click the session name in the header (or press `I`) for
+  a read-only panel: model and thinking level, context use with a bar,
+  prompts, replies and cost, repo status (branch, ahead/behind, staged,
+  modified and untracked counts, last commit), UniiChat's live stats, and
+  provider usage from `provider-usage.ts`'s shared cache (this session's
+  provider first; entries over a week old left out). canvas.ts writes
+  `info.json` after each reply and on a model, thinking level or compaction
+  change; the daemon adds `git status` (with `GIT_OPTIONAL_LOCKS=0`, so it
+  never takes the index lock) and the usage cache when the panel opens
+  (`GET /api/s/<id>/info`). The panel redraws in place while it's open.
+  UniiChat's stats come from `globalThis[Symbol.for("pi-uniichat")]`,
+  which pi-uniichat publishes; without it the row says it isn't loaded.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
