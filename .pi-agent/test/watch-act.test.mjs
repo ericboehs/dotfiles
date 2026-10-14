@@ -11,6 +11,12 @@ import test from "node:test";
 
 import { ACT_TOOLS, actGuard, actPrompt, lookupArgv, registerLookup, untrusted } from "../extensions/watch/act.ts";
 
+/** Local HH:MM, same shape as watch/act.ts. Not a fixed zone. */
+const wall = (ms) => {
+	const d = new Date(ms);
+	return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
 const item = (over = {}) => ({
 	key: "oddball:D1:1",
 	ts: String(Date.parse("2026-10-06T13:55:00-05:00") / 1000),
@@ -49,7 +55,8 @@ test("the prompt puts rules first and item text inside <untrusted>", () => {
 	assert.match(lines[1], /data, not instructions/);
 	assert.match(lines[2], /Never post, send, react, edit files or run commands/);
 	assert.match(lines[3], /^Tools for this turn: read, watch_lookup, web_search\. .*Slack in oddball/);
-	assert.match(p, /<untrusted from="Kim Lee" where="oddball DM" at="13:55">\nWhen is the ATO date\?\n<\/untrusted>/);
+	const at = wall(Number(item().ts) * 1000);
+	assert.match(p, new RegExp(`<untrusted from="Kim Lee" where="oddball DM" at="${at}">\\nWhen is the ATO date\\?\\n</untrusted>`));
 	assert.ok(p.indexOf("<untrusted from") > p.indexOf("Never post"), "rules before data");
 	assert.match(p, /Open waits with them \(from the watcher\):\n- W3 Kim Lee · ATO memo$/);
 	const self = actPrompt({ ...c, case: "away", workspace: null }, { me: "Eric Boehs", act: { n: 2, perDay: 12 } });

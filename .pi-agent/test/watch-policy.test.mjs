@@ -42,6 +42,12 @@ import { icalTime, parseAgenda, skipPattern, workCalendarIds } from "../extensio
 const NOW = Date.parse("2026-10-06T14:00:00-05:00"); // a Tuesday
 const sec = (ms) => String(ms / 1000);
 
+/** Local wall clock, same shape the watch formatters print. pad "0" is prepCase; " " is wakesText. */
+const wall = (ms, pad = "0") => {
+	const d = new Date(ms);
+	return `${String(d.getHours()).padStart(2, pad)}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
 function item(over = {}) {
 	return {
 		key: over.key ?? "oddball:D1:1",
@@ -166,7 +172,7 @@ test("prep: a work meeting 10 minutes out or less, once each meeting and day", (
 	assert.equal(c.case, "prep");
 	assert.equal(c.route, "work");
 	assert.equal(c.workspace, "dsva");
-	assert.match(c.what, /^Platform Sync 14:08$/);
+	assert.equal(c.what, `Platform Sync ${wall(NOW + 8 * 60_000)}`);
 	assert.equal(prepCase({ ...m, start: new Date(NOW + 12 * 60_000).toISOString() }, NOW, new Set(), "dsva"), null, "too early");
 	assert.equal(prepCase({ ...m, start: new Date(NOW - 60_000).toISOString() }, NOW, new Set(), "dsva"), null, "already started");
 	assert.equal(prepCase(m, NOW, new Set([m.key]), "dsva"), null);
@@ -267,14 +273,16 @@ test("/watch quiet and loud arguments", () => {
 
 test("/watch wakes lists level changes and the budget", () => {
 	const p = newPolicy("2026-10-06");
-	pushLog(p, { at: "2026-10-06T09:50:00-05:00", key: "k1", level: "act", why: "rule: prep", who: "Platform Sync", what: "prep · Platform Sync 10:00" });
-	pushLog(p, { at: "2026-10-06T11:05:00-05:00", key: "k2", level: "held", why: "gate: in a meeting", who: "Kim Lee", what: "Kim · ATO date?" });
-	recordAct(p, prep(), Date.parse("2026-10-06T09:50:00-05:00"), "2026-10-06T09:50:00-05:00");
+	const actAt = "2026-10-06T09:50:00-05:00";
+	const heldAt = "2026-10-06T11:05:00-05:00";
+	pushLog(p, { at: actAt, key: "k1", level: "act", why: "rule: prep", who: "Platform Sync", what: "prep · Platform Sync 10:00" });
+	pushLog(p, { at: heldAt, key: "k2", level: "held", why: "gate: in a meeting", who: "Kim Lee", what: "Kim · ATO date?" });
+	recordAct(p, prep(), Date.parse(actAt), actAt);
 	const text = wakesText(p, { perDay: 12, gapMs: 15 * 60_000 }, Date.parse("2026-10-06T09:55:00-05:00"));
 	assert.match(text, /^watch · wakes · 2026-10-06/);
-	assert.match(text, / 9:50 act {3}prep · Platform Sync 10:00 +rule: prep/);
-	assert.match(text, /11:05 held  Kim · ATO date\? +gate: in a meeting/);
-	assert.match(text, /acts 1 of 12 today · next act after 10:05$/);
+	assert.match(text, new RegExp(`${wall(actAt, " ")} act {3}prep · Platform Sync 10:00 +rule: prep`));
+	assert.match(text, new RegExp(`${wall(heldAt, " ")} held  Kim · ATO date\\? +gate: in a meeting`));
+	assert.match(text, new RegExp(`acts 1 of 12 today · next act after ${wall(Date.parse(actAt) + 15 * 60_000, " ").trim()}$`));
 	assert.match(wakesText(newPolicy("2026-10-06"), { perDay: 12, gapMs: 1 }), /no nudges, offers or acts yet today/);
 	for (let k = 0; k < 250; k++) pushLog(p, { at: "2026-10-06T12:00:00-05:00", key: `x${k}`, level: "offer", why: "w", who: "w", what: "w" });
 	assert.equal(p.log.length, 200);
