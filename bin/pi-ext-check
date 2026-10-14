@@ -177,10 +177,23 @@ if [[ "$MODE" != "--typecheck-only" ]]; then
   # cancels the step without naming it. 30s is far above a healthy test.
   # The spec reporter only names a test after it finishes, so a blocked
   # event loop never shows up. The start reporter writes the name first.
-  elif (cd "$PI_AGENT" && node --test --test-timeout=30000 \
-      --test-reporter=spec --test-reporter-destination=stdout \
-      --test-reporter="$REPO/bin/pi-ext-test-start.mjs" --test-reporter-destination=stderr \
-      test/*.test.mjs); then
+  # One file per process, with the name printed before node starts: the hang
+  # is between files, after footer.test.mjs finishes and before the next file
+  # emits START. The last FILE line is the one the runner never got into.
+  elif (
+    cd "$PI_AGENT" || exit 1
+    file_status=0
+    for test_file in test/*.test.mjs; do
+      printf 'FILE %s\n' "$test_file" >&2
+      if ! node --test --test-timeout=30000 \
+          --test-reporter=spec --test-reporter-destination=stdout \
+          --test-reporter="$REPO/bin/pi-ext-test-start.mjs" --test-reporter-destination=stderr \
+          "$test_file"; then
+        file_status=1
+      fi
+    done
+    exit "$file_status"
+  ); then
     echo -e "${GREEN}✅ tests passed${NC}"
   else
     echo -e "${RED}❌ tests failed${NC}"
