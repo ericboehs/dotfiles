@@ -173,7 +173,9 @@ if [[ "$MODE" != "--typecheck-only" ]]; then
   if [ ! -e "${tests[0]}" ]; then
     echo -e "${RED}❌ no test files at $PI_AGENT/test${NC}" >&2
     status=1
-  elif (cd "$PI_AGENT" && node --test test/*.test.mjs); then
+  # A test that never returns used to sit until the job timeout, which
+  # cancels the step without naming it. 30s is far above a healthy test.
+  elif (cd "$PI_AGENT" && node --test --test-timeout=30000 test/*.test.mjs); then
     echo -e "${GREEN}✅ tests passed${NC}"
   else
     echo -e "${RED}❌ tests failed${NC}"
