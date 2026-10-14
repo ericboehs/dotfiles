@@ -752,7 +752,28 @@ the agent's last response.
   block (the status has its own Next), rendered, below the prompt it answered (clipped to two lines; a click
   shows it all). canvas.ts writes it to `reply.json` when a turn settles (no
   model involved), so a short turn updates it too. The heading folds it,
-  remembered per browser.
+  remembered per browser. The reply's Next steps options show under it as
+  buttons; a click sends that option to pi (see Talk-back).
+- **Talk-back.** Under Last response, a message box writes to this
+  session's pi (`i` focuses it, Esc leaves). Enter sends; while a turn runs
+  Enter steers it and ⌥Enter queues the message for after, ⇧Enter is a new
+  line. Next steps buttons, an `options` card's Pick and a kanban card's
+  Send to pi send at once, with 3 s to undo, and queue behind a running
+  turn; ⌥-click copies instead. On an ended session the box is disabled and
+  the buttons copy. How it works:
+  - The page posts `/s/<id>/send` (`X-Canvas: 1` and a matching Origin, like
+    `/clip`). The daemon refuses sessions that aren't running and writes
+    `inbox/<ms>-<hex>.json` (mode 600, folder 700), at most 20 waiting.
+  - canvas.ts watches `inbox/` (with a 1 s poll as backup), removes each
+    file before acting on it, and calls `pi.sendUserMessage`: a new turn
+    when pi is idle, else `deliverAs` steer or followUp.
+  - It records each message in `inbox-ack.json` (the last 10); the page
+    turns "Sending…" into "Sent ✓: started a turn / steered / queued", and
+    says so if pi hasn't picked a message up within 5 s.
+  - A file queue, not a socket, so a message survives the daemon
+    restarting (as it does after every code change).
+  - Dialogs open in pi's terminal (an `ask`, a confirm) can't be answered
+    from the page.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
@@ -830,7 +851,7 @@ the agent's last response.
   background tab keeps its marks until you look). A click on a card (or
   Enter on a focused one) opens its **details** over the page: the full
   title and note, tag, owner and link, and a prompt to paste into pi with
-  a Copy prompt button; ← / → step through the board's cards. On the Tasks
+  a Copy prompt button (and Send to pi, see Talk-back); ← / → step through the board's cards. On the Tasks
   board the prompt is the todo's next move for its column ("Claim todo #5
   (...) and start on it.", "Help unblock todo #6 (...): it's blocked on
   ..."); on any other board it hands over the card with the board and
@@ -872,8 +893,8 @@ the agent's last response.
   `tree`-command text. `options` puts 2–6 choices side by side as cards
   (A, B, C): a summary, ✓ pros, ✗ cons, a cost, 0–5 score bars per
   criterion, and at most one Recommended card, outlined. Each card's **Pick**
-  copies a prompt to paste into pi (its `pick` text, or "Go with option B:
-  ..."); the section copies as markdown. `pdf` and `video` (mp4, m4v, webm,
+  sends pi a prompt that picks it (its `pick` text, or "Go with option B:
+  ..."), or copies it on ⌥-click or once the session has ended; the section copies as markdown. `pdf` and `video` (mp4, m4v, webm,
   mov) copy a file in by `path` (up to 50 and 200 MB) and show it in the
   browser's own PDF viewer or a `<video>` player with controls, opened on
   its first frame. The daemon streams both from disk and answers byte
@@ -1122,9 +1143,12 @@ and cached in `~/.pi/canvas/.vendor`; mermaid alone is 5.5 MB, too heavy to
 commit here.
 
 Loopback only. The daemon answers only 127.0.0.1 with a loopback `Host`
-header, which stops DNS rebinding. It serves reads plus one write: Clippy's
-`POST /s/<id>/clip`, which needs the page's own header and origin and only
-copies that session's files. `html` sections run in an opaque-origin frame
+header, which stops DNS rebinding. It serves reads plus a few writes, each
+needing the page's own header and origin: Clippy's `POST /s/<id>/clip`,
+which only copies that session's files, tmux follow's `/follow` and
+`/focus`, and talk-back's `/s/<id>/send`, which only queues a message for a
+running session. Anything that can make those requests can type into your
+pi, so the same trust as the terminal applies. `html` sections run in an opaque-origin frame
 (no `allow-same-origin`): they can't touch the page or call the daemon, and
 a small script the daemon adds reports their height and stands in an
 in-memory `localStorage`. `html-plan` still runs same-origin, because its

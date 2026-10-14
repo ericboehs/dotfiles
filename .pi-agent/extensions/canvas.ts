@@ -153,7 +153,7 @@ export const REPLY_PROMPT_MAX = 2_000;
  * that has any, and the user prompt it answered (the last one that wasn't
  * from another agent). Null before there is a reply.
  */
-export function lastReply(branch: unknown[]): { prompt: string; text: string } | null {
+export function lastReply(branch: unknown[]): { prompt: string; text: string; next?: string[] } | null {
   const entries = (branch || []) as Entry[];
   for (let i = entries.length - 1; i >= 0; i--) {
     const m = entries[i]?.message;
@@ -169,9 +169,74 @@ export function lastReply(branch: unknown[]): { prompt: string; text: string } |
       prompt = t;
       break;
     }
-    return { prompt: prompt.slice(0, REPLY_PROMPT_MAX), text: withoutNextSteps(text).slice(0, REPLY_MAX) };
+    return { prompt: prompt.slice(0, REPLY_PROMPT_MAX), text: withoutNextSteps(text).slice(0, REPLY_MAX), ...nextOf(text) };
   }
   return null;
+}
+const nextOf = (text: string) => {
+  const next = nextSteps(text);
+  return next.length ? { next } : {};
+};
+
+/**
+ * The numbered options of a reply's closing "Next steps" block, as plain
+ * text (the page sends one back when clicked). Empty when there is none.
+ */
+export function nextSteps(text: string): string[] {
+  let cut = -1;
+  for (const m of text.matchAll(/^[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*|__)?next steps\b/gim)) cut = m.index;
+  if (cut < 0) return [];
+  const out: string[] = [];
+  for (const line of text.slice(cut).split("\n").slice(1)) {
+    const m = line.match(/^\s*\d+[.)]\s+(.+)$/)?.[1];
+    if (m) out.push(m.trim().replace(/^\*\*(.+)\*\*$/, "$1").slice(0, 1000));
+  }
+  return out.slice(0, 6);
+}
+
+// ── talk-back: the page's messages ──
+
+export type InboxMessage = { id: string; text: string; mode: "steer" | "followUp" };
+export const INBOX_ACKS = 10;
+
+/**
+ * Take the waiting messages in <dir>/inbox (written by the daemon's POST
+ * /s/<id>/send), oldest first. Each file is removed before it is returned,
+ * so a message goes out once even if two drains overlap. Bad files are dropped.
+ */
+export function claimInbox(dir: string): InboxMessage[] {
+  const inbox = join(dir, "inbox");
+  let names: string[];
+  try {
+    names = readdirSync(inbox).filter((n) => /^\d+-[a-f0-9]+\.json$/.test(n)).sort();
+  } catch {
+    return [];
+  }
+  const out: InboxMessage[] = [];
+  for (const n of names) {
+    const p = join(inbox, n);
+    let raw = "";
+    try {
+      raw = readFileSync(p, "utf8");
+      rmSync(p);
+    } catch {
+      continue; // another drain took it
+    }
+    try {
+      const m = JSON.parse(raw);
+      if (typeof m?.text !== "string" || !m.text.trim()) continue;
+      out.push({ id: n.slice(0, -5), text: m.text.slice(0, 20_000), mode: m.mode === "followUp" ? "followUp" : "steer" });
+    } catch {}
+  }
+  return out;
+}
+
+/** Record how messages went out in <dir>/inbox-ack.json, newest last, keeping the last few: the page turns "Sending…" into "Sent". */
+export function ackInbox(dir: string, acks: { id: string; how: string }[], at = new Date().toISOString()) {
+  const p = join(dir, "inbox-ack.json");
+  const prev = readJson<{ acks?: unknown[] }>(p, {}).acks;
+  const all = [...(Array.isArray(prev) ? prev : []), ...acks.map((a) => ({ ...a, at }))].slice(-INBOX_ACKS);
+  writeAtomic(p, JSON.stringify({ acks: all }));
 }
 
 /**
@@ -1158,8 +1223,8 @@ export function normalizeTree(s: any): string {
 /**
  * Choices side by side: { question?, options: [{ label, summary?, pros?,
  * cons?, cost?, scores? { "Effort": 1-5 }, recommended?, pick? }] } or the
- * options array alone. 2 to 6 options; Pick copies `pick` (default
- * "Go with option B: <label>").
+ * options array alone. 2 to 6 options; Pick sends pi `pick` (default
+ * "Go with option B: <label>"), or copies it.
  */
 export function normalizeOptions(s: any): string {
   const opts = Array.isArray(s) ? s : s?.options;
@@ -1760,6 +1825,61 @@ export default function canvas(pi: ExtensionAPI) {
     } catch {} // no .pi/ here; the per-turn refresh still picks a new file up
   }
 
+  // Talk-back: the page's messages arrive as files in <session>/inbox (the
+  // daemon writes them). A watch picks them up at once; the 1 s poll covers a
+  // missed event and an inbox made after start.
+  let inboxWatch: FSWatcher | undefined;
+  let inboxTimer: ReturnType<typeof setInterval> | undefined;
+  let inboxCtx: ExtensionContext | undefined;
+  function stopInbox() {
+    clearInterval(inboxTimer);
+    inboxTimer = undefined;
+    inboxWatch?.close();
+    inboxWatch = undefined;
+    inboxCtx = undefined;
+  }
+  function drainInbox() {
+    const ctx = inboxCtx;
+    if (!ctx || !sessionId) return;
+    const msgs = claimInbox(dir());
+    if (!msgs.length) return;
+    const acks: { id: string; how: string }[] = [];
+    let started = false;
+    for (const m of msgs) {
+      // Idle: the first message starts a turn and the rest queue behind it.
+      // Busy: steer (Enter) or follow-up (⌥Enter), as the page asked.
+      const how = ctx.isIdle() && !started ? "prompt" : started ? "followUp" : m.mode;
+      try {
+        if (how === "prompt") pi.sendUserMessage(m.text);
+        else pi.sendUserMessage(m.text, { deliverAs: how as "steer" | "followUp" });
+        started = true;
+        acks.push({ id: m.id, how });
+      } catch {
+        acks.push({ id: m.id, how: "failed" });
+      }
+    }
+    try {
+      ackInbox(dir(), acks);
+    } catch {}
+  }
+  function watchInbox(ctx: ExtensionContext) {
+    stopInbox();
+    inboxCtx = ctx;
+    const tryWatch = () => {
+      const inbox = join(dir(), "inbox");
+      if (inboxWatch || !sessionId || !existsSync(inbox)) return;
+      try {
+        inboxWatch = watch(inbox, () => drainInbox());
+        inboxWatch.on("error", () => (inboxWatch?.close(), (inboxWatch = undefined)));
+        inboxWatch.unref();
+      } catch {}
+    };
+    inboxTimer = setInterval(() => (tryWatch(), drainInbox()), 1000);
+    inboxTimer.unref();
+    tryWatch();
+    drainInbox();
+  }
+
   /** Agents: rebuilt from the branch each time, so it backfills and follows branch switches. */
   function updateAgents(ctx: ExtensionContext) {
     const peers = readPeers();
@@ -1944,6 +2064,7 @@ export default function canvas(pi: ExtensionAPI) {
       } catch {}
       if (ctx.hasUI) writeReply(ctx);
     }
+    if (ctx.hasUI) watchInbox(ctx);
     if (autoOn && ctx.hasUI) {
       void serial(() => updateTasks(ctx)).catch(() => {});
       watchTasks(ctx);
@@ -2049,6 +2170,7 @@ export default function canvas(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (event) => {
     stopTasksWatch();
+    stopInbox();
     dropWatch();
     clearInterval(bgTimer);
     bgTimer = undefined;
@@ -2119,7 +2241,7 @@ export default function canvas(pi: ExtensionAPI) {
       "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), " +
       'code (lines of a source file with line numbers: path to the file, read when posted; body optional JSON {"lines": "40-80", "highlight": ["42", "50-52"], "notes": [{"lines": "42" or "44-46", "text" (takes `code`, **bold**, [links](https://...)), "tone"?: ok|warn|bad|accent|dim}], "lang"?, "caption"?}; a note shows as a callout under its lines), ' +
       'tree (a file tree from flat paths: JSON {"root"?, "caption"?, "entries": {"src/a.ts": "added"|"changed"|"deleted"|"renamed"|"moved" or a note, or {"tag", "note"}}} or an array of paths; folders are built from the paths; a path ending in / is a folder, to note it), ' +
-      'options (2-6 choices side by side: JSON {"question"?, "options": [{"label", "summary"?, "pros"?: [text], "cons"?: [text], "cost"?, "scores"?: {"Effort": 0-5, ...}, "recommended"?: true (one at most), "pick"? (the prompt its Pick button copies)}]}), ' +
+      'options (2-6 choices side by side: JSON {"question"?, "options": [{"label", "summary"?, "pros"?: [text], "cons"?: [text], "cost"?, "scores"?: {"Effort": 0-5, ...}, "recommended"?: true (one at most), "pick"? (the prompt its Pick button sends to pi)}]}), ' +
       "pdf (a .pdf via path, in a viewer), video (an mp4/m4v/webm/mov screen recording via path, with controls), finding (appends one durable line to the findings log; id not needed). " +
       "html sections get the canvas design kit, so write little CSS: the page's colours as variables (--ink --dim --line --soft --card --accent --ok --warn --bad, chart colours --c1 to --c8), " +
       "light and dark handled, buttons (class primary), inputs, range sliders, select and tables already styled, and classes k-row, k-col, k-grid, k-card, k-stat (b + span), k-field (label above a control), k-muted, k-tag, k-ok, k-warn, k-bad, k-bar (> i). " +

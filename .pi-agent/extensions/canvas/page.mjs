@@ -623,6 +623,27 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .status .reply-prompt { margin: 6px 0 8px; padding: 6px 10px; border-radius: 8px; background: var(--soft); color: var(--dim); font-size: 13px; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
 .status .reply-prompt.full { display: block; -webkit-line-clamp: unset; }
 .status .reply-bd > .md { font-size: 14px; }
+.status .reply-next { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 10px; }
+.status .reply-next .eyebrow { margin-bottom: 2px; }
+.next-btn { display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%; padding: 5px 10px 5px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 13.5px; line-height: 1.4; text-align: left; cursor: pointer; }
+.next-btn:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
+.next-btn .n { flex: none; min-width: 18px; padding: 0 4px; border-radius: 4px; background: var(--soft); color: var(--dim); font-size: 11.5px; font-weight: 600; text-align: center; }
+.talk { margin: 0 0 16px; }
+.talk-row { display: flex; align-items: flex-end; gap: 8px; }
+.talk-in { flex: 1; min-height: 34px; max-height: 220px; resize: none; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.4; }
+.talk-in:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.talk-in:disabled { background: var(--soft); cursor: not-allowed; }
+.talk-send { height: 34px; padding: 0 14px; font-size: 13px; color: #fff; background: var(--accent); border-color: var(--accent); }
+.talk-send:hover { filter: brightness(1.08); }
+.talk-send:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+.talk-st { min-height: 0; margin-top: 4px; color: var(--dim); font-size: 12px; }
+.talk-st:empty { display: none; }
+.talk-st.ok { color: var(--ok); }
+.talk-st.warn { color: var(--warn); }
+.talk-st.bad { color: var(--bad); }
+.undo-toast { display: flex; align-items: center; gap: 12px; pointer-events: auto; }
+.undo-toast .btn { color: var(--card); border-color: color-mix(in srgb, var(--card) 40%, transparent); }
+.kb-d-acts { display: flex; align-items: center; gap: 2px; }
 .status .col h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; color: var(--ink); }
 .status .col ul { list-style: none; margin: 0; padding: 0; }
 .status .col li { position: relative; padding: 3px 0 3px 20px; font-size: 13.5px; line-height: 1.4; }
@@ -1342,6 +1363,7 @@ function statusCard(status, state, reply = null) {
   if (!status) {
     bd.append(h("div", { class: "empty" }, "No status yet. It appears after the next turn with tool calls."));
     if (reply) bd.append(replyPart(reply));
+    bd.append(talkBox());
     return collapsible(card, "_status");
   }
   title.append(
@@ -1354,6 +1376,7 @@ function statusCard(status, state, reply = null) {
   bd.append(h("div", { class: "goal" }, h("span", { class: "eyebrow" }, "Goal"), status.goal || "—"));
   bd.append(h("div", { class: "now" }, h("span", { class: `pulse ${state}` }), h("span", { class: "eyebrow" }, "Now"), h("span", {}, status.now || "—")));
   if (reply) bd.append(replyPart(reply));
+  bd.append(talkBox());
   const col = (kind, label, items) =>
     h(
       "div",
@@ -1379,6 +1402,20 @@ function replyPart(reply) {
     body.append(p);
   }
   body.append(renderMarkdown(reply.text));
+  // The reply's Next steps (cut from the text) as buttons: a click sends that option to pi.
+  if (reply.next?.length)
+    body.append(
+      h(
+        "div",
+        { class: "reply-next" },
+        h("span", { class: "eyebrow" }, "Next steps"),
+        reply.next.map((t, i) => {
+          const b = h("button", { class: "next-btn", type: "button", title: "Send this to pi (⌥-click: copy it)" }, h("span", { class: "n" }, String(i + 1)), h("span", {}, inline(t, false)));
+          b.addEventListener("click", (e) => sendOrCopy(t, e));
+          return b;
+        }),
+      ),
+    );
   let shut = false;
   try {
     shut = localStorage.getItem(REPLY_FOLD_KEY) === "1";
@@ -1406,6 +1443,117 @@ function replyPart(reply) {
 }
 
 const FINDINGS_SHOWN = 8;
+
+// ── talk-back ──
+// The page writes to its pi: POST /s/<id>/send queues the message in the
+// session's inbox, canvas.ts sends it with pi.sendUserMessage and acks it in
+// inbox-ack.json, which comes back in the state as `acks`.
+
+const talk = { live: false, busy: false, pending: new Map(), box: null, input: null, st: null, btn: null };
+const HOW = { prompt: "started a turn", steer: "steered the running turn", followUp: "queued for after this turn" };
+const shortText = (t, n = 60) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+/** The message box, made once: the Status card is rebuilt often, and this moves into each new one with what you typed. */
+function talkBox() {
+  if (talk.box) return talk.box;
+  const input = h("textarea", { class: "talk-in", rows: "1", "aria-label": "Message pi" });
+  const btn = h("button", { class: "btn primary talk-send", type: "button" }, "Send");
+  const st = h("div", { class: "talk-st", role: "status", "aria-live": "polite" });
+  const grow = () => {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight + 2, 220)}px`;
+  };
+  const go = (mode) => {
+    const text = input.value.trim();
+    if (!text || !talk.live) return;
+    postToPi(text, mode).then((ok) => ok && ((input.value = ""), grow()));
+  };
+  input.addEventListener("input", grow);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") return e.preventDefault(), input.blur();
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    go(e.altKey ? "followUp" : "steer");
+  });
+  btn.addEventListener("click", (e) => go(e.altKey ? "followUp" : "steer"));
+  Object.assign(talk, { box: h("div", { class: "talk" }, h("div", { class: "talk-row" }, input, btn), st), input, st, btn });
+  talkState();
+  return talk.box;
+}
+
+function talkState() {
+  if (!talk.input) return;
+  talk.input.disabled = talk.btn.disabled = !talk.live;
+  talk.input.placeholder = !talk.live ? "This session has ended" : talk.busy ? "Message pi… Enter steers the running turn, ⌥Enter queues it for after" : "Message pi… Enter sends, ⇧Enter for a new line";
+  talk.btn.title = talk.busy ? "Steer the running turn (⌥-click: queue it for after)" : "Send to pi";
+}
+
+function talkSay(text, tone = "") {
+  if (!talk.st) return;
+  talk.st.textContent = text;
+  talk.st.className = `talk-st${tone ? ` ${tone}` : ""}`;
+}
+
+/** Queue a message for this session's pi; true once the daemon has it. `loud`: also toast how it went (sent from a button, maybe far from the box). */
+async function postToPi(text, mode = "steer", loud = false) {
+  const short = shortText(text);
+  try {
+    const res = await fetch(`/s/${encodeURIComponent(currentSession)}/send`, { method: "POST", headers: { "x-canvas": "1", "content-type": "application/json" }, body: JSON.stringify({ text, mode }) });
+    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    const { id } = await res.json();
+    talk.pending.set(id, { short, loud });
+    talkSay(`Sending “${short}”…`);
+    setTimeout(() => talk.pending.has(id) && talkSay(`pi hasn't picked up “${short}” yet. Is it waiting in a dialog?`, "warn"), 5000);
+    return true;
+  } catch (e) {
+    talkSay(`Not sent: ${e.message}`, "bad");
+    if (loud) toast(`Not sent: ${e.message}`);
+    return false;
+  }
+}
+
+/** A fresh state: liveness for the box, and acks that turn "Sending…" into "Sent". */
+function talkUpdate(state) {
+  talk.live = Boolean(state.live);
+  talk.busy = ["working", "blocked"].includes(stateOf(state));
+  talkState();
+  for (const a of state.acks || []) {
+    const p = talk.pending.get(a.id);
+    if (!p) continue;
+    talk.pending.delete(a.id);
+    const msg = a.how === "failed" ? `pi refused “${p.short}”` : `Sent ✓ “${p.short}”: ${HOW[a.how] || a.how}`;
+    talkSay(msg, a.how === "failed" ? "bad" : "ok");
+    if (p.loud) toast(msg);
+  }
+}
+
+/**
+ * A button's message (a Next step, a Pick, a card's prompt): sent at once,
+ * with 3 s to undo before it goes; while a turn runs it waits for the turn to
+ * end. Copied instead on ⌥-click or when the session isn't running.
+ */
+function sendOrCopy(text, e) {
+  if (!talk.live || e?.altKey) {
+    copyText(text).then(
+      () => toast(talk.live ? "Copied" : "Copied: the session isn't running, so paste it into pi"),
+      () => toast("Copy failed"),
+    );
+    return;
+  }
+  undoToast(`Sending to pi: “${shortText(text, 50)}”`, () => postToPi(text, talk.busy ? "followUp" : "steer", true));
+}
+
+let undoing = null; // { el, timer, fire }
+function undoToast(text, fire) {
+  if (undoing) (clearTimeout(undoing.timer), undoing.el.remove(), undoing.fire()); // a second click sends the first now
+  const btn = h("button", { class: "btn", type: "button" }, "Undo");
+  const el = h("div", { class: "toast undo-toast show", role: "status" }, h("span", {}, text), btn);
+  const done = () => (clearTimeout(cur.timer), el.remove(), undoing === cur && (undoing = null));
+  const cur = { el, fire, timer: setTimeout(() => (done(), fire()), 3000) };
+  btn.addEventListener("click", () => (done(), toast("Not sent")));
+  document.body.append(el);
+  undoing = cur;
+}
 
 /** Hover text for the turn mark: when that turn ran. */
 function turnTitle(turn) {
@@ -2957,12 +3105,19 @@ function renderOptions(spec) {
             Object.entries(o.scores).flatMap(([k, v]) => [h("span", {}, k), h("span", { class: "cbar", title: `${k}: ${v}/5` }, h("i", { style: `width:${(v / 5) * 100}%` })), h("span", {}, String(v))]),
           )
         : null,
-      h("div", { class: "opt-ft" }, withTitle(copyButton(() => optionPrompt(spec, i), "Pick"), "Copy a prompt that picks this option, to paste into pi")),
+      h("div", { class: "opt-ft" }, sendButton(() => optionPrompt(spec, i), "Pick", "Send this choice to pi (⌥-click: copy the prompt)")),
     ),
   );
   return h("div", {}, spec.question ? h("div", { class: "opts-q" }, inline(spec.question)) : null, h("div", { class: "opts" }, cards), spec.caption ? h("div", { class: "opt-cap" }, inline(spec.caption)) : null);
 }
 const withTitle = (el, title) => (el.setAttribute("title", title), el);
+
+/** A button that sends getText() to pi (sendOrCopy: undo toast; copies on ⌥-click or when the session has ended). */
+function sendButton(getText, label = "Send to pi", title = "Send this to pi (⌥-click: copy it)") {
+  const b = h("button", { class: "btn", type: "button", title }, label);
+  b.addEventListener("click", (e) => (e.preventDefault(), e.stopPropagation(), sendOrCopy(getText(), e)));
+  return b;
+}
 
 // ── kanban ─────────────────────────────────────────────────────────────────────────
 // Columns side by side, or stacked when the card is narrow (the side panel,
@@ -3151,7 +3306,7 @@ function cardDetail(items, i, { todo, board, moves }) {
               k.href ? h("a", { class: "btn", href: k.href, target: "_blank", rel: "noopener noreferrer", title: k.href }, "Open link ↗") : null,
             )
           : null,
-        h("div", { class: "kb-d-prompt" }, h("div", { class: "kb-d-hd" }, h("span", { class: "k" }, "Prompt for pi"), copyButton(async () => prompt, "Copy prompt")), h("pre", {}, prompt)),
+        h("div", { class: "kb-d-prompt" }, h("div", { class: "kb-d-hd" }, h("span", { class: "k" }, "Prompt for pi"), h("span", { class: "kb-d-acts" }, sendButton(() => prompt), copyButton(async () => prompt, "Copy prompt"))), h("pre", {}, prompt)),
       ),
     };
   });
@@ -4166,6 +4321,7 @@ async function sessionView(id) {
     }
     const name = state.meta.name || id.slice(0, 8);
     liveTmux = Boolean(state.tmux);
+    talkUpdate(state);
     document.title = `${name} · canvas`;
     header.replaceChildren(
       h("h1", {}, name),
@@ -4187,10 +4343,13 @@ async function sessionView(id) {
       lastStatusAt = state.status?.at;
       lastReplyAt = state.reply?.at;
       lastState = stateOf(state);
+      // The message box moves into the new card; keep its focus and cursor.
+      const typing = talk.input && document.activeElement === talk.input ? [talk.input.selectionStart, talk.input.selectionEnd] : null;
       const card = statusCard(state.status, lastState, state.reply);
       if (changed) card.classList.add("fresh");
       if (changed && card.classList.contains("collapsed")) card.classList.add("unseen");
       statusSlot.replaceChildren(card);
+      if (typing) (talk.input.focus(), talk.input.setSelectionRange(...typing));
     } else {
       // Keep the "12s ago" honest without a rebuild.
       const by = statusSlot.querySelector(".by");
@@ -4254,6 +4413,15 @@ async function sessionView(id) {
     if (reply.querySelector(".reply-bd")?.hidden) reply.querySelector(".reply-h").click();
     setCurrent(card, false);
     reply.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  // i: the message box, focused (the Status card opened if folded).
+  pageHooks.compose = () => {
+    const card = statusSlot.querySelector(":scope > .card");
+    if (!card || !talk.input) return;
+    if (card.classList.contains("collapsed")) card.setCollapsed(false);
+    if (!talk.live) return toast("This session has ended");
+    talk.input.scrollIntoView({ behavior: "smooth", block: "center" });
+    talk.input.focus({ preventScroll: true });
   };
 
   // One stream for every session: this page refreshes on its own changes, and
@@ -4950,6 +5118,8 @@ function vimAction(action, e) {
       return window.scrollTo({ top: 0, behavior: "smooth" });
     case "lastReply":
       return pageHooks.showReply?.();
+    case "compose":
+      return pageHooks.compose?.();
     case "bottom":
       setCurrent(null);
       return window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });

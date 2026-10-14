@@ -182,7 +182,7 @@ export function sessionState(root, id) {
   // The current or last turn, so the page can mark what it touched.
   const t = readJson(join(dir, "turn.json"), null);
   const turn = typeof t?.started === "string" ? { started: t.started, ...(typeof t.ended === "string" ? { ended: t.ended } : {}) } : undefined;
-  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, reply: readReply(dir), sections: Array.isArray(sections) ? sections : [], findings, watch: readWatch(root), updated: newestMtime(dir) };
+  return { meta: { ...pageMeta(meta), id }, live, tmux: live && Boolean(tmuxOf(meta)), activity, activityMessage, activityAt, turn, status, reply: readReply(dir), acks: live ? readAcks(dir) : [], sections: Array.isArray(sections) ? sections : [], findings, watch: readWatch(root), updated: newestMtime(dir) };
 }
 
 /**
@@ -211,7 +211,7 @@ export function replyPreview(md, max = 240) {
 export function readReply(dir) {
   const r = readJson(join(dir, "reply.json"), null);
   if (typeof r?.text !== "string" || !r.text.trim()) return null;
-  return { prompt: typeof r.prompt === "string" ? r.prompt.slice(0, 2_000) : "", text: r.text.slice(0, 100_000), at: typeof r.at === "string" ? r.at : undefined };
+  return { prompt: typeof r.prompt === "string" ? r.prompt.slice(0, 2_000) : "", text: r.text.slice(0, 100_000), at: typeof r.at === "string" ? r.at : undefined, next: Array.isArray(r.next) ? r.next.filter((s) => typeof s === "string" && s.trim()).slice(0, 6).map((s) => s.slice(0, 1000)) : [] };
 }
 
 /**
@@ -586,13 +586,13 @@ function fromPage(req, header) {
   return req.headers[header] === "1" && (!origin || origin === `http://${req.headers.host}`);
 }
 
-/** A small JSON body, or {} (anything over 1 KB drops the connection). */
-function readBody(req) {
+/** A small JSON body, or {} (anything over `max` bytes drops the connection). */
+function readBody(req, max = 1024) {
   return new Promise((ok) => {
     let body = "";
     req.on("data", (c) => {
       body += c;
-      if (body.length > 1024) req.destroy();
+      if (body.length > max) req.destroy();
     });
     req.on("end", () => {
       try {
@@ -602,6 +602,46 @@ function readBody(req) {
       }
     });
   });
+}
+
+/** POST /s/<id>/send { text, mode } from the page: queue a message for that session's pi (see queueMessage). */
+async function sendToPi(req, res, id) {
+  if (!fromPage(req, "x-canvas")) return send(res, 403, "forbidden");
+  const r = queueMessage(ROOT, id, await readBody(req, 96 * 1024));
+  if (r.error) return send(res, r.status, r.error);
+  json(res, { id: r.id });
+}
+
+export const SEND_MAX = 20_000;
+const INBOX_MAX = 20;
+
+/**
+ * Talk-back: a message from the page as <root>/<id>/inbox/<ms>-<hex>.json
+ * (mode 600, folder 700), which that session's canvas.ts picks up and sends
+ * with pi.sendUserMessage, then acks in inbox-ack.json. Only live sessions
+ * take messages, and only INBOX_MAX may wait. Returns { id } or { status, error }.
+ */
+export function queueMessage(root, id, body) {
+  const text = typeof body?.text === "string" ? body.text.trim() : "";
+  if (!text) return { status: 400, error: "text is empty" };
+  if (text.length > SEND_MAX) return { status: 413, error: `text is over ${SEND_MAX} characters` };
+  const mode = body.mode === "followUp" ? "followUp" : "steer";
+  const meta = readJson(join(root, id, "meta.json"), null);
+  if (!meta || meta.ended || !pidAlive(meta.pid)) return { status: 409, error: "that session is not running" };
+  const inbox = join(root, id, "inbox");
+  mkdirSync(inbox, { recursive: true, mode: 0o700 });
+  if (readdirSync(inbox).filter((n) => n.endsWith(".json")).length >= INBOX_MAX) return { status: 429, error: "too many messages waiting; is pi stuck?" };
+  const name = `${Date.now()}-${createHash("sha1").update(`${Math.random()}${process.hrtime.bigint()}`).digest("hex").slice(0, 8)}`;
+  const tmp = join(inbox, `.${name}.tmp`);
+  writeFileSync(tmp, JSON.stringify({ text, mode, at: new Date().toISOString() }), { mode: 0o600 });
+  renameSync(tmp, join(inbox, `${name}.json`));
+  return { id: name };
+}
+
+/** How the page's last messages went out (inbox-ack.json, written by canvas.ts): [{ id, how, at }]. */
+export function readAcks(dir) {
+  const a = readJson(join(dir, "inbox-ack.json"), null)?.acks;
+  return Array.isArray(a) ? a.filter((x) => typeof x?.id === "string" && typeof x?.how === "string").slice(-10) : [];
 }
 
 // tmux fires several hooks for one move (window changed, pane selected), so
@@ -642,6 +682,7 @@ function handler(req, res) {
   if (req.method === "POST" && route.length === 3 && route[0] === "s" && route[2] === "clip" && SESSION_ID.test(route[1])) return clip(req, res, route[1]);
   if (req.method === "POST" && route.length === 1 && route[0] === "follow") return follow(req, res);
   if (req.method === "POST" && route.length === 3 && route[0] === "s" && route[2] === "focus" && SESSION_ID.test(route[1])) return focus(req, res, route[1]);
+  if (req.method === "POST" && route.length === 3 && route[0] === "s" && route[2] === "send" && SESSION_ID.test(route[1])) return sendToPi(req, res, route[1]);
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "read only");
 
   const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
@@ -760,6 +801,7 @@ function onChange(relPath) {
   }
   const id = relPath.split(/[\\/]/)[0];
   if (!id || id.startsWith(".") || !SESSION_ID.test(id)) return;
+  if (/^[^\\/]+[\\/]inbox([\\/]|$)/.test(relPath)) return; // talk-back queue: its ack file is what the page waits for
   clearTimeout(pending.get(id));
   pending.set(
     id,

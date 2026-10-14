@@ -7,15 +7,15 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, normalizeCode, normalizeOptions, normalizeTree, parseLineRange, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, byteRange, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, normalizeCode, normalizeOptions, normalizeTree, parseLineRange, nextSteps, claimInbox, ackInbox, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { allowedHost, byteRange, clipTarget, latestClient, listSessions, parseFindings, prune, queueMessage, readAcks, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -70,6 +70,48 @@ test("lastReply: the newest assistant message with text, and the user prompt it 
   assert.deepEqual(lastReply(branch), { prompt: "plan the canvas", text: "Done." });
   assert.equal(lastReply([msg("user", "x".repeat(5000)), msg("assistant", [{ type: "text", text: "y" }])]).prompt.length, 2000);
   assert.equal(lastReply([msg("user", "q"), msg("assistant", [{ type: "text", text: "Done.\n\nNext steps:\n1. Push" }])]).text, "Done.", "Next steps cut");
+  assert.deepEqual(lastReply([msg("user", "q"), msg("assistant", [{ type: "text", text: "Done.\n\nNext steps:\n1. Push" }])]).next, ["Push"], "but kept as options");
+});
+
+test("nextSteps: the closing block's numbered options, as plain text", () => {
+  assert.deepEqual(nextSteps("Done.\n\nNext steps:\n1. Push `d25f6f0`\n2) **Add sources**\n- not numbered\n3. Ship it"), ["Push `d25f6f0`", "Add sources", "Ship it"]);
+  assert.deepEqual(nextSteps("Next steps are below.\n1. not this\n\n**Next steps:**\n1. this"), ["this"], "the last block");
+  assert.deepEqual(nextSteps("No list.\n1. a"), []);
+  assert.equal(nextSteps(`Next steps:\n${Array.from({ length: 9 }, (_, i) => `${i + 1}. x`).join("\n")}`).length, 6, "at most six");
+});
+
+test("talk-back: queueMessage writes the inbox, claimInbox takes it once, ackInbox reports back", () => {
+  const { root, mk } = tempRoot();
+  try {
+    mk("live", { pid: process.pid });
+    mk("gone", { pid: process.pid, ended: "2026-01-01T00:00:00Z" });
+    assert.deepEqual(queueMessage(root, "live", { text: "  " }), { status: 400, error: "text is empty" });
+    assert.equal(queueMessage(root, "live", { text: "x".repeat(20_001) }).status, 413);
+    assert.equal(queueMessage(root, "gone", { text: "hi" }).status, 409, "ended sessions take nothing");
+    assert.equal(queueMessage(root, "nope", { text: "hi" }).status, 409, "nor unknown ones");
+    const a = queueMessage(root, "live", { text: " first ", mode: "followUp" });
+    const b = queueMessage(root, "live", { text: "second", mode: "bogus" });
+    assert.match(a.id, /^\d+-[a-f0-9]{8}$/);
+    const inbox = join(root, "live", "inbox");
+    assert.equal(statSync(inbox).mode & 0o777, 0o700);
+    assert.equal(statSync(join(inbox, `${a.id}.json`)).mode & 0o777, 0o600);
+    writeFileSync(join(inbox, "1-ff.json"), "{not json");
+    const got = claimInbox(join(root, "live"));
+    assert.deepEqual(got.map((m) => [m.text, m.mode]), [["first", "followUp"], ["second", "steer"]], "oldest first; bad files dropped; unknown modes steer");
+    assert.deepEqual(readdirSync(inbox), [], "claimed means gone");
+    assert.deepEqual(claimInbox(join(root, "live")), [], "so it goes out once");
+    assert.deepEqual(claimInbox(join(root, "gone")), [], "no inbox yet");
+    for (let i = 0; i < 20; i++) queueMessage(root, "live", { text: `m${i}` });
+    assert.equal(queueMessage(root, "live", { text: "one too many" }).status, 429);
+    ackInbox(join(root, "live"), [{ id: a.id, how: "followUp" }, { id: b.id, how: "prompt" }], "2026-05-01T00:00:00Z");
+    assert.deepEqual(readAcks(join(root, "live")).map((x) => x.how), ["followUp", "prompt"]);
+    assert.deepEqual(sessionState(root, "live").acks.map((x) => x.id), [a.id, b.id], "the page gets them");
+    ackInbox(join(root, "live"), Array.from({ length: 12 }, (_, i) => ({ id: `x${i}`, how: "steer" })));
+    assert.equal(readAcks(join(root, "live")).length, 10, "only the last ten");
+    assert.deepEqual(sessionState(root, "gone").acks, [], "not for ended sessions");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("withoutNextSteps: the closing Next steps block goes; all of it stays when that is all there is", () => {
@@ -609,7 +651,9 @@ test("daemon carries the last response from reply.json", () => {
     mk("a", { pid: process.pid });
     assert.equal(sessionState(root, "a").reply, null);
     writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z" }));
-    assert.deepEqual(sessionState(root, "a").reply, { prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z" });
+    assert.deepEqual(sessionState(root, "a").reply, { prompt: "why?", text: "Because.", at: "2026-10-12T15:00:00.000Z", next: [] });
+    writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ text: "Because.", next: ["Push", 3, " ", "x".repeat(2000)] }));
+    assert.deepEqual(sessionState(root, "a").reply.next.map((t) => t.length), [4, 1000], "Next steps: strings only, clipped");
     assert.equal(listSessions(root).find((s) => s.id === "a").reply, "Because.", "the list gets a preview");
     writeFileSync(join(root, "a", "reply.json"), JSON.stringify({ prompt: 3, text: "x".repeat(200_000) }));
     const r = readReply(join(root, "a"));
@@ -1176,6 +1220,11 @@ test("daemon /follow tells pages which session tmux moved to; /focus and /follow
     assert.equal((await post(port, "/follow", { pane: "%5" }, { "x-canvas": "1", origin: "https://evil.example" })).status, 403, "foreign origin");
     assert.equal((await post(port, "/s/s1/focus", {}, {})).status, 403, "needs the header");
     assert.equal((await post(port, "/s/s2/focus", {}, { "x-canvas": "1" })).status, 404, "not in tmux: nothing to run");
+    assert.equal((await post(port, "/s/s2/send", { text: "hi" }, {})).status, 403, "send needs the header");
+    assert.equal((await post(port, "/s/s2/send", { text: "hi" }, { "x-canvas": "1", origin: "https://evil.example" })).status, 403, "and this page's origin");
+    assert.equal((await post(port, "/s/s2/send", { text: "hi" }, { "x-canvas": "1", origin: `http://127.0.0.1:${port}` })).status, 200);
+    assert.equal(readdirSync(join(root, "s2", "inbox")).length, 1);
+    assert.equal((await post(port, "/s/s2/send", { text: "" }, { "x-canvas": "1" })).status, 400);
     assert.equal((await post(port, "/follow", { pane: "%9" }, { "x-canvas": "1" })).status, 200, "a non-pi pane is ignored");
     assert.equal((await post(port, "/follow", { pane: "%5", socket: "/sock" }, { "x-canvas": "1" })).status, 200);
     for (let i = 0; i < 20 && !events.includes("event: follow"); i++) await new Promise((r) => setTimeout(r, 50));
