@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel, buildTree, codeLayout, lineLabel, optionPrompt, optionsText, treeText } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel, buildTree, codeLayout, lineLabel, optionPrompt, optionsText, treeText, fenceFor, reviewLabel, reviewMessage } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -376,4 +376,33 @@ test("options copy as markdown and Pick builds a prompt", () => {
   assert.equal(optionPrompt(spec, 1), "Use Postgres via RDS", "pick wins");
   assert.equal(optionPrompt(spec, 5), "");
   assert.equal(optionsText(spec), "**Which store?**\n\n**A. SQLite** (recommended) — S\none file\n- ✓ simple\n- ✗ one writer\n- Effort: 1/5\n\n**B. Postgres**");
+});
+
+test("reviewLabel: file and lines, the old side marked, a range across sides spelled out", () => {
+  assert.equal(reviewLabel({ file: "app.rb", start: { side: "new", n: 12 }, end: { side: "new", n: 12 } }), "app.rb:12");
+  assert.equal(reviewLabel({ file: "app.rb", start: { side: "", n: 4 }, end: { side: "", n: 9 } }), "app.rb:4-9");
+  assert.equal(reviewLabel({ file: "app.rb", start: { side: "old", n: 9 }, end: { side: "old", n: 9 } }), "app.rb:9 (old)");
+  assert.equal(reviewLabel({ file: "app.rb", start: { side: "old", n: 9 }, end: { side: "new", n: 11 } }), "app.rb: old 9 to new 11");
+  assert.equal(reviewLabel({ start: { side: "", n: 1 } }), "code:1");
+});
+
+test("fenceFor: longer than any backtick run inside", () => {
+  assert.equal(fenceFor("plain"), "```");
+  assert.equal(fenceFor("a ```` b"), "`````");
+});
+
+test("reviewMessage: verdict and count, summary, then each comment with its lines quoted", () => {
+  const comments = [
+    { file: "app/c.rb", start: { side: "", n: 9 }, end: { side: "", n: 9 }, quote: ["if coupon.expires_at < Time.now"], lang: "ruby", text: " Use `expired?`: nil raises. ", title: "Bug" },
+    { file: "lib/x.rb", start: { side: "new", n: 3 }, end: { side: "new", n: 4 }, quote: ["+a = 1", "+b = ```"], lang: "diff", text: "Why?" },
+  ];
+  assert.equal(
+    reviewMessage({ verdict: "changes", summary: "Close, two things.\n", comments }),
+    ["Review from the canvas: **Request changes** (2 comments)", "", "Close, two things.", "", '**`app/c.rb:9`** in "Bug"', "```ruby", "if coupon.expires_at < Time.now", "```", "Use `expired?`: nil raises.", "", "**`lib/x.rb:3-4`**", "````diff", "+a = 1\n+b = ```", "````", "Why?"].join("\n"),
+  );
+  assert.equal(reviewMessage({ verdict: "approve" }), "Review from the canvas: **Approve**");
+  assert.equal(reviewMessage({ verdict: "bogus", comments: [comments[1]] }).split("\n")[0], "Review from the canvas: **Comment** (1 comment)");
+  const long = reviewMessage({ comments: [{ file: "f", start: { side: "", n: 1 }, end: { side: "", n: 40 }, quote: Array.from({ length: 40 }, (_, i) => `l${i}`), text: "t" }] });
+  assert.match(long, /l29\n…\n```/);
+  assert.doesNotMatch(long, /l30/);
 });

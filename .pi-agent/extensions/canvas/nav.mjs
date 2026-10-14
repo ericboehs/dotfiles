@@ -596,3 +596,50 @@ export function optionsText(spec) {
   if (spec?.caption) out.push(spec.caption);
   return out.join("\n").trim();
 }
+
+// ── review mode ──
+// Comments on lines of diff and code sections, sent to pi as one message.
+// A comment: { file, start: { side, n }, end: { side, n }, quote: [lines],
+// lang, text, title? } where side is "new", "old" or "" (a code section).
+
+export const REVIEW_VERDICTS = { comment: "Comment", approve: "Approve", changes: "Request changes" };
+const QUOTE_MAX = 30;
+
+/** Where a comment sits: "app.rb:12", "app.rb:12-14", "app.rb:9 (old)", or "app.rb: old 9 to new 11" across sides. */
+export function reviewLabel(c) {
+  const file = c?.file || "code";
+  const s = c?.start || {};
+  const e = c?.end || s;
+  if ((s.side || "") !== (e.side || "")) return `${file}: ${s.side || "line"} ${s.n} to ${e.side || "line"} ${e.n}`;
+  const lines = e.n !== s.n ? `${s.n}-${e.n}` : `${s.n}`;
+  return `${file}:${lines}${s.side === "old" ? " (old)" : ""}`;
+}
+
+/** A fence that the text can't close: one backtick longer than its longest run, at least three. */
+export function fenceFor(text) {
+  const runs = String(text).match(/`+/g) || [];
+  return "`".repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
+}
+
+/**
+ * The review as one message for pi: the verdict and count, the summary, then
+ * each comment under its place (and section title), with the lines it is
+ * about quoted (at most QUOTE_MAX).
+ */
+export function reviewMessage({ verdict = "comment", summary = "", comments = [] } = {}) {
+  const n = comments.length;
+  const out = [`Review from the canvas: **${REVIEW_VERDICTS[verdict] || REVIEW_VERDICTS.comment}**${n ? ` (${n} comment${n === 1 ? "" : "s"})` : ""}`];
+  if (String(summary).trim()) out.push("", String(summary).trim());
+  for (const c of comments) {
+    out.push("", `**\`${reviewLabel(c)}\`**${c.title ? ` in "${c.title}"` : ""}`);
+    const q = (c.quote || []).slice(0, QUOTE_MAX);
+    if (q.length) {
+      if ((c.quote || []).length > QUOTE_MAX) q.push("…");
+      const body = q.join("\n");
+      const f = fenceFor(body);
+      out.push(`${f}${c.lang || ""}`, body, f);
+    }
+    out.push(String(c.text || "").trim());
+  }
+  return out.join("\n");
+}

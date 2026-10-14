@@ -774,6 +774,21 @@ the agent's last response.
     restarting (as it does after every code change).
   - Dialogs open in pi's terminal (an `ask`, a confirm) can't be answered
     from the page.
+- **Review mode.** On `diff` and `code` sections, hovering a line number
+  shows a +; a click opens a comment box under that line (drag down the
+  gutter, or ⇧-click another line's + while the box is open, for a range;
+  ⌘Enter adds it, Esc cancels). In a diff a comment sits on the new line,
+  or the old one for a deletion; in split view on the side you clicked.
+  Drafts show under their lines with Edit and Delete, and survive a reload
+  and the Unified / Split switch (localStorage per session). Once there is
+  one, a bar at the bottom gathers them: the count (a click jumps to the
+  next), an optional summary, a verdict (Comment, Approve, Request
+  changes), Discard (click twice) and **Send review**, which sends one
+  message through talk-back: the verdict, the summary, then each comment
+  under `path:lines` and its section, with up to 30 of its lines quoted.
+  Sent comments stay on their lines, dashed and marked Sent, until their
+  section is replaced. On an ended session Send becomes Copy review. The
+  Files changed modal's diffs don't take comments.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,

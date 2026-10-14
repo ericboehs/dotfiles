@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { asQuote, boardMarks, buildTree, codeLayout, dismissPipe, lineLabel, optionLetter, optionPrompt, optionsText, pipeRows, pipeStripHidden, slackText, treeText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, buildTree, codeLayout, dismissPipe, lineLabel, optionLetter, optionPrompt, optionsText, pipeRows, pipeStripHidden, REVIEW_VERDICTS, reviewLabel, reviewMessage, slackText, treeText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -644,6 +644,43 @@ time[data-at] { font-variant-numeric: tabular-nums; }
 .undo-toast { display: flex; align-items: center; gap: 12px; pointer-events: auto; }
 .undo-toast .btn { color: var(--card); border-color: color-mix(in srgb, var(--card) 40%, transparent); }
 .kb-d-acts { display: flex; align-items: center; gap: 2px; }
+.card[data-kind="diff"] [data-rv], .card[data-kind="code"] [data-rv] { position: relative; cursor: pointer; }
+.card[data-kind="diff"] [data-rv]:hover::after, .card[data-kind="code"] [data-rv]:hover::after { content: "+"; position: absolute; z-index: 2; right: -9px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; border-radius: 5px; background: var(--accent); color: #fff; font: 700 13px/18px -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); opacity: 1; }
+.rv-sel > td, .cl.rv-sel { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--accent) 16%, transparent); }
+.rv-mark > td.ln[data-rv] { box-shadow: inset -3px 0 0 var(--accent); color: var(--accent); }
+.cl.rv-mark { box-shadow: inset 3px 0 0 var(--accent); }
+.cl.rv-mark > .ln { color: var(--accent); opacity: 1; }
+.rv-row > td { padding: 6px 10px 8px !important; background: var(--soft); white-space: normal; }
+div.rv-row { padding: 6px 12px 8px; background: var(--soft); }
+.rv-row.flash .rv-c { animation: rvflash 1.2s ease-out; }
+@keyframes rvflash { 0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent); } 100% { box-shadow: 0 0 0 4px transparent; } }
+.rv-c { max-width: 760px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: 13.5px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; white-space: normal; }
+.rv-c.open { border-color: var(--accent); }
+.rv-c.sent { border-style: dashed; color: var(--dim); background: transparent; }
+.rv-h { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--dim); font-size: 12px; }
+.rv-h b { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); overflow-wrap: anywhere; }
+.rv-c.sent .rv-h b { color: var(--dim); }
+.rv-sp { flex: 1; }
+.rv-tag { padding: 1px 6px; border-radius: 4px; background: var(--soft); font-size: 11px; font-weight: 600; }
+.rv-tag.sent { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.rv-hint { font-size: 11.5px; }
+.rv-t p { margin: 0 0 4px; }
+.rv-t p:last-child { margin: 0; }
+.rv-in, .rv-sum { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: 13.5px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
+.rv-in { min-height: 64px; resize: vertical; }
+.rv-in:focus, .rv-sum:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.rv-ft { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.rv-save, .rv-send { color: #fff; background: var(--accent); border-color: var(--accent); padding: 6px 12px; font-size: 12.5px; }
+.rv-save:hover, .rv-send:hover { filter: brightness(1.08); color: #fff; }
+.rv-bar { position: fixed; left: 50%; bottom: 14px; z-index: 55; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(980px, calc(100vw - 32px)); box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: 0 8px 28px rgba(0, 0, 0, .2); }
+.rv-bar[hidden] { display: none; }
+.rv-title { font-weight: 700; font-size: 13px; }
+.rv-count { color: var(--accent); white-space: nowrap; }
+.rv-sum { flex: 1; min-width: 120px; height: 32px; max-height: 160px; resize: none; }
+.rv-verdict { flex: none; }
+body.rv-on { padding-bottom: 76px; }
+body.rv-on .toast { bottom: 76px; }
+@media (max-width: 720px) { .rv-bar { flex-wrap: wrap; } .rv-sum { flex-basis: 100%; order: 5; } }
 .status .col h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; color: var(--ink); }
 .status .col ul { list-style: none; margin: 0; padding: 0; }
 .status .col li { position: relative; padding: 3px 0 3px 20px; font-size: 13.5px; line-height: 1.4; }
@@ -1532,7 +1569,7 @@ function talkUpdate(state) {
  * with 3 s to undo before it goes; while a turn runs it waits for the turn to
  * end. Copied instead on ⌥-click or when the session isn't running.
  */
-function sendOrCopy(text, e) {
+function sendOrCopy(text, e, onSent) {
   if (!talk.live || e?.altKey) {
     copyText(text).then(
       () => toast(talk.live ? "Copied" : "Copied: the session isn't running, so paste it into pi"),
@@ -1540,7 +1577,7 @@ function sendOrCopy(text, e) {
     );
     return;
   }
-  undoToast(`Sending to pi: “${shortText(text, 50)}”`, () => postToPi(text, talk.busy ? "followUp" : "steer", true));
+  undoToast(`Sending to pi: “${shortText(text, 50)}”`, () => postToPi(text, talk.busy ? "followUp" : "steer", true).then((ok) => ok && onSent?.()));
 }
 
 let undoing = null; // { el, timer, fire }
@@ -1553,6 +1590,326 @@ function undoToast(text, fire) {
   btn.addEventListener("click", () => (done(), toast("Not sent")));
   document.body.append(el);
   undoing = cur;
+}
+
+// ── review mode ──
+// Comments on lines of diff and code sections. A + in the gutter opens a box
+// under the line (drag down the gutter, or ⇧-click another line's +, for a
+// range). The bottom bar gathers the drafts with a summary and a verdict and
+// sends them to pi as one message (reviewMessage in nav.mjs). Drafts live in
+// localStorage per session; sent comments stay on their lines, marked sent,
+// until their section is replaced.
+
+const REVIEWABLE = new Set(["diff", "code"]);
+const RV_CELL = '.card[data-kind="diff"] [data-rv], .card[data-kind="code"] [data-rv]';
+let rv = null; // { verdict, summary, comments: [{ id, sec, secAt, file, lang, start, end, quote, text, at, sent? }] }
+let rvOpen = null; // the comment being written (id set when editing one)
+let rvDrag = null; // { box, from, to }: gutter cells while dragging
+let rvSections = [];
+
+const rvKey = () => `canvas:review:${currentSession}`;
+function rvState() {
+  if (rv) return rv;
+  try {
+    rv = JSON.parse(localStorage.getItem(rvKey()) || "null");
+  } catch {}
+  if (!rv || !Array.isArray(rv.comments)) rv = { verdict: "comment", summary: "", comments: [] };
+  return rv;
+}
+function rvSave() {
+  try {
+    localStorage.setItem(rvKey(), JSON.stringify(rv));
+  } catch {}
+}
+const rvPending = () => rvState().comments.filter((c) => !c.sent);
+const rvRef = (cell) => {
+  const [side, n] = cell.dataset.rv.split(":");
+  return { side, n: Number(n) };
+};
+const rvRow = (cell) => cell.closest("tr, .cl");
+const rvCellAt = (box, ref) => box.querySelector(`[data-rv="${ref.side}:${ref.n}"]`);
+const isLineRow = (r) => r.matches("tr:not(.hunk):not(.rv-row), .cl");
+
+/** A row's text on one side: a diff line with its + / - / space, or a code line; null when that side is empty. */
+function rvLine(row, side) {
+  if (row.matches(".cl")) return (row.querySelector(".lc")?.textContent ?? "").replace(/\u200b/g, "");
+  const sign = (el) => (el.classList.contains("add") ? "+" : el.classList.contains("del") ? "-" : " ");
+  if (!row.closest("table")?.classList.contains("split")) return sign(row) + (row.lastElementChild?.textContent ?? "");
+  const ln = row.children[side === "old" ? 0 : 2];
+  if (!ln?.textContent) return null;
+  return sign(ln.nextElementSibling) + ln.nextElementSibling.textContent;
+}
+
+/** Two gutter cells in one file as a range: first and last cell in page order, and the line rows from one to the other. */
+function rvSpan(box, a, b) {
+  const cells = [...box.querySelectorAll("[data-rv]")];
+  const [s, e] = cells.indexOf(a) <= cells.indexOf(b) ? [a, b] : [b, a];
+  const rows = [];
+  const last = rvRow(e);
+  for (let r = rvRow(s); r; r = r.nextElementSibling) {
+    if (isLineRow(r)) rows.push(r);
+    if (r === last) break;
+  }
+  return { s, e, rows };
+}
+
+function rvRange(box, a, b) {
+  const { s, e, rows } = rvSpan(box, a, b);
+  const side = rvRef(s).side;
+  // In split view the range stays on the side it started on where it can.
+  const end = rvRow(e).querySelector(`[data-rv^="${side}:"]`) || e;
+  return { start: rvRef(s), end: rvRef(end), quote: rows.map((r) => rvLine(r, side)).filter((l) => l != null) };
+}
+
+function rvBtn(label, onclick, cls = "btn") {
+  const b = h("button", { class: cls, type: "button" }, label);
+  b.addEventListener("click", (e) => (e.stopPropagation(), onclick(e)));
+  return b;
+}
+
+function rvBubble(c) {
+  const acts = c.sent ? [h("span", { class: "rv-tag sent" }, "Sent"), rvBtn("Hide", () => rvDelete(c))] : [h("span", { class: "rv-tag" }, "Draft"), rvBtn("Edit", () => rvEdit(c)), rvBtn("Delete", () => rvDelete(c))];
+  return h("div", { class: `rv-c${c.sent ? " sent" : ""}` }, h("div", { class: "rv-h" }, h("b", {}, reviewLabel(c)), h("span", { class: "rv-sp" }), ...acts), h("div", { class: "rv-t" }, ...noteParas(c.text)));
+}
+
+function rvComposer() {
+  const o = rvOpen;
+  const ta = h("textarea", { class: "rv-in", rows: "3", placeholder: "Leave a comment (⌘Enter adds it, Esc cancels)", "aria-label": `Comment on ${reviewLabel(o)}` });
+  ta.value = o.text || "";
+  ta.addEventListener("input", () => (o.text = ta.value));
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") return e.preventDefault(), e.stopPropagation(), rvCancel();
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return e.preventDefault(), rvCommit();
+  });
+  if (o.focus)
+    queueMicrotask(() => {
+      if (!ta.isConnected) return;
+      o.focus = false;
+      ta.focus({ preventScroll: true });
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+  return h(
+    "div",
+    { class: "rv-c open" },
+    h("div", { class: "rv-h" }, h("b", {}, reviewLabel(o)), h("span", { class: "rv-sp" }), h("span", { class: "rv-hint" }, "⇧-click another line's + to extend")),
+    ta,
+    h("div", { class: "rv-ft" }, rvBtn("Cancel", rvCancel), rvBtn(o.id ? "Save" : "Add comment", rvCommit, "btn primary rv-save")),
+  );
+}
+
+/** Put a comment (or the open box) under its last line, and mark its lines in the gutter. */
+function rvPlace(box, c, content) {
+  const endCell = rvCellAt(box, c.end);
+  if (!endCell) return;
+  const startCell = rvCellAt(box, c.start) || endCell;
+  for (const r of rvSpan(box, startCell, endCell).rows) r.classList.add("rv-mark");
+  const row = rvRow(endCell);
+  let after = row;
+  while (after.nextElementSibling?.matches(".code-note, .rv-row")) after = after.nextElementSibling;
+  const wrap = row.matches("tr") ? h("tr", { class: "rv-row" }, h("td", { colspan: String(row.children.length) }, content)) : h("div", { class: "rv-row" }, content);
+  wrap.dataset.rvId = c.id || "open";
+  after.after(wrap);
+}
+
+/** Draw one file's comments (drafts, sent ones for this version of the section, the open box). */
+function reviewPaintBox(box) {
+  const card = box.closest(".card[data-key]");
+  if (!card || !REVIEWABLE.has(card.dataset.kind)) return;
+  const sec = card.dataset.key;
+  const file = box.dataset.rvFile;
+  for (const el of box.querySelectorAll(".rv-row")) el.remove();
+  for (const el of box.querySelectorAll(".rv-mark")) el.classList.remove("rv-mark");
+  for (const c of rvState().comments) if (c.sec === sec && c.file === file && (!c.sent || c.secAt === card.dataset.at) && rvOpen?.id !== c.id) rvPlace(box, c, rvBubble(c));
+  if (rvOpen?.sec === sec && rvOpen.file === file) rvPlace(box, rvOpen, rvComposer());
+}
+
+function rvRepaint(...secs) {
+  // (CSS here is the page's stylesheet string, not window.CSS: cards are found by id.)
+  for (const sec of new Set(secs.filter(Boolean))) for (const box of document.getElementById(`sec-${sec}`)?.querySelectorAll("[data-rv-file]") || []) reviewPaintBox(box);
+  reviewBar();
+}
+
+function rvOpenAt(box, a, b) {
+  const prev = rvOpen;
+  if (prev?.text?.trim()) rvCommit(); // what you wrote in the last box stays, as a draft
+  const card = box.closest(".card[data-key]");
+  rvOpen = { sec: card.dataset.key, file: box.dataset.rvFile, lang: box.dataset.rvLang || "", ...rvRange(box, a, b), text: "", focus: true };
+  rvRepaint(prev?.sec, rvOpen.sec);
+}
+
+function rvExtend(box, cell) {
+  const from = rvCellAt(box, rvOpen.start);
+  if (!from) return;
+  Object.assign(rvOpen, rvRange(box, from, cell), { focus: true });
+  rvRepaint(rvOpen.sec);
+}
+
+function rvEdit(c) {
+  const prev = rvOpen;
+  if (prev?.text?.trim() && prev.id !== c.id) rvCommit();
+  rvOpen = { ...c, focus: true };
+  rvRepaint(prev?.sec, c.sec);
+}
+
+function rvCancel() {
+  const sec = rvOpen?.sec;
+  rvOpen = null;
+  rvRepaint(sec);
+}
+
+function rvCommit() {
+  const o = rvOpen;
+  if (!o) return;
+  rvOpen = null;
+  const text = (o.text || "").trim();
+  const st = rvState();
+  if (text) {
+    const { focus: _f, ...c } = o;
+    const at = document.getElementById(`sec-${o.sec}`)?.dataset.at || "";
+    const i = st.comments.findIndex((x) => x.id === o.id);
+    if (i >= 0) st.comments[i] = { ...st.comments[i], ...c, text };
+    else st.comments.push({ ...c, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, secAt: at, text, at: new Date().toISOString() });
+    rvSave();
+  }
+  rvRepaint(o.sec);
+}
+
+function rvDelete(c) {
+  rvState().comments = rv.comments.filter((x) => x.id !== c.id);
+  rvSave();
+  rvRepaint(c.sec);
+}
+
+/** On each state: sent comments go once their section is replaced or removed; the bar follows liveness. */
+function reviewSync(sections) {
+  rvSections = sections;
+  const at = new Map(sections.map((s) => [s.id, s.at || ""]));
+  const st = rvState();
+  const keep = st.comments.filter((c) => !c.sent || at.get(c.sec) === c.secAt);
+  if (keep.length !== st.comments.length) (st.comments = keep), rvSave();
+  reviewBar();
+}
+
+let rvBarEl = null;
+let rvJump = -1;
+function reviewBar() {
+  const pend = rvPending();
+  document.body.classList.toggle("rv-on", pend.length > 0);
+  if (!pend.length && !rvBarEl) return;
+  if (!rvBarEl) {
+    const summary = h("textarea", { class: "rv-sum", rows: "1", placeholder: "Summary (optional)", "aria-label": "Review summary" });
+    summary.addEventListener("input", () => {
+      rvState().summary = summary.value;
+      rvSave();
+      summary.style.height = "auto";
+      summary.style.height = `${Math.min(summary.scrollHeight + 2, 160)}px`;
+    });
+    const discard = rvBtn("Discard", () => {
+      if (!discard.dataset.armed) {
+        discard.dataset.armed = "1";
+        discard.textContent = "Discard all?";
+        return setTimeout(() => (delete discard.dataset.armed, (discard.textContent = "Discard")), 3000);
+      }
+      const secs = rvPending().map((c) => c.sec);
+      Object.assign(rvState(), { summary: "", verdict: "comment", comments: rv.comments.filter((c) => c.sent) });
+      rvSave();
+      toast("Review discarded");
+      rvRepaint(...secs, rvOpen?.sec);
+    });
+    rvBarEl = h(
+      "div",
+      { class: "rv-bar", role: "region", "aria-label": "Review" },
+      h("span", { class: "rv-title" }, "Review"),
+      rvBtn("", rvNext, "btn rv-count"),
+      summary,
+      h(
+        "span",
+        { class: "segs rv-verdict" },
+        Object.entries(REVIEW_VERDICTS).map(([k, label]) => {
+          const b = rvBtn(label, () => ((rvState().verdict = k), rvSave(), reviewBar()), "seg");
+          b.dataset.v = k;
+          return b;
+        }),
+      ),
+      discard,
+      rvBtn("", rvSend, "btn primary rv-send"),
+    );
+    document.body.append(rvBarEl);
+  }
+  const st = rvState();
+  rvBarEl.hidden = !pend.length;
+  rvBarEl.querySelector(".rv-count").textContent = `${pend.length} comment${pend.length === 1 ? "" : "s"}`;
+  rvBarEl.querySelector(".rv-count").title = "Jump to the next comment";
+  const sum = rvBarEl.querySelector(".rv-sum");
+  if (document.activeElement !== sum) sum.value = st.summary || "";
+  for (const b of rvBarEl.querySelectorAll(".rv-verdict .seg")) b.classList.toggle("on", b.dataset.v === (st.verdict || "comment"));
+  const send = rvBarEl.querySelector(".rv-send");
+  send.textContent = talk.live ? "Send review" : "Copy review";
+  send.title = talk.live ? "Send every comment to pi as one message (⌥-click: copy it)" : "The session isn't running: copy the review to paste into pi";
+}
+
+/** The bar's count: scroll to the next draft (its section opened if folded). */
+function rvNext() {
+  const pend = rvPending();
+  if (!pend.length) return;
+  rvJump = (rvJump + 1) % pend.length;
+  const c = pend[rvJump];
+  const card = document.getElementById(`sec-${c.sec}`);
+  if (!card) return toast("That comment's section is gone; it still goes with the review");
+  if (card.classList.contains("collapsed")) card.setCollapsed(false);
+  setTimeout(() => {
+    const el = [...card.querySelectorAll(".rv-row")].find((r) => r.dataset.rvId === c.id);
+    if (!el) return card.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+  }, 150);
+}
+
+function rvSend(e) {
+  if (rvOpen?.text?.trim()) rvCommit();
+  const pend = rvPending();
+  if (!pend.length) return;
+  const st = rvState();
+  const title = new Map(rvSections.map((s) => [s.id, s.title || s.id]));
+  const msg = reviewMessage({ verdict: st.verdict, summary: st.summary, comments: pend.map((c) => ({ ...c, title: title.get(c.sec) })) });
+  sendOrCopy(msg, e, () => {
+    const at = new Map(rvSections.map((s) => [s.id, s.at || ""]));
+    const ids = new Set(pend.map((c) => c.id));
+    for (const c of rvState().comments) if (ids.has(c.id)) Object.assign(c, { sent: true, secAt: at.get(c.sec) ?? c.secAt });
+    Object.assign(rv, { summary: "", verdict: "comment" });
+    rvSave();
+    rvRepaint(...pend.map((c) => c.sec));
+  });
+}
+
+// The gutter: press on a + (and drag for a range), ⇧-click to extend the open box.
+document.addEventListener("mousedown", (e) => {
+  const cell = e.button === 0 ? e.target.closest?.(RV_CELL) : null;
+  const box = cell?.closest("[data-rv-file]");
+  if (!box) return;
+  e.preventDefault();
+  if (e.shiftKey && rvOpen && box.closest(".card").dataset.key === rvOpen.sec && box.dataset.rvFile === rvOpen.file) return rvExtend(box, cell);
+  rvDrag = { box, from: cell, to: cell };
+  rvSelect();
+});
+document.addEventListener("mouseover", (e) => {
+  if (!rvDrag) return;
+  const cell = e.target.closest?.("[data-rv]");
+  if (cell && cell !== rvDrag.to && rvDrag.box.contains(cell)) (rvDrag.to = cell), rvSelect();
+});
+document.addEventListener("mouseup", () => {
+  if (!rvDrag) return;
+  const { box, from, to } = rvDrag;
+  rvDrag = null;
+  for (const r of box.querySelectorAll(".rv-sel")) r.classList.remove("rv-sel");
+  rvOpenAt(box, from, to);
+});
+function rvSelect() {
+  const { box, from, to } = rvDrag;
+  for (const r of box.querySelectorAll(".rv-sel")) r.classList.remove("rv-sel");
+  for (const r of rvSpan(box, from, to).rows) r.classList.add("rv-sel");
 }
 
 /** Hover text for the turn mark: when that turn ran. */
@@ -1722,7 +2079,7 @@ function sectionCard(id, sec) {
   if (sec.file) meta.append(h("a", { class: "btn ico", href: rawUrl(id, sec, false), target: "_blank", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open")));
   const flush = sec.kind === "html" || sec.kind === "html-plan";
   const bd = h("div", { class: `bd${flush ? " flush" : ""}` });
-  const el = h("section", { class: "card", id: `sec-${sec.id}` }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), pinButton(sec.id), meta), bd);
+  const el = h("section", { class: "card", id: `sec-${sec.id}`, "data-kind": sec.kind, "data-at": sec.at || "" }, h("h2", {}, h("span", { class: "title", title: sec.title || sec.id }, sec.title || sec.id), pinButton(sec.id), meta), bd);
   // The age's tooltip: the kind, whether the canvas keeps it up to date, when, and the last-turn mark.
   meta.prepend(withTip(agoEl(sec.at), () => [sec.by === "auto" ? `${sec.kind} · kept up to date by the canvas` : sec.kind, `Updated ${fullDate(sec.at)}`, el.dataset.turn || null]));
   return collapsible(
@@ -1733,6 +2090,7 @@ function sectionCard(id, sec) {
         (body) => {
           bd.replaceChildren(FOLDS[sec.id] ? foldItems(body, sec.id, ...FOLDS[sec.id]) : body);
           if (sec.id === "auto-agents") foldAgents(bd), wireAgents(bd);
+          if (REVIEWABLE.has(sec.kind)) for (const box of bd.querySelectorAll("[data-rv-file]")) reviewPaintBox(box);
         },
         (e) => bd.replaceChildren(h("div", { class: "err" }, String(e))),
       ),
@@ -3013,12 +3371,12 @@ function lineNodes(root) {
 function renderCode(spec) {
   const rows = codeLayout(spec);
   const last = rows.at(-1)?.n || 1;
-  const body = h("div", { class: "code-body", style: `--gut:${String(last).length + 0.5}ch` });
+  const body = h("div", { class: "code-body", style: `--gut:${String(last).length + 0.5}ch`, "data-rv-file": spec.path || "code", "data-rv-lang": spec.lang || "" });
   const cells = [];
   for (const r of rows) {
     const lc = h("span", { class: "lc" }, r.text || "\u200b");
     cells.push(lc);
-    body.append(h("div", { class: `cl${r.hl ? " hl" : ""}${r.tone ? " toned" : ""}`, style: r.tone ? `--tone:${toneVar(r.tone)}` : null, "data-line": r.n }, h("span", { class: "ln" }, String(r.n)), lc));
+    body.append(h("div", { class: `cl${r.hl ? " hl" : ""}${r.tone ? " toned" : ""}`, style: r.tone ? `--tone:${toneVar(r.tone)}` : null, "data-line": r.n }, h("span", { class: "ln", "data-rv": `:${r.n}` }, String(r.n)), lc));
     for (const n of r.notes) body.append(h("div", { class: "code-note", style: n.tone ? `--tone:${toneVar(n.tone)}` : null }, ...noteParas(n.text, h("span", { class: "at" }, lineLabel(n.from, n.to)))));
   }
   const shown = rows.length ? `lines ${rows[0].n}–${last} of ${spec.total}` : "";
@@ -3732,16 +4090,19 @@ function pairWords(rows) {
 function hunkRows(hunk, split, hl, lang) {
   const marks = pairWords(hunk.rows);
   const out = [h("tr", { class: "hunk" }, h("td", { colspan: split ? 4 : 3 }, hunk.head))];
-  const ln = (n) => h("td", { class: "ln" }, n ?? "");
+  // A gutter cell that takes review comments carries data-rv="side:n".
+  const ln = (n, side) => h("td", { class: "ln", ...(side && n != null ? { "data-rv": `${side}:${n}` } : {}) }, n ?? "");
   if (!split) {
-    for (const r of hunk.rows) out.push(h("tr", { class: r.t }, ln(r.a), ln(r.b), codeCell(r, hl, lang, marks.get(r))));
+    // Unified: one commentable cell per row, the new line's (the old one's for a deletion).
+    for (const r of hunk.rows) out.push(h("tr", { class: r.t }, ln(r.a, r.t === "del" ? "old" : null), ln(r.b, r.t === "add" || r.t === "ctx" ? "new" : null), codeCell(r, hl, lang, marks.get(r))));
     return out;
   }
   const rows = hunk.rows;
   for (let i = 0; i < rows.length; ) {
     const r = rows[i];
     if (r.t === "ctx" || r.t === "note") {
-      out.push(h("tr", { class: r.t }, ln(r.a), codeCell(r, hl, lang), ln(r.b), codeCell(r, hl, lang)));
+      const side = r.t === "ctx";
+      out.push(h("tr", { class: r.t }, ln(r.a, side && "old"), codeCell(r, hl, lang), ln(r.b, side && "new"), codeCell(r, hl, lang)));
       i++;
       continue;
     }
@@ -3752,7 +4113,7 @@ function hunkRows(hunk, split, hl, lang) {
     for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
       const d = dels[k];
       const a = adds[k];
-      out.push(h("tr", { class: "pair" }, ln(d?.a), codeCell(d, hl, lang, marks.get(d)), ln(a?.b), codeCell(a, hl, lang, marks.get(a))));
+      out.push(h("tr", { class: "pair" }, ln(d?.a, d && "old"), codeCell(d, hl, lang, marks.get(d)), ln(a?.b, a && "new"), codeCell(a, hl, lang, marks.get(a))));
       const tr = out[out.length - 1];
       if (d) (tr.children[0].classList.add("del"), tr.children[1].classList.add("del"));
       if (a) (tr.children[2].classList.add("add"), tr.children[3].classList.add("add"));
@@ -3770,11 +4131,12 @@ const STATUS = { added: "new", deleted: "deleted", renamed: "renamed" };
 function fileBlock(f, split, hl, showHead) {
   const lang = langFor(f.path);
   const lines = f.hunks.reduce((n, x) => n + x.rows.length, 0);
-  const body = h("div", { class: "dv-body" });
+  const body = h("div", { class: "dv-body", "data-rv-file": f.path, "data-rv-lang": "diff" });
   const fill = () => {
     if (f.binary) return body.replaceChildren(h("div", { class: "empty" }, "Binary file changed."));
     if (!f.hunks.length) return body.replaceChildren(h("div", { class: "empty" }, f.status === "renamed" ? "Renamed without changes." : "No content changes."));
     body.replaceChildren(h("table", { class: `diff${split ? " split" : ""}` }, split ? h("colgroup", {}, h("col", { class: "c-ln" }), h("col"), h("col", { class: "c-ln" }), h("col")) : null, h("tbody", {}, f.hunks.flatMap((x) => hunkRows(x, split, hl, lang)))));
+    queueMicrotask(() => reviewPaintBox(body)); // a redraw (Split / Unified, Show this diff) brings the comments back
   };
   if (lines > BIG_FILE && !f.loaded) body.append(h("button", { class: "btn dv-load", type: "button", onclick: () => ((f.loaded = true), fill()) }, `Show this diff (${lines} lines)`));
   else fill();
@@ -4381,6 +4743,7 @@ async function sessionView(id) {
       }
     }
     lastSections = sections;
+    reviewSync(sections);
     const t = state.turn;
     turnNow = t?.started ? { since: t.started, ended: t.ended, label: !t.ended && state.live ? "this turn" : "last turn" } : null;
     for (const sec of sections) markTurn(cards.get(sec.id).el, turnNow && String(sec.at) >= turnNow.since ? turnNow : null);
