@@ -14,8 +14,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
-import { allowedHost, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
+import canvasExtension, { ActivityTracker, STATUS_PROMPT, checkChart, compareOptions, normalizeSpec, parseDelimited, diffSkipReason, fileId, filesMarkdown, syncCopies, gitDiff, isSensitivePath, jobsSpec, logTail, looksLikeDiff, makePatch, findingLine, findingTexts, isSectionId, newFindings, parseExtras, shotsMarkdown, agentTraffic, agentsMarkdown, bashExit, runSpec, streamable, tailLines, readPeers, resolvePeerName, tallyFiles, lastReply, lastTurn, normalizeCode, normalizeOptions, normalizeTree, parseLineRange, withoutNextSteps, leftHalfBounds, openTodos, parseStatus, tmuxMeta, todoBoard, turnDigest, upsertSection, worthStatus } from "../extensions/canvas.ts";
+import { allowedHost, byteRange, clipTarget, latestClient, listSessions, parseFindings, prune, readReply, readWatch, replyPreview, sessionForPane, sessionState, tmuxOf, withKit } from "../extensions/canvas/daemon.mjs";
 
 const msg = (role, content, extra = {}) => ({ type: "message", message: { role, content, ...extra } });
 
@@ -408,7 +408,84 @@ test("prompt copy points at the newer kinds and keeps bodies out of context", as
   assert.match(rules, /over ~2 KB, write a file and pass path/);
   assert.match(rules, /subagents, agent-link handoffs, a pstack run\), post it as a pipeline section/);
   assert.match(rules, /independent work items .* in parallel lanes of one stage/);
-  for (const k of ["terminal", "stats", "table", "compare", "steps", "pipeline", "kanban", "json", "timeline"]) assert.match(rules, new RegExp(`\\b${k} for `), `lightest-kind rule names ${k}`);
+  for (const k of ["terminal", "stats", "table", "compare", "steps", "pipeline", "kanban", "json", "timeline", "code", "tree", "options", "video", "pdf"]) assert.match(rules, new RegExp(`\\b${k} (for|to) `), `lightest-kind rule names ${k}`);
+  for (const k of ["code (", "tree (", "options (", "pdf (", "video ("]) assert.ok(tool.description.includes(k), `description covers ${k}`);
+});
+
+test("parseLineRange reads one line or a range", () => {
+  assert.deepEqual(parseLineRange("40-45"), [40, 45]);
+  assert.deepEqual(parseLineRange("42"), [42, 42]);
+  assert.deepEqual(parseLineRange(7), [7, 7]);
+  assert.deepEqual(parseLineRange("3 – 9"), [3, 9]);
+  for (const bad of ["9-3", "0", "a-b", "", -1, null]) assert.equal(parseLineRange(bad), null, String(bad));
+});
+
+test("normalizeCode keeps the asked lines, ranges and notes, and checks they fit", () => {
+  const src = `${Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
+  const s = JSON.parse(normalizeCode({ lines: "40-45", highlight: ["42"], notes: [{ lines: "43-44", text: "here `x`", tone: "warn" }], caption: "c" }, src, "lib/a.ts", ".ts"));
+  assert.equal(s.path, "lib/a.ts");
+  assert.equal(s.lang, "typescript");
+  assert.equal(s.start, 40);
+  assert.equal(s.total, 60);
+  assert.equal(s.code.split("\n").length, 6);
+  assert.equal(s.code.split("\n")[0], "line 40");
+  assert.deepEqual(s.highlight, [[42, 42]]);
+  assert.deepEqual(s.notes, [{ from: 43, to: 44, text: "here `x`", tone: "warn" }]);
+  // A range past the end is clipped; no options means the whole file.
+  assert.equal(JSON.parse(normalizeCode({ lines: "58-90" }, src, "a")).code, "line 58\nline 59\nline 60");
+  assert.equal(JSON.parse(normalizeCode(null, "a\r\nb\r\n", "Makefile")).code, "a\nb");
+  assert.equal(JSON.parse(normalizeCode(null, "x", "Dockerfile")).lang, "dockerfile", "known file names");
+  assert.equal(JSON.parse(normalizeCode({ lang: "Ruby" }, "x", "a.txt")).lang, "ruby", "lang wins over the extension");
+  assert.equal(JSON.parse(normalizeCode(null, "x", "a.unknown", ".unknown")).lang, undefined);
+  assert.throws(() => normalizeCode({ lines: "40-45", highlight: ["50"] }, src, "a"), /outside the lines shown \(40-45\)/);
+  assert.throws(() => normalizeCode({ lines: "40-45", notes: [{ lines: "39", text: "t" }] }, src, "a"), /notes\[0\]\.lines/);
+  assert.throws(() => normalizeCode({ notes: [{ lines: "1" }] }, src, "a"), /needs text/);
+  assert.throws(() => normalizeCode({ notes: [{ lines: "1", text: "t", tone: "pink" }] }, src, "a"), /tone must be/);
+  assert.throws(() => normalizeCode({ lines: "61" }, src, "a"), /file has 60 lines/);
+  assert.throws(() => normalizeCode({ lines: "forty" }, src, "a"), /lines must be a range/);
+  assert.throws(() => normalizeCode(null, "a\u0000b", "a"), /binary/);
+  assert.throws(() => normalizeCode(null, "x\n".repeat(2500), "a"), /at most 2000/);
+  assert.throws(() => normalizeCode([], src, "a"), /JSON object/);
+});
+
+test("normalizeTree takes a map, an array or entries, and tells tags from notes", () => {
+  const t = JSON.parse(normalizeTree({ root: "repo", caption: "c", entries: { "src/a.ts": "added", "./src/lib/b.ts": { tag: "changed", note: "n" }, "docs/": "the docs", "README.md": "Changed" } }));
+  assert.equal(t.root, "repo");
+  assert.deepEqual(t.entries, [
+    { path: "src/a.ts", tag: "added" },
+    { path: "src/lib/b.ts", tag: "changed", note: "n" },
+    { path: "docs/", note: "the docs" },
+    { path: "README.md", tag: "changed" },
+  ]);
+  assert.deepEqual(JSON.parse(normalizeTree(["a", { path: "b", tag: "deleted" }, "a"])).entries, [{ path: "a" }, { path: "b", tag: "deleted" }], "repeats dropped");
+  assert.deepEqual(JSON.parse(normalizeTree({ "x/y": true })).entries, [{ path: "x/y" }], "a bare map");
+  assert.throws(() => normalizeTree({ entries: { a: { tag: "new" } } }), /tag must be one of/);
+  assert.throws(() => normalizeTree({ entries: [] }), /at least one/);
+  assert.throws(() => normalizeTree("src"), /tree needs entries/);
+  assert.throws(() => normalizeTree(["/"]), /needs a path/);
+});
+
+test("normalizeOptions checks choices, scores and one recommendation", () => {
+  const o = JSON.parse(normalizeOptions({ question: "Which?", options: [{ label: "A", pros: ["fast"], cons: [""], scores: { Effort: 2 }, recommended: true, pick: "do A" }, "B"] }));
+  assert.equal(o.question, "Which?");
+  assert.deepEqual(o.options[0], { label: "A", pros: ["fast"], scores: { Effort: 2 }, recommended: true, pick: "do A" });
+  assert.deepEqual(o.options[1], { label: "B" });
+  assert.equal(JSON.parse(normalizeOptions(["x", "y"])).options.length, 2, "a bare array");
+  assert.throws(() => normalizeOptions({ options: ["only"] }), /at least two/);
+  assert.throws(() => normalizeOptions(Array(7).fill("x")), /at most 6/);
+  assert.throws(() => normalizeOptions([{ label: "a", recommended: true }, { label: "b", recommended: true }]), /at most one/);
+  assert.throws(() => normalizeOptions([{ label: "a", scores: { x: 6 } }, "b"]), /from 0 to 5/);
+  assert.throws(() => normalizeOptions([{ label: "a", pros: "fast" }, "b"]), /array of strings/);
+  assert.throws(() => normalizeOptions([{}, "b"]), /needs a label/);
+});
+
+test("byteRange reads a Range header against a size", () => {
+  assert.deepEqual(byteRange("bytes=2-5", 10), { start: 2, end: 5 });
+  assert.deepEqual(byteRange("bytes=4-", 10), { start: 4, end: 9 });
+  assert.deepEqual(byteRange("bytes=-3", 10), { start: 7, end: 9 });
+  assert.deepEqual(byteRange("bytes=0-99", 10), { start: 0, end: 9 }, "an end past the file is clipped");
+  assert.deepEqual(byteRange("bytes=10-", 10), { bad: true });
+  for (const h of [undefined, "", "bytes=-", "items=1-2", "bytes=1-2,4-5"]) assert.equal(byteRange(h, 10), null, String(h));
 });
 
 test("parseStatus accepts fenced JSON and clamps lists", () => {
@@ -664,9 +741,9 @@ test("prune deletes only old sessions whose pi is gone", () => {
   }
 });
 
-function get(port, path, host = `127.0.0.1:${port}`) {
+function get(port, path, host = `127.0.0.1:${port}`, extra = {}) {
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, path, headers: { host } }, (res) => {
+    const req = request({ host: "127.0.0.1", port, path, headers: { host, ...extra } }, (res) => {
       let body = "";
       res.on("data", (d) => (body += d));
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
@@ -956,6 +1033,11 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     "l.timeline": '{"events":[]}',
     "k.compare": '{"before":"k-before.png","after":"k-after.png"}',
     "k-before.png": "png",
+    "v.mp4": "0123456789",
+    "d.pdf": "%PDF-1.4",
+    "x.code": '{"path":"a.ts","start":1,"total":1,"code":"a"}',
+    "x.tree": '{"entries":[{"path":"a"}]}',
+    "x.options": '{"options":[{"label":"A"},{"label":"B"}]}',
     "diff-0123abcd.patch": "--- a/x\n+++ b/x\n",
     "cur-0123abcd.txt": "<script>alert(1)</script>",
     "base-0123abcd": "secret original",
@@ -996,6 +1078,20 @@ test("daemon serves pages, state and sections, and refuses bad hosts and paths",
     for (const f of ["j.jsonv", "s.steps", "b.kanban", "l.timeline"]) assert.equal((await get(port, `/s/s1/f/${f}`)).status, 200, f);
     assert.equal(JSON.parse((await get(port, "/s/s1/f/k.compare")).body).after, "k-after.png");
     assert.equal((await get(port, "/s/s1/f/k-before.png")).headers["content-type"], "image/png", "compare images are served");
+    for (const f of ["x.code", "x.tree", "x.options"]) assert.equal((await get(port, `/s/s1/f/${f}`)).headers["content-type"], "application/json; charset=utf-8", f);
+    const vid = await get(port, "/s/s1/f/v.mp4");
+    assert.equal(vid.headers["content-type"], "video/mp4");
+    assert.equal(vid.headers["accept-ranges"], "bytes");
+    assert.equal(vid.body, "0123456789");
+    const part = await get(port, "/s/s1/f/v.mp4", undefined, { range: "bytes=2-5" });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers["content-range"], "bytes 2-5/10");
+    assert.equal(part.body, "2345");
+    assert.equal((await get(port, "/s/s1/f/v.mp4", undefined, { range: "bytes=-3" })).body, "789", "a suffix range");
+    assert.equal((await get(port, "/s/s1/f/v.mp4", undefined, { range: "bytes=20-" })).status, 416);
+    const pdf = await get(port, "/s/s1/f/d.pdf");
+    assert.equal(pdf.headers["content-type"], "application/pdf");
+    assert.match(pdf.headers["content-security-policy"], /connect-src 'none'/, "a pdf gets the section CSP");
     for (const a of ["page.mjs", "theme.mjs", "nav.mjs", "theme-boot.js"]) assert.equal((await get(port, `/assets/${a}`)).headers["content-type"], "text/javascript; charset=utf-8", a);
     assert.ok(Object.keys(JSON.parse((await get(port, "/assets/themes.json")).body).themes).length >= 20, "Omarchy themes are served");
     assert.match(page.body, /<script src="\/assets\/theme-boot\.js"><\/script>[\s\S]*page\.mjs/, "the theme boot script runs before the page module");

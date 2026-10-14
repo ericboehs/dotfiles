@@ -3,7 +3,7 @@
 // sections whose timestamp moved, so iframes and scroll position survive.
 
 import { readPair, prettyName, swatch, themeMode, themeVars } from "/assets/theme.mjs";
-import { asQuote, boardMarks, dismissPipe, pipeRows, pipeStripHidden, slackText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
+import { asQuote, boardMarks, buildTree, codeLayout, dismissPipe, lineLabel, optionLetter, optionPrompt, optionsText, pipeRows, pipeStripHidden, slackText, treeText, wrapLabel, cardKey, cardPrompt, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions } from "/assets/nav.mjs";
 
 const CSS = `
 :root { color-scheme: light dark; --bg:#f7f5f0; --card:#fff; --ink:#1c1b19; --dim:#8a8578; --line:#e6e1d6; --soft:#f0ece3; --accent:#b4541f; --ok:#1f7a52; --warn:#a86a00; --bad:#c0392b; --code:#f3f0e8; --tint:#fbf3ec; --hl-kw:#285880; --hl-str:#42632a; --hl-num:#805424; --hl-com:#5b6a7f; --hl-title:#68448b; --c1:#3b7dd8; --c2:#e0703a; --c3:#2f9e72; --c4:#c4475b; --c5:#8a63c9; --c6:#b8901c; --c7:#2e9bb0; --c8:#8c8577; }
@@ -232,6 +232,61 @@ td.barc > div { display: flex; align-items: center; gap: 8px; min-width: 140px; 
 .cbar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 td.barc .num { min-width: 4em; }
 .ctag { display: inline-block; font-size: 11.5px; line-height: 1; padding: 3px 7px; border-radius: 999px; background: var(--soft); color: var(--dim); white-space: nowrap; }
+/* code: a file's lines with numbers, highlighted bands, and note callouts under their lines */
+.code-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12px; color: var(--dim); }
+.code-head .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); overflow-wrap: anywhere; }
+.code-body { background: var(--code); border-radius: 8px; padding: 6px 0; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cl { display: grid; grid-template-columns: var(--gut, 3ch) 1fr; gap: 12px; padding: 0 12px 0 0; box-shadow: inset 3px 0 0 transparent; }
+.cl .ln { text-align: right; color: var(--dim); user-select: none; padding-left: 10px; opacity: 0.75; }
+.cl .lc { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; tab-size: 4; }
+.cl.hl { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.cl.hl .ln { color: var(--accent); opacity: 1; }
+.cl.toned { box-shadow: inset 3px 0 0 var(--tone); }
+.code-note { margin: 4px 12px 6px calc(var(--gut, 3ch) + 22px); padding: 7px 10px; border-left: 3px solid var(--tone, var(--accent)); background: var(--card); border-radius: 0 6px 6px 0; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / 0.06); }
+.code-note p { margin: 0; } .code-note p + p { margin-top: 6px; }
+.code-note .at { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--tone, var(--accent)); margin-right: 6px; }
+.code-note code { font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--soft); }
+.code-cap, .tree-cap, .opt-cap { margin-top: 6px; font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--dim); }
+/* tree: folders fold; tags colour the name */
+.tree { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tree ul { list-style: none; margin: 0; padding: 0 0 0 16px; border-left: 1px solid var(--line); margin-left: 7px; }
+.tree > ul { border: 0; padding: 0; margin: 0; }
+.tree li { margin: 0; }
+.tr { display: flex; align-items: baseline; gap: 6px; padding: 1px 4px; border-radius: 4px; }
+.tr.dir { cursor: pointer; user-select: none; }
+.tr.dir:hover { background: var(--soft); }
+.tr .caret { display: inline-block; width: 1ch; color: var(--dim); transition: transform 0.12s; }
+.tr.dir.open .caret { transform: rotate(90deg); }
+.tr .ico { flex: none; align-self: center; color: var(--dim); }
+.tr .nm { white-space: nowrap; }
+.tr.dir .nm { font-weight: 600; }
+.tr .note { color: var(--dim); font: 12.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+.tr .note code { font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--soft); }
+.tr .ttag { font: 10.5px/1 -apple-system, BlinkMacSystemFont, sans-serif; padding: 2px 6px; border-radius: 999px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); white-space: nowrap; }
+.tr.t-added .nm { color: var(--ok); } .tr.t-changed .nm { color: var(--warn); } .tr.t-deleted .nm { color: var(--bad); text-decoration: line-through; } .tr:is(.t-renamed, .t-moved) .nm { color: var(--c5); }
+.tr .sum { color: var(--dim); font-size: 11.5px; display: none; } .tr.dir:not(.open) .sum { display: inline; }
+.tree-root { font-weight: 600; padding: 1px 4px; }
+/* options: choices side by side */
+.opts-q { font-weight: 600; margin-bottom: 8px; }
+.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.opt { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--card); font-size: 13px; line-height: 1.45; }
+.opt.rec { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.opt-hd { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+.opt-hd .letter { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--soft); font-size: 11.5px; font-weight: 700; color: var(--dim); align-self: center; }
+.opt.rec .letter { background: var(--accent); color: var(--card); }
+.opt-hd b { font-size: 13.5px; }
+.opt-badge { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-weight: 600; white-space: nowrap; }
+.opt-cost { font-size: 12px; color: var(--dim); }
+.opt ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.opt li { display: grid; grid-template-columns: 1.1em 1fr; }
+.opt li::before { font-weight: 700; } .opt .pros li::before { content: "✓"; color: var(--ok); } .opt .cons li::before { content: "✗"; color: var(--bad); }
+.opt code { font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--soft); }
+.opt-scores { display: grid; grid-template-columns: auto 1fr auto; gap: 3px 8px; align-items: center; font-size: 12px; color: var(--dim); }
+.opt-scores .cbar { height: 6px; min-width: 40px; } .opt-scores .cbar i { background: var(--c1); }
+.opt-ft { margin-top: auto; padding-top: 4px; display: flex; justify-content: flex-end; }
+/* pdf and video */
+iframe.pdf { width: 100%; height: 80vh; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); }
+video.vid { display: block; max-width: 100%; max-height: 80vh; margin: 0 auto; border-radius: 6px; background: #000; }
 /* kanban: columns side by side; stacked when the card is narrow (side panel, phone) */
 .kanban { container-type: inline-size; display: flex; flex-direction: column; gap: 8px; }
 .kb-head { font-size: 13px; }
@@ -1041,6 +1096,17 @@ async function sectionBody(id, sec) {
       return renderTimeline(JSON.parse(await (await fetch(url)).text()));
     case "compare":
       return renderCompare(JSON.parse(await (await fetch(url)).text()), (f) => `/s/${encodeURIComponent(id)}/f/${encodeURIComponent(f)}?v=${encodeURIComponent(sec.at || "")}`);
+    case "code":
+      return renderCode(JSON.parse(await (await fetch(url)).text()));
+    case "tree":
+      return renderTree(JSON.parse(await (await fetch(url)).text()), sec.id);
+    case "options":
+      return renderOptions(JSON.parse(await (await fetch(url)).text()));
+    case "pdf":
+      return h("iframe", { class: "pdf", src: url, title: sec.title || sec.id, loading: "lazy" });
+    case "video":
+      // #t=0.1: show the first frame rather than black until it plays.
+      return h("video", { class: "vid", src: `${url}#t=0.1`, controls: "", preload: "metadata", playsinline: "" });
     default:
       return h("div", { class: "empty" }, `unknown kind ${sec.kind}`);
   }
@@ -1494,8 +1560,13 @@ function foldAgents(root) {
 
 function sectionCard(id, sec) {
   const meta = h("span", { class: "meta" });
-  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "kanban", "timeline"].includes(sec.kind)) {
-    const src = copyButton(async () => (await fetch(rawUrl(id, sec))).text(), "Copy source (yc, yC for Slack)", "copy");
+  if (["markdown", "mermaid", "diff", "chart", "stats", "table", "steps", "pipeline", "kanban", "timeline", "code", "tree", "options"].includes(sec.kind)) {
+    // code, tree and options copy what they show (the lines, the tree as text, the choices as markdown), not their JSON.
+    const as = COPY_AS[sec.kind];
+    const src = copyButton(async () => {
+      const text = await (await fetch(rawUrl(id, sec))).text();
+      return as ? as(JSON.parse(text)) : text;
+    }, `Copy ${as ? (sec.kind === "code" ? "the code" : sec.kind === "tree" ? "the tree" : "the options") : "source"} (yc, yC for Slack)`, "copy", { slack: sec.kind === "code" || sec.kind === "tree" ? "code" : "markdown" });
     src.dataset.yank = "source"; // yc presses it, yC ⇧-presses it
     meta.append(src);
   }
@@ -2759,6 +2830,139 @@ function fmtGap(ms) {
   const hr = Math.round((m % 1440) / 60);
   return `${d}d${hr ? ` ${hr}h` : ""}`;
 }
+
+// ── code, tree, options ──
+
+const COPY_AS = { code: (s) => s.code, tree: (s) => treeText(s), options: (s) => optionsText(s) };
+
+/** Note text: paragraphs split on blank lines, with inline `code`, **bold** and links. */
+const noteParas = (text, lead = null) => String(text).split(/\n\s*\n/).map((p, i) => h("p", {}, i ? null : lead, inline(p)));
+
+/** A highlighted element's content as one list of nodes per line; a span that crosses a line break is split, so every line stands alone. */
+function lineNodes(root) {
+  const lines = [[]];
+  const walk = (node, chain) => {
+    for (const ch of node.childNodes) {
+      if (ch.nodeType === Node.TEXT_NODE) {
+        ch.textContent.split("\n").forEach((part, i) => {
+          if (i) lines.push([]);
+          if (!part) return;
+          let el = document.createTextNode(part);
+          for (let j = chain.length - 1; j >= 0; j--) {
+            const c = chain[j].cloneNode(false);
+            c.append(el);
+            el = c;
+          }
+          lines.at(-1).push(el);
+        });
+      } else if (ch.nodeType === Node.ELEMENT_NODE) walk(ch, [...chain, ch]);
+    }
+  };
+  walk(root, []);
+  return lines;
+}
+
+function renderCode(spec) {
+  const rows = codeLayout(spec);
+  const last = rows.at(-1)?.n || 1;
+  const body = h("div", { class: "code-body", style: `--gut:${String(last).length + 0.5}ch` });
+  const cells = [];
+  for (const r of rows) {
+    const lc = h("span", { class: "lc" }, r.text || "\u200b");
+    cells.push(lc);
+    body.append(h("div", { class: `cl${r.hl ? " hl" : ""}${r.tone ? " toned" : ""}`, style: r.tone ? `--tone:${toneVar(r.tone)}` : null, "data-line": r.n }, h("span", { class: "ln" }, String(r.n)), lc));
+    for (const n of r.notes) body.append(h("div", { class: "code-note", style: n.tone ? `--tone:${toneVar(n.tone)}` : null }, ...noteParas(n.text, h("span", { class: "at" }, lineLabel(n.from, n.to)))));
+  }
+  const shown = rows.length ? `lines ${rows[0].n}–${last} of ${spec.total}` : "";
+  const head = h("div", { class: "code-head" }, h("span", { class: "path" }, spec.path || ""), h("span", {}, rows.length === spec.total ? `${spec.total} lines` : shown), spec.lang ? h("span", { class: "ctag" }, spec.lang) : null);
+  // Highlight the whole range at once (a string or comment can span lines), then split the result back into rows.
+  if (spec.lang && !PLAIN.has(spec.lang) && String(spec.code).length <= 200000)
+    loadHighlight().then((hl) => {
+      if (!hl?.getLanguage(spec.lang) || !window.DOMPurify) return;
+      try {
+        const tmp = document.createElement("code");
+        tmp.innerHTML = window.DOMPurify.sanitize(hl.highlight(String(spec.code), { language: spec.lang, ignoreIllegals: true }).value, HL_CLEAN);
+        const lines = lineNodes(tmp);
+        if (lines.length === cells.length) cells.forEach((c, i) => lines[i].length && c.replaceChildren(...lines[i]));
+      } catch {}
+    });
+  return h("div", { class: "code" }, head, body, spec.caption ? h("div", { class: "code-cap" }, inline(spec.caption)) : null);
+}
+
+const TREE_FOLD_KEY = "canvas:tree-folds"; // localStorage: { "<session>/<section>/<path>": open? }
+const TREE_TONE = { added: "ok", changed: "warn", deleted: "bad", renamed: "c5", moved: "c5" };
+const FOLDER_ICON = ["M1.8 4.2c0-.6.4-1 1-1h3.4l1.4 1.5h5.6c.6 0 1 .4 1 1v6.6c0 .6-.4 1-1 1H2.8c-.6 0-1-.4-1-1z"];
+const FILE_ICON = ["M4 1.8h5l3.2 3.2v9.2H4z", "M9 1.8V5h3.2"];
+
+function renderTree(spec, secId = "") {
+  const nodes = buildTree(spec.entries);
+  const total = spec.entries?.length || 0;
+  const store = () => readStore(localStorage, TREE_FOLD_KEY);
+  const keyOf = (p) => `${currentSession}/${secId}/${p}`;
+  const glyph = (paths) => svg("svg", { class: "ico", viewBox: "0 0 16 16", width: 13, height: 13, "aria-hidden": "true" }, ...paths.map((d) => svg("path", { d, fill: "none", stroke: "currentColor", "stroke-width": "1.3", "stroke-linejoin": "round" })));
+  const list = (kids, depth) =>
+    h(
+      "ul",
+      {},
+      kids.map((n) => {
+        const tone = TREE_TONE[n.tag];
+        const sum = n.dir ? Object.entries(n.counts || {}).map(([t, c]) => `${c} ${t}`).join(" · ") || `${n.files} file${n.files === 1 ? "" : "s"}` : "";
+        const row = h(
+          "div",
+          { class: `tr${n.dir ? " dir" : ""}${n.tag ? ` t-${n.tag}` : ""}`, title: n.path, ...(n.dir ? { role: "button", tabindex: "0" } : {}) },
+          n.dir ? h("span", { class: "caret", "aria-hidden": "true" }, "▸") : h("span", { class: "caret" }),
+          glyph(n.dir ? FOLDER_ICON : FILE_ICON),
+          h("span", { class: "nm" }, n.dir ? `${n.name}/` : n.name),
+          n.tag ? h("span", { class: "ttag", style: `--tone:${toneVar(tone)}` }, n.tag) : null,
+          n.note ? h("span", { class: "note" }, inline(n.note)) : null,
+          n.dir ? h("span", { class: "sum" }, sum) : null,
+        );
+        const li = h("li", {}, row);
+        if (n.dir) {
+          const sub = list(n.kids, depth + 1);
+          const saved = store()[keyOf(n.path)];
+          const set = (open) => ((sub.hidden = !open), row.classList.toggle("open", open), row.setAttribute("aria-expanded", String(open)));
+          set(saved ?? (total <= 150 || depth < 1));
+          const flip = () => {
+            const open = sub.hidden;
+            set(open);
+            const all = store();
+            all[keyOf(n.path)] = open;
+            writeStore(localStorage, TREE_FOLD_KEY, all);
+          };
+          row.addEventListener("click", flip);
+          row.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), flip()));
+          li.append(sub);
+        }
+        return li;
+      }),
+    );
+  return h("div", { class: "tree" }, spec.root ? h("div", { class: "tree-root" }, `${spec.root}/`) : null, list(nodes, 0), spec.caption ? h("div", { class: "tree-cap" }, inline(spec.caption)) : null);
+}
+
+function renderOptions(spec) {
+  const cards = (spec.options || []).map((o, i) =>
+    h(
+      "div",
+      { class: `opt${o.recommended ? " rec" : ""}` },
+      h("div", { class: "opt-hd" }, h("span", { class: "letter" }, optionLetter(i)), h("b", {}, inline(o.label)), o.recommended ? h("span", { class: "opt-badge" }, "Recommended") : null),
+      o.cost ? h("div", { class: "opt-cost" }, o.cost) : null,
+      o.summary ? h("div", {}, inline(o.summary)) : null,
+      o.pros ? h("ul", { class: "pros" }, o.pros.map((p) => h("li", {}, h("span", {}, inline(p))))) : null,
+      o.cons ? h("ul", { class: "cons" }, o.cons.map((p) => h("li", {}, h("span", {}, inline(p))))) : null,
+      o.scores
+        ? h(
+            "div",
+            { class: "opt-scores" },
+            Object.entries(o.scores).flatMap(([k, v]) => [h("span", {}, k), h("span", { class: "cbar", title: `${k}: ${v}/5` }, h("i", { style: `width:${(v / 5) * 100}%` })), h("span", {}, String(v))]),
+          )
+        : null,
+      h("div", { class: "opt-ft" }, withTitle(copyButton(() => optionPrompt(spec, i), "Pick"), "Copy a prompt that picks this option, to paste into pi")),
+    ),
+  );
+  return h("div", {}, spec.question ? h("div", { class: "opts-q" }, inline(spec.question)) : null, h("div", { class: "opts" }, cards), spec.caption ? h("div", { class: "opt-cap" }, inline(spec.caption)) : null);
+}
+const withTitle = (el, title) => (el.setAttribute("title", title), el);
 
 // ── kanban ─────────────────────────────────────────────────────────────────────────
 // Columns side by side, or stacked when the card is narrow (the side panel,

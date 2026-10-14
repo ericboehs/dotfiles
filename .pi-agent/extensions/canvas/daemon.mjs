@@ -49,7 +49,7 @@ export const VENDOR = {
 };
 
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const FILE_NAME = /^[a-z0-9][a-z0-9-]{0,63}\.(md|mmd|html|png|jpe?g|gif|webp|svg|patch|txt|chart|term|stats|table|compare|steps|pipe|kanban|jsonv|timeline|jobs)$/;
+const FILE_NAME = /^[a-z0-9][a-z0-9-]{0,63}\.(md|mmd|html|png|jpe?g|gif|webp|svg|patch|txt|chart|term|stats|table|compare|steps|pipe|kanban|jsonv|timeline|jobs|code|tree|options|pdf|mp4|m4v|webm|mov)$/;
 
 const TYPES = {
   ".md": "text/markdown; charset=utf-8",
@@ -67,6 +67,14 @@ const TYPES = {
   ".jobs": "application/json; charset=utf-8",
   ".jsonv": "application/json; charset=utf-8",
   ".timeline": "application/json; charset=utf-8",
+  ".code": "application/json; charset=utf-8",
+  ".tree": "application/json; charset=utf-8",
+  ".options": "application/json; charset=utf-8",
+  ".pdf": "application/pdf",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
   ".html": "text/html; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -415,6 +423,32 @@ function send(res, code, body, headers = {}) {
 
 const json = (res, value) => send(res, 200, JSON.stringify(value), { "Content-Type": "application/json; charset=utf-8" });
 
+// Video and PDF stream from disk and answer byte ranges: Safari won't play a
+// video without them, and a 200 MB file shouldn't be read into memory.
+const STREAMED = new Set([".mp4", ".m4v", ".webm", ".mov", ".pdf"]);
+export function byteRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header || "").trim());
+  if (!m || (!m[1] && !m[2])) return null;
+  const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+  const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+  return start < size && start <= end ? { start, end } : { bad: true };
+}
+function streamFile(req, res, path, headers) {
+  const size = statSync(path).size;
+  const base = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes", ...headers };
+  const r = byteRange(req.headers.range, size);
+  if (r?.bad) {
+    res.writeHead(416, { ...base, "Content-Range": `bytes */${size}` });
+    return res.end();
+  }
+  if (r) res.writeHead(206, { ...base, "Content-Range": `bytes ${r.start}-${r.end}/${size}`, "Content-Length": r.end - r.start + 1 });
+  else res.writeHead(200, { ...base, "Content-Length": size });
+  if (req.method === "HEAD") return res.end();
+  createReadStream(path, r ? { start: r.start, end: r.end } : {})
+    .on("error", () => res.destroy())
+    .pipe(res);
+}
+
 /** SSE subscribers: key is a session id, or "*" for the index. */
 const clients = new Map();
 
@@ -646,6 +680,7 @@ function handler(req, res) {
     const path = join(ROOT, parts[1], parts[3]);
     if (!path.startsWith(ROOT + sep) || !existsSync(path)) return send(res, 404, "not found");
     const type = TYPES[extname(path)] || "application/octet-stream";
+    if (STREAMED.has(extname(path))) return streamFile(req, res, path, { "Content-Type": type, "Content-Security-Policy": SECTION_CSP });
     if (extname(path) === ".html") {
       const sec = readJson(join(ROOT, parts[1], "sections.json"), []).find((s) => s.file === parts[3]);
       if (sec?.kind === "html") return send(res, 200, withKit(readFileSync(path, "utf8"), readFileSync(join(HERE, "kit.css"), "utf8")), { "Content-Type": type, "Content-Security-Policy": SECTION_CSP });

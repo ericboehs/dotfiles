@@ -956,11 +956,14 @@ type Registry = {
   complete?: (model: unknown, req: unknown, opts: Record<string, unknown>) => Promise<CompleteResult>;
 };
 
-const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "pipeline", "kanban", "json", "timeline", "diff", "finding"] as const;
+const KINDS = ["markdown", "html", "html-plan", "image", "mermaid", "chart", "terminal", "stats", "table", "compare", "steps", "pipeline", "kanban", "json", "timeline", "diff", "code", "tree", "options", "pdf", "video", "finding"] as const;
 
 // Kinds whose body is a JSON spec the page draws, and the extension each is stored under.
 // (Not .json for the json kind: a section called "meta" or "sections" would overwrite the page's own files.)
-const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", kanban: "kanban", json: "jsonv", timeline: "timeline", jobs: "jobs" }; // jobs: the Background jobs card only, not a tool kind
+const SPEC_EXT: Record<string, string> = { terminal: "term", stats: "stats", table: "table", steps: "steps", pipeline: "pipe", kanban: "kanban", json: "jsonv", timeline: "timeline", tree: "tree", options: "options", jobs: "jobs" }; // jobs: the Background jobs card only, not a tool kind
+const VIDEO_EXT = new Set([".mp4", ".m4v", ".webm", ".mov"]);
+const VIDEO_MAX = 200 * 1024 * 1024;
+const PDF_MAX = 50 * 1024 * 1024;
 
 export const PIPE_STATUS = ["todo", "active", "done", "back", "failed", "skipped"] as const;
 
@@ -1032,6 +1035,180 @@ export function normalizePipeline(s: any): string {
  * is a card with only a title. `limit` is a WIP limit (the page flags a column
  * past it); `more` counts cards left out, shown as "+N more".
  */
+// ── code, tree, options ──
+
+export const TREE_TAGS = ["added", "changed", "deleted", "renamed", "moved"] as const;
+const CODE_MAX_LINES = 2000;
+const CODE_LANG: Record<string, string> = {
+  ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
+  ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby", ".py": "python", ".go": "go", ".rs": "rust", ".java": "java", ".kt": "kotlin", ".swift": "swift",
+  ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".fish": "bash", ".json": "json", ".yml": "yaml", ".yaml": "yaml", ".toml": "ini", ".ini": "ini",
+  ".md": "markdown", ".html": "xml", ".erb": "erb", ".xml": "xml", ".css": "css", ".scss": "scss", ".sql": "sql", ".c": "c", ".h": "c", ".cpp": "cpp",
+  ".lua": "lua", ".php": "php", ".tf": "hcl", ".hcl": "hcl", ".dockerfile": "dockerfile",
+};
+const CODE_NAMES: Record<string, string> = { dockerfile: "dockerfile", makefile: "makefile", gemfile: "ruby", rakefile: "ruby", brewfile: "ruby", "justfile": "makefile" };
+
+/** "40-45", "42" or a number as [from, to], or null. */
+export function parseLineRange(v: unknown): [number, number] | null {
+  if (Number.isInteger(v) && (v as number) > 0) return [v as number, v as number];
+  const m = typeof v === "string" ? v.trim().match(/^(\d+)(?:\s*[-–:]\s*(\d+))?$/) : null;
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = m[2] ? Number(m[2]) : a;
+  return a > 0 && b >= a ? [a, b] : null;
+}
+
+/**
+ * A code section: lines of a file read at post time, with highlighted ranges
+ * and notes (callouts under their lines). `source` is the file's text, `shown`
+ * the path as the page prints it. Options (all optional): lines "40-80",
+ * highlight ["42", "50-52"], notes [{ lines, text, tone? }], lang, caption.
+ */
+export function normalizeCode(opts: any, source: string, shown: string, ext = ""): string {
+  if (opts != null && (typeof opts !== "object" || Array.isArray(opts))) throw new Error('code body must be a JSON object: {"lines"?: "40-80", "highlight"?: ["42"], "notes"?: [{"lines", "text", "tone"?}]}');
+  const o = opts ?? {};
+  if (source.includes("\u0000")) throw new Error("code takes a text file; that one looks binary");
+  const all = source.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+  let [from, to] = [1, all.length];
+  if (o.lines != null) {
+    const r = parseLineRange(o.lines);
+    if (!r) throw new Error('lines must be a range like "40-80" or one line like "42"');
+    if (r[0] > all.length) throw new Error(`lines starts at ${r[0]}, but the file has ${all.length} lines`);
+    [from, to] = [r[0], Math.min(r[1], all.length)];
+  }
+  if (to - from + 1 > CODE_MAX_LINES) throw new Error(`that is ${to - from + 1} lines; show at most ${CODE_MAX_LINES} (pass lines: "a-b")`);
+  const inside = (v: unknown, where: string) => {
+    const r = parseLineRange(v);
+    if (!r) throw new Error(`${where} must be a range like "40-45" or one line like "42"`);
+    if (r[0] < from || r[1] > to) throw new Error(`${where} (${r[0]}-${r[1]}) is outside the lines shown (${from}-${to})`);
+    return r;
+  };
+  if (o.highlight != null && !Array.isArray(o.highlight)) throw new Error("highlight must be an array of ranges");
+  const highlight = (o.highlight ?? []).map((v: unknown, i: number) => inside(v, `highlight[${i}]`));
+  if (o.notes != null && !Array.isArray(o.notes)) throw new Error("notes must be an array");
+  if ((o.notes ?? []).length > 50) throw new Error("code takes at most 50 notes");
+  const notes = (o.notes ?? []).map((n: any, i: number) => {
+    const where = `notes[${i}]`;
+    if (!n || typeof n !== "object") throw new Error(`${where} must be an object`);
+    if (typeof n.text !== "string" || !n.text.trim()) throw new Error(`${where} needs text`);
+    if (n.tone != null && !TONES.includes(n.tone)) throw new Error(`${where}.tone must be one of ${TONES.join(", ")}`);
+    const [a, b] = inside(n.lines, `${where}.lines`);
+    return { from: a, to: b, text: n.text.trim().slice(0, 2000), ...(n.tone ? { tone: n.tone } : {}) };
+  });
+  optString(o.lang, "lang");
+  optString(o.caption, "caption");
+  const base = shown.split("/").pop()?.toLowerCase() ?? "";
+  const lang = (o.lang && /^[a-z0-9_+#.-]{1,40}$/i.test(o.lang) ? o.lang.toLowerCase() : "") || CODE_LANG[ext] || CODE_NAMES[base] || "";
+  return JSON.stringify({
+    path: shown,
+    ...(lang ? { lang } : {}),
+    start: from,
+    total: all.length,
+    code: all.slice(from - 1, to).join("\n"),
+    ...(highlight.length ? { highlight } : {}),
+    ...(notes.length ? { notes } : {}),
+    ...(o.caption?.trim() ? { caption: oneLine(o.caption, 300) } : {}),
+  });
+}
+
+/**
+ * A file tree from a flat list of paths: { "entries": { "src/a.ts": "added" }
+ * } (a value is a tag, added|changed|deleted|renamed|moved, or a note; or
+ * { tag?, note? }), an array of paths or { path, tag?, note? }, or the map on
+ * its own. A path ending in / is a folder (to note it). The page builds the folders.
+ */
+export function normalizeTree(s: any): string {
+  const src = s && typeof s === "object" && !Array.isArray(s) && (s.entries != null || s.title != null || s.root != null) ? s.entries : s;
+  let list: { path: string; tag?: string; note?: string }[] = [];
+  const one = (path: unknown, v: any, where: string) => {
+    if (typeof path !== "string" || !path.trim()) throw new Error(`${where} needs a path`);
+    const clean = path.trim().replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/{2,}/g, "/");
+    if (!clean || clean === "/") throw new Error(`${where} needs a path`);
+    let tag: string | undefined;
+    let note: string | undefined;
+    if (typeof v === "string") {
+      if ((TREE_TAGS as readonly string[]).includes(v.trim().toLowerCase())) tag = v.trim().toLowerCase();
+      else if (v.trim()) note = v;
+    } else if (v && typeof v === "object") {
+      if (v.tag != null && !(TREE_TAGS as readonly string[]).includes(v.tag)) throw new Error(`${where}.tag must be one of ${TREE_TAGS.join(", ")}`);
+      optString(v.note, `${where}.note`);
+      tag = v.tag;
+      note = v.note?.trim() || undefined;
+    } else if (v != null && v !== true) throw new Error(`${where} must be a tag, a note or { tag, note }`);
+    list.push({ path: clean.slice(0, 400), ...(tag ? { tag } : {}), ...(note ? { note: oneLine(note, 300) } : {}) });
+  };
+  if (Array.isArray(src)) src.forEach((e: any, i: number) => (typeof e === "string" ? one(e, null, `entries[${i}]`) : one(e?.path, e, `entries[${i}]`)));
+  else if (src && typeof src === "object") for (const [k, v] of Object.entries(src)) one(k, v, `entries["${k}"]`);
+  else throw new Error('tree needs entries: { "src/a.ts": "added", "docs/": "a note" } or ["src/a.ts", ...]');
+  if (!list.length) throw new Error("tree needs at least one entry");
+  if (list.length > 2000) throw new Error("a tree takes at most 2000 entries");
+  const seen = new Set<string>();
+  list = list.filter((e) => !seen.has(e.path) && seen.add(e.path));
+  const head = s && typeof s === "object" && !Array.isArray(s) ? s : {};
+  optString(head.title, "title");
+  optString(head.root, "root");
+  optString(head.caption, "caption");
+  return JSON.stringify({
+    ...(head.root?.trim() ? { root: oneLine(head.root, 120) } : {}),
+    ...(head.caption?.trim() ? { caption: oneLine(head.caption, 300) } : {}),
+    entries: list,
+  });
+}
+
+/**
+ * Choices side by side: { question?, options: [{ label, summary?, pros?,
+ * cons?, cost?, scores? { "Effort": 1-5 }, recommended?, pick? }] } or the
+ * options array alone. 2 to 6 options; Pick copies `pick` (default
+ * "Go with option B: <label>").
+ */
+export function normalizeOptions(s: any): string {
+  const opts = Array.isArray(s) ? s : s?.options;
+  if (!Array.isArray(opts) || opts.length < 2) throw new Error('options needs at least two: { "options": [{ "label", "summary"?, "pros"?, "cons"?, "scores"?, "recommended"? }] }');
+  if (opts.length > 6) throw new Error("options takes at most 6 choices");
+  const list = (v: unknown, where: string) => {
+    if (v == null) return undefined;
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) throw new Error(`${where} must be an array of strings`);
+    const out = (v as string[]).map((x) => oneLine(x, 300)).filter(Boolean).slice(0, 12);
+    return out.length ? out : undefined;
+  };
+  const out = opts.map((o: any, i: number) => {
+    const where = `options[${i}]`;
+    if (typeof o === "string") o = { label: o };
+    if (!o || typeof o !== "object") throw new Error(`${where} must be an object`);
+    if (typeof o.label !== "string" || !o.label.trim()) throw new Error(`${where} needs a label`);
+    for (const k of ["summary", "cost", "pick"]) optString(o[k], `${where}.${k}`);
+    let scores: Record<string, number> | undefined;
+    if (o.scores != null) {
+      if (typeof o.scores !== "object" || Array.isArray(o.scores)) throw new Error(`${where}.scores must be { "criterion": 1-5 }`);
+      const ents = Object.entries(o.scores);
+      if (ents.length > 8) throw new Error(`${where}.scores takes at most 8 criteria`);
+      for (const [k, v] of ents) if (!isNum(v) || (v as number) < 0 || (v as number) > 5) throw new Error(`${where}.scores["${k}"] must be a number from 0 to 5`);
+      scores = Object.fromEntries(ents.map(([k, v]) => [oneLine(k, 40), v as number]));
+    }
+    const pros = list(o.pros, `${where}.pros`);
+    const cons = list(o.cons, `${where}.cons`);
+    return {
+      label: oneLine(o.label, 120),
+      ...(o.summary?.trim() ? { summary: o.summary.trim().slice(0, 1000) } : {}),
+      ...(pros ? { pros } : {}),
+      ...(cons ? { cons } : {}),
+      ...(o.cost?.trim() ? { cost: oneLine(o.cost, 80) } : {}),
+      ...(scores && Object.keys(scores).length ? { scores } : {}),
+      ...(o.recommended === true ? { recommended: true } : {}),
+      ...(o.pick?.trim() ? { pick: o.pick.trim().slice(0, 2000) } : {}),
+    };
+  });
+  if (out.filter((o: any) => o.recommended).length > 1) throw new Error("at most one option can be recommended");
+  const head = Array.isArray(s) ? {} : s;
+  optString(head.question, "question");
+  optString(head.caption, "caption");
+  return JSON.stringify({
+    ...(head.question?.trim() ? { question: oneLine(head.question, 300) } : {}),
+    ...(head.caption?.trim() ? { caption: oneLine(head.caption, 300) } : {}),
+    options: out,
+  });
+}
+
 export function normalizeKanban(s: any): string {
   const cols = Array.isArray(s) ? s : s?.columns;
   if (!Array.isArray(cols) || !cols.length) throw new Error('kanban needs columns: [{ "label", "cards": ["text" or { "title", ... }] }]');
@@ -1252,6 +1429,8 @@ export function normalizeSpec(kind: string, text: string, ext = ""): string {
   }
   if (kind === "pipeline") return normalizePipeline(parseJson(text, "pipeline"));
   if (kind === "kanban") return normalizeKanban(parseJson(text, "kanban"));
+  if (kind === "tree") return normalizeTree(parseJson(text, "tree"));
+  if (kind === "options") return normalizeOptions(parseJson(text, "options"));
   if (kind === "timeline") {
     const s = parseJson(text, "timeline");
     const events = Array.isArray(s) ? s : s?.events;
@@ -1937,7 +2116,11 @@ export default function canvas(pi: ExtensionAPI) {
       'kanban (a board of work items by state: JSON {"title"?, "progress"? (true: a bar of counts per column), "columns": [{"label", "tone"?, "limit"? (WIP limit), "more"? (cards left out), "compact"? (true: one-line cards, folded when nothing else is on the board), "cards": ["text" or {"title", "id"?, "note"?, "tag"?, "owner"?, "tone"?, "href"? (http/https)}]}], "caption"?}; titles and notes take `code`, **bold** and [links](https://...); up to 8 columns; tone: ok|warn|bad|accent|dim|c1-c8), ' +
       'json (any JSON as a collapsible, searchable tree: body is the JSON itself, or path to a .json file), ' +
       'timeline (events in time: JSON [{"at" (ISO time or text), "title", "note"?, "tag"?, "tone"?: ok|warn|bad|accent|dim|c1-c8}] or {"events", "caption", "order": time|given}; dated events are sorted and grouped by day), ' +
-      "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), finding (appends one durable line to the findings log; id not needed). " +
+      "diff (a unified patch in body or path, or omit both and pass ref/paths to have git produce it; shown GitHub-style, one block per file, with a split view), " +
+      'code (lines of a source file with line numbers: path to the file, read when posted; body optional JSON {"lines": "40-80", "highlight": ["42", "50-52"], "notes": [{"lines": "42" or "44-46", "text" (takes `code`, **bold**, [links](https://...)), "tone"?: ok|warn|bad|accent|dim}], "lang"?, "caption"?}; a note shows as a callout under its lines), ' +
+      'tree (a file tree from flat paths: JSON {"root"?, "caption"?, "entries": {"src/a.ts": "added"|"changed"|"deleted"|"renamed"|"moved" or a note, or {"tag", "note"}}} or an array of paths; folders are built from the paths; a path ending in / is a folder, to note it), ' +
+      'options (2-6 choices side by side: JSON {"question"?, "options": [{"label", "summary"?, "pros"?: [text], "cons"?: [text], "cost"?, "scores"?: {"Effort": 0-5, ...}, "recommended"?: true (one at most), "pick"? (the prompt its Pick button copies)}]}), ' +
+      "pdf (a .pdf via path, in a viewer), video (an mp4/m4v/webm/mov screen recording via path, with controls), finding (appends one durable line to the findings log; id not needed). " +
       "html sections get the canvas design kit, so write little CSS: the page's colours as variables (--ink --dim --line --soft --card --accent --ok --warn --bad, chart colours --c1 to --c8), " +
       "light and dark handled, buttons (class primary), inputs, range sliders, select and tables already styled, and classes k-row, k-col, k-grid, k-card, k-stat (b + span), k-field (label above a control), k-muted, k-tag, k-ok, k-warn, k-bad, k-bar (> i). " +
       "They run in an isolated frame: no network, no access to the page, and localStorage lasts only until reload. " +
@@ -1948,7 +2131,8 @@ export default function canvas(pi: ExtensionAPI) {
       "Record a finding the moment you confirm a root cause, a gotcha, a non-obvious constraint or API fact, or a decision and its reason. Not progress updates.",
       "When a reply would contain a table, an option or state matrix, a diagram, a plan (as steps), or a list of commands, put it on the canvas as its own section and keep the chat answer short.",
       "Pick the lightest canvas kind that fits: markdown for short tables, lists and prose; table for data over ~20 rows; stats for a few headline numbers; chart for numbers to compare or follow over time; " +
-        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); kanban for many work items by state (a triage of issues, a review queue); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; html only for something to interact with (a calculator, sliders, a what-if).",
+        "terminal for command output worth keeping (a failing run, a build error); compare for before/after screenshots; steps for a multi-step plan as it runs; pipeline for a multi-stage or multi-agent workflow (parallel work, reviews that send work back); kanban for many work items by state (a triage of issues, a review queue); json for an API response or config to explore; timeline for an incident or a sequence of events; mermaid for flows and structure; " +
+        "code to walk through specific lines of a file (highlight and note the lines that matter, rather than pasting a fence); tree for a repo layout or the files a change touches; options for a decision between approaches (instead of a pros/cons table); video for a screen recording of a UI flow or bug; pdf for a document; html only for something to interact with (a calculator, sliders, a what-if).",
       "When work runs through other agents (subagents, agent-link handoffs, a pstack run), post it as a pipeline section when it starts, " +
         "one step per agent or role, and replace the same id as each one starts, finishes or sends work back, so its statuses stay current.",
       "A pipeline's stages run in order, one after another. Put independent work items that move at the same time (several PRs, packages, repos) in parallel lanes of one stage, a labelled lane per item with its own steps, not in stages of their own; for many items, a kanban may fit better.",
@@ -1964,7 +2148,7 @@ export default function canvas(pi: ExtensionAPI) {
       title: Type.Optional(Type.String({ description: "Section heading" })),
       kind: Type.Union(KINDS.map((k) => Type.Literal(k)), { description: "Section kind" }),
       body: Type.Optional(Type.String({ description: "Markdown, HTML, mermaid source, chart JSON or finding text" })),
-      path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, image, chart JSON, or a patch for diff. Relative to the cwd." })),
+      path: Type.Optional(Type.String({ description: "File to copy in: packed html-plan, html page, image, pdf, video, chart JSON, or a patch for diff; for code, the source file to show. Relative to the cwd." })),
       ref: Type.Optional(Type.String({ description: 'diff without body/path: what git compares the working tree to. Default HEAD; a commit; a range like main..branch; or "staged".' })),
       paths: Type.Optional(Type.Array(Type.String(), { description: "diff without body/path: only these files (untracked ones show as new). Default: every change. compare: [before, after] image files." })),
       repo: Type.Optional(Type.String({ description: "diff without body/path: the repository directory. Default the cwd." })),
@@ -2021,6 +2205,21 @@ export default function canvas(pi: ExtensionAPI) {
           file = `${id}.compare`;
           if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
           writeAtomic(join(d, file), JSON.stringify({ before: extra[0], after: extra[1], ...opts }));
+        } else if (params.kind === "code") {
+          // The source is read now and kept, so the section stays as it was when the file changes later.
+          if (!params.path) throw new Error('code needs path (the source file); body takes {"lines": "40-80", "highlight", "notes"}');
+          const src = isAbsolute(params.path) ? params.path : resolve(ctx.cwd, params.path);
+          if (isSensitivePath(src)) throw new Error(`${params.path} may hold secrets; it is not shown on the canvas`);
+          const st = statSync(src);
+          if (!st.isFile()) throw new Error(`${params.path} is not a file`);
+          if (st.size > MAX_BODY) throw new Error(`${params.path} is over 2 MB`);
+          const rel = relative(ctx.cwd, src);
+          const shown = rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : src.replace(homedir(), "~");
+          const opts = params.body?.trim() ? parseJson(params.body, "code") : null;
+          file = `${id}.code`;
+          const spec = normalizeCode(opts, readFileSync(src, "utf8"), shown, extname(src).toLowerCase());
+          if (old && old.file !== file) rmSync(join(d, old.file), { force: true });
+          writeAtomic(join(d, file), spec);
         } else if (SPEC_EXT[params.kind]) {
           let text: string;
           let ext = "";
@@ -2061,11 +2260,18 @@ export default function canvas(pi: ExtensionAPI) {
           const src = isAbsolute(params.path) ? params.path : resolve(ctx.cwd, params.path);
           const st = statSync(src);
           if (!st.isFile()) throw new Error(`${params.path} is not a file`);
-          if (st.size > MAX_FILE) throw new Error(`${params.path} is over 20 MB`);
           const ext = extname(src).toLowerCase();
+          const cap = params.kind === "video" ? VIDEO_MAX : params.kind === "pdf" ? PDF_MAX : MAX_FILE;
+          if (st.size > cap) throw new Error(`${params.path} is over ${cap / 1024 / 1024} MB`);
           if (params.kind === "image") {
             if (!IMAGE_EXT.has(ext)) throw new Error(`image must be one of ${[...IMAGE_EXT].join(", ")}`);
             file = `${id}${ext === ".jpeg" ? ".jpg" : ext}`;
+          } else if (params.kind === "video") {
+            if (!VIDEO_EXT.has(ext)) throw new Error(`video must be one of ${[...VIDEO_EXT].join(", ")}`);
+            file = `${id}${ext}`;
+          } else if (params.kind === "pdf") {
+            if (ext !== ".pdf") throw new Error("pdf takes a .pdf file");
+            file = `${id}.pdf`;
           } else if (params.kind === "html" || params.kind === "html-plan") {
             file = `${id}.html`;
           } else if (params.kind === "markdown") {
@@ -2081,7 +2287,7 @@ export default function canvas(pi: ExtensionAPI) {
           copyFileSync(src, join(d, `${file}.tmp`));
           renameSync(join(d, `${file}.tmp`), join(d, file));
         } else {
-          if (params.kind === "image" || params.kind === "html-plan") throw new Error(`${params.kind} needs path`);
+          if (params.kind === "image" || params.kind === "html-plan" || params.kind === "pdf" || params.kind === "video") throw new Error(`${params.kind} needs path`);
           const body = String(params.body ?? "");
           if (!body.trim()) throw new Error("body is empty");
           if (Buffer.byteLength(body) > MAX_BODY) throw new Error("body is over 2 MB; write a file and pass path");

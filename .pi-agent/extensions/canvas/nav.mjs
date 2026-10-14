@@ -489,3 +489,109 @@ export function dismissPipe(hidden, key, at, max = 100) {
   for (const k of keys.slice(0, Math.max(0, keys.length - max))) delete next[k];
   return next;
 }
+
+// ── code, tree, options ──
+
+/**
+ * A code section's rows: the line number, its text, whether a highlight range
+ * covers it, the tone of the note range it sits in, and the notes that end
+ * on it (their callout goes under that line).
+ */
+export function codeLayout(spec) {
+  const start = spec?.start || 1;
+  const hl = spec?.highlight || [];
+  const notes = spec?.notes || [];
+  return String(spec?.code ?? "")
+    .split("\n")
+    .map((text, i) => {
+      const n = start + i;
+      const mark = notes.find((x) => n >= x.from && n <= x.to);
+      return { n, text, hl: hl.some(([a, b]) => n >= a && n <= b), ...(mark ? { tone: mark.tone || "accent" } : {}), notes: notes.filter((x) => x.to === n) };
+    });
+}
+
+/** "L42" or "L40–45". */
+export const lineLabel = (a, b) => (a === b ? `L${a}` : `L${a}–${b}`);
+
+/**
+ * Flat tree entries ({ path, tag?, note? }; a path ending in / is a folder)
+ * as nested nodes: folders first, then names in natural order. A folder
+ * whose only child is a folder merges into it ("src/lib"), and each folder
+ * counts the tags below it.
+ */
+export function buildTree(entries) {
+  const root = { kids: new Map() };
+  for (const e of entries || []) {
+    const isDir = /\/$/.test(e.path);
+    const parts = String(e.path).split("/").filter(Boolean);
+    let node = root;
+    parts.forEach((p, i) => {
+      const last = i === parts.length - 1;
+      let k = node.kids.get(p);
+      if (!k) node.kids.set(p, (k = { name: p, path: parts.slice(0, i + 1).join("/"), dir: false, kids: new Map() }));
+      if (!last || isDir) k.dir = true;
+      if (last) {
+        if (e.tag) k.tag = e.tag;
+        if (e.note) k.note = e.note;
+      }
+      node = k;
+    });
+  }
+  const finish = (n) => {
+    const kids = [...n.kids.values()].map(finish).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const dir = n.dir || kids.length > 0;
+    let out = { name: n.name, path: n.path, dir, ...(n.tag ? { tag: n.tag } : {}), ...(n.note ? { note: n.note } : {}), kids };
+    while (n !== root && out.dir && out.kids.length === 1 && out.kids[0].dir && !out.tag && !out.note) {
+      const k = out.kids[0];
+      out = { ...k, name: `${out.name}/${k.name}` };
+    }
+    if (out.dir) {
+      const counts = {};
+      for (const k of out.kids) {
+        if (k.tag) counts[k.tag] = (counts[k.tag] || 0) + 1;
+        for (const [t, c] of Object.entries(k.counts || {})) counts[t] = (counts[t] || 0) + c;
+      }
+      out.counts = counts;
+      out.files = out.kids.reduce((s, k) => s + (k.dir ? k.files : 1), 0);
+    }
+    return out;
+  };
+  return finish(root).kids;
+}
+
+/** A tree as text, like the tree command: ├── and └──, folders with a /, tags in brackets, notes after a dash. */
+export function treeText(spec) {
+  const out = spec?.root ? [`${spec.root}/`] : [];
+  const walk = (nodes, pre) =>
+    nodes.forEach((n, i) => {
+      const last = i === nodes.length - 1;
+      out.push(`${pre}${last ? "└── " : "├── "}${n.name}${n.dir ? "/" : ""}${n.tag ? ` [${n.tag}]` : ""}${n.note ? ` — ${n.note}` : ""}`);
+      if (n.dir) walk(n.kids, pre + (last ? "    " : "│   "));
+    });
+  walk(buildTree(spec?.entries), "");
+  return out.join("\n");
+}
+
+export const optionLetter = (i) => String.fromCharCode(65 + i);
+
+/** The prompt an option's Pick button copies. */
+export function optionPrompt(spec, i) {
+  const o = spec?.options?.[i];
+  if (!o) return "";
+  return o.pick || `Go with option ${optionLetter(i)}: ${o.label}${spec.question ? ` (for "${spec.question}")` : ""}`;
+}
+
+/** Options as markdown: the question, then each option with its summary, pros, cons and scores. */
+export function optionsText(spec) {
+  const out = spec?.question ? [`**${spec.question}**`, ""] : [];
+  (spec?.options || []).forEach((o, i) => {
+    out.push(`**${optionLetter(i)}. ${o.label}**${o.recommended ? " (recommended)" : ""}${o.cost ? ` — ${o.cost}` : ""}`);
+    if (o.summary) out.push(o.summary);
+    for (const p of o.pros || []) out.push(`- ✓ ${p}`);
+    for (const c of o.cons || []) out.push(`- ✗ ${c}`);
+    for (const [k, v] of Object.entries(o.scores || {})) out.push(`- ${k}: ${v}/5`);
+    out.push("");
+  });
+  if (spec?.caption) out.push(spec.caption);
+  return out.join("\n").trim();
+}

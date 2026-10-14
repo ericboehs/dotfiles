@@ -757,7 +757,7 @@ the agent's last response.
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,
   `chart`, `terminal`, `stats`, `table`, `compare`, `steps`, `pipeline`, `kanban`, `json`,
-  `timeline`, `diff`, and `finding`
+  `timeline`, `diff`, `code`, `tree`, `options`, `pdf`, `video`, and `finding`
   (one append-only line in the findings log).
   The tool's guidelines tell the agent to pick the lightest kind that fits:
   markdown for short tables, table for data, stats for headline numbers,
@@ -853,7 +853,31 @@ the agent's last response.
   a file list with +/− counts, then one collapsible block per file:
   unified or split (the toggle is remembered per browser), coloured by
   extension, with the changed words marked in paired −/+ lines, and Expand
-  opens it in the modal. `/html-plan` now puts
+  opens it in the modal. A `code` section shows lines of a source file: the
+  tool reads `path` when posted (the copy stays put when the file changes;
+  secret-looking files are refused) and the body picks `lines` (`"40-80"`, at
+  most 2,000), `highlight` ranges (a tinted band) and `notes`, each a callout
+  under the last line of its range with a tone stripe that runs down those
+  lines, and text that takes `` `code` ``, **bold** and links. Line numbers,
+  the path and "lines 40–80 of 312" head it; highlight.js colours the whole
+  range at once and the result is split back into rows, so a comment that
+  spans lines stays coloured. Its copy button copies the code itself (⇧ for a
+  Slack ``` block). A `tree` is a file tree from flat paths
+  (`{"src/a.ts": "added"}`, a note, or `{tag, note}`; a trailing `/` names a
+  folder): folders first, natural order, a chain of lone folders merged
+  (`src/lib/util/`), tags colouring the name (added green, changed amber,
+  deleted struck through red, renamed/moved purple), and folders that fold
+  (remembered per browser; trees over 150 entries start with only the top
+  level open) and show "3 changed · 1 added" while folded. It copies as
+  `tree`-command text. `options` puts 2–6 choices side by side as cards
+  (A, B, C): a summary, ✓ pros, ✗ cons, a cost, 0–5 score bars per
+  criterion, and at most one Recommended card, outlined. Each card's **Pick**
+  copies a prompt to paste into pi (its `pick` text, or "Go with option B:
+  ..."); the section copies as markdown. `pdf` and `video` (mp4, m4v, webm,
+  mov) copy a file in by `path` (up to 50 and 200 MB) and show it in the
+  browser's own PDF viewer or a `<video>` player with controls, opened on
+  its first frame. The daemon streams both from disk and answers byte
+  ranges (206), which Safari needs to play video. `/html-plan` now puts
   its packed page here instead of opening Safari. The tool's guidelines tell
   the main agent to use it without being asked: a finding for each confirmed
   root cause, gotcha or decision, a section for tables, diagrams and

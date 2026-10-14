@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel } from "../extensions/canvas/nav.mjs";
+import { asQuote, boardMarks, boardMoves, boardSnapshot, cardPrompt, dismissPipe, pipeStripHidden, slackText, fuzzyScore, inlineTokens, matchKeys, mergeOrder, moveAmong, nextSeen, orderSessions, ownerSession, pipeRows, placeBefore, rankItems, splitPinned, togglePin, topQuotes, unquote, VIM_KEYS, waitingSessions, wrapLabel, buildTree, codeLayout, lineLabel, optionPrompt, optionsText, treeText } from "../extensions/canvas/nav.mjs";
 import { mix, prettyName, readPair, swatch, systemTheme, themeMode, themeVars } from "../extensions/canvas/theme.mjs";
 import { parseColors } from "../extensions/canvas/build-themes.mjs";
 
@@ -330,4 +330,50 @@ test("slackText: markdown as Slack markup; links, code and quotes kept; tables a
   );
   assert.equal(slackText("| not | a table |"), "| not | a table |", "pipes without a separator row stay");
   assert.equal(asQuote(slackText("# Hi\n\n**x**\n")), "> *Hi*\n>\n> *x*");
+});
+
+test("codeLayout numbers lines and places bands and callouts", () => {
+  const rows = codeLayout({ start: 40, code: "a\nb\nc\nd", highlight: [[41, 41]], notes: [{ from: 42, to: 43, text: "n", tone: "warn" }, { from: 40, to: 40, text: "m" }] });
+  assert.deepEqual(rows.map((r) => r.n), [40, 41, 42, 43]);
+  assert.deepEqual(rows.map((r) => r.hl), [false, true, false, false]);
+  assert.deepEqual(rows.map((r) => r.tone ?? null), ["accent", null, "warn", "warn"], "a note range tints its lines; no tone means accent");
+  assert.deepEqual(rows.map((r) => r.notes.map((n) => n.text)), [["m"], [], [], ["n"]], "a callout goes under the last line of its range");
+  assert.equal(codeLayout({ code: "" }).length, 1);
+  assert.equal(lineLabel(4, 4), "L4");
+  assert.equal(lineLabel(4, 9), "L4–9");
+});
+
+test("buildTree nests paths, folders first, merges lone folders and counts tags", () => {
+  const t = buildTree([
+    { path: "src/lib/util/b.ts", tag: "changed" },
+    { path: "src/lib/util/a10.ts" },
+    { path: "src/lib/util/a9.ts", tag: "added" },
+    { path: "README.md", tag: "changed" },
+    { path: "docs/", note: "later" },
+    { path: "bin/run" },
+    { path: "bin/x/y" },
+  ]);
+  assert.deepEqual(t.map((n) => n.name), ["bin", "docs", "src/lib/util", "README.md"], "folders first; a chain of lone folders merges");
+  const src = t[2];
+  assert.deepEqual(src.kids.map((n) => n.name), ["a9.ts", "a10.ts", "b.ts"], "natural order");
+  assert.deepEqual(src.counts, { added: 1, changed: 1 });
+  assert.equal(src.files, 3);
+  assert.equal(src.path, "src/lib/util");
+  assert.equal(t[1].note, "later");
+  assert.equal(t[1].dir, true, "a trailing / is a folder");
+  assert.deepEqual(t[0].kids.map((n) => n.name), ["x", "run"], "a folder with a file beside it does not merge");
+  assert.equal(buildTree([{ path: "a", note: "n" }, { path: "a/b" }])[0].dir, true, "a path that has children is a folder");
+});
+
+test("treeText draws the tree like the tree command", () => {
+  const text = treeText({ root: "repo", entries: [{ path: "src/a.ts", tag: "added" }, { path: "src/b.ts", note: "why" }, { path: "z.md" }] });
+  assert.equal(text, ["repo/", "├── src/", "│   ├── a.ts [added]", "│   └── b.ts — why", "└── z.md"].join("\n"));
+});
+
+test("options copy as markdown and Pick builds a prompt", () => {
+  const spec = { question: "Which store?", options: [{ label: "SQLite", recommended: true, cost: "S", summary: "one file", pros: ["simple"], cons: ["one writer"], scores: { Effort: 1 } }, { label: "Postgres", pick: "Use Postgres via RDS" }] };
+  assert.equal(optionPrompt(spec, 0), 'Go with option A: SQLite (for "Which store?")');
+  assert.equal(optionPrompt(spec, 1), "Use Postgres via RDS", "pick wins");
+  assert.equal(optionPrompt(spec, 5), "");
+  assert.equal(optionsText(spec), "**Which store?**\n\n**A. SQLite** (recommended) — S\none file\n- ✓ simple\n- ✗ one writer\n- Effort: 1/5\n\n**B. Postgres**");
 });
