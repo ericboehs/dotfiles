@@ -1539,15 +1539,40 @@ test("/footer lists every chip with its live value and saves toggles to footer.j
     assert.ok(shown.some((line) => /Context\s+41\.2k\/1m/.test(line)));
     assert.ok(shown.some((line) => /Bypass\s+—/.test(line)), "a chip with nothing to show gets a dash");
     assert.ok(shown.some((line) => line.includes("Working directory. Click: toggle the full path.")), "selected row's description");
+    const raw = list.render(140);
+    assert.match(raw.find((line) => strip(line).includes("Directory")), /\x1B\[[0-9;]*mdotfiles/, "samples keep the footer's colours");
 
     list.handleInput("\r"); // Enter toggles the selected row, Directory
     assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: ["dir"] });
-    assert.match(ui.plain()[0], /^master/);
+    // Still previewed while the checklist is open: struck through, and blinking as the selection.
+    assert.match(ui.raw()[0], /^\x1b\[9m\x1b\[5m.*dotfiles/);
     assert.ok(list.render(140).map(strip).some((line) => /Directory.*hidden/.test(line)));
 
     list.handleInput("\r");
     assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: [] });
     assert.match(ui.plain()[0], /^dotfiles/);
+  });
+});
+
+test("/footer previews in the real footer: the selected chip blinks, the rest go gray", async () => {
+  await withAgentDir(async () => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    const footerLine = () => ui.raw()[0];
+    // Directory is selected first: it blinks, other chips are dim and uncoloured.
+    assert.match(footerLine(), /\x1b\[5m\x1b\[[0-9;]*mdotfiles/);
+    assert.match(footerLine(), /\x1B\[2mopus\x1B\[22m/);
+
+    list.handleInput("\x1b[B"); // down to Git
+    assert.match(footerLine(), /\x1b\[5m.*master/);
+    assert.match(footerLine(), /^\x1B\[2mdotfiles\x1B\[22m/);
+
+    list.handleInput("\r"); // hide Git: still previewed, struck through
+    assert.match(footerLine(), /\x1b\[9m\x1b\[5m.*master/);
+
+    list.handleInput("\x1b"); // Esc closes: normal footer, Git gone
+    assert.doesNotMatch(footerLine(), /\x1b\[5m/);
+    assert.match(strip(footerLine()), /^dotfiles gh /);
   });
 });
 

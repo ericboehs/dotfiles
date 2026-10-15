@@ -124,9 +124,19 @@ export type FooterChipId = (typeof FOOTER_CHIPS)[number]["id"];
 
 const CHIP_IDS: ReadonlySet<string> = new Set(FOOTER_CHIPS.map((chip) => chip.id));
 
-/** SGR colour codes out, for /footer's plain samples. */
+/** SGR codes out, for the gray chips in /footer's preview. */
 function stripAnsi(text: string): string {
   return text.replace(/\x1B\[[0-9;:]*m/g, "");
+}
+
+/** Blink, re-applied after any full reset inside the text. */
+function blink(text: string): string {
+  return `\x1b[5m${text.replace(/\x1B\[0?m/g, "$&\x1b[5m")}\x1b[25m`;
+}
+
+/** Struck through: a hidden chip, shown only in /footer's preview. */
+function strike(text: string): string {
+  return `\x1b[9m${text}\x1b[29m`;
 }
 
 /** footer.json: `{ "hidden": ["boot", "rate"] }`. New chips start shown. */
@@ -1449,6 +1459,12 @@ export default function footerExtension(pi: ExtensionAPI): void {
   /** Each chip's text at the last render, hidden ones too, for /footer's samples. */
   let chipSamples = new Map<FooterChipId, string>();
   /**
+   * The chip selected in an open /footer checklist. While set, the footer is
+   * the preview: that chip blinks, the rest go gray, hidden ones show struck
+   * through.
+   */
+  let previewChip: FooterChipId | undefined;
+  /**
    * Hit-testing state for clickable chips, refreshed on every footer render:
    * one entry per painted footer line, top to bottom, holding the
    * visible-column ranges of its clickable chips. Local coordinates
@@ -1656,6 +1672,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
           for (const [id, text] of chips) {
             if (text) samples.set(id, samples.has(id) ? `${samples.get(id)} ${text}` : text);
           }
+          // /footer's preview: the selected chip blinks, the rest go gray, and
+          // hidden chips show struck through so you can see where they'd go.
+          const previewStyle = (id: FooterChipId, text: string): string => {
+            if (!previewChip || !text) return text;
+            const styled = id === previewChip ? blink(text) : theme.fg("dim", stripAnsi(text));
+            return hiddenChips.has(id) ? strike(styled) : styled;
+          };
 
           // Fall back to the name other agents use to reach this session.
           const sessionName = pi.getSessionName();
@@ -1670,7 +1693,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             : peerName ? theme.fg("dim", peerName)
             : "";
           if (nameText) samples.set("name", nameText);
-          const right = hiddenChips.has("name") ? "" : nameText;
+          const right = previewChip ? previewStyle("name", nameText) : hiddenChips.has("name") ? "" : nameText;
 
           // Wrap, don't truncate: chips fill a row and whole chips move down
           // to the next row when the terminal is too narrow, so nothing is
@@ -1700,8 +1723,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
             zones = {};
             rowLimit = width;
           };
-          for (const [id, part] of chips) {
-            if (!part || hiddenChips.has(id)) continue;
+          for (const [id, text] of chips) {
+            if (!text || (hiddenChips.has(id) && !previewChip)) continue;
+            const part = previewStyle(id, text);
             const partWidth = visibleWidth(part);
             // A chip moves down whole when it cannot fit its row's budget —
             // except a chip wider than the terminal itself, which can never
@@ -1772,7 +1796,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }
           if (extra.length > 0) {
             samples.set("statuses", extra.join(" "));
-            if (!hiddenChips.has("statuses")) lines.push(truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…"));
+            const statusLine = theme.fg("dim", extra.join(" "));
+            if (previewChip) lines.push(truncateToWidth(previewStyle("statuses", statusLine), width, "…"));
+            else if (!hiddenChips.has("statuses")) lines.push(truncateToWidth(statusLine, width, "…"));
           }
           chipSamples = samples;
           // Publish the chip zones per painted line for the click hit test.
@@ -2053,19 +2079,24 @@ export default function footerExtension(pi: ExtensionAPI): void {
       hiddenChips = readHiddenChips();
       await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
         const labelWidth = Math.max(...FOOTER_CHIPS.map((chip) => chip.label.length));
+        // SettingsList aligns values after at most 36 label columns; a longer
+        // label would push its value out of line, so samples fit in the rest.
+        const sampleWidth = Math.max(8, 36 - labelWidth - 2);
         const items: SettingItem[] = FOOTER_CHIPS.map((chip) => {
           const sample = chipSamples.get(chip.id);
           return {
             id: chip.id,
-            // The live value, plain: the list paints the selected row in the accent colour.
-            label: `${chip.label.padEnd(labelWidth)}  ${sample ? truncateToWidth(stripAnsi(sample), 40, "…") : "—"}`,
+            // The live value in the footer's own colours.
+            label: `${chip.label.padEnd(labelWidth)}  ${sample ? truncateToWidth(sample, sampleWidth, "…") : "—"}`,
             description: chip.description,
             currentValue: hiddenChips.has(chip.id) ? "hidden" : "shown",
             values: ["shown", "hidden"],
           };
         });
         const listTheme: SettingsListTheme = {
-          label: (text, selected) => (selected ? theme.fg("accent", text) : text),
+          // Accent only the chip name: the sample after it keeps its colours.
+          label: (text, selected) =>
+            selected ? `${theme.fg("accent", text.slice(0, labelWidth))}${text.slice(labelWidth)}` : text,
           value: (text, selected) =>
             selected ? theme.fg("accent", text) : theme.fg(text === "hidden" ? "dim" : "muted", text),
           description: (text) => theme.fg("dim", text),
@@ -2087,18 +2118,40 @@ export default function footerExtension(pi: ExtensionAPI): void {
             }
             repaint?.();
           },
-          () => done(undefined),
+          () => {
+            previewChip = undefined;
+            repaint?.();
+            done(undefined);
+          },
         );
+        // SettingsList keeps its cursor private; read it to follow the
+        // selection in the footer preview (search is off, so its index is ours).
+        const syncPreview = () => {
+          const index = (list as unknown as { selectedIndex?: number }).selectedIndex;
+          const id = typeof index === "number" ? items[index]?.id : undefined;
+          previewChip = (id as FooterChipId | undefined) ?? FOOTER_CHIPS[0].id;
+          repaint?.();
+        };
+        syncPreview();
         const header = () => [theme.fg("accent", "Footer chips"), ""];
         return {
           render: (width: number) => [...header().map((line) => truncateToWidth(line, width, "…")), ...list.render(width)],
           invalidate: () => list.invalidate(),
           handleInput: (data: string) => {
             list.handleInput(data);
+            if (previewChip) syncPreview();
             tui.requestRender();
           },
           // The list's rows start below the header.
-          handleMouse: (event: TuiMouseEvent) => list.handleMouse({ ...event, y: event.y - header().length }),
+          handleMouse: (event: TuiMouseEvent) => {
+            const result = list.handleMouse({ ...event, y: event.y - header().length });
+            if (previewChip) syncPreview();
+            return result;
+          },
+          dispose: () => {
+            previewChip = undefined;
+            repaint?.();
+          },
         };
       });
     },
