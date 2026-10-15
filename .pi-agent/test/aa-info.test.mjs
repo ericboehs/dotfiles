@@ -109,7 +109,10 @@ const COSTS = [
 // AA suffixes reasoning variants onto its names; the briefing strips them, so
 // the sample carries them and the expectations do not. Latency is in the sample
 // too, and deliberately absent from every expectation.
-const OPUS_LINE = "Claude Opus 5 — int 62.5 · cod 55 · 151t/s · $10/1M · $1.80/task (AA)";
+// Below max, the int score names its effort and carries AA's max score, the
+// number the site headlines.
+const OPUS_LINE =
+  "Claude Opus 5 — int 62.5@xhi (max 62.9) · cod 55 · 151t/s · $10/1M · $1.80/task (AA)";
 
 /** Run one test against a throwaway agent directory (the cache lives there). */
 function withAgentDir(fn) {
@@ -197,6 +200,7 @@ function mount() {
     return handlers.model_select({ model, source: "cycle" }, ctx);
   };
   return {
+    ctx,
     notifies,
     fire,
     /** Fire session_start and wait for any briefing it produces. */
@@ -257,6 +261,29 @@ test("briefs every switch, sharing a single fetch across models", async () => {
         ui.notifies[3].message,
         /^GPT-5\.6 — int 70\.1 · cod 66 · 200t\/s · \$4\.5\/1M · \$0\.12\/task@med \(AA\)$/,
       );
+    } finally {
+      fetcher.restore();
+    }
+  });
+});
+
+test("the int score names its effort below max, and stays plain at max", async () => {
+  await withAgentDir(async () => {
+    const fetcher = withFetch(okFetch());
+    try {
+      const ui = mount();
+      // Low: below max, so the effort and AA's max (site headline) ride along.
+      ui.ctx.thinkingLevel = "low";
+      await ui.select(model("claude-opus-5"));
+      assert.match(ui.notifies.at(-1).message, /^Claude Opus 5 — int 52\.5@lo \(max 62\.9\) · /);
+      // Max: the bare row is the site's number, nothing to mark.
+      ui.ctx.thinkingLevel = "max";
+      await ui.select(model("claude-opus-5"));
+      assert.match(ui.notifies.at(-1).message, /^Claude Opus 5 — int 62\.9 · /);
+      // An effort AA lacks falls back to the max row, which is likewise plain.
+      ui.ctx.thinkingLevel = "high";
+      await ui.select(model("gpt-5-6"));
+      assert.match(ui.notifies.at(-1).message, /^GPT-5\.6 — int 70\.1 · /);
     } finally {
       fetcher.restore();
     }
@@ -442,7 +469,7 @@ test("a cost endpoint that fails costs only the $/task segment", async () => {
       assert.deepEqual(ui.notifies, [
         {
           // The main list is effort-aware even when the $/task endpoint fails.
-          message: "Claude Opus 5 — int 62.5 · cod 55 · 151t/s · $10/1M (AA)",
+          message: "Claude Opus 5 — int 62.5@xhi (max 62.9) · cod 55 · 151t/s · $10/1M (AA)",
           level: "info",
         },
       ]);
@@ -788,7 +815,7 @@ test("when nothing is within ±1.0, the nearest peers take the line as Near", as
       const ui = mount();
       await ui.select(model("muse-spark-1.3", "opencode"));
       const [first, second] = ui.notifies[0].message.split("\n");
-      assert.match(first, /^Muse Spark 1\.3 — int 51\.6 /);
+      assert.match(first, /^Muse Spark 1\.3 — int 51\.6@xhi \(max 53\) /);
       assert.equal(
         second,
         "Near Claude Opus 5 (53.4), GPT-5.6 Sol (49.8), and Grok 4.6 (49.3)",

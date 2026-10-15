@@ -8,7 +8,11 @@
  * and simply scrolls away as the conversation grows. It is never attached to
  * the editor, the footer, or the LLM context.
  *
- *   Claude Opus 5 — int 62.5 · cod 77 · 53t/s · $10/1M · $1.80/task (AA)
+ *   Claude Opus 5 — int 62.5@xhi (max 62.9) · cod 77 · 53t/s · $10/1M · $1.80/task (AA)
+ *
+ * AA's site headlines the bare slug, its max-effort row. When pi runs below
+ * max, the int score carries its effort and the max score beside it, so a
+ * medium 51.2 never reads as a mismatch with the site's 58.
  *
  * The two prices answer different questions: $/1M is the sticker rate, while
  * $/task is what one Intelligence Index task actually cost AA to run, which
@@ -439,6 +443,39 @@ function rate(value: number | undefined): string | undefined {
   return `$${parseFloat(value.toFixed(value < 0.01 ? 3 : 2))}`;
 }
 
+interface EffortMark {
+  /** The effort rung of the row shown, e.g. "medium". */
+  effort: string;
+  /** AA's bare/max row int score, the number the site headlines. */
+  maxInt?: number;
+}
+
+/**
+ * When the row shown is below AA's max row, name its effort and carry the max
+ * int alongside. AA's site headlines the bare (max) slug, so an unmarked
+ * medium-effort 51.2 next to the site's 58 reads as a bug rather than a
+ * different measurement. Returns undefined for the max row itself and for
+ * models without an effort ladder.
+ */
+function effortMark(aa: AaCache, entry: AaModel): EffortMark | undefined {
+  if (!entry.slug) return undefined;
+  const base = baseSlug(entry.slug);
+  if (base === entry.slug) return undefined;
+  const effort = entry.slug.slice(base.length + 1);
+  if (effort === "max") return undefined;
+  const max = aa.data.find((candidate) => candidate.slug === base);
+  return { effort, maxInt: max?.evaluations?.artificial_analysis_intelligence_index };
+}
+
+/** "int 51.2@med (max 57.6)" below max, plain "int 57.6" at it. */
+function intPart(score: number, mark: EffortMark | undefined): string {
+  const label = `int ${fmt(score)}`;
+  if (!mark) return label;
+  const max = fmt(mark.maxInt);
+  const suffix = max !== undefined && max !== fmt(score) ? ` (max ${max})` : "";
+  return `${label}@${EFFORT_NAMES[mark.effort] ?? mark.effort}${suffix}`;
+}
+
 /** Attribution tag, versioned when the cache knows the index: (AA) or (AA v4.3). */
 function aaTag(indexVersion: number | undefined): string {
   return indexVersion === undefined ? "(AA)" : `(AA v${indexVersion})`;
@@ -448,12 +485,13 @@ function briefing(
   entry: AaModel,
   cost: TaskCost | undefined,
   indexVersion?: number,
+  mark?: EffortMark,
 ): string | undefined {
   const evals = entry.evaluations ?? {};
   const taskCost = money(cost?.usd);
   const parts = [
     typeof evals.artificial_analysis_intelligence_index === "number"
-      ? `int ${fmt(evals.artificial_analysis_intelligence_index)}`
+      ? intPart(evals.artificial_analysis_intelligence_index, mark)
       : undefined,
     typeof evals.artificial_analysis_coding_index === "number"
       ? `cod ${fmt(evals.artificial_analysis_coding_index)}`
@@ -637,7 +675,12 @@ export default function (pi: ExtensionAPI): void {
     const entry = aa && matched ? forThinkingLevel(aa, matched, ctx.thinkingLevel) : undefined;
     let line =
       aa && entry
-        ? briefing(entry, costPerTask(aa, entry, ctx.thinkingLevel), aa.indexVersion)
+        ? briefing(
+            entry,
+            costPerTask(aa, entry, ctx.thinkingLevel),
+            aa.indexVersion,
+            effortMark(aa, entry),
+          )
         : undefined;
     if (!line && aa && !matched && hasPendingRelease(aa, model)) {
       line = `${displayId(model)} — scores not yet on AA ${aaTag(aa.indexVersion)}`;
