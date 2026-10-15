@@ -460,14 +460,29 @@ agent-link or bg message, so text inside an item can't drive it.
 `extensions/footer.ts` renders the status line (dir, provider, model, git,
 context/cost, boot time) plus `/bypass`, `/boot` and `/footer`.
 
-`/footer` opens a checklist of the chips, each with its live value; the
-selected row's description says what it shows and what a click does. Space or
-Enter hides or shows it. The choice is saved to `footer.json` in the agent
-directory (`{ "hidden": ["boot", "rate"] }`), so it applies to every session
-that starts afterwards; chips added later start shown. `/footer off` and
-`/footer on` switch the whole footer for this session. The click zones are
-keyed by the same chip ids, so a hidden chip shifts the rest without breaking
-their clicks.
+`/footer` opens a checklist of the chips in footer order, each with its live
+value; the selected row's description says what it shows and what a click
+does. Enter or Space cycles the row's value: `shown`/`hidden`, or for chips
+with display modes, each mode then `hidden` (Directory name/full path, Git
+full/branch, Context tokens/percent, Idle compaction clock/countdown, Cost and
+Rate limits compact/detailed, Token rate number/with TTFT). `j`/`k` move the
+selection; `J`/`K` or Shift+↑/↓ move the chip itself (the session name and the
+status row stay put). While the list is open the real footer is the preview:
+the selected chip blinks underlined, the rest go faint gray, hidden chips show
+struck through, and a chip with nothing to show right now stands in with an
+example.
+
+Choices save to `footer.json` in the agent directory, defaults left out:
+
+```json
+{ "hidden": ["boot"], "modes": { "context": "percent" }, "order": ["git", "dir", "..."] }
+```
+
+A saved mode is where each session starts; clicking a chip still flips it, for
+that session only. Chips added later start shown, in their default mode, after
+the ones the file orders. `/footer off` and `/footer on` switch the whole
+footer for this session. Click zones are keyed by chip id, so hiding or moving
+a chip never breaks the others' clicks.
 
 It also watches
 pi's on-disk version: when an install lands while instances are running — via

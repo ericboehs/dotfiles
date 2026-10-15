@@ -60,6 +60,8 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Key,
+  matchesKey,
   SettingsList,
   truncateToWidth,
   visibleWidth,
@@ -106,25 +108,59 @@ const IDLE_COMPACT_STATUS = "idle-compact";
  * show right now.
  */
 export const FOOTER_CHIPS = [
-  { id: "dir", label: "Directory", example: "project", description: "Working directory. Click: toggle the full path." },
-  { id: "git", label: "Git", example: "main* ⇡", description: "Branch, * when dirty, ⇡/⇣ ahead/behind. Click: branch prefills git status; arrows prefill push/pull (⇧ for force/rebase)." },
+  { id: "dir", label: "Directory", example: "project", description: "Working directory: its name, or the full path. Click: flip for this session." },
+  { id: "git", label: "Git", example: "main* ⇡", description: "Branch; full mode adds * when dirty and ⇡/⇣ ahead/behind. Click: branch prefills git status; arrows prefill push/pull (⇧ for force/rebase)." },
   { id: "provider", label: "Provider", example: "gh", description: "Provider, short (gh = GitHub Copilot, o = OpenAI Codex). Click: next model." },
   { id: "model", label: "Model", example: "opus", description: "Model, short (opus, sonn). Click: next model." },
   { id: "thinking", label: "Thinking", example: "med", description: "Thinking level (med, hi, xhi). Click: next level." },
   { id: "bypass", label: "Bypass", example: "bypass", description: "Shown while Approval Guardian is bypassed. Click: turn the guardian back on." },
-  { id: "context", label: "Context", example: "42k/1m", description: "Context tokens / window, coloured as it fills. Click: show a percent instead." },
-  { id: "idle", label: "Idle compaction", example: "⏲ 2:41p", description: "⏲ time the idle-compaction timer fires (54 minutes after the last request). /idle explains when it is missing." },
-  { id: "cost", label: "Cost", example: "$0.42", description: "Session cost, or a provider budget (ollama, baseten, openrouter). Click on a budget: percent or total." },
-  { id: "usage", label: "Rate limits", example: "57%", description: "Provider usage windows: Copilot premium-request share, Codex/Grok/Claude windows. Click: compact or detailed." },
+  { id: "context", label: "Context", example: "42k/1m", description: "Context tokens / window, or a percent, coloured as it fills. Click: flip for this session." },
+  { id: "idle", label: "Idle compaction", example: "⏲ 2:41p", description: "When idle compaction fires (54 minutes after the last request): a clock time or a countdown. /idle explains when it is missing." },
+  { id: "cost", label: "Cost", example: "$0.42", description: "Session cost, or a provider budget (ollama, baseten, openrouter) as a percent (compact) or total (detailed). Click: flip for this session." },
+  { id: "usage", label: "Rate limits", example: "57%", description: "Provider usage windows: Copilot premium-request share, Codex/Grok/Claude windows, compact or detailed. Click: flip for this session." },
   { id: "boot", label: "Boot time", example: "⚡775ms", description: "⚡ startup time, until the first message. Click: recent boot stats." },
-  { id: "rate", label: "Token rate", example: "99", description: "Tokens per second of the last reply (live while streaming). Click: add time to first token." },
+  { id: "rate", label: "Token rate", example: "99", description: "Tokens per second of the last reply (live while streaming), alone or with the time to first token. Click: flip for this session." },
   { id: "name", label: "Session name", example: "session-name", description: "Session name, or the dim peer name other agents use. Click: prefill /auto-name." },
   { id: "statuses", label: "Extension statuses", example: "extension status", description: "Other extensions' statuses, on a dim line of their own." },
 ] as const;
 
 export type FooterChipId = (typeof FOOTER_CHIPS)[number]["id"];
 
+/** Chips in the main row, which /footer can reorder; the name and statuses stay put. */
+export type FooterLineChipId = Exclude<FooterChipId, "name" | "statuses">;
+
 const CHIP_IDS: ReadonlySet<string> = new Set(FOOTER_CHIPS.map((chip) => chip.id));
+
+const isLineChip = (id: FooterChipId): id is FooterLineChipId => id !== "name" && id !== "statuses";
+
+/** The main row's chips in their built-in order. */
+export const DEFAULT_CHIP_ORDER: readonly FooterLineChipId[] = FOOTER_CHIPS.map((chip) => chip.id).filter(isLineChip);
+
+/**
+ * Display modes a chip can start in, the first being the default. A click on
+ * the chip still flips the mode, for that session only.
+ */
+export const CHIP_MODES: Partial<Record<FooterChipId, readonly string[]>> = {
+  dir: ["name", "full path"],
+  git: ["full", "branch"],
+  context: ["tokens", "percent"],
+  idle: ["clock", "countdown"],
+  cost: ["compact", "detailed"],
+  usage: ["compact", "detailed"],
+  rate: ["number", "with TTFT"],
+};
+
+/** What footer.json holds, normalized: every chip has a mode if it has modes, every line chip a place. */
+export interface FooterConfig {
+  hidden: Set<FooterChipId>;
+  modes: Partial<Record<FooterChipId, string>>;
+  order: FooterLineChipId[];
+}
+
+/** A chip's saved mode, or its default. */
+export function chipMode(config: FooterConfig, id: FooterChipId): string | undefined {
+  return config.modes[id] ?? CHIP_MODES[id]?.[0];
+}
 
 /** SGR codes out, for the gray chips in /footer's preview. */
 function stripAnsi(text: string): string {
@@ -146,26 +182,60 @@ function underline(text: string): string {
   return `\x1b[4m${text}\x1b[24m`;
 }
 
-/** footer.json: `{ "hidden": ["boot", "rate"] }`. New chips start shown. */
+/**
+ * footer.json: `{ "hidden": ["boot"], "modes": { "context": "percent" },
+ * "order": ["git", "dir", ...] }`, every key optional. New chips start shown,
+ * in their default mode, after the ones the file orders.
+ */
 export function footerConfigPath(): string {
   return join(agentDir(), "footer.json");
 }
 
-/** The hidden chips; unknown ids and a missing or broken file mean none. */
-export function readHiddenChips(): Set<FooterChipId> {
+/** The saved config; unknown ids, unknown modes and a missing or broken file fall back to defaults. */
+export function readFooterConfig(): FooterConfig {
+  let parsed: { hidden?: unknown; modes?: unknown; order?: unknown } = {};
   try {
-    const parsed = JSON.parse(readFileSync(footerConfigPath(), "utf8")) as { hidden?: unknown };
-    const hidden = Array.isArray(parsed.hidden) ? parsed.hidden : [];
-    return new Set(hidden.filter((id): id is FooterChipId => typeof id === "string" && CHIP_IDS.has(id)));
+    parsed = JSON.parse(readFileSync(footerConfigPath(), "utf8")) ?? {};
   } catch {
-    return new Set();
+    // Missing or broken: defaults.
   }
+  const known = (id: unknown): id is FooterChipId => typeof id === "string" && CHIP_IDS.has(id);
+  const hidden = new Set(Array.isArray(parsed.hidden) ? parsed.hidden.filter(known) : []);
+  const modes: Partial<Record<FooterChipId, string>> = {};
+  if (parsed.modes && typeof parsed.modes === "object") {
+    for (const [id, mode] of Object.entries(parsed.modes)) {
+      if (known(id) && typeof mode === "string" && CHIP_MODES[id]?.includes(mode)) modes[id] = mode;
+    }
+  }
+  const saved = Array.isArray(parsed.order) ? parsed.order.filter(known).filter(isLineChip) : [];
+  const order = [...new Set(saved)];
+  for (const id of DEFAULT_CHIP_ORDER) if (!order.includes(id)) order.push(id);
+  return { hidden, modes, order };
 }
 
-export function writeHiddenChips(hidden: ReadonlySet<FooterChipId>): void {
-  const ordered = FOOTER_CHIPS.map((chip) => chip.id).filter((id) => hidden.has(id));
+/** Save the config, leaving out defaults so the file stays short. */
+export function writeFooterConfig(config: FooterConfig): void {
+  const out: { hidden: FooterChipId[]; modes?: Partial<Record<FooterChipId, string>>; order?: FooterLineChipId[] } = {
+    hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
+  };
+  const modes = Object.fromEntries(
+    Object.entries(config.modes).filter(([id, mode]) => mode !== CHIP_MODES[id as FooterChipId]?.[0]),
+  );
+  if (Object.keys(modes).length > 0) out.modes = modes;
+  if (config.order.join() !== DEFAULT_CHIP_ORDER.join()) out.order = config.order;
   mkdirSync(agentDir(), { recursive: true });
-  writeFileSync(footerConfigPath(), `${JSON.stringify({ hidden: ordered }, null, 2)}\n`);
+  writeFileSync(footerConfigPath(), `${JSON.stringify(out, null, 2)}\n`);
+}
+
+/** Minutes until a footer clock label ("2:41p") next comes round, for the idle countdown. */
+export function minutesUntilClock(label: string, now: Date): number | undefined {
+  const match = /(\d{1,2}):(\d{2})([ap])/.exec(label);
+  if (!match) return undefined;
+  const hours = (Number(match[1]) % 12) + (match[3] === "p" ? 12 : 0);
+  const target = new Date(now);
+  target.setHours(hours, Number(match[2]), 0, 0);
+  if (target.getTime() < now.getTime() - 60_000) target.setDate(target.getDate() + 1);
+  return Math.max(0, Math.ceil((target.getTime() - now.getTime()) / 60_000));
 }
 
 /**
@@ -1461,8 +1531,21 @@ export default function footerExtension(pi: ExtensionAPI): void {
     ["rate", "rate"],
     ["name", "name"],
   ];
-  /** Chips /footer hid, from footer.json. */
-  let hiddenChips = readHiddenChips();
+  /** /footer's saved choices (hidden chips, start modes, order), from footer.json. */
+  let footerConfig = readFooterConfig();
+  /** The idle chip is showing a countdown, so the update tick repaints it. */
+  let idleCountdownShown = false;
+  /**
+   * Start the session-only click toggles in the modes /footer saved. A click
+   * still flips them, for this session only.
+   */
+  function applySavedModes(): void {
+    showFullPath = chipMode(footerConfig, "dir") === "full path";
+    contextPercent = chipMode(footerConfig, "context") === "percent";
+    compactCostUsage = chipMode(footerConfig, "cost") !== "detailed";
+    compactProviderUsage = chipMode(footerConfig, "usage") !== "detailed";
+    detailedRate = chipMode(footerConfig, "rate") === "with TTFT";
+  }
   /** Each chip's text at the last render, hidden ones too, for /footer's samples. */
   let chipSamples = new Map<FooterChipId, string>();
   /**
@@ -1602,7 +1685,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const usage = ctx.getContextUsage();
           const gitState = git.read(ctx.cwd, requestRender);
           const branch = footerData.getGitBranch();
-          const gitChip = formatGit(branch, gitState);
+          // Git "branch" mode drops the dirty marker and the arrows (and their clicks).
+          const gitChip = formatGit(
+            branch,
+            chipMode(footerConfig, "git") === "branch" ? { ...gitState, dirty: false, ahead: false, behind: false } : gitState,
+          );
           const statuses = footerData.getExtensionStatuses();
           const usageValue = usageChip(provider);
           // theme is pi's live proxy, so a light/dark switch repaints with the right pair.
@@ -1614,6 +1701,17 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }
           const showBoot = bootMs !== undefined && !bootCleared;
 
+          // Idle compaction as compaction/index.ts set it (⏲ 2:41p), or as a
+          // countdown (⏲ 37m), which the 30s update tick keeps current.
+          const idleChipText = (status: string | undefined): string => {
+            idleCountdownShown = false;
+            if (!status) return "";
+            const minutes =
+              chipMode(footerConfig, "idle") === "countdown" ? minutesUntilClock(status, new Date()) : undefined;
+            if (minutes === undefined) return theme.fg("dim", status);
+            idleCountdownShown = true;
+            return theme.fg("dim", `⏲ ${minutes}m`);
+          };
           const chips: Array<readonly [Exclude<FooterChipId, "name" | "statuses">, string]> = [
             ["dir", color(BLUE, showFullPath ? tildePath(ctx.cwd) : basename(ctx.cwd))],
             ["git", gitChip.text],
@@ -1638,7 +1736,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
                     usage?.tokens == null ? "?" : formatCount(usage.tokens),
                   )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
             ],
-            ["idle", statuses.get(IDLE_COMPACT_STATUS) ? theme.fg("dim", statuses.get(IDLE_COMPACT_STATUS) as string) : ""],
+            ["idle", idleChipText(statuses.get(IDLE_COMPACT_STATUS))],
             [
               "cost",
               usageValue
@@ -1673,6 +1771,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
                     : "",
             ],
           ];
+          // /footer's order: a stable sort, so the rate-limit slots stay together.
+          const rank = (id: FooterLineChipId) => footerConfig.order.indexOf(id);
+          chips.sort(([a], [b]) => rank(a) - rank(b));
           // /footer samples every chip, hidden ones included; the walk below
           // then skips the hidden ones.
           const samples = new Map<FooterChipId, string>();
@@ -1686,7 +1787,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const previewStyle = (id: FooterChipId, text: string): string => {
             if (!previewChip || !text) return text;
             const styled = id === previewChip ? blink(underline(text)) : faint(theme.fg("dim", stripAnsi(text)));
-            return hiddenChips.has(id) ? strike(styled) : styled;
+            return footerConfig.hidden.has(id) ? strike(styled) : styled;
           };
           // The selected chip, when it has nothing to show right now, stands in
           // with its example, styled the way the real chip is, so you see what
@@ -1735,7 +1836,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             : "";
           if (nameText) samples.set("name", nameText);
           const nameShown = nameText || (previewChip === "name" ? placeholder("name") : "");
-          const right = previewChip ? previewStyle("name", nameShown) : hiddenChips.has("name") ? "" : nameText;
+          const right = previewChip ? previewStyle("name", nameShown) : footerConfig.hidden.has("name") ? "" : nameText;
 
           // Wrap, don't truncate: chips fill a row and whole chips move down
           // to the next row when the terminal is too narrow, so nothing is
@@ -1771,7 +1872,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             const isExample = !raw && previewEmpty && id === previewChip && !examplePlaced;
             if (isExample) examplePlaced = true;
             const text = isExample ? placeholder(id) : raw;
-            if (!text || (hiddenChips.has(id) && !previewChip)) continue;
+            if (!text || (footerConfig.hidden.has(id) && !previewChip)) continue;
             const part = previewStyle(id, text);
             const partWidth = visibleWidth(part);
             // A chip moves down whole when it cannot fit its row's budget —
@@ -1847,7 +1948,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
             samples.set("statuses", extra.join(" "));
             const statusLine = theme.fg("dim", extra.join(" "));
             if (previewChip) lines.push(truncateToWidth(previewStyle("statuses", statusLine), width, "…"));
-            else if (!hiddenChips.has("statuses")) lines.push(truncateToWidth(statusLine, width, "…"));
+            else if (!footerConfig.hidden.has("statuses")) lines.push(truncateToWidth(statusLine, width, "…"));
           } else if (previewChip === "statuses") {
             lines.push(truncateToWidth(previewStyle("statuses", placeholder("statuses")), width, "…"));
           }
@@ -2127,23 +2228,28 @@ export default function footerExtension(pi: ExtensionAPI): void {
       }
       if (!ctx.hasUI) return;
       // Another session may have changed footer.json since this one read it.
-      hiddenChips = readHiddenChips();
+      footerConfig = readFooterConfig();
       await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
         const labelWidth = Math.max(...FOOTER_CHIPS.map((chip) => chip.label.length));
         // SettingsList aligns values after at most 36 label columns; a longer
         // label would push its value out of line, so samples fit in the rest.
         const sampleWidth = Math.max(8, 36 - labelWidth - 2);
-        const items: SettingItem[] = FOOTER_CHIPS.map((chip) => {
-          const sample = chipSamples.get(chip.id);
-          return {
-            id: chip.id,
-            // The live value in the footer's own colours.
-            label: `${chip.label.padEnd(labelWidth)}  ${sample ? truncateToWidth(sample, sampleWidth, "…") : "—"}`,
-            description: chip.description,
-            currentValue: hiddenChips.has(chip.id) ? "hidden" : "shown",
-            values: ["shown", "hidden"],
-          };
-        });
+        const chipById = new Map<FooterChipId, (typeof FOOTER_CHIPS)[number]>(FOOTER_CHIPS.map((chip) => [chip.id, chip]));
+        // Rows follow the footer: the saved order, then the name and statuses, which stay put.
+        const buildItems = (): SettingItem[] =>
+          [...footerConfig.order, "name" as const, "statuses" as const].map((id) => {
+            const chip = chipById.get(id)!;
+            const sample = chipSamples.get(id);
+            return {
+              id,
+              // The live value in the footer's own colours.
+              label: `${chip.label.padEnd(labelWidth)}  ${sample ? truncateToWidth(sample, sampleWidth, "…") : "—"}`,
+              description: chip.description,
+              // A chip with modes cycles through them, then hidden.
+              currentValue: footerConfig.hidden.has(id) ? "hidden" : (chipMode(footerConfig, id) ?? "shown"),
+              values: [...(CHIP_MODES[id] ?? ["shown"]), "hidden"],
+            };
+          });
         const listTheme: SettingsListTheme = {
           // Accent only the chip name: the sample after it keeps its colours.
           label: (text, selected) =>
@@ -2154,42 +2260,78 @@ export default function footerExtension(pi: ExtensionAPI): void {
           cursor: theme.fg("accent", "→ "),
           hint: (text) => theme.fg("dim", text),
         };
-        const list = new SettingsList(
-          items,
-          Math.min(items.length, 15),
-          listTheme,
-          (id, value) => {
-            const chip = id as FooterChipId;
-            if (value === "hidden") hiddenChips.add(chip);
-            else hiddenChips.delete(chip);
-            try {
-              writeHiddenChips(hiddenChips);
-            } catch (error) {
-              ctx.ui.notify(`Could not save ${footerConfigPath()}: ${(error as Error).message}`, "warning");
-            }
-            repaint?.();
-          },
-          () => {
-            previewChip = undefined;
-            repaint?.();
-            done(undefined);
-          },
-        );
-        // SettingsList keeps its cursor private; read it to follow the
-        // selection in the footer preview (search is off, so its index is ours).
-        const syncPreview = () => {
-          const index = (list as unknown as { selectedIndex?: number }).selectedIndex;
-          const id = typeof index === "number" ? items[index]?.id : undefined;
-          previewChip = (id as FooterChipId | undefined) ?? FOOTER_CHIPS[0].id;
+        const save = () => {
+          try {
+            writeFooterConfig(footerConfig);
+          } catch (error) {
+            ctx.ui.notify(`Could not save ${footerConfigPath()}: ${(error as Error).message}`, "warning");
+          }
           repaint?.();
         };
+        const onChange = (id: string, value: string) => {
+          const chip = id as FooterChipId;
+          if (value === "hidden") {
+            footerConfig.hidden.add(chip);
+          } else {
+            footerConfig.hidden.delete(chip);
+            if (CHIP_MODES[chip]) footerConfig.modes[chip] = value;
+          }
+          // A new start mode applies to this session at once, too.
+          applySavedModes();
+          save();
+        };
+        const close = () => {
+          previewChip = undefined;
+          repaint?.();
+          done(undefined);
+        };
+        let items = buildItems();
+        const makeList = (select?: string) => {
+          const created = new SettingsList(items, Math.min(items.length, 15), listTheme, onChange, close);
+          if (select) created.selectItem(select);
+          return created;
+        };
+        let list = makeList();
+        // SettingsList keeps its cursor private; read it to follow the
+        // selection in the footer preview (search is off, so its index is ours).
+        const selectedId = (): FooterChipId | undefined => {
+          const index = (list as unknown as { selectedIndex?: number }).selectedIndex;
+          return typeof index === "number" ? (items[index]?.id as FooterChipId | undefined) : undefined;
+        };
+        const syncPreview = () => {
+          previewChip = selectedId() ?? FOOTER_CHIPS[0].id;
+          repaint?.();
+        };
+        // J/K or Shift+↑/↓: move the selected chip; the list is rebuilt in the
+        // new order with the chip still selected.
+        const move = (delta: 1 | -1) => {
+          const id = selectedId();
+          if (!id || !isLineChip(id)) return;
+          const order = footerConfig.order;
+          const from = order.indexOf(id);
+          const to = from + delta;
+          if (from < 0 || to < 0 || to >= order.length) return;
+          order.splice(from, 1);
+          order.splice(to, 0, id);
+          save();
+          items = buildItems();
+          list = makeList(id);
+        };
         syncPreview();
-        const header = () => [theme.fg("accent", "Footer chips"), ""];
+        const header = () => [
+          theme.fg("accent", "Footer chips"),
+          theme.fg("dim", "j/k select · J/K or ⇧↑/⇧↓ move · click a chip to flip its mode for this session"),
+          "",
+        ];
         return {
           render: (width: number) => [...header().map((line) => truncateToWidth(line, width, "…")), ...list.render(width)],
           invalidate: () => list.invalidate(),
           handleInput: (data: string) => {
-            list.handleInput(data);
+            if (data === "J" || matchesKey(data, Key.shift("down"))) move(1);
+            else if (data === "K" || matchesKey(data, Key.shift("up"))) move(-1);
+            else if (data === "j") list.handleInput("\x1b[B");
+            else if (data === "k") list.handleInput("\x1b[A");
+            else list.handleInput(data);
             if (previewChip) syncPreview();
             tui.requestRender();
           },
@@ -2213,8 +2355,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
     runtimeContext = ctx;
     // Session-local toggles reset instead of leaking into the next conversation.
     bypassed = false;
-    compactProviderUsage = true;
-    compactCostUsage = true;
     turnStartMs = undefined;
     stopWaiting();
     streaming = false;
@@ -2224,9 +2364,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
     liveTtftMs = undefined;
     lastRate = undefined;
     lastTtftMs = undefined;
-    detailedRate = false;
     coldStart = event.reason === "startup";
-    hiddenChips = readHiddenChips();
+    // The click toggles start each session in the modes /footer saved.
+    footerConfig = readFooterConfig();
+    applySavedModes();
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer
     // name that lands after the last startup paint — until the next keystroke.
@@ -2238,7 +2379,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
     // session_start also fires on session switches — only start one timer.
     if (!updateTimerStarted) {
       updateTimerStarted = true;
-      updateTimer = setInterval(() => update.reload(() => repaint?.()), UPDATE_TTL_MS);
+      updateTimer = setInterval(() => {
+        update.reload(() => repaint?.());
+        // The idle countdown (⏲ 37m) needs a repaint to count down.
+        if (idleCountdownShown) repaint?.();
+      }, UPDATE_TTL_MS);
       updateTimer.unref?.();
     }
   });

@@ -22,7 +22,14 @@ afterEach(async () => {
 });
 
 import { VERSION as RUNNING_PI_VERSION } from "@earendil-works/pi-coding-agent";
-import footer, { FOOTER_CHIPS, readHiddenChips, writeHiddenChips } from "../extensions/footer.ts";
+import footer, {
+  CHIP_MODES,
+  DEFAULT_CHIP_ORDER,
+  FOOTER_CHIPS,
+  minutesUntilClock,
+  readFooterConfig,
+  writeFooterConfig,
+} from "../extensions/footer.ts";
 
 const PORCELAIN = "A  staged.ts\n M edited.ts\n?? new.ts\n";
 
@@ -1479,17 +1486,42 @@ test("every footer chip has a unique id, a label and a description", () => {
   for (const chip of FOOTER_CHIPS) assert.ok(chip.label && chip.description && chip.example, chip.id);
 });
 
-test("footer.json: unknown ids and broken files mean nothing hidden; writes keep chip order", async () => {
+test("footer.json: unknown ids, modes and broken files fall back to defaults; writes leave defaults out", async () => {
   await withAgentDir(async (dir) => {
     const file = path.join(dir, "footer.json");
-    assert.deepEqual([...readHiddenChips()], []);
+    const defaults = readFooterConfig();
+    assert.deepEqual([...defaults.hidden], []);
+    assert.deepEqual(defaults.modes, {});
+    assert.deepEqual(defaults.order, [...DEFAULT_CHIP_ORDER]);
     writeFileSync(file, "{not json");
-    assert.deepEqual([...readHiddenChips()], []);
-    writeFileSync(file, JSON.stringify({ hidden: ["rate", "nonsense", 7] }));
-    assert.deepEqual([...readHiddenChips()], ["rate"]);
-    writeHiddenChips(new Set(["rate", "dir"]));
-    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { hidden: ["dir", "rate"] });
+    assert.deepEqual(readFooterConfig().order, [...DEFAULT_CHIP_ORDER]);
+
+    writeFileSync(
+      file,
+      JSON.stringify({
+        hidden: ["rate", "nonsense", 7],
+        modes: { context: "percent", dir: "sideways", nonsense: "x" },
+        order: ["git", "dir", "name", "git", "nonsense"],
+      }),
+    );
+    const config = readFooterConfig();
+    assert.deepEqual([...config.hidden], ["rate"]);
+    assert.deepEqual(config.modes, { context: "percent" }, "unknown modes dropped");
+    // Saved order first (deduped, line chips only), then the rest in default order.
+    assert.deepEqual(config.order.slice(0, 3), ["git", "dir", "provider"]);
+    assert.equal(config.order.length, DEFAULT_CHIP_ORDER.length);
+
+    writeFooterConfig({ hidden: new Set(["rate", "dir"]), modes: { context: "tokens", idle: "countdown" }, order: [...DEFAULT_CHIP_ORDER] });
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { hidden: ["dir", "rate"], modes: { idle: "countdown" } });
   });
+});
+
+test("every chip mode list starts with the behaviour the footer had before modes", () => {
+  assert.deepEqual(CHIP_MODES.dir, ["name", "full path"]);
+  assert.deepEqual(CHIP_MODES.context, ["tokens", "percent"]);
+  assert.deepEqual(CHIP_MODES.cost?.[0], "compact");
+  assert.deepEqual(CHIP_MODES.usage?.[0], "compact");
+  assert.deepEqual(CHIP_MODES.rate?.[0], "number");
 });
 
 test("hidden chips leave the footer, and click zones follow the chips that remain", async () => {
@@ -1535,21 +1567,27 @@ test("/footer lists every chip with its live value and saves toggles to footer.j
     const list = await openChecklist(ui);
     const shown = list.render(140).map(strip);
     assert.equal(shown[0], "Footer chips");
-    assert.ok(shown.some((line) => /Directory\s+dotfiles\s+shown/.test(line)), shown.join("\n"));
-    assert.ok(shown.some((line) => /Context\s+41\.2k\/1m/.test(line)));
-    assert.ok(shown.some((line) => /Bypass\s+—/.test(line)), "a chip with nothing to show gets a dash");
-    assert.ok(shown.some((line) => line.includes("Working directory. Click: toggle the full path.")), "selected row's description");
+    assert.match(shown[1], /j\/k select · J\/K or ⇧↑\/⇧↓ move/);
+    assert.ok(shown.some((line) => /Directory\s+dotfiles\s+name/.test(line)), shown.join("\n"));
+    assert.ok(shown.some((line) => /Context\s+41\.2k\/1m\s+tokens/.test(line)));
+    assert.ok(shown.some((line) => /Bypass\s+—\s+shown/.test(line)), "a chip with nothing to show gets a dash");
+    assert.ok(shown.some((line) => line.includes("Working directory: its name, or the full path.")), "selected row's description");
     const raw = list.render(140);
     assert.match(raw.find((line) => strip(line).includes("Directory")), /\x1B\[[0-9;]*mdotfiles/, "samples keep the footer's colours");
 
-    list.handleInput("\r"); // Enter toggles the selected row, Directory
-    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: ["dir"] });
+    const saved = () => JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8"));
+    list.handleInput("\r"); // Enter cycles Directory: name → full path
+    assert.deepEqual(saved(), { hidden: [], modes: { dir: "full path" } });
+    assert.match(ui.plain()[0], /^\/Users\/someone\/Code\/github\.com\/someone\/dotfiles /, "applies to this session at once");
+
+    list.handleInput("\r"); // → hidden
+    assert.deepEqual(saved().hidden, ["dir"]);
     // Still previewed while the checklist is open: struck through, and blinking as the selection.
     assert.match(ui.raw()[0], /^\x1b\[9m\x1b\[5m.*dotfiles/);
     assert.ok(list.render(140).map(strip).some((line) => /Directory.*hidden/.test(line)));
 
-    list.handleInput("\r");
-    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: [] });
+    list.handleInput("\r"); // → back to name, the default, so nothing saved
+    assert.deepEqual(saved(), { hidden: [] });
     assert.match(ui.plain()[0], /^dotfiles/);
   });
 });
@@ -1567,7 +1605,9 @@ test("/footer previews in the real footer: the selected chip blinks, the rest go
     assert.match(footerLine(), /\x1b\[5m.*master/);
     assert.match(footerLine(), /^\x1b\[2m\x1B\[2mdotfiles\x1B\[22m/);
 
-    list.handleInput("\r"); // hide Git: still previewed, struck through
+    list.handleInput("\r"); // Git: full → branch, so no dirty marker or arrows
+    assert.match(strip(footerLine()), /^dotfiles master gh /);
+    list.handleInput("\r"); // → hidden: still previewed, struck through
     assert.match(footerLine(), /\x1b\[9m\x1b\[5m.*master/);
 
     list.handleInput("\x1b"); // Esc closes: normal footer, Git gone
@@ -1608,6 +1648,78 @@ test("/footer stand-ins never leak raw colour codes, for any selected chip", asy
       assert.doesNotMatch(shown, /\d+;\d+;\d+|\x1b/, `${chip.id} selected: ${shown}`);
       list.handleInput("\x1b[B");
     }
+    list.handleInput("\x1b");
+  });
+});
+
+test("saved modes start each session; a click flips them for that session only", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ modes: { context: "percent", dir: "full path" } }));
+    const ui = await mount();
+    assert.match(ui.plain()[0], /^\/Users\/someone\/.* 4%/);
+    const line = ui.plain()[0];
+    ui.click(line.indexOf(" 4%") + 1, 0);
+    assert.match(ui.plain()[0], /41\.2k\/1m/, "click flips it");
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")).modes.context, "percent", "but saves nothing");
+    await ui.startSession();
+    assert.match(ui.plain()[0], / 4%/, "a new session starts in the saved mode again");
+  });
+});
+
+test("git branch mode drops the dirty marker and arrows", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ modes: { git: "branch" } }));
+    const ui = await mount({ revList: "2\t1" });
+    const line = await ui.settled();
+    assert.match(line[0], /^dotfiles master gh /);
+  });
+});
+
+test("idle countdown mode shows minutes left instead of the clock", async () => {
+  const now = new Date(2026, 9, 15, 14, 4, 30);
+  assert.equal(minutesUntilClock("⏲ 2:41p", now), 37);
+  assert.equal(minutesUntilClock("⏲ 12:05a", new Date(2026, 9, 15, 23, 50)), 15, "past midnight");
+  assert.equal(minutesUntilClock("soon", now), undefined);
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ modes: { idle: "countdown" } }));
+    const inAnHour = new Date(Date.now() + 37 * 60_000 + 20_000);
+    const hours = inAnHour.getHours();
+    const clock = `⏲ ${hours % 12 || 12}:${String(inAnHour.getMinutes()).padStart(2, "0")}${hours < 12 ? "a" : "p"}`;
+    const ui = await mount({ statuses: new Map([["idle-compact", clock]]) });
+    assert.match(ui.plain()[0], /41\.2k\/1m ⏲ 3[78]m/);
+  });
+});
+
+test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row stays put", async () => {
+  await withAgentDir(async (dir) => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    const saved = () => JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8"));
+    const rows = () => list.render(140).map(strip).filter((line) => /shown|hidden|name|tokens|full|clock|compact|number/.test(line));
+
+    list.handleInput("J"); // Directory down past Git
+    assert.match(strip(ui.raw()[0]), /^master\* dotfiles gh /, "the footer follows");
+    assert.deepEqual(saved().order.slice(0, 2), ["git", "dir"]);
+    assert.match(rows()[1], /→ Directory/, "the moved chip stays selected");
+
+    list.handleInput("\x1b[1;2A"); // Shift+Up: back to the top
+    assert.match(strip(ui.raw()[0]), /^dotfiles master\* gh /);
+    assert.equal(saved().order, undefined, "default order is not saved");
+
+    list.handleInput("K"); // already first: no-op
+    assert.match(strip(ui.raw()[0]), /^dotfiles master\* /);
+
+    list.handleInput("j");
+    list.handleInput("j");
+    assert.match(rows().find((line) => line.startsWith("→")), /Provider/, "j moves the selection down");
+    list.handleInput("k");
+    assert.match(rows().find((line) => line.startsWith("→")), /Git/);
+
+    for (let i = 0; i < 11; i += 1) list.handleInput("j"); // down to Session name
+    assert.match(rows().find((line) => line.startsWith("→")), /Session name/);
+    list.handleInput("K");
+    assert.match(rows().find((line) => line.startsWith("→")), /Session name/, "name row does not move");
+    assert.equal(saved().order, undefined);
     list.handleInput("\x1b");
   });
 });
