@@ -112,13 +112,25 @@ export function clockLabel(date: Date): string {
 	return `${hours % 12 || 12}:${minutes}${hours < 12 ? "a" : "p"}`;
 }
 
-/** True when the context is at least `minPercent` of the model's window. */
+/**
+ * True when the context is at least `minTokens`, or `minPercent` of the
+ * model's window if that is smaller. A fixed count suits 1M windows, where half
+ * the window is 500K and would almost never arm; the share keeps 200K-256K
+ * windows, which compact before reaching 200K, arming at half their size.
+ */
 export function contextIsLarge(
 	usage: { tokens: number | null; contextWindow: number; percent?: number | null } | undefined,
 	minPercent: number,
+	minTokens = Number.POSITIVE_INFINITY,
 ): boolean {
 	if (!usage || usage.tokens == null || !usage.contextWindow) return false;
-	return (usage.tokens / usage.contextWindow) * 100 >= minPercent;
+	return usage.tokens >= Math.min(minTokens, (usage.contextWindow * minPercent) / 100);
+}
+
+/** PI_IDLE_COMPACT_MIN_TOKENS, a positive count, default 200,000. */
+export function minTokens(env: Record<string, string | undefined> = process.env): number {
+	const value = Number(env.PI_IDLE_COMPACT_MIN_TOKENS);
+	return Number.isFinite(value) && value >= 1 ? value : 200_000;
 }
 
 /** PI_IDLE_COMPACT_MIN_PERCENT, clamped to 1..100, default 50. */

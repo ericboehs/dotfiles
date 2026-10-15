@@ -19,6 +19,7 @@ import {
 	idleDelayMs,
 	isSessionPayload,
 	minPercent,
+	minTokens,
 	replayPrompt,
 	replayTail,
 	summaryRoom,
@@ -100,7 +101,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_settled", (_event, ctx) => {
 		clearIdleTimer();
 		if (!idleCompactEnabled() || !captured || ctx.model?.api !== "anthropic-messages") return;
-		if (!contextIsLarge(ctx.getContextUsage(), minPercent())) return;
+		if (!contextIsLarge(ctx.getContextUsage(), minPercent(), minTokens())) return;
 		// PI_IDLE_COMPACT_DELAY_MS replaces the 54-minute wait, for testing.
 		const override = Number(process.env.PI_IDLE_COMPACT_DELAY_MS);
 		const delay = override > 0 ? override : idleDelayMs(captured, Date.now(), cacheTtlMs());

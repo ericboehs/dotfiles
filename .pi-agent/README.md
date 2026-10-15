@@ -618,8 +618,8 @@ in order:
 3. **pi's default**, for models that don't use the Anthropic API.
 
 It also does Claude Code's idle compaction. With `PI_CACHE_RETENTION=long`
-(the 1-hour cache), a session left idle with its context at half the model's
-window or more is compacted 54 minutes after its last request, while the
+(the 1-hour cache), a session left idle with its context at 200K tokens or
+more (half the window, for windows under 400K) is compacted 54 minutes after its last request, while the
 cache is still warm. Otherwise the next message, an hour later, would rewrite
 the whole context at cache-write price. Any input, a new turn or a model
 switch cancels the timer. While the timer is armed, the footer shows the
@@ -628,7 +628,8 @@ time it will fire, dim, after the context chip (`41.2k/200k ⏲10:54p`).
 | Variable | Effect |
 |---|---|
 | `PI_IDLE_COMPACT=0` | turns idle compaction off |
-| `PI_IDLE_COMPACT_MIN_PERCENT` | context share that arms the timer (default 50) |
+| `PI_IDLE_COMPACT_MIN_TOKENS` | context size that arms the timer (default 200000) |
+| `PI_IDLE_COMPACT_MIN_PERCENT` | share of the window that arms it when smaller (default 50) |
 | `PI_IDLE_COMPACT_DELAY_MS` | replaces the 54-minute wait (for testing) |
 | `PI_COMPACTION_DEBUG=<file>` | logs why each replay ran or was skipped |
 

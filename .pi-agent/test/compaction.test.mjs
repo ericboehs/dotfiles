@@ -13,6 +13,7 @@ import {
   isSessionPayload,
   MIN_SUMMARY_ROOM,
   minPercent,
+  minTokens,
   replayTail,
   summaryRoom,
 } from "../extensions/compaction/replay.ts";
@@ -186,6 +187,16 @@ test("idle compaction settings", () => {
   assert.equal(contextIsLarge({ tokens: 99_999, contextWindow: 200_000 }, 50), false);
   assert.equal(contextIsLarge({ tokens: null, contextWindow: 200_000 }, 50), false);
   assert.equal(contextIsLarge(undefined, 50), false);
+  assert.equal(minTokens({}), 200_000);
+  assert.equal(minTokens({ PI_IDLE_COMPACT_MIN_TOKENS: "150000" }), 150_000);
+  assert.equal(minTokens({ PI_IDLE_COMPACT_MIN_TOKENS: "0" }), 200_000);
+  // 1M window: the token floor applies, not half the window (500K).
+  assert.equal(contextIsLarge({ tokens: 200_000, contextWindow: 1_000_000 }, 50, 200_000), true);
+  assert.equal(contextIsLarge({ tokens: 199_999, contextWindow: 1_000_000 }, 50, 200_000), false);
+  // 200K-256K windows compact before 200K, so half the window applies.
+  assert.equal(contextIsLarge({ tokens: 100_000, contextWindow: 200_000 }, 50, 200_000), true);
+  assert.equal(contextIsLarge({ tokens: 128_000, contextWindow: 256_000 }, 50, 200_000), true);
+  assert.equal(contextIsLarge({ tokens: 127_999, contextWindow: 256_000 }, 50, 200_000), false);
 });
 
 // ---- the extension -------------------------------------------------------
@@ -300,6 +311,7 @@ test("idle timer compacts 54 minutes after the last request, and input cancels i
   delete process.env.PI_IDLE_COMPACT;
   delete process.env.PI_IDLE_COMPACT_DELAY_MS;
   delete process.env.PI_IDLE_COMPACT_MIN_PERCENT;
+  delete process.env.PI_IDLE_COMPACT_MIN_TOKENS;
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
   t.after(() => mock.timers.reset());
 
