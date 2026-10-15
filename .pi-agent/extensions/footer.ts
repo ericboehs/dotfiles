@@ -1711,7 +1711,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
               case "usage":
                 return color(YELLOW, text);
               case "rate":
-                return paint(rateColor(99, lightTheme), text);
+                return color(rateColor(99, lightTheme), text);
               case "name":
                 return color(CYAN, text);
               default:

@@ -1599,6 +1599,19 @@ test("/footer stands in an example for a selected chip with nothing to show", as
   });
 });
 
+test("/footer stand-ins never leak raw colour codes, for any selected chip", async () => {
+  await withAgentDir(async () => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    for (const chip of FOOTER_CHIPS) {
+      const shown = ui.plain().join("\n");
+      assert.doesNotMatch(shown, /\d+;\d+;\d+|\x1b/, `${chip.id} selected: ${shown}`);
+      list.handleInput("\x1b[B");
+    }
+    list.handleInput("\x1b");
+  });
+});
+
 test("/footer on and off switch the whole footer; anything else shows usage", async () => {
   const ui = await mount();
   await ui.run("footer", "off");
