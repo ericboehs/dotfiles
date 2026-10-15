@@ -25,6 +25,14 @@ if [[ -t 0 ]]; then
   export GPG_TTY="$(tty)"
 fi
 
+# Ask providers for their long prompt cache. On Claude that is the 1-hour TTL
+# instead of the 5-minute default; Copilot keeps it (a request after 7.5 idle
+# minutes read the whole prefix from cache, against 0 of 631 hits past 5
+# minutes without it). OpenAI-style APIs get prompt_cache_retention "24h". A
+# provider that rejects the field gets compat.supportsLongCacheRetention: false
+# in .pi-agent/models.*.json.
+export PI_CACHE_RETENTION=long
+
 # Machine-local env, the .zshenv counterpart to .zshrc's .zshrc.local. It has to
 # be here rather than there because the things that need it are not interactive:
 # a work box's AWS profile and gov-cloud regions, a Homebrew prefix that only
