@@ -640,6 +640,7 @@ function shortModel(model: string | undefined, provider?: string): string {
     if (family) return family;
   }
   if (provider === "github-copilot" && /^claude-opus-5\.5$/i.test(base)) return "opus";
+  if (provider === "github-copilot" && /^claude-sonnet-5\.5$/i.test(base)) return "sonn";
   for (const [pattern, replacement] of MODEL_RULES) {
     // Aliased ids render lowercase; unknown ids pass through with their original casing.
     if (pattern.test(base)) return base.replace(pattern, replacement).toLowerCase();
