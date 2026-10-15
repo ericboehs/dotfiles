@@ -141,6 +141,11 @@ function strike(text: string): string {
   return `\x1b[9m${text}\x1b[29m`;
 }
 
+/** Underlined: the selected chip in /footer's preview, legible even when the chip itself is dim. */
+function underline(text: string): string {
+  return `\x1b[4m${text}\x1b[24m`;
+}
+
 /** footer.json: `{ "hidden": ["boot", "rate"] }`. New chips start shown. */
 export function footerConfigPath(): string {
   return join(agentDir(), "footer.json");
@@ -1674,11 +1679,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
           for (const [id, text] of chips) {
             if (text) samples.set(id, samples.has(id) ? `${samples.get(id)} ${text}` : text);
           }
-          // /footer's preview: the selected chip blinks, the rest go gray, and
-          // hidden chips show struck through so you can see where they'd go.
+          // /footer's preview: the selected chip blinks underlined, the rest go
+          // faint gray (faint too, so a chip that is already dim, like boot or
+          // idle, still stands out when selected), and hidden chips show struck
+          // through so you can see where they'd go.
           const previewStyle = (id: FooterChipId, text: string): string => {
             if (!previewChip || !text) return text;
-            const styled = id === previewChip ? blink(text) : theme.fg("dim", stripAnsi(text));
+            const styled = id === previewChip ? blink(underline(text)) : faint(theme.fg("dim", stripAnsi(text)));
             return hiddenChips.has(id) ? strike(styled) : styled;
           };
           // The selected chip, when it has nothing to show right now, stands in

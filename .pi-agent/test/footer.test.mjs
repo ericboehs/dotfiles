@@ -1559,13 +1559,13 @@ test("/footer previews in the real footer: the selected chip blinks, the rest go
     const ui = await mount();
     const list = await openChecklist(ui);
     const footerLine = () => ui.raw()[0];
-    // Directory is selected first: it blinks, other chips are dim and uncoloured.
-    assert.match(footerLine(), /\x1b\[5m\x1b\[[0-9;]*mdotfiles/);
-    assert.match(footerLine(), /\x1B\[2mopus\x1B\[22m/);
+    // Directory is selected first: it blinks underlined; other chips are faint, dim and uncoloured.
+    assert.match(footerLine(), /\x1b\[5m\x1b\[4m\x1b\[[0-9;]*mdotfiles/);
+    assert.match(footerLine(), /\x1b\[2m\x1B\[2mopus\x1B\[22m\x1b\[22m/);
 
     list.handleInput("\x1b[B"); // down to Git
     assert.match(footerLine(), /\x1b\[5m.*master/);
-    assert.match(footerLine(), /^\x1B\[2mdotfiles\x1B\[22m/);
+    assert.match(footerLine(), /^\x1b\[2m\x1B\[2mdotfiles\x1B\[22m/);
 
     list.handleInput("\r"); // hide Git: still previewed, struck through
     assert.match(footerLine(), /\x1b\[9m\x1b\[5m.*master/);
@@ -1585,7 +1585,7 @@ test("/footer stands in an example for a selected chip with nothing to show", as
     };
     assert.doesNotMatch(strip(ui.raw()[0]), / bypass/);
     down(5); // Bypass: not bypassed, so the example shows, red like the real chip, blinking
-    assert.match(ui.raw()[0], /\x1b\[5m\x1b\[91mbypass\x1b\[39m\x1b\[25m/);
+    assert.match(ui.raw()[0], /\x1b\[5m\x1b\[4m\x1b\[91mbypass\x1b\[39m\x1b\[24m\x1b\[25m/);
     const beforeContext = strip(ui.raw()[0]).indexOf("bypass");
     ui.click(beforeContext, 0);
     assert.equal(ui.guardianRequests.length, 0, "the stand-in has no click zone");
