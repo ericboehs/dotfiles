@@ -10,6 +10,7 @@ import {
   contextIsLarge,
   idleCompactEnabled,
   idleDelayMs,
+  idleStatus,
   isSessionPayload,
   MIN_SUMMARY_ROOM,
   minPercent,
@@ -203,7 +204,8 @@ test("idle compaction settings", () => {
 
 function extension({ model = OPUS, usage = { tokens: 120_000, contextWindow: 200_000 } } = {}) {
   const handlers = {};
-  compaction({ on: (event, handler) => (handlers[event] = handler) });
+  const commands = {};
+  compaction({ on: (event, handler) => (handlers[event] = handler), registerCommand: (name, command) => (commands[name] = command) });
   const calls = { complete: [], compact: 0, notify: [], status: [] };
   const ctx = {
     model,
@@ -227,8 +229,48 @@ function extension({ model = OPUS, usage = { tokens: 120_000, contextWindow: 200
     signal: new AbortController().signal,
     ...overrides,
   });
-  return { handlers, calls, ctx, compactEvent };
+  return { handlers, commands, calls, ctx, compactEvent };
 }
+
+test("/idle explains the first condition that keeps the timer off", () => {
+  const long = { PI_CACHE_RETENTION: "long" };
+  const big = { tokens: 219_000, contextWindow: 1_000_000 };
+  const captured = { at: 0 };
+  const status = (o) => idleStatus({ env: long, api: "anthropic-messages", usage: big, captured, firesAt: undefined, now: 60_000, ...o });
+  assert.match(status({ env: {} }), /^Off: PI_CACHE_RETENTION is not long/);
+  assert.match(status({ env: { ...long, PI_IDLE_COMPACT: "0" } }), /^Off: PI_IDLE_COMPACT=0/);
+  assert.match(status({ api: "openai-responses" }), /^Not armed: this model uses openai-responses API/);
+  assert.match(status({ captured: undefined }), /^Not armed: no request since this session started or reloaded/);
+  assert.match(status({ usage: { tokens: 150_000, contextWindow: 1_000_000 } }), /^Not armed: context is below the 200k threshold\.\ncontext 150k, threshold 200k/);
+  assert.match(status({ now: 55 * 60_000 }), /^Not armed: too close to the cache expiring/);
+  assert.match(status({}), /^Not armed yet: it arms when the current turn finishes/);
+  assert.match(status({ firesAt: 54 * 60_000 }), /^Armed: compacts at .* \(in 53m\) unless you type first\.\ncontext 219k, threshold 200k; last request .*, cache warm until /);
+});
+
+test("/idle reports the armed timer", (t) => {
+  const saved = { ...process.env };
+  t.after(() => {
+    process.env = saved;
+  });
+  process.env.PI_CACHE_RETENTION = "long";
+  delete process.env.PI_IDLE_COMPACT;
+  delete process.env.PI_IDLE_COMPACT_DELAY_MS;
+  delete process.env.PI_IDLE_COMPACT_MIN_PERCENT;
+  delete process.env.PI_IDLE_COMPACT_MIN_TOKENS;
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  t.after(() => mock.timers.reset());
+
+  const { handlers, commands, calls, ctx } = extension();
+  commands.idle.handler("", ctx);
+  assert.match(calls.notify.at(-1), /no request since this session started or reloaded/);
+  handlers.before_provider_request({ payload: sessionPayload() }, ctx);
+  handlers.agent_settled({}, ctx);
+  commands.idle.handler("", ctx);
+  assert.match(calls.notify.at(-1), /^Armed: compacts at .* \(in 54m\)/);
+  handlers.input({}, ctx);
+  commands.idle.handler("", ctx);
+  assert.match(calls.notify.at(-1), /^Not armed yet/, "input cancelled the timer");
+});
 
 test("compaction replays the captured request", async () => {
   const { handlers, calls, ctx, compactEvent } = extension();

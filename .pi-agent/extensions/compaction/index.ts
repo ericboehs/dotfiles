@@ -17,6 +17,7 @@ import {
 	fileLists,
 	idleCompactEnabled,
 	idleDelayMs,
+	idleStatus,
 	isSessionPayload,
 	minPercent,
 	minTokens,
@@ -48,6 +49,8 @@ export default function (pi: ExtensionAPI) {
 	let captured: CapturedRequest | undefined;
 	let compacting = false;
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	// When the armed timer fires, for /idle.
+	let idleFiresAt: number | undefined;
 	// The ctx that armed the timer, to clear the footer chip with.
 	let chipCtx: ExtensionContext | undefined;
 
@@ -62,6 +65,7 @@ export default function (pi: ExtensionAPI) {
 	const clearIdleTimer = () => {
 		if (idleTimer) clearTimeout(idleTimer);
 		idleTimer = undefined;
+		idleFiresAt = undefined;
 		setChip(chipCtx, undefined);
 		chipCtx = undefined;
 	};
@@ -116,6 +120,7 @@ export default function (pi: ExtensionAPI) {
 			});
 		}, delay);
 		idleTimer.unref?.();
+		idleFiresAt = Date.now() + delay;
 		// footer.ts shows this dim after the context chip.
 		chipCtx = ctx;
 		setChip(ctx, `⏲${clockLabel(new Date(Date.now() + delay))}`);
@@ -128,6 +133,21 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", () => {
 		clearIdleTimer();
 		captured = undefined;
+	});
+
+	pi.registerCommand("idle", {
+		description: "Show whether idle compaction is armed, or why not",
+		handler: async (_args, ctx) => {
+			const text = idleStatus({
+				env: process.env,
+				api: ctx.model?.api,
+				usage: ctx.getContextUsage(),
+				captured,
+				firesAt: idleFiresAt,
+				now: Date.now(),
+			});
+			ctx.ui.notify(text, "info");
+		},
 	});
 }
 

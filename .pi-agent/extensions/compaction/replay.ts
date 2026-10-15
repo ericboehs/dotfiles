@@ -124,13 +124,57 @@ export function contextIsLarge(
 	minTokens = Number.POSITIVE_INFINITY,
 ): boolean {
 	if (!usage || usage.tokens == null || !usage.contextWindow) return false;
-	return usage.tokens >= Math.min(minTokens, (usage.contextWindow * minPercent) / 100);
+	return usage.tokens >= armThreshold(usage.contextWindow, minPercent, minTokens);
 }
 
 /** PI_IDLE_COMPACT_MIN_TOKENS, a positive count, default 200,000. */
 export function minTokens(env: Record<string, string | undefined> = process.env): number {
 	const value = Number(env.PI_IDLE_COMPACT_MIN_TOKENS);
 	return Number.isFinite(value) && value >= 1 ? value : 200_000;
+}
+
+/** The context size that arms the idle timer for a window. */
+export function armThreshold(contextWindow: number, percent: number, tokens: number): number {
+	return Math.min(tokens, (contextWindow * percent) / 100);
+}
+
+const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
+
+const minutesUntil = (at: number, now: number) => `${Math.max(0, Math.round((at - now) / 60_000))}m`;
+
+/**
+ * /idle: whether the idle timer is armed, or the first condition that keeps
+ * it from arming, plus the numbers behind it.
+ */
+export function idleStatus(o: {
+	env: Record<string, string | undefined>;
+	api: string | undefined;
+	usage: { tokens: number | null; contextWindow: number } | undefined;
+	captured: CapturedRequest | undefined;
+	firesAt: number | undefined;
+	now: number;
+}): string {
+	const { env, api, usage, captured, firesAt, now } = o;
+	const ttl = cacheTtlMs(env);
+	const threshold = usage?.contextWindow ? armThreshold(usage.contextWindow, minPercent(env), minTokens(env)) : undefined;
+	const details = [
+		usage?.tokens != null && threshold !== undefined ? `context ${kTokens(usage.tokens)}, threshold ${kTokens(threshold)}` : undefined,
+		captured ? `last request ${clockLabel(new Date(captured.at))}, cache warm until ${clockLabel(new Date(captured.at + ttl))}` : undefined,
+	]
+		.filter(Boolean)
+		.join("; ");
+	const line = (headline: string) => (details ? `${headline}\n${details}` : headline);
+
+	if (firesAt !== undefined) return line(`Armed: compacts at ${clockLabel(new Date(firesAt))} (in ${minutesUntil(firesAt, now)}) unless you type first.`);
+	if (env.PI_CACHE_RETENTION !== "long")
+		return line("Off: PI_CACHE_RETENTION is not long in this pi's environment. Restart pi from a fresh shell.");
+	if (env.PI_IDLE_COMPACT === "0") return line("Off: PI_IDLE_COMPACT=0.");
+	if (api !== "anthropic-messages") return line(`Not armed: this model uses ${api ?? "no"} API, not anthropic-messages.`);
+	if (!captured) return line("Not armed: no request since this session started or reloaded. It arms after the next reply.");
+	if (usage?.tokens == null || threshold === undefined) return line("Not armed: context size unknown until the next reply.");
+	if (usage.tokens < threshold) return line(`Not armed: context is below the ${kTokens(threshold)} threshold.`);
+	if (idleDelayMs(captured, now, ttl) === undefined) return line("Not armed: too close to the cache expiring to compact from it.");
+	return line("Not armed yet: it arms when the current turn finishes.");
 }
 
 /** PI_IDLE_COMPACT_MIN_PERCENT, clamped to 1..100, default 50. */

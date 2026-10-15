@@ -624,6 +624,9 @@ cache is still warm. Otherwise the next message, an hour later, would rewrite
 the whole context at cache-write price. Any input, a new turn or a model
 switch cancels the timer. While the timer is armed, the footer shows the
 time it will fire, dim, after the context chip (`41.2k/200k ⏲10:54p`).
+`/idle` says whether the timer is armed or which condition keeps it off
+(environment, model API, context size, no request since start or `/reload`),
+with the context, threshold and cache expiry behind it.
 
 | Variable | Effect |
 |---|---|
