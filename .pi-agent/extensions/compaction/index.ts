@@ -123,7 +123,8 @@ export default function (pi: ExtensionAPI) {
 		idleFiresAt = Date.now() + delay;
 		// footer.ts shows this dim after the context chip.
 		chipCtx = ctx;
-		setChip(ctx, `⏲${clockLabel(new Date(Date.now() + delay))}`);
+		// The space: terminals draw ⏲ two cells wide, over the clock's first digit.
+		setChip(ctx, `⏲ ${clockLabel(new Date(Date.now() + delay))}`);
 	});
 
 	// Any activity, a model switch or leaving the session cancels the timer.

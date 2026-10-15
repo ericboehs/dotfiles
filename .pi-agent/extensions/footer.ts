@@ -86,7 +86,7 @@ const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window", "opencode-go-window"] as const;
 
-/** compaction/index.ts: "⏲10:54p" while the idle-compaction timer is armed. Shown dim after ctx. */
+/** compaction/index.ts: "⏲ 10:54p" while the idle-compaction timer is armed. Shown dim after ctx. */
 const IDLE_COMPACT_STATUS = "idle-compact";
 
 /**

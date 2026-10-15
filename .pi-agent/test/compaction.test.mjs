@@ -360,7 +360,7 @@ test("idle timer compacts 54 minutes after the last request, and input cancels i
   const { handlers, calls, ctx } = extension();
   handlers.before_provider_request({ payload: sessionPayload() }, ctx);
   handlers.agent_settled({}, ctx);
-  assert.deepEqual(calls.status.at(-1), ["idle-compact", `⏲${clockLabel(new Date(54 * 60_000))}`], "footer chip shows the fire time");
+  assert.deepEqual(calls.status.at(-1), ["idle-compact", `⏲ ${clockLabel(new Date(54 * 60_000))}`], "footer chip shows the fire time");
   mock.timers.tick(54 * 60_000 - 1);
   assert.equal(calls.compact, 0);
   mock.timers.tick(1);
