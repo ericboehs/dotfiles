@@ -63,6 +63,13 @@
     "maxRetries": 10,
     "baseDelayMs": 2000
   },
+  "compaction": {
+    "modelOverrides": {
+      "github-copilot/claude-opus-5.5": {
+        "reserveTokens": 48000
+      }
+    }
+  },
   "showHardwareCursor": true,
   "editorPaddingX": 1,
   "terminal": {
