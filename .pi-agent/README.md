@@ -632,6 +632,21 @@ time it will fire, dim, after the context chip (`41.2k/200k ⏲10:54p`).
 | `PI_IDLE_COMPACT_DELAY_MS` | replaces the 54-minute wait (for testing) |
 | `PI_COMPACTION_DEBUG=<file>` | logs why each replay ran or was skipped |
 
+### Cache trace (temporary)
+
+`extensions/cache-trace.ts` records every Anthropic-shaped request to
+`~/.local/state/pi-cache-trace/YYYY-MM-DD.jsonl`: fingerprints of the tools,
+the system prompt and each message, then the cache read and write, the 5m/1h
+split and Copilot's billed AIU. It strips `cache_control` before comparing,
+because pi moves that marker to the last message on every request. When a
+request changes something the previous one already sent, `change` gives the
+JSON path and the types or lengths on each side, never the content. `miss`
+flags a read below half of the previous cached prefix. Copilot misses about
+15% of requests seconds apart, and controlled loops never reproduced that, so
+this records real sessions until a miss can be diffed against the request
+before it. It switches itself off at 10:00 UTC on 2026-10-16
+(`PI_CACHE_TRACE=0` stops it sooner); delete the file after that.
+
 ## Session color
 
 `extensions/color.ts` adds `/color`, Claude Code's trick for telling four
