@@ -14,16 +14,49 @@
 // also names /update.
 
 import { spawn } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { DynamicBorder, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, VERSION, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, getCapabilities, hyperlink, type AutocompleteItem } from "@earendil-works/pi-tui";
 
 const TASK = "update:pi";
 const BANNER_TYPE = "pi-update-available";
 const CHANGELOG_URL = "https://pi.dev/changelog";
+
+// The startup availability check spawns `mise run update:pi`, which starts a
+// whole npm process (~350ms of CPU). Run inline at session_start, that work
+// competes with pi's own first paint. So it waits until boot is done and runs
+// at most once per window across every pane, with the result in a stamp
+// file. A launch inside the window shows the cached banner without spawning.
+const STARTUP_CHECK_DELAY_MS = 15_000;
+const STARTUP_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const STAMP_FILE = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "update-check.json");
+
+interface CheckStamp {
+  at: number;
+  from: string;
+  to?: string;
+}
+
+async function readStamp(): Promise<CheckStamp | null> {
+  try {
+    const stamp = JSON.parse(await readFile(STAMP_FILE, "utf8")) as CheckStamp;
+    return typeof stamp.at === "number" && typeof stamp.from === "string" ? stamp : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeStamp(stamp: CheckStamp): Promise<void> {
+  try {
+    await mkdir(dirname(STAMP_FILE), { recursive: true });
+    await writeFile(STAMP_FILE, `${JSON.stringify(stamp)}\n`);
+  } catch {
+    // A missing stamp just means the next launch checks again.
+  }
+}
 
 interface UpdateResult {
   from: string;
@@ -224,15 +257,34 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI || process.env.PI_OFFLINE || announcedFor) return;
+    const announce = (to: string | undefined): void => {
+      if (!to || to === VERSION || announcedFor === to) return;
+      announcedFor = to;
+      showBanner(to);
+    };
     void (async () => {
       try {
+        // A stamp from this same pi version inside the window is current enough.
+        const stamp = await readStamp();
+        if (stamp && stamp.from === VERSION && Date.now() - stamp.at < STARTUP_CHECK_INTERVAL_MS) {
+          announce(stamp.to);
+          return;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, STARTUP_CHECK_DELAY_MS).unref());
+        // Another pane may have checked while this one waited.
+        const again = await readStamp();
+        if (again && again.from === VERSION && Date.now() - again.at < STARTUP_CHECK_INTERVAL_MS) {
+          announce(again.to);
+          return;
+        }
+        await writeStamp({ at: Date.now(), from: VERSION });
         const root = await dotfilesRoot();
         if (!root) return;
         const { code, output } = await runTask(root, true, () => {});
         const result = code === 0 ? parseResult(output) : null;
-        if (!result?.changed || announcedFor === result.to) return;
-        announcedFor = result.to;
-        showBanner(result.to);
+        if (!result) return;
+        await writeStamp({ at: Date.now(), from: VERSION, to: result.changed ? result.to : undefined });
+        if (result.changed) announce(result.to);
       } catch {
         // A failed availability check is not worth a startup error. /update still works.
       }

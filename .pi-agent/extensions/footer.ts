@@ -641,6 +641,20 @@ class UpdateCheckCache {
   private inFlight = false;
 
   async init(): Promise<void> {
+    // On a fresh launch the version on disk is the one we just started, so
+    // skip the `mise which pi` spawns that would confirm it (three per launch
+    // counting read() and bundleIsStale(), ~10ms of main-thread spawn cost
+    // each). The first disk check then runs one TTL later. After a /reload
+    // (the extension loads again in the same process) an update may have
+    // landed in the meantime, so check right away.
+    const stash = globalThis as { __piFooterLoaded?: boolean };
+    const reloaded = stash.__piFooterLoaded === true;
+    stash.__piFooterLoaded = true;
+    if (!reloaded && this.bootVersion) {
+      this.current = this.bootVersion;
+      this.fetchedAt = Date.now();
+      return;
+    }
     this.current = (await piVersion()) || this.bootVersion;
   }
 

@@ -49,6 +49,10 @@ function withAgentDir(fn) {
 }
 
 /** Build the extension, drive session_start, and return a rendering handle. */
+// Every mount after the first in a process counts as a /reload, which checks
+// the on-disk version straight away. Mark that up front so test order is moot.
+globalThis.__piFooterLoaded = true;
+
 async function mount(overrides = {}) {
   const {
     model = { id: "claude-opus-5.5", provider: "github-copilot", reasoning: true },

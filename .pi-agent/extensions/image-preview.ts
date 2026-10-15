@@ -363,7 +363,10 @@ export default function (pi: ExtensionAPI): void {
         // Definition (not the wrapped tool): keeps prompt metadata and renderers.
         const builtinRead = createReadToolDefinition(ctx.cwd);
         const builtinRenderResult = builtinRead.renderResult ?? (() => new Text("", 0, 0));
-        const kittyInline = INLINE_KITTY_IMAGES && Boolean(process.env.TMUX) && supportsKittyGraphics();
+        // Probed on the first image render, not here: the spawnSync blocks boot.
+        let kittyInlineCached: boolean | undefined;
+        const kittyInline = (): boolean =>
+            (kittyInlineCached ??= INLINE_KITTY_IMAGES && Boolean(process.env.TMUX) && supportsKittyGraphics());
 
         pi.registerTool({
             ...builtinRead,
@@ -394,7 +397,7 @@ export default function (pi: ExtensionAPI): void {
                     image.data,
                     options.expanded,
                     () => builtinRenderResult(result, options, theme, { ...context, lastComponent: undefined }),
-                    kittyInline,
+                    kittyInline(),
                 );
                 return preview;
             },
