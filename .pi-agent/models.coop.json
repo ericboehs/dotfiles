@@ -228,7 +228,8 @@
       "apiKey": "$CEREBRAS_API_KEY",
       "compat": {
         "supportsReasoningEffort": true,
-        "maxTokensField": "max_tokens"
+        "maxTokensField": "max_tokens",
+        "supportsLongCacheRetention": false
       },
       "models": [
         {
