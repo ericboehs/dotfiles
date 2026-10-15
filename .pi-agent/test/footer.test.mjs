@@ -12,7 +12,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach } from "node:test";
+
+// Each mount starts an update poll. Shut it down when the test returns, or the
+// poll keeps asking mise after the file is done and a stuck child holds node.
+const shutdowns = [];
+afterEach(async () => {
+  await Promise.all(shutdowns.splice(0).map((shutdown) => Promise.resolve(shutdown())));
+});
 
 import { VERSION as RUNNING_PI_VERSION } from "@earendil-works/pi-coding-agent";
 import footer from "../extensions/footer.ts";
@@ -175,6 +182,7 @@ async function mount(overrides = {}) {
       process.argv[1] = entry;
     }
   }
+  shutdowns.push(() => pi.handlers.session_shutdown?.({}, ctx));
   try {
     footer(pi);
     await pi.handlers.session_start(overrides.sessionStart ?? {}, ctx);
@@ -906,6 +914,21 @@ test("session name is right-aligned and statuses split inline vs status row", as
   assert.match(main, /codex 12% copilot 40% 18% +footer-work$/);
   assert.equal(statusRow, "3s");
   assert.equal(main.length, 120);
+});
+
+test("a mise that ignores SIGTERM does not hold the update check", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "footer-hang-mise-"));
+  const mise = path.join(root, "mise");
+  writeFileSync(mise, "#!/bin/sh\ntrap '' TERM\nsleep 30\n", { mode: 0o755 });
+  const previous = process.env.PATH;
+  process.env.PATH = [root, "/usr/bin", "/bin"].join(path.delimiter);
+  const started = Date.now();
+  try {
+    await mount();
+    assert.ok(Date.now() - started < 8_000, `update check waited ${Date.now() - started}ms on a stuck mise`);
+  } finally {
+    process.env.PATH = previous;
+  }
 });
 
 for (const [layout, why] of [

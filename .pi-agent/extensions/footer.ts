@@ -46,7 +46,7 @@
  *   peer session name, and the extension-status row.
  */
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { appendFile, readFile, readlink, realpath, writeFile, access, stat, lstat, constants } from "node:fs/promises";
 import { homedir, loadavg } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -857,12 +857,42 @@ async function miseBinary(piBins: string[]): Promise<string | null> {
 
 function miseWhichPi(mise: string): Promise<string> {
   return new Promise((resolve) => {
-    execFile(
-      mise,
-      ["which", "pi"],
-      { cwd: process.cwd(), timeout: MISE_WHICH_TIMEOUT_MS },
-      (error, stdout) => resolve(error ? "" : String(stdout).trim()),
-    );
+    // Own process group. `execFile`'s timeout only SIGTERMs the direct child,
+    // and a mise that ignores that (or whose grandchildren hold the pipes)
+    // never emits close, so the test process stays up until the job timeout.
+    const child = spawn(mise, ["which", "pi"], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "ignore"],
+      detached: true,
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const killTree = () => {
+      const pid = child.pid;
+      if (pid !== undefined) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        }
+      }
+      child.stdout?.destroy();
+      child.unref();
+    };
+    const timer = setTimeout(() => {
+      killTree();
+      finish("");
+    }, MISE_WHICH_TIMEOUT_MS);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => { stdout += chunk; });
+    child.on("error", () => finish(""));
+    child.on("close", () => finish(stdout.trim()));
   });
 }
 
@@ -1273,6 +1303,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   let bootMs: number | undefined;
   let bootCleared = false;
   let updateTimerStarted = false;
+  let updateTimer: ReturnType<typeof setInterval> | undefined;
   /** Dir chip shows the full ~/path instead of the basename when true. */
   let showFullPath = false;
   /** Context chip shows percent-used instead of tokens/window when true. */
@@ -2020,7 +2051,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     // session_start also fires on session switches — only start one timer.
     if (!updateTimerStarted) {
       updateTimerStarted = true;
-      const updateTimer = setInterval(() => update.reload(() => repaint?.()), UPDATE_TTL_MS);
+      updateTimer = setInterval(() => update.reload(() => repaint?.()), UPDATE_TTL_MS);
       updateTimer.unref?.();
     }
   });
@@ -2125,6 +2156,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     stopWaiting();
+    if (updateTimer !== undefined) clearInterval(updateTimer);
+    updateTimer = undefined;
     if (ctx.hasUI) {
       ctx.ui.setFooter(undefined);
       ctx.ui.setWidget(UPDATE_WIDGET_KEY, undefined);
