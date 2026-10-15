@@ -30,10 +30,12 @@
     "~/Code/github.com/ericboehs/claude-config/prompts",
     "~/Code/github.com/ericboehs/agent-plugins/pi/prompts"
   ],
-  "defaultProvider": "xai",
-  "defaultModel": "grok-4.7",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-opus-5.5",
   "defaultThinkingLevel": "xhigh",
   "modelThinkingLevels": {
+    "github-copilot/claude-opus-5.5": "medium",
+    "github-copilot/claude-sonnet-5.5": "high",
     "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
     "ollama/glm-5.3-flash": "max",
     "inco/deepseek-v4.1-flash:fast": "high"
@@ -51,6 +53,7 @@
   "enabledModels": [
     "xai/grok-4.7",
     "github-copilot/claude-opus-5.5",
+    "github-copilot/claude-sonnet-5.5",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6.1-sol",
     "opencode-go/glm-5.3",

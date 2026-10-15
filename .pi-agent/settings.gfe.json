@@ -13,9 +13,21 @@
   "enableInstallTelemetry": false,
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-5.5",
+  "modelThinkingLevels": {
+    "github-copilot/claude-opus-5.5": "medium",
+    "github-copilot/claude-sonnet-5.5": "high"
+  },
   "enabledModels": [
-    "github-copilot/claude-opus-5.5"
+    "github-copilot/claude-opus-5.5",
+    "github-copilot/claude-sonnet-5.5"
   ],
+  "compaction": {
+    "modelOverrides": {
+      "github-copilot/claude-opus-5.5": {
+        "reserveTokens": 48000
+      }
+    }
+  },
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@384d523123d006bfa7e1445ce29190f14c832e64",
     "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",

@@ -34,6 +34,8 @@
   "defaultModel": "union-alpha",
   "defaultThinkingLevel": "xhigh",
   "modelThinkingLevels": {
+    "github-copilot/claude-opus-5.5": "medium",
+    "github-copilot/claude-sonnet-5.5": "high",
     "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
     "ollama/glm-5.3-flash": "max",
     "inco/deepseek-v4.1-flash:fast": "high"
@@ -52,12 +54,20 @@
     "opencode/space-bunny-free",
     "xai/grok-4.7",
     "github-copilot/claude-opus-5.5",
+    "github-copilot/claude-sonnet-5.5",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6.1-sol",
     "opencode-go/glm-5.3",
     "opencode-go/deepseek-v4.1-flash",
     "opencode-go/muse-spark-1.3-contributor"
   ],
+  "compaction": {
+    "modelOverrides": {
+      "github-copilot/claude-opus-5.5": {
+        "reserveTokens": 48000
+      }
+    }
+  },
   "retry": {
     "enabled": true,
     "maxRetries": 10,
