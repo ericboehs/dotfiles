@@ -34,6 +34,10 @@
  * Install: drop this file in ~/.pi/agent/extensions/ (global) or
  * .pi/extensions/ (project), then run /reload.
  *
+ * Named compact-progress.ts so it loads before compaction/: pi awaits
+ * session_before_compact handlers one by one in load order, and compaction/
+ * spends the whole summary inside its handler.
+ *
  * Events used:
  *   session_start            -> patch /tree compaction row labels (TUI only)
  *   session_before_compact   -> start animation

@@ -1,13 +1,25 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import progress, {
   compactionTreeKind,
   patchTreeSelector,
   relabelCompactionRow,
-} from "../extensions/compaction-progress.ts";
+} from "../extensions/compact-progress.ts";
+
+// pi awaits session_before_compact handlers one by one, in load (directory)
+// order. compaction/ spends the whole summary inside its handler, so the bar
+// has to start first or it only appears once the summary is already done.
+test("compact-progress loads before compaction/, which blocks for the summary", () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "../extensions");
+  for (const names of [readdirSync(dir), readdirSync(dir).sort()]) {
+    assert.ok(names.indexOf("compact-progress.ts") < names.indexOf("compaction"), names.join(" "));
+  }
+});
 
 async function withProgress(fn) {
   const home = await mkdtemp(join(tmpdir(), "pi-compaction-progress-test-"));
