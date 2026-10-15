@@ -440,7 +440,6 @@ test("infoRows: the panel's rows from /info", () => {
     { key: "context", label: "Context", value: "48% · 96k / 200k", percent: 48.4 },
     { key: "session", label: "Session", value: "37 prompts · 1 reply · $4.12", note: "started <S> · as of <A>" },
     { key: "repo", label: "Repo", value: "master · clean", note: "78e0392 fix it · <D>" },
-    { key: "uniichat", label: "UniiChat", value: "not loaded in this session" },
   ]);
   const bare = infoRows({ live: true, info: { model: { id: "m", reasoning: false }, context: { tokens: null, window: 128000, percent: null }, prompts: 0, replies: 0, cost: 0, uniichat: { enabled: false } }, git: null }, ago);
   assert.equal(bare[0].value, "m · no thinking");

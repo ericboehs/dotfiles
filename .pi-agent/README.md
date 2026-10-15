@@ -802,7 +802,7 @@ the agent's last response.
   never takes the index lock) and the usage cache when the panel opens
   (`GET /api/s/<id>/info`). The panel redraws in place while it's open.
   UniiChat's stats come from `globalThis[Symbol.for("pi-uniichat")]`,
-  which pi-uniichat publishes; without it the row says it isn't loaded.
+  which pi-uniichat publishes; the row shows only when it is loaded.
 - **Sections.** The `canvas` tool adds or replaces a section by id: `markdown`
   (GFM, with ```` ```mermaid ```` fences), `html` (a page in a frame that fits
   its height), `html-plan` (a packed `/html-plan` file), `image`, `mermaid`,

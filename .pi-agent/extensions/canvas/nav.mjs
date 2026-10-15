@@ -714,6 +714,5 @@ export function infoRows(d, ago = (t) => t) {
     rows.push({ key: "repo", label: "Repo", value: gitSummary(g), note: [g.last ? `${g.last.sha} ${g.last.subject}` : "no commits yet", g.last?.date ? ago(g.last.date) : ""].filter(Boolean).join(" · ") });
   } else if (d) rows.push({ key: "repo", label: "Repo", value: "not a git repo" });
   if (i.uniichat !== undefined) rows.push({ key: "uniichat", label: "UniiChat", value: uniichatSummary(i.uniichat), note: i.uniichat?.compactor ? `compactor ${i.uniichat.compactor}` : "" });
-  else if (d?.info) rows.push({ key: "uniichat", label: "UniiChat", value: "not loaded in this session" });
   return rows;
 }
