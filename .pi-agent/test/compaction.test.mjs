@@ -6,6 +6,7 @@ import {
   buildReplayPayload,
   cacheIsWarm,
   cacheTtlMs,
+  clockLabel,
   contextIsLarge,
   idleCompactEnabled,
   idleDelayMs,
@@ -167,6 +168,13 @@ test("idle compaction fires 54 minutes after the request", () => {
   assert.equal(idleDelayMs({ at: 0 }, 55 * 60_000, 3_600_000), undefined, "already too late");
 });
 
+test("clockLabel is footer-sized", () => {
+  assert.equal(clockLabel(new Date(2026, 9, 14, 22, 54)), "10:54p");
+  assert.equal(clockLabel(new Date(2026, 9, 14, 9, 5)), "9:05a");
+  assert.equal(clockLabel(new Date(2026, 9, 14, 0, 0)), "12:00a");
+  assert.equal(clockLabel(new Date(2026, 9, 14, 12, 30)), "12:30p");
+});
+
 test("idle compaction settings", () => {
   assert.equal(idleCompactEnabled({ PI_CACHE_RETENTION: "long" }), true);
   assert.equal(idleCompactEnabled({ PI_CACHE_RETENTION: "long", PI_IDLE_COMPACT: "0" }), false);
@@ -185,7 +193,7 @@ test("idle compaction settings", () => {
 function extension({ model = OPUS, usage = { tokens: 120_000, contextWindow: 200_000 } } = {}) {
   const handlers = {};
   compaction({ on: (event, handler) => (handlers[event] = handler) });
-  const calls = { complete: [], compact: 0, notify: [] };
+  const calls = { complete: [], compact: 0, notify: [], status: [] };
   const ctx = {
     model,
     isIdle: () => true,
@@ -193,7 +201,7 @@ function extension({ model = OPUS, usage = { tokens: 120_000, contextWindow: 200
     getContextUsage: () => usage,
     compact: () => calls.compact++,
     sessionManager: { getLeafId: () => "prompt", getSessionId: () => "session" },
-    ui: { notify: (message) => calls.notify.push(message) },
+    ui: { notify: (message) => calls.notify.push(message), setStatus: (key, text) => calls.status.push([key, text]) },
     modelRegistry: {
       async complete(...args) {
         calls.complete.push(args);
@@ -298,14 +306,18 @@ test("idle timer compacts 54 minutes after the last request, and input cancels i
   const { handlers, calls, ctx } = extension();
   handlers.before_provider_request({ payload: sessionPayload() }, ctx);
   handlers.agent_settled({}, ctx);
+  assert.deepEqual(calls.status.at(-1), ["idle-compact", `⏲${clockLabel(new Date(54 * 60_000))}`], "footer chip shows the fire time");
   mock.timers.tick(54 * 60_000 - 1);
   assert.equal(calls.compact, 0);
   mock.timers.tick(1);
   assert.equal(calls.compact, 1);
+  assert.deepEqual(calls.status.at(-1), ["idle-compact", undefined], "chip cleared when it fires");
 
   handlers.before_provider_request({ payload: sessionPayload() }, ctx);
   handlers.agent_settled({}, ctx);
+  assert.equal(calls.status.at(-1)[1].startsWith("⏲"), true);
   handlers.input({}, ctx);
+  assert.deepEqual(calls.status.at(-1), ["idle-compact", undefined], "chip cleared on input");
   mock.timers.tick(60 * 60_000);
   assert.equal(calls.compact, 1, "input cancelled it");
 });

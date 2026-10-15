@@ -105,6 +105,13 @@ export function idleDelayMs(captured: CapturedRequest, now: number, ttlMs: numbe
 	return delay > 0 ? delay : undefined;
 }
 
+/** A footer-sized clock: 10:54p, 9:05a. */
+export function clockLabel(date: Date): string {
+	const hours = date.getHours();
+	const minutes = String(date.getMinutes()).padStart(2, "0");
+	return `${hours % 12 || 12}:${minutes}${hours < 12 ? "a" : "p"}`;
+}
+
 /** True when the context is at least `minPercent` of the model's window. */
 export function contextIsLarge(
 	usage: { tokens: number | null; contextWindow: number; percent?: number | null } | undefined,

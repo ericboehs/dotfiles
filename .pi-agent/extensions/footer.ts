@@ -86,6 +86,9 @@ const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window", "opencode-go-window"] as const;
 
+/** compaction/index.ts: "⏲10:54p" while the idle-compaction timer is armed. Shown dim after ctx. */
+const IDLE_COMPACT_STATUS = "idle-compact";
+
 /**
  * The boot timer sits in the footer until the first message goes out, and every
  * cold start is appended to `boot-times.jsonl` so `/boot stats` can show whether
@@ -1549,6 +1552,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
                   contextColorCode(usage?.tokens, usage?.contextWindow),
                   usage?.tokens == null ? "?" : formatCount(usage.tokens),
                 )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
+            statuses.get(IDLE_COMPACT_STATUS) ? theme.fg("dim", statuses.get(IDLE_COMPACT_STATUS) as string) : "",
             usageValue
               ? renderBudgetUsage(usageValue, budgetResetMs(provider), compactCostUsage)
               : hideSessionCost(provider, ctx)
@@ -1600,6 +1604,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // separator, non-empty parts join with one space.
           const chipRows: Array<FooterClickRow & { line: string }> = [];
           const bootIndex = left.length - 2;
+          // left[]: dir 0, git 1, provider 2, model 3, thinking 4, bypass 5,
+          // ctx 6, idle-compaction 7, cost 8, provider statuses 9.., boot, rate.
+          const COST_INDEX = 8;
           const nameWidth = visibleWidth(right);
           const firstLimit = nameWidth > 0 ? Math.max(0, width - nameWidth - 1) : width;
           let rowLimit = firstLimit;
@@ -1687,9 +1694,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
             if (index === 6) contextZone = [cursor, cursor + partWidth];
             // The cost slot: a usage chip (ollama/baseten/openrouter) toggles
             // percent/total on click; the plain session-cost fallback stays
-            // glance-only, so no zone for it.
-            if (index === 7 && usageValue) costZone = [cursor, cursor + partWidth];
-            if (index >= 8 && index < bootIndex) {
+            // glance-only, so no zone for it. The idle-compaction chip sits
+            // between ctx and cost (index 7) and is glance-only too.
+            if (index === COST_INDEX && usageValue) costZone = [cursor, cursor + partWidth];
+            if (index >= COST_INDEX + 1 && index < bootIndex) {
               // Only one provider status normally renders. If extensions expose
               // several, make their contiguous run one shared toggle target.
               providerUsageZone = [providerUsageZone?.[0] ?? cursor, cursor + partWidth];
@@ -1728,7 +1736,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const lines = chipRows.map((row) => row.line);
           const extra: string[] = [];
           for (const [key, value] of statuses) {
-            if (!value || (INLINE_STATUS_KEYS as readonly string[]).includes(key)) continue;
+            if (!value || key === IDLE_COMPACT_STATUS || (INLINE_STATUS_KEYS as readonly string[]).includes(key)) continue;
             extra.push(value);
           }
           if (extra.length > 0) {

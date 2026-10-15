@@ -622,7 +622,8 @@ It also does Claude Code's idle compaction. With `PI_CACHE_RETENTION=long`
 window or more is compacted 54 minutes after its last request, while the
 cache is still warm. Otherwise the next message, an hour later, would rewrite
 the whole context at cache-write price. Any input, a new turn or a model
-switch cancels the timer.
+switch cancels the timer. While the timer is armed, the footer shows the
+time it will fire, dim, after the context chip (`41.2k/200k ⏲10:54p`).
 
 | Variable | Effect |
 |---|---|

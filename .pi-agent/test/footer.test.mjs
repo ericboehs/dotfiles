@@ -919,6 +919,13 @@ test("session name is right-aligned and statuses split inline vs status row", as
   assert.equal(main.length, 120);
 });
 
+test("the idle-compaction chip sits dim right after ctx, not in the status row", async () => {
+  const ui = await mount({ statuses: new Map([["idle-compact", "⏲10:54p"], ["turn-timer", "3s"]]) });
+  const [main, statusRow] = await ui.settled(120);
+  assert.match(main, /41\.2k\/1m ⏲10:54p(\s|$)/);
+  assert.equal(statusRow, "3s");
+});
+
 test("a mise that ignores SIGTERM does not hold the update check", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "footer-hang-mise-"));
   const mise = path.join(root, "mise");

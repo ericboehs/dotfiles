@@ -12,6 +12,7 @@ import {
 	cacheIsWarm,
 	cacheTtlMs,
 	type CapturedRequest,
+	clockLabel,
 	contextIsLarge,
 	fileLists,
 	idleCompactEnabled,
@@ -22,6 +23,9 @@ import {
 	replayTail,
 	summaryRoom,
 } from "./replay.ts";
+
+/** ctx.ui.setStatus key for the footer chip; footer.ts renders it inline. */
+export const IDLE_COMPACT_STATUS = "idle-compact";
 import { summarizeWithoutThinking } from "./thoughtless.ts";
 
 // Compaction, in one session_before_compact handler (pi runs every handler and
@@ -43,10 +47,22 @@ export default function (pi: ExtensionAPI) {
 	let captured: CapturedRequest | undefined;
 	let compacting = false;
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	// The ctx that armed the timer, to clear the footer chip with.
+	let chipCtx: ExtensionContext | undefined;
+
+	const setChip = (ctx: ExtensionContext | undefined, text: string | undefined) => {
+		try {
+			ctx?.ui.setStatus(IDLE_COMPACT_STATUS, text);
+		} catch {
+			// A ctx from a replaced session throws; its footer is gone anyway.
+		}
+	};
 
 	const clearIdleTimer = () => {
 		if (idleTimer) clearTimeout(idleTimer);
 		idleTimer = undefined;
+		setChip(chipCtx, undefined);
+		chipCtx = undefined;
 	};
 
 	pi.on("before_provider_request", (event, ctx) => {
@@ -91,7 +107,7 @@ export default function (pi: ExtensionAPI) {
 		if (delay === undefined) return;
 		const armedFor = captured;
 		idleTimer = setTimeout(() => {
-			idleTimer = undefined;
+			clearIdleTimer();
 			if (captured !== armedFor || !ctx.isIdle() || ctx.hasPendingMessages()) return;
 			ctx.ui.notify("Idle for 54 minutes: compacting while the prompt cache is still warm", "info");
 			ctx.compact({
@@ -99,6 +115,9 @@ export default function (pi: ExtensionAPI) {
 			});
 		}, delay);
 		idleTimer.unref?.();
+		// footer.ts shows this dim after the context chip.
+		chipCtx = ctx;
+		setChip(ctx, `⏲${clockLabel(new Date(Date.now() + delay))}`);
 	});
 
 	// Any activity, a model switch or leaving the session cancels the timer.
