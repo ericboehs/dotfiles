@@ -616,14 +616,18 @@ async function sendToPi(req, res, id) {
 
 export const SEND_MAX = 20_000;
 const INBOX_MAX = 20;
+// claimInbox sorts names. Two writes in one millisecond would otherwise order
+// by the random suffix, so a per-process counter keeps oldest first.
+let inboxSeq = 0;
 
 /**
- * Talk-back: a message from the page as <root>/<id>/inbox/<ms>-<hex>.json
+ * Talk-back: a message from the page as <root>/<id>/inbox/<ms><seq>-<hex>.json
  * (mode 600, folder 700), which that session's canvas.ts picks up and sends
  * with pi.sendUserMessage, then acks in inbox-ack.json. Only live sessions
  * take messages, and only INBOX_MAX may wait. Returns { id } or { status, error }.
+ * `now` pins the millisecond (tests); production uses Date.now.
  */
-export function queueMessage(root, id, body) {
+export function queueMessage(root, id, body, now = Date.now) {
   const text = typeof body?.text === "string" ? body.text.trim() : "";
   if (!text) return { status: 400, error: "text is empty" };
   if (text.length > SEND_MAX) return { status: 413, error: `text is over ${SEND_MAX} characters` };
@@ -633,7 +637,8 @@ export function queueMessage(root, id, body) {
   const inbox = join(root, id, "inbox");
   mkdirSync(inbox, { recursive: true, mode: 0o700 });
   if (readdirSync(inbox).filter((n) => n.endsWith(".json")).length >= INBOX_MAX) return { status: 429, error: "too many messages waiting; is pi stuck?" };
-  const name = `${Date.now()}-${createHash("sha1").update(`${Math.random()}${process.hrtime.bigint()}`).digest("hex").slice(0, 8)}`;
+  const seq = String(inboxSeq++ % 1_000_000).padStart(6, "0");
+  const name = `${now()}${seq}-${createHash("sha1").update(`${Math.random()}${process.hrtime.bigint()}`).digest("hex").slice(0, 8)}`;
   const tmp = join(inbox, `.${name}.tmp`);
   writeFileSync(tmp, JSON.stringify({ text, mode, at: new Date().toISOString() }), { mode: 0o600 });
   renameSync(tmp, join(inbox, `${name}.json`));

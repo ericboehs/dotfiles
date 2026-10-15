@@ -89,9 +89,13 @@ test("talk-back: queueMessage writes the inbox, claimInbox takes it once, ackInb
     assert.equal(queueMessage(root, "live", { text: "x".repeat(20_001) }).status, 413);
     assert.equal(queueMessage(root, "gone", { text: "hi" }).status, 409, "ended sessions take nothing");
     assert.equal(queueMessage(root, "nope", { text: "hi" }).status, 409, "nor unknown ones");
-    const a = queueMessage(root, "live", { text: " first ", mode: "followUp" });
-    const b = queueMessage(root, "live", { text: "second", mode: "bogus" });
+    const stamp = 1_726_000_000_000;
+    const a = queueMessage(root, "live", { text: " first ", mode: "followUp" }, () => stamp);
+    const b = queueMessage(root, "live", { text: "second", mode: "bogus" }, () => stamp);
     assert.match(a.id, /^\d+-[a-f0-9]{8}$/);
+    assert.equal(a.id.slice(0, 13), String(stamp));
+    assert.equal(b.id.slice(0, 13), String(stamp), "same millisecond");
+    assert.ok(a.id < b.id, "same-millisecond ids still sort oldest first");
     const inbox = join(root, "live", "inbox");
     assert.equal(statSync(inbox).mode & 0o777, 0o700);
     assert.equal(statSync(join(inbox, `${a.id}.json`)).mode & 0o777, 0o600);

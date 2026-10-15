@@ -264,6 +264,7 @@ export function claimInbox(dir: string): InboxMessage[] {
   const inbox = join(dir, "inbox");
   let names: string[];
   try {
+    // Names are <ms><seq>-<hex>. The counter keeps same-millisecond writes oldest first.
     names = readdirSync(inbox).filter((n) => /^\d+-[a-f0-9]+\.json$/.test(n)).sort();
   } catch {
     return [];

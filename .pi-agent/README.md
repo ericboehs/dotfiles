@@ -764,7 +764,8 @@ the agent's last response.
   the buttons copy. How it works:
   - The page posts `/s/<id>/send` (`X-Canvas: 1` and a matching Origin, like
     `/clip`). The daemon refuses sessions that aren't running and writes
-    `inbox/<ms>-<hex>.json` (mode 600, folder 700), at most 20 waiting.
+    `inbox/<ms><seq>-<hex>.json` (mode 600, folder 700), at most 20 waiting.
+    The counter keeps two writes in the same millisecond oldest first.
   - canvas.ts watches `inbox/` (with a 1 s poll as backup), removes each
     file before acting on it, and calls `pi.sendUserMessage`: a new turn
     when pi is idle, else `deliverAs` steer or followUp.
