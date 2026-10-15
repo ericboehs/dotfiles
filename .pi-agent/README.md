@@ -592,6 +592,45 @@ model the API does not know (local oMLX weights) or a failed fetch shows
 nothing. The key resolves from `$ARTIFICIAL_ANALYSIS_API_KEY`, then `fnox get`
 (Keychain), like the web providers; nothing touches the LLM context.
 
+## Compaction
+
+`extensions/compaction/` handles every compaction in one
+`session_before_compact` handler. pi runs every handler and keeps the last
+result, so two handlers would both pay for a summary. It tries three things
+in order:
+
+1. **Cache replay** (`replay.ts`), as Claude Code does. pi's own summarizer
+   flattens the conversation to text under a separate system prompt, so each
+   compaction pays full input price for the whole history. This instead
+   resends the session's last Anthropic request (captured from
+   `before_provider_request`, with the same system prompt, tools and messages)
+   through `onPayload`. It adds one user turn: a transcript of the turns since
+   that request, then the summarize instruction. The prefix is unchanged, so
+   the history is billed as a cache read, 1/20th of the input price on Opus
+   5.5. On Copilot it read 14,046 of 14,506 tokens from cache, with 0 written.
+   It is skipped when the cache has gone cold, the model changed, a user
+   message or context edit came after that request, the compaction is
+   overflow recovery, or the window has less than 32K tokens left for the
+   summary.
+2. **Thoughtless summary** (`thoughtless.ts`): the flattened text with
+   thinking turned down and a 64K output ceiling. See the comment at its top
+   for why pi's default wedges on Opus at xhigh.
+3. **pi's default**, for models that don't use the Anthropic API.
+
+It also does Claude Code's idle compaction. With `PI_CACHE_RETENTION=long`
+(the 1-hour cache), a session left idle with its context at half the model's
+window or more is compacted 54 minutes after its last request, while the
+cache is still warm. Otherwise the next message, an hour later, would rewrite
+the whole context at cache-write price. Any input, a new turn or a model
+switch cancels the timer.
+
+| Variable | Effect |
+|---|---|
+| `PI_IDLE_COMPACT=0` | turns idle compaction off |
+| `PI_IDLE_COMPACT_MIN_PERCENT` | context share that arms the timer (default 50) |
+| `PI_IDLE_COMPACT_DELAY_MS` | replaces the 54-minute wait (for testing) |
+| `PI_COMPACTION_DEBUG=<file>` | logs why each replay ran or was skipped |
+
 ## Session color
 
 `extensions/color.ts` adds `/color`, Claude Code's trick for telling four
