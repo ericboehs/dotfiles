@@ -819,16 +819,19 @@ function shortThinking(level: string): string {
 }
 
 /**
- * 0 → "0", 12_300 → "12.3k", 123_400 → "123k", 1_000_000 → "1m".
+ * 0 → "0", 12_300 → "12k", 123_400 → "123k", 1_000_000 → "1m".
  *
- * Caps at 3 significant digits: at 100k the tenths place becomes a 4th digit of
- * jittery noise, so it is dropped.
+ * Whole thousands only: tenths of a k are jittery noise for a context gauge.
  */
 function formatCount(value: number): string {
   if (value < 1_000) return `${value}`;
-  if (value < 100_000) return `${trimFixed(value / 1_000, 1)}k`;
-  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
+  if (value < 999_500) return `${Math.round(value / 1_000)}k`;
   return `${trimFixed(value / 1_000_000, 1)}m`;
+}
+
+/** Used tokens in bare thousands (57_300 → "57"); the window carries the unit. */
+function formatThousands(value: number): string {
+  return `${Math.round(value / 1_000)}`;
 }
 
 function trimFixed(value: number, digits: number): string {
@@ -1747,7 +1750,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
                   )
                 : `${color(
                     contextColorCode(usage?.tokens, usage?.contextWindow),
-                    usage?.tokens == null ? "?" : formatCount(usage.tokens),
+                    usage?.tokens == null ? "?" : formatThousands(usage.tokens),
                   )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
             ],
             ["idle", idleChipText(statuses.get(IDLE_COMPACT_STATUS))],
