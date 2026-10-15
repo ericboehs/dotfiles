@@ -22,9 +22,13 @@ afterEach(async () => {
 });
 
 import { VERSION as RUNNING_PI_VERSION } from "@earendil-works/pi-coding-agent";
-import footer from "../extensions/footer.ts";
+import footer, { FOOTER_CHIPS, readHiddenChips, writeHiddenChips } from "../extensions/footer.ts";
 
 const PORCELAIN = "A  staged.ts\n M edited.ts\n?? new.ts\n";
+
+// Mounts outside withAgentDir still read footer.json (and write the boot log);
+// keep them off the real ~/.pi/agent so hidden chips there can't break tests.
+process.env.PI_CODING_AGENT_DIR = mkdtempSync(path.join(tmpdir(), "pi-agent-dir-default-"));
 
 /** Run one test against a throwaway agent directory (boot log, settings.json). */
 function withAgentDir(fn) {
@@ -1465,4 +1469,95 @@ test("/boot stats says so when there is nothing recorded", async () => {
     assert.equal(ui.notices.at(-1).level, "warning");
     assert.match(ui.notices.at(-1).message, /No boot times recorded/);
   });
+});
+
+// ---- /footer: the chip checklist -----------------------------------------
+
+test("every footer chip has a unique id, a label and a description", () => {
+  const ids = FOOTER_CHIPS.map((chip) => chip.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const chip of FOOTER_CHIPS) assert.ok(chip.label && chip.description, chip.id);
+});
+
+test("footer.json: unknown ids and broken files mean nothing hidden; writes keep chip order", async () => {
+  await withAgentDir(async (dir) => {
+    const file = path.join(dir, "footer.json");
+    assert.deepEqual([...readHiddenChips()], []);
+    writeFileSync(file, "{not json");
+    assert.deepEqual([...readHiddenChips()], []);
+    writeFileSync(file, JSON.stringify({ hidden: ["rate", "nonsense", 7] }));
+    assert.deepEqual([...readHiddenChips()], ["rate"]);
+    writeHiddenChips(new Set(["rate", "dir"]));
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { hidden: ["dir", "rate"] });
+  });
+});
+
+test("hidden chips leave the footer, and click zones follow the chips that remain", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ hidden: ["dir", "model"] }));
+    const ui = await mount();
+    const line = ui.plain()[0];
+    assert.match(line, /^master/, "directory hidden");
+    assert.doesNotMatch(line, / opus /, "model hidden");
+    // The context chip moved left; clicking where it is now still toggles it.
+    assert.deepEqual(ui.click(line.indexOf("41.2k"), 0), { handled: true });
+    assert.match(ui.plain()[0], / 4%/);
+    // And the git branch, now first, still prefills git status.
+    ui.click(0, 0);
+    assert.equal(ui.editor(), "! git status -s");
+  });
+});
+
+test("hiding the session name and the status row", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ hidden: ["name", "statuses"] }));
+    const ui = await mount({ sessionName: "my-session", statuses: new Map([["other-ext", "busy"]]) });
+    const lines = ui.plain();
+    assert.equal(lines.length, 1, "no status row");
+    assert.doesNotMatch(lines[0], /my-session/);
+  });
+});
+
+/** Open /footer against a stub ui.custom; returns the checklist component. */
+async function openChecklist(ui) {
+  ui.plain(); // a render records each chip's live value
+  let list;
+  ui.ctx.ui.custom = async (factory) => {
+    list = factory({ requestRender() {} }, { fg: (_color, text) => text }, {}, () => {});
+  };
+  await ui.run("footer");
+  return list;
+}
+
+test("/footer lists every chip with its live value and saves toggles to footer.json", async () => {
+  await withAgentDir(async (dir) => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    const shown = list.render(140).map(strip);
+    assert.equal(shown[0], "Footer chips");
+    assert.ok(shown.some((line) => /Directory\s+dotfiles\s+shown/.test(line)), shown.join("\n"));
+    assert.ok(shown.some((line) => /Context\s+41\.2k\/1m/.test(line)));
+    assert.ok(shown.some((line) => /Bypass\s+—/.test(line)), "a chip with nothing to show gets a dash");
+    assert.ok(shown.some((line) => line.includes("Working directory. Click: toggle the full path.")), "selected row's description");
+
+    list.handleInput("\r"); // Enter toggles the selected row, Directory
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: ["dir"] });
+    assert.match(ui.plain()[0], /^master/);
+    assert.ok(list.render(140).map(strip).some((line) => /Directory.*hidden/.test(line)));
+
+    list.handleInput("\r");
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: [] });
+    assert.match(ui.plain()[0], /^dotfiles/);
+  });
+});
+
+test("/footer on and off switch the whole footer; anything else shows usage", async () => {
+  const ui = await mount();
+  await ui.run("footer", "off");
+  assert.equal(ui.notices.at(-1).message, "footer disabled");
+  await ui.run("footer", "on");
+  assert.equal(ui.notices.at(-1).message, "footer enabled");
+  await ui.run("footer", "sideways");
+  assert.equal(ui.notices.at(-1).level, "warning");
+  assert.match(ui.notices.at(-1).message, /^Usage: \/footer/);
 });

@@ -458,7 +458,18 @@ agent-link or bg message, so text inside an item can't drive it.
 ## Footer
 
 `extensions/footer.ts` renders the status line (dir, provider, model, git,
-context/cost, boot time) plus `/bypass`, `/boot` and `/footer`. It also watches
+context/cost, boot time) plus `/bypass`, `/boot` and `/footer`.
+
+`/footer` opens a checklist of the chips, each with its live value; the
+selected row's description says what it shows and what a click does. Space or
+Enter hides or shows it. The choice is saved to `footer.json` in the agent
+directory (`{ "hidden": ["boot", "rate"] }`), so it applies to every session
+that starts afterwards; chips added later start shown. `/footer off` and
+`/footer on` switch the whole footer for this session. The click zones are
+keyed by the same chip ids, so a hidden chip shifts the rest without breaking
+their clicks.
+
+It also watches
 pi's on-disk version: when an install lands while instances are running — via
 `pi update`, `npm i -g`, anything — each running footer shows a green, right-aligned
 "Update installed v0.52.1 → v0.53.0 · Restart to update" line above the prompt

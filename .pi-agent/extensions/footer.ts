@@ -37,7 +37,8 @@
  * Fullscreen only: that is where the terminal reports mouse clicks to pi at all.
  *
  * Design notes:
- * - No config UI, no widget registry: the layout is this file.
+ * - The layout is this file. FOOTER_CHIPS names each chip, and /footer hides
+ *   or shows them, saved in footer.json in the agent directory.
  * - Git state comes from a single `git status --porcelain=v1` per refresh, cached
  *   with a 5s TTL and refreshed asynchronously (stale-while-revalidate), so a slow
  *   repo never blocks a render.
@@ -47,6 +48,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { appendFile, readFile, readlink, realpath, writeFile, access, stat, lstat, constants } from "node:fs/promises";
 import { homedir, loadavg } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -57,7 +59,15 @@ import {
   type ExtensionContext,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  SettingsList,
+  truncateToWidth,
+  visibleWidth,
+  type SettingItem,
+  type SettingsListTheme,
+  type TUI,
+  type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 
 const GIT_TTL_MS = 5_000;
 const GIT_TIMEOUT_MS = 1_000;
@@ -88,6 +98,58 @@ const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "ce
 
 /** compaction/index.ts: "⏲ 10:54p" while the idle-compaction timer is armed. Shown dim after ctx. */
 const IDLE_COMPACT_STATUS = "idle-compact";
+
+/**
+ * Every footer chip, in painted order. The id keys footer.json and the click
+ * zones; the description is what /footer shows for the selected row.
+ */
+export const FOOTER_CHIPS = [
+  { id: "dir", label: "Directory", description: "Working directory. Click: toggle the full path." },
+  { id: "git", label: "Git", description: "Branch, * when dirty, ⇡/⇣ ahead/behind. Click: branch prefills git status; arrows prefill push/pull (⇧ for force/rebase)." },
+  { id: "provider", label: "Provider", description: "Provider, short (gh = GitHub Copilot, o = OpenAI Codex). Click: next model." },
+  { id: "model", label: "Model", description: "Model, short (opus, sonn). Click: next model." },
+  { id: "thinking", label: "Thinking", description: "Thinking level (med, hi, xhi). Click: next level." },
+  { id: "bypass", label: "Bypass", description: "Shown while Approval Guardian is bypassed. Click: turn the guardian back on." },
+  { id: "context", label: "Context", description: "Context tokens / window, coloured as it fills. Click: show a percent instead." },
+  { id: "idle", label: "Idle compaction", description: "⏲ time the idle-compaction timer fires (54 minutes after the last request). /idle explains when it is missing." },
+  { id: "cost", label: "Cost", description: "Session cost, or a provider budget (ollama, baseten, openrouter). Click on a budget: percent or total." },
+  { id: "usage", label: "Rate limits", description: "Provider usage windows: Copilot premium-request share, Codex/Grok/Claude windows. Click: compact or detailed." },
+  { id: "boot", label: "Boot time", description: "⚡ startup time, until the first message. Click: recent boot stats." },
+  { id: "rate", label: "Token rate", description: "Tokens per second of the last reply (live while streaming). Click: add time to first token." },
+  { id: "name", label: "Session name", description: "Session name, or the dim peer name other agents use. Click: prefill /auto-name." },
+  { id: "statuses", label: "Extension statuses", description: "Other extensions' statuses, on a dim line of their own." },
+] as const;
+
+export type FooterChipId = (typeof FOOTER_CHIPS)[number]["id"];
+
+const CHIP_IDS: ReadonlySet<string> = new Set(FOOTER_CHIPS.map((chip) => chip.id));
+
+/** SGR colour codes out, for /footer's plain samples. */
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-9;:]*m/g, "");
+}
+
+/** footer.json: `{ "hidden": ["boot", "rate"] }`. New chips start shown. */
+export function footerConfigPath(): string {
+  return join(agentDir(), "footer.json");
+}
+
+/** The hidden chips; unknown ids and a missing or broken file mean none. */
+export function readHiddenChips(): Set<FooterChipId> {
+  try {
+    const parsed = JSON.parse(readFileSync(footerConfigPath(), "utf8")) as { hidden?: unknown };
+    const hidden = Array.isArray(parsed.hidden) ? parsed.hidden : [];
+    return new Set(hidden.filter((id): id is FooterChipId => typeof id === "string" && CHIP_IDS.has(id)));
+  } catch {
+    return new Set();
+  }
+}
+
+export function writeHiddenChips(hidden: ReadonlySet<FooterChipId>): void {
+  const ordered = FOOTER_CHIPS.map((chip) => chip.id).filter((id) => hidden.has(id));
+  mkdirSync(agentDir(), { recursive: true });
+  writeFileSync(footerConfigPath(), `${JSON.stringify({ hidden: ordered }, null, 2)}\n`);
+}
 
 /**
  * The boot timer sits in the footer until the first message goes out, and every
@@ -1357,24 +1419,35 @@ export default function footerExtension(pi: ExtensionAPI): void {
     | "gitStatus"
     | "gitPush"
     | "gitPull";
+  /** Clickable zones: chip ids, plus the git chip's three segments. */
+  type FooterZoneKey =
+    | Exclude<FooterChipId, "git" | "idle" | "statuses">
+    | "gitBranch"
+    | "gitBehind"
+    | "gitAhead";
   /** One entry per painted footer line, holding the chip zones on that line. */
-  interface FooterClickRow {
-    provider?: ClickZone;
-    model?: ClickZone;
-    thinking?: ClickZone;
-    boot?: ClickZone;
-    bypass?: ClickZone;
-    dir?: ClickZone;
-    /** Git chip sub-segments: the branch text, and each arrow separately. */
-    gitBranch?: ClickZone;
-    gitBehind?: ClickZone;
-    gitAhead?: ClickZone;
-    context?: ClickZone;
-    cost?: ClickZone;
-    providerUsage?: ClickZone;
-    rate?: ClickZone;
-    name?: ClickZone;
-  }
+  type FooterClickRow = Partial<Record<FooterZoneKey, ClickZone>>;
+  /** Which action each zone runs, checked in this order. */
+  const ZONE_ACTIONS: ReadonlyArray<readonly [FooterZoneKey, FooterClickAction]> = [
+    ["provider", "model"],
+    ["model", "model"],
+    ["thinking", "thinking"],
+    ["boot", "boot"],
+    ["bypass", "bypass"],
+    ["dir", "dir"],
+    ["gitBranch", "gitStatus"],
+    ["gitAhead", "gitPush"],
+    ["gitBehind", "gitPull"],
+    ["context", "context"],
+    ["cost", "cost"],
+    ["usage", "providerUsage"],
+    ["rate", "rate"],
+    ["name", "name"],
+  ];
+  /** Chips /footer hid, from footer.json. */
+  let hiddenChips = readHiddenChips();
+  /** Each chip's text at the last render, hidden ones too, for /footer's samples. */
+  let chipSamples = new Map<FooterChipId, string>();
   /**
    * Hit-testing state for clickable chips, refreshed on every footer render:
    * one entry per painted footer line, top to bottom, holding the
@@ -1398,20 +1471,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
   function footerChipAction(x: number, y: number): FooterClickAction | undefined {
     const row = footerClickRows[y];
     if (!row) return undefined;
-    if (zoneHit(row.provider, x) || zoneHit(row.model, x)) return "model";
-    if (zoneHit(row.thinking, x)) return "thinking";
-    if (zoneHit(row.boot, x)) return "boot";
-    if (zoneHit(row.bypass, x)) return "bypass";
-    if (zoneHit(row.dir, x)) return "dir";
-    if (zoneHit(row.gitBranch, x)) return "gitStatus";
-    if (zoneHit(row.gitAhead, x)) return "gitPush";
-    if (zoneHit(row.gitBehind, x)) return "gitPull";
-    if (zoneHit(row.context, x)) return "context";
-    if (zoneHit(row.cost, x)) return "cost";
-    if (zoneHit(row.providerUsage, x)) return "providerUsage";
-    if (zoneHit(row.rate, x)) return "rate";
-    if (zoneHit(row.name, x)) return "name";
-    return undefined;
+    return ZONE_ACTIONS.find(([key]) => zoneHit(row[key], x))?.[1];
   }
 
   /** Fill the auto-name command without destroying a prompt already in progress. */
@@ -1531,56 +1591,71 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }
           const showBoot = bootMs !== undefined && !bootCleared;
 
-          const left: string[] = [
-            color(BLUE, showFullPath ? tildePath(ctx.cwd) : basename(ctx.cwd)),
-            gitChip.text,
-            color(BRIGHT_YELLOW, shortProvider(provider)),
-            color(
-              BRIGHT_YELLOW,
-              `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id, provider)}`,
-            ),
-            color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : ""),
-            bypassed ? color(BRIGHT_RED, "bypass") : "",
+          const chips: Array<readonly [Exclude<FooterChipId, "name" | "statuses">, string]> = [
+            ["dir", color(BLUE, showFullPath ? tildePath(ctx.cwd) : basename(ctx.cwd))],
+            ["git", gitChip.text],
+            ["provider", color(BRIGHT_YELLOW, shortProvider(provider))],
+            [
+              "model",
+              color(BRIGHT_YELLOW, `${routePrefix(provider, ctx.model?.id)}${shortModel(ctx.model?.id, provider)}`),
+            ],
+            ["thinking", color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : "")],
+            ["bypass", bypassed ? color(BRIGHT_RED, "bypass") : ""],
             // context-length / context-window share one segment (no spaces around "/"),
             // or a single percent when the chip is toggled.
-            contextPercent
-              ? color(
-                  contextColorCode(usage?.tokens, usage?.contextWindow),
-                  usage?.percent == null ? "?" : formatPercent(usage.percent),
-                )
-              : `${color(
-                  contextColorCode(usage?.tokens, usage?.contextWindow),
-                  usage?.tokens == null ? "?" : formatCount(usage.tokens),
-                )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
-            statuses.get(IDLE_COMPACT_STATUS) ? theme.fg("dim", statuses.get(IDLE_COMPACT_STATUS) as string) : "",
-            usageValue
-              ? renderBudgetUsage(usageValue, budgetResetMs(provider), compactCostUsage)
-              : hideSessionCost(provider, ctx)
-                ? ""
-                : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
+            [
+              "context",
+              contextPercent
+                ? color(
+                    contextColorCode(usage?.tokens, usage?.contextWindow),
+                    usage?.percent == null ? "?" : formatPercent(usage.percent),
+                  )
+                : `${color(
+                    contextColorCode(usage?.tokens, usage?.contextWindow),
+                    usage?.tokens == null ? "?" : formatCount(usage.tokens),
+                  )}/${color(CYAN, usage?.contextWindow ? formatCount(usage.contextWindow) : "?")}`,
+            ],
+            ["idle", statuses.get(IDLE_COMPACT_STATUS) ? theme.fg("dim", statuses.get(IDLE_COMPACT_STATUS) as string) : ""],
+            [
+              "cost",
+              usageValue
+                ? renderBudgetUsage(usageValue, budgetResetMs(provider), compactCostUsage)
+                : hideSessionCost(provider, ctx)
+                  ? ""
+                  : color(GREEN, formatCost(sessionCost(ctx.sessionManager.getBranch()))),
+            ],
             ...INLINE_STATUS_KEYS.map((key) => {
               const value = statuses.get(key);
               // Per-window coloring: a red 5h shouldn't paint the week red too.
-              return value ? renderWindowUsage(value, compactProviderUsage) : "";
+              return ["usage", value ? renderWindowUsage(value, compactProviderUsage) : ""] as const;
             }),
-            showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : "",
+            ["boot", showBoot ? theme.fg("dim", `⚡${formatMs(bootMs as number)}`) : ""],
             // Waiting for the first token: the TTFT counts up, dim (detailed
             // mode keeps the previous rate beside it, faint). Then live
             // (faint) while streaming, and the exact figure once it ends.
-            waitingForToken && turnStartMs !== undefined
-              ? `${theme.fg("dim", `${((Date.now() - turnStartMs) / 1_000).toFixed(1)}s`)}${
-                  detailedRate && lastRate !== undefined
-                    ? ` ${faint(color(rateColor(lastRate, lightTheme), `${formatRateValue(lastRate)}tk/s`))}`
-                    : ""
-                }`
-              : liveRate !== undefined
-              ? faint(color(rateColor(liveRate, lightTheme), formatRateChip(liveRate, liveTtftMs, detailedRate)))
-              : lastRate !== undefined
-                ? streaming
-                  ? faint(color(rateColor(lastRate, lightTheme), formatRateChip(lastRate, lastTtftMs, detailedRate)))
-                  : color(rateColor(lastRate, lightTheme), formatRateChip(lastRate, lastTtftMs, detailedRate))
-                : "",
+            [
+              "rate",
+              waitingForToken && turnStartMs !== undefined
+                ? `${theme.fg("dim", `${((Date.now() - turnStartMs) / 1_000).toFixed(1)}s`)}${
+                    detailedRate && lastRate !== undefined
+                      ? ` ${faint(color(rateColor(lastRate, lightTheme), `${formatRateValue(lastRate)}tk/s`))}`
+                      : ""
+                  }`
+                : liveRate !== undefined
+                  ? faint(color(rateColor(liveRate, lightTheme), formatRateChip(liveRate, liveTtftMs, detailedRate)))
+                  : lastRate !== undefined
+                    ? streaming
+                      ? faint(color(rateColor(lastRate, lightTheme), formatRateChip(lastRate, lastTtftMs, detailedRate)))
+                      : color(rateColor(lastRate, lightTheme), formatRateChip(lastRate, lastTtftMs, detailedRate))
+                    : "",
+            ],
           ];
+          // /footer samples every chip, hidden ones included; the walk below
+          // then skips the hidden ones.
+          const samples = new Map<FooterChipId, string>();
+          for (const [id, text] of chips) {
+            if (text) samples.set(id, samples.has(id) ? `${samples.get(id)} ${text}` : text);
+          }
 
           // Fall back to the name other agents use to reach this session.
           const sessionName = pi.getSessionName();
@@ -1590,10 +1665,12 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // stays dim, because it says "nobody named this" and a bright color
           // would claim otherwise.
           const tint = sessionColorAnsi();
-          const right =
+          const nameText =
             sessionName ? (tint ? paint(tint, sessionName) : color(CYAN, sessionName))
             : peerName ? theme.fg("dim", peerName)
             : "";
+          if (nameText) samples.set("name", nameText);
+          const right = hiddenChips.has("name") ? "" : nameText;
 
           // Wrap, don't truncate: chips fill a row and whole chips move down
           // to the next row when the terminal is too narrow, so nothing is
@@ -1602,68 +1679,29 @@ export default function footerExtension(pi: ExtensionAPI): void {
           // it; later rows get the full width. The same walk records the
           // clickable chip columns per row; skipped empties contribute no
           // separator, non-empty parts join with one space.
-          const chipRows: Array<FooterClickRow & { line: string }> = [];
-          const bootIndex = left.length - 2;
-          // left[]: dir 0, git 1, provider 2, model 3, thinking 4, bypass 5,
-          // ctx 6, idle-compaction 7, cost 8, provider statuses 9.., boot, rate.
-          const COST_INDEX = 8;
+          const chipRows: Array<{ line: string; zones: FooterClickRow }> = [];
           const nameWidth = visibleWidth(right);
           const firstLimit = nameWidth > 0 ? Math.max(0, width - nameWidth - 1) : width;
           let rowLimit = firstLimit;
           let current = "";
           let cursor = 0;
-          let providerZone: ClickZone | undefined;
-          let modelZone: ClickZone | undefined;
-          let thinkingZone: ClickZone | undefined;
-          let bypassZone: ClickZone | undefined;
-          let bootZone: ClickZone | undefined;
-          let dirZone: ClickZone | undefined;
-          let gitBranchZone: ClickZone | undefined;
-          let gitBehindZone: ClickZone | undefined;
-          let gitAheadZone: ClickZone | undefined;
-          let contextZone: ClickZone | undefined;
-          let providerUsageZone: ClickZone | undefined;
-          let costZone: ClickZone | undefined;
-          let rateZone: ClickZone | undefined;
+          let zones: FooterClickRow = {};
           const flushChipRow = () => {
             const line = truncateToWidth(current, rowLimit, "…");
             const paintedWidth = visibleWidth(line);
-            chipRows.push({
-              line,
-              provider: clipZone(providerZone, paintedWidth),
-              model: clipZone(modelZone, paintedWidth),
-              thinking: clipZone(thinkingZone, paintedWidth),
-              bypass: clipZone(bypassZone, paintedWidth),
-              boot: clipZone(bootZone, paintedWidth),
-              dir: clipZone(dirZone, paintedWidth),
-              gitBranch: clipZone(gitBranchZone, paintedWidth),
-              gitBehind: clipZone(gitBehindZone, paintedWidth),
-              gitAhead: clipZone(gitAheadZone, paintedWidth),
-              context: clipZone(contextZone, paintedWidth),
-              cost: clipZone(costZone, paintedWidth),
-              providerUsage: clipZone(providerUsageZone, paintedWidth),
-              rate: clipZone(rateZone, paintedWidth),
-            });
+            const clipped: FooterClickRow = {};
+            for (const [key, zone] of Object.entries(zones) as Array<[FooterZoneKey, ClickZone]>) {
+              const fitted = clipZone(zone, paintedWidth);
+              if (fitted) clipped[key] = fitted;
+            }
+            chipRows.push({ line, zones: clipped });
             current = "";
             cursor = 0;
-            providerZone = undefined;
-            modelZone = undefined;
-            thinkingZone = undefined;
-            bypassZone = undefined;
-            bootZone = undefined;
-            dirZone = undefined;
-            gitBranchZone = undefined;
-            gitBehindZone = undefined;
-            gitAheadZone = undefined;
-            contextZone = undefined;
-            costZone = undefined;
-            providerUsageZone = undefined;
-            rateZone = undefined;
+            zones = {};
             rowLimit = width;
           };
-          for (let index = 0; index < left.length; index += 1) {
-            const part = left[index]!;
-            if (!part) continue;
+          for (const [id, part] of chips) {
+            if (!part || hiddenChips.has(id)) continue;
             const partWidth = visibleWidth(part);
             // A chip moves down whole when it cannot fit its row's budget —
             // except a chip wider than the terminal itself, which can never
@@ -1677,33 +1715,27 @@ export default function footerExtension(pi: ExtensionAPI): void {
               current += " ";
               cursor += 1;
             }
-            if (index === 0) dirZone = [cursor, cursor + partWidth];
-            if (index === 1) {
-              gitBranchZone = [cursor, cursor + gitChip.branchWidth];
+            const span: ClickZone = [cursor, cursor + partWidth];
+            if (id === "git") {
+              zones.gitBranch = [cursor, cursor + gitChip.branchWidth];
               if (gitChip.behindOffset !== undefined) {
-                gitBehindZone = [cursor + gitChip.behindOffset, cursor + gitChip.behindOffset + 1];
+                zones.gitBehind = [cursor + gitChip.behindOffset, cursor + gitChip.behindOffset + 1];
               }
               if (gitChip.aheadOffset !== undefined) {
-                gitAheadZone = [cursor + gitChip.aheadOffset, cursor + gitChip.aheadOffset + 1];
+                zones.gitAhead = [cursor + gitChip.aheadOffset, cursor + gitChip.aheadOffset + 1];
               }
-            }
-            if (index === 2) providerZone = [cursor, cursor + partWidth];
-            if (index === 3) modelZone = [cursor, cursor + partWidth];
-            if (index === 4) thinkingZone = [cursor, cursor + partWidth];
-            if (index === 5) bypassZone = [cursor, cursor + partWidth];
-            if (index === 6) contextZone = [cursor, cursor + partWidth];
-            // The cost slot: a usage chip (ollama/baseten/openrouter) toggles
-            // percent/total on click; the plain session-cost fallback stays
-            // glance-only, so no zone for it. The idle-compaction chip sits
-            // between ctx and cost (index 7) and is glance-only too.
-            if (index === COST_INDEX && usageValue) costZone = [cursor, cursor + partWidth];
-            if (index >= COST_INDEX + 1 && index < bootIndex) {
+            } else if (id === "cost") {
+              // A budget chip (ollama/baseten/openrouter) toggles percent/total;
+              // the plain session-cost fallback stays glance-only.
+              if (usageValue) zones.cost = span;
+            } else if (id === "usage") {
               // Only one provider status normally renders. If extensions expose
               // several, make their contiguous run one shared toggle target.
-              providerUsageZone = [providerUsageZone?.[0] ?? cursor, cursor + partWidth];
+              zones.usage = [zones.usage?.[0] ?? cursor, span[1]];
+            } else if (id !== "idle") {
+              // The idle-compaction chip is glance-only; every other chip is its own zone.
+              zones[id] = span;
             }
-            if (index === bootIndex && showBoot) bootZone = [cursor, cursor + partWidth];
-            if (index === bootIndex + 1) rateZone = [cursor, cursor + partWidth];
             current += part;
             cursor += partWidth;
           }
@@ -1719,17 +1751,16 @@ export default function footerExtension(pi: ExtensionAPI): void {
             const nameZone: ClickZone = [width - fittedNameWidth, width];
             const first = chipRows[0];
             if (!first) {
-              chipRows.push({ line: alignRight(right, width), name: nameZone });
+              chipRows.push({ line: alignRight(right, width), zones: { name: nameZone } });
             } else if (visibleWidth(first.line) + 1 + nameWidth <= width) {
               chipRows[0] = {
-                ...first,
                 line: padBetween(first.line, right, width),
-                name: nameZone,
+                zones: { ...first.zones, name: nameZone },
               };
             } else {
               // The name replaced the whole row, so don't retain invisible
               // chip zones from the row that was displaced.
-              chipRows[0] = { line: alignRight(right, width), name: nameZone };
+              chipRows[0] = { line: alignRight(right, width), zones: { name: nameZone } };
             }
           }
 
@@ -1740,33 +1771,14 @@ export default function footerExtension(pi: ExtensionAPI): void {
             extra.push(value);
           }
           if (extra.length > 0) {
-            lines.push(truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…"));
+            samples.set("statuses", extra.join(" "));
+            if (!hiddenChips.has("statuses")) lines.push(truncateToWidth(theme.fg("dim", extra.join(" ")), width, "…"));
           }
+          chipSamples = samples;
           // Publish the chip zones per painted line for the click hit test.
           // Aligned with `lines` so handleMouse's local event.y indexes
           // straight into it. Extra status rows carry no zones and never hit.
-          footerClickRows = lines.map((_, index) => {
-            const row = chipRows[index];
-            if (row) {
-              return {
-                provider: row.provider,
-                model: row.model,
-                thinking: row.thinking,
-                bypass: row.bypass,
-                boot: row.boot,
-                dir: row.dir,
-                gitBranch: row.gitBranch,
-                gitBehind: row.gitBehind,
-                gitAhead: row.gitAhead,
-                context: row.context,
-                cost: row.cost,
-                providerUsage: row.providerUsage,
-                rate: row.rate,
-                name: row.name,
-              } satisfies FooterClickRow;
-            }
-            return {};
-          });
+          footerClickRows = lines.map((_, index) => chipRows[index]?.zones ?? {});
           return lines;
         },
       };
@@ -2023,11 +2035,72 @@ export default function footerExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("footer", {
-    description: "Toggle the custom footer",
-    handler: async (_args, ctx) => {
-      enabled = !enabled;
-      apply(ctx);
-      ctx.ui.notify(enabled ? "footer enabled" : "footer disabled", "info");
+    description: "Choose which footer chips show (/footer on|off toggles the whole footer)",
+    handler: async (args, ctx) => {
+      const argument = args.trim().toLowerCase();
+      if (argument === "on" || argument === "off" || argument === "toggle") {
+        enabled = argument === "toggle" ? !enabled : argument === "on";
+        apply(ctx);
+        ctx.ui.notify(enabled ? "footer enabled" : "footer disabled", "info");
+        return;
+      }
+      if (argument) {
+        ctx.ui.notify("Usage: /footer (choose chips), /footer on, /footer off", "warning");
+        return;
+      }
+      if (!ctx.hasUI) return;
+      // Another session may have changed footer.json since this one read it.
+      hiddenChips = readHiddenChips();
+      await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+        const labelWidth = Math.max(...FOOTER_CHIPS.map((chip) => chip.label.length));
+        const items: SettingItem[] = FOOTER_CHIPS.map((chip) => {
+          const sample = chipSamples.get(chip.id);
+          return {
+            id: chip.id,
+            // The live value, plain: the list paints the selected row in the accent colour.
+            label: `${chip.label.padEnd(labelWidth)}  ${sample ? truncateToWidth(stripAnsi(sample), 40, "…") : "—"}`,
+            description: chip.description,
+            currentValue: hiddenChips.has(chip.id) ? "hidden" : "shown",
+            values: ["shown", "hidden"],
+          };
+        });
+        const listTheme: SettingsListTheme = {
+          label: (text, selected) => (selected ? theme.fg("accent", text) : text),
+          value: (text, selected) =>
+            selected ? theme.fg("accent", text) : theme.fg(text === "hidden" ? "dim" : "muted", text),
+          description: (text) => theme.fg("dim", text),
+          cursor: theme.fg("accent", "→ "),
+          hint: (text) => theme.fg("dim", text),
+        };
+        const list = new SettingsList(
+          items,
+          Math.min(items.length, 15),
+          listTheme,
+          (id, value) => {
+            const chip = id as FooterChipId;
+            if (value === "hidden") hiddenChips.add(chip);
+            else hiddenChips.delete(chip);
+            try {
+              writeHiddenChips(hiddenChips);
+            } catch (error) {
+              ctx.ui.notify(`Could not save ${footerConfigPath()}: ${(error as Error).message}`, "warning");
+            }
+            repaint?.();
+          },
+          () => done(undefined),
+        );
+        const header = () => [theme.fg("accent", "Footer chips"), ""];
+        return {
+          render: (width: number) => [...header().map((line) => truncateToWidth(line, width, "…")), ...list.render(width)],
+          invalidate: () => list.invalidate(),
+          handleInput: (data: string) => {
+            list.handleInput(data);
+            tui.requestRender();
+          },
+          // The list's rows start below the header.
+          handleMouse: (event: TuiMouseEvent) => list.handleMouse({ ...event, y: event.y - header().length }),
+        };
+      });
     },
   });
 
@@ -2049,6 +2122,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
     lastTtftMs = undefined;
     detailedRate = false;
     coldStart = event.reason === "startup";
+    hiddenChips = readHiddenChips();
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer
     // name that lands after the last startup paint — until the next keystroke.
