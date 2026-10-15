@@ -283,7 +283,7 @@ function clampThinking(requested, supported) {
 
 test("renders the full line once git has settled", async () => {
   const ui = await mount();
-  assert.equal((await ui.settled())[0], "dotfiles master* gh opus hi 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles master* gh opus hi 41/1m");
 });
 
 /** Drive one streamed reply: turn_start, ttft wait, deltas over `ms`, message_end. */
@@ -420,7 +420,7 @@ test("tk/s state resets on session change and model switch", async (t) => {
 
 test("first render omits git and repaints when the refresh lands", async () => {
   const ui = await mount();
-  assert.equal(ui.plain()[0], "dotfiles master gh opus hi 41.2k/1m");
+  assert.equal(ui.plain()[0], "dotfiles master gh opus hi 41/1m");
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
@@ -440,7 +440,7 @@ test("git runs one porcelain + one rev-list per refresh, cached for 5s", async (
 
 test("non-repo directories drop the git segments", async () => {
   const ui = await mount({ branch: null, gitCode: 128, porcelain: "" });
-  assert.equal((await ui.settled())[0], "dotfiles gh opus hi 41.2k/1m");
+  assert.equal((await ui.settled())[0], "dotfiles gh opus hi 41/1m");
 });
 
 test("dirty marker: any change earns a single '*' glued to the branch", async () => {
@@ -679,11 +679,11 @@ function contextX(ui, width = 120) {
 
 test("clicking the context chip toggles tokens and percent", async () => {
   const ui = await mount();
-  assert.match(ui.plain()[0], /41\.2k\/1m/);
+  assert.match(ui.plain()[0], /41\/1m/);
   assert.deepEqual(ui.click(contextX(ui), 0), { handled: true });
   assert.match(ui.plain()[0], / 4%$/);
   assert.deepEqual(ui.click(contextX(ui), 0), { handled: true });
-  assert.match(ui.plain()[0], /41\.2k\/1m/);
+  assert.match(ui.plain()[0], /41\/1m/);
 });
 
 test("cost formatting and subscription providers", async () => {
@@ -937,7 +937,7 @@ test("session name is right-aligned and statuses split inline vs status row", as
 test("the idle-compaction chip sits dim right after ctx, not in the status row", async () => {
   const ui = await mount({ statuses: new Map([["idle-compact", "⏲ 10:54p"], ["turn-timer", "3s"]]) });
   const [main, statusRow] = await ui.settled(120);
-  assert.match(main, /41\.2k\/1m ⏲ 10:54p(\s|$)/);
+  assert.match(main, /41\/1m ⏲ 10:54p(\s|$)/);
   assert.equal(statusRow, "3s");
 });
 
@@ -978,7 +978,7 @@ test("update notice shows both versions in a right-aligned widget above the prom
   const widget = widgetFactory({ requestRender: () => {} });
   const message = `Update installed v${RUNNING_PI_VERSION} → v99.0.0 · Restart to update`;
 
-  assert.equal(main, "dotfiles master* gh opus hi 41.2k/1m");
+  assert.equal(main, "dotfiles master* gh opus hi 41/1m");
   assert.equal(strip(widget.render(80)[0]), `${" ".repeat(80 - message.length)}${message}`);
   assert.match(
     widget.render(80)[0],
@@ -1152,7 +1152,7 @@ test("no peer registry means no right-hand segment at all", async () => {
   try {
     const ui = await mount({ sessionName: undefined });
     const [main] = await ui.settled(80);
-    assert.equal(main, "dotfiles master* gh opus hi 41.2k/1m", "no padding, no trailing gap");
+    assert.equal(main, "dotfiles master* gh opus hi 41/1m", "no padding, no trailing gap");
   } finally {
     restore();
   }
@@ -1190,7 +1190,7 @@ test("chips wrap whole onto more rows instead of truncating", async () => {
   // only the space left of it; chips that no longer fit move down whole onto
   // a full-width row rather than being cut mid-chip.
   assert.equal(lines[0], "dotfiles master*   footer-work");
-  assert.equal(lines[1], "gh opus hi 41.2k/1m");
+  assert.equal(lines[1], "gh opus hi 41/1m");
   assert.ok(lines.every((line) => line.length <= 30), "every row fits the width");
   assert.ok(!lines.join("\n").includes("…"), "nothing is cut");
 });
@@ -1536,7 +1536,7 @@ test("hidden chips leave the footer, and click zones follow the chips that remai
     assert.match(line, /^master/, "directory hidden");
     assert.doesNotMatch(line, / opus /, "model hidden");
     // The context chip moved left; clicking where it is now still toggles it.
-    assert.deepEqual(ui.click(line.indexOf("41.2k"), 0), { handled: true });
+    assert.deepEqual(ui.click(line.indexOf("41/1m"), 0), { handled: true });
     assert.match(ui.plain()[0], / 4%/);
     // And the git branch, now first, still prefills git status.
     ui.click(0, 0);
@@ -1573,7 +1573,7 @@ test("/footer lists every chip with its live value and saves toggles to footer.j
     assert.equal(shown[0], "Footer chips");
     assert.match(shown[1], /j\/k select · J\/K or ⇧↑\/⇧↓ move/);
     assert.ok(shown.some((line) => /Directory\s+dotfiles\s+name/.test(line)), shown.join("\n"));
-    assert.ok(shown.some((line) => /Context\s+41\.2k\/1m\s+tokens/.test(line)));
+    assert.ok(shown.some((line) => /Context\s+41\/1m\s+tokens/.test(line)));
     assert.ok(shown.some((line) => /Bypass\s+—\s+shown/.test(line)), "a chip with nothing to show gets a dash");
     assert.ok(shown.some((line) => line.includes("Working directory: its name, or the full path.")), "selected row's description");
     const raw = list.render(140);
@@ -1663,7 +1663,7 @@ test("saved modes start each session; a click flips them for that session only",
     assert.match(ui.plain()[0], /^\/Users\/someone\/.* 4%/);
     const line = ui.plain()[0];
     ui.click(line.indexOf(" 4%") + 1, 0);
-    assert.match(ui.plain()[0], /41\.2k\/1m/, "click flips it");
+    assert.match(ui.plain()[0], /41\/1m/, "click flips it");
     assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")).modes.context, "percent", "but saves nothing");
     await ui.startSession();
     assert.match(ui.plain()[0], / 4%/, "a new session starts in the saved mode again");
@@ -1690,7 +1690,7 @@ test("idle countdown mode shows minutes left instead of the clock", async () => 
     const hours = inAnHour.getHours();
     const clock = `⏲ ${hours % 12 || 12}:${String(inAnHour.getMinutes()).padStart(2, "0")}${hours < 12 ? "a" : "p"}`;
     const ui = await mount({ statuses: new Map([["idle-compact", clock]]) });
-    assert.match(ui.plain()[0], /41\.2k\/1m ⏲ 3[78]m/);
+    assert.match(ui.plain()[0], /41\/1m ⏲ 3[78]m/);
   });
 });
 
