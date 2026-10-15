@@ -101,23 +101,25 @@ const IDLE_COMPACT_STATUS = "idle-compact";
 
 /**
  * Every footer chip, in painted order. The id keys footer.json and the click
- * zones; the description is what /footer shows for the selected row.
+ * zones; the description is what /footer shows for the selected row, and the
+ * example stands in for the chip in /footer's preview when it has nothing to
+ * show right now.
  */
 export const FOOTER_CHIPS = [
-  { id: "dir", label: "Directory", description: "Working directory. Click: toggle the full path." },
-  { id: "git", label: "Git", description: "Branch, * when dirty, ⇡/⇣ ahead/behind. Click: branch prefills git status; arrows prefill push/pull (⇧ for force/rebase)." },
-  { id: "provider", label: "Provider", description: "Provider, short (gh = GitHub Copilot, o = OpenAI Codex). Click: next model." },
-  { id: "model", label: "Model", description: "Model, short (opus, sonn). Click: next model." },
-  { id: "thinking", label: "Thinking", description: "Thinking level (med, hi, xhi). Click: next level." },
-  { id: "bypass", label: "Bypass", description: "Shown while Approval Guardian is bypassed. Click: turn the guardian back on." },
-  { id: "context", label: "Context", description: "Context tokens / window, coloured as it fills. Click: show a percent instead." },
-  { id: "idle", label: "Idle compaction", description: "⏲ time the idle-compaction timer fires (54 minutes after the last request). /idle explains when it is missing." },
-  { id: "cost", label: "Cost", description: "Session cost, or a provider budget (ollama, baseten, openrouter). Click on a budget: percent or total." },
-  { id: "usage", label: "Rate limits", description: "Provider usage windows: Copilot premium-request share, Codex/Grok/Claude windows. Click: compact or detailed." },
-  { id: "boot", label: "Boot time", description: "⚡ startup time, until the first message. Click: recent boot stats." },
-  { id: "rate", label: "Token rate", description: "Tokens per second of the last reply (live while streaming). Click: add time to first token." },
-  { id: "name", label: "Session name", description: "Session name, or the dim peer name other agents use. Click: prefill /auto-name." },
-  { id: "statuses", label: "Extension statuses", description: "Other extensions' statuses, on a dim line of their own." },
+  { id: "dir", label: "Directory", example: "project", description: "Working directory. Click: toggle the full path." },
+  { id: "git", label: "Git", example: "main* ⇡", description: "Branch, * when dirty, ⇡/⇣ ahead/behind. Click: branch prefills git status; arrows prefill push/pull (⇧ for force/rebase)." },
+  { id: "provider", label: "Provider", example: "gh", description: "Provider, short (gh = GitHub Copilot, o = OpenAI Codex). Click: next model." },
+  { id: "model", label: "Model", example: "opus", description: "Model, short (opus, sonn). Click: next model." },
+  { id: "thinking", label: "Thinking", example: "med", description: "Thinking level (med, hi, xhi). Click: next level." },
+  { id: "bypass", label: "Bypass", example: "bypass", description: "Shown while Approval Guardian is bypassed. Click: turn the guardian back on." },
+  { id: "context", label: "Context", example: "42k/1m", description: "Context tokens / window, coloured as it fills. Click: show a percent instead." },
+  { id: "idle", label: "Idle compaction", example: "⏲ 2:41p", description: "⏲ time the idle-compaction timer fires (54 minutes after the last request). /idle explains when it is missing." },
+  { id: "cost", label: "Cost", example: "$0.42", description: "Session cost, or a provider budget (ollama, baseten, openrouter). Click on a budget: percent or total." },
+  { id: "usage", label: "Rate limits", example: "57%", description: "Provider usage windows: Copilot premium-request share, Codex/Grok/Claude windows. Click: compact or detailed." },
+  { id: "boot", label: "Boot time", example: "⚡775ms", description: "⚡ startup time, until the first message. Click: recent boot stats." },
+  { id: "rate", label: "Token rate", example: "99", description: "Tokens per second of the last reply (live while streaming). Click: add time to first token." },
+  { id: "name", label: "Session name", example: "session-name", description: "Session name, or the dim peer name other agents use. Click: prefill /auto-name." },
+  { id: "statuses", label: "Extension statuses", example: "extension status", description: "Other extensions' statuses, on a dim line of their own." },
 ] as const;
 
 export type FooterChipId = (typeof FOOTER_CHIPS)[number]["id"];
@@ -1679,6 +1681,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
             const styled = id === previewChip ? blink(text) : theme.fg("dim", stripAnsi(text));
             return hiddenChips.has(id) ? strike(styled) : styled;
           };
+          // The selected chip, when it has nothing to show right now, stands in
+          // with its example, italic, so you can see where it would sit.
+          const placeholder = (id: FooterChipId) =>
+            `\x1b[3m${FOOTER_CHIPS.find((chip) => chip.id === id)?.example ?? ""}\x1b[23m`;
+          const previewEmpty = previewChip !== undefined && !chips.some(([id, text]) => id === previewChip && text);
 
           // Fall back to the name other agents use to reach this session.
           const sessionName = pi.getSessionName();
@@ -1693,7 +1700,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
             : peerName ? theme.fg("dim", peerName)
             : "";
           if (nameText) samples.set("name", nameText);
-          const right = previewChip ? previewStyle("name", nameText) : hiddenChips.has("name") ? "" : nameText;
+          const nameShown = nameText || (previewChip === "name" ? placeholder("name") : "");
+          const right = previewChip ? previewStyle("name", nameShown) : hiddenChips.has("name") ? "" : nameText;
 
           // Wrap, don't truncate: chips fill a row and whole chips move down
           // to the next row when the terminal is too narrow, so nothing is
@@ -1723,7 +1731,12 @@ export default function footerExtension(pi: ExtensionAPI): void {
             zones = {};
             rowLimit = width;
           };
-          for (const [id, text] of chips) {
+          let examplePlaced = false;
+          for (const [id, raw] of chips) {
+            // Rate limits fill several slots; the example takes only the first.
+            const isExample = !raw && previewEmpty && id === previewChip && !examplePlaced;
+            if (isExample) examplePlaced = true;
+            const text = isExample ? placeholder(id) : raw;
             if (!text || (hiddenChips.has(id) && !previewChip)) continue;
             const part = previewStyle(id, text);
             const partWidth = visibleWidth(part);
@@ -1740,7 +1753,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
               cursor += 1;
             }
             const span: ClickZone = [cursor, cursor + partWidth];
-            if (id === "git") {
+            if (isExample) {
+              // A stand-in has nothing to act on, so no click zone.
+            } else if (id === "git") {
               zones.gitBranch = [cursor, cursor + gitChip.branchWidth];
               if (gitChip.behindOffset !== undefined) {
                 zones.gitBehind = [cursor + gitChip.behindOffset, cursor + gitChip.behindOffset + 1];
@@ -1799,6 +1814,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
             const statusLine = theme.fg("dim", extra.join(" "));
             if (previewChip) lines.push(truncateToWidth(previewStyle("statuses", statusLine), width, "…"));
             else if (!hiddenChips.has("statuses")) lines.push(truncateToWidth(statusLine, width, "…"));
+          } else if (previewChip === "statuses") {
+            lines.push(truncateToWidth(previewStyle("statuses", placeholder("statuses")), width, "…"));
           }
           chipSamples = samples;
           // Publish the chip zones per painted line for the click hit test.

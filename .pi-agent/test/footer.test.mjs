@@ -1476,7 +1476,7 @@ test("/boot stats says so when there is nothing recorded", async () => {
 test("every footer chip has a unique id, a label and a description", () => {
   const ids = FOOTER_CHIPS.map((chip) => chip.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const chip of FOOTER_CHIPS) assert.ok(chip.label && chip.description, chip.id);
+  for (const chip of FOOTER_CHIPS) assert.ok(chip.label && chip.description && chip.example, chip.id);
 });
 
 test("footer.json: unknown ids and broken files mean nothing hidden; writes keep chip order", async () => {
@@ -1573,6 +1573,29 @@ test("/footer previews in the real footer: the selected chip blinks, the rest go
     list.handleInput("\x1b"); // Esc closes: normal footer, Git gone
     assert.doesNotMatch(footerLine(), /\x1b\[5m/);
     assert.match(strip(footerLine()), /^dotfiles gh /);
+  });
+});
+
+test("/footer stands in an example for a selected chip with nothing to show", async () => {
+  await withAgentDir(async () => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    const down = (n) => {
+      for (let i = 0; i < n; i += 1) list.handleInput("\x1b[B");
+    };
+    assert.doesNotMatch(strip(ui.raw()[0]), / bypass/);
+    down(5); // Bypass: not bypassed, so the example shows, italic and blinking
+    assert.match(ui.raw()[0], /\x1b\[5m\x1b\[3mbypass\x1b\[23m\x1b\[25m/);
+    const beforeContext = strip(ui.raw()[0]).indexOf("bypass");
+    ui.click(beforeContext, 0);
+    assert.equal(ui.guardianRequests.length, 0, "the stand-in has no click zone");
+    down(7); // Session name: unnamed session, so the example sits at the right end
+    assert.match(strip(ui.raw()[0]), /session-name$/);
+    down(1); // Extension statuses: none, so an example status row appears
+    assert.equal(strip(ui.raw().at(-1)), "extension status");
+    list.handleInput("\x1b");
+    assert.equal(ui.raw().length, 1, "stand-ins gone when the checklist closes");
+    assert.doesNotMatch(strip(ui.raw()[0]), /bypass|session-name/);
   });
 });
 
