@@ -1682,9 +1682,36 @@ export default function footerExtension(pi: ExtensionAPI): void {
             return hiddenChips.has(id) ? strike(styled) : styled;
           };
           // The selected chip, when it has nothing to show right now, stands in
-          // with its example, italic, so you can see where it would sit.
-          const placeholder = (id: FooterChipId) =>
-            `\x1b[3m${FOOTER_CHIPS.find((chip) => chip.id === id)?.example ?? ""}\x1b[23m`;
+          // with its example, styled the way the real chip is, so you see what
+          // it would look like and where it would sit.
+          const placeholder = (id: FooterChipId): string => {
+            const text = FOOTER_CHIPS.find((chip) => chip.id === id)?.example ?? "";
+            switch (id) {
+              case "dir":
+                return color(BLUE, text);
+              case "git":
+                return `${color(MAGENTA, "main*")} ${color(CYAN, "⇡")}`;
+              case "provider":
+              case "model":
+              case "thinking":
+                return color(BRIGHT_YELLOW, text);
+              case "bypass":
+                return color(BRIGHT_RED, text);
+              case "context":
+                return `${color(contextColorCode(42_000, 1_000_000), "42k")}/${color(CYAN, "1m")}`;
+              case "cost":
+                return color(GREEN, text);
+              case "usage":
+                return color(YELLOW, text);
+              case "rate":
+                return paint(rateColor(99, lightTheme), text);
+              case "name":
+                return color(CYAN, text);
+              default:
+                // idle, boot and the status row are dim in the real footer.
+                return theme.fg("dim", text);
+            }
+          };
           const previewEmpty = previewChip !== undefined && !chips.some(([id, text]) => id === previewChip && text);
 
           // Fall back to the name other agents use to reach this session.

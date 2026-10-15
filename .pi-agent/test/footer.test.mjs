@@ -1584,8 +1584,8 @@ test("/footer stands in an example for a selected chip with nothing to show", as
       for (let i = 0; i < n; i += 1) list.handleInput("\x1b[B");
     };
     assert.doesNotMatch(strip(ui.raw()[0]), / bypass/);
-    down(5); // Bypass: not bypassed, so the example shows, italic and blinking
-    assert.match(ui.raw()[0], /\x1b\[5m\x1b\[3mbypass\x1b\[23m\x1b\[25m/);
+    down(5); // Bypass: not bypassed, so the example shows, red like the real chip, blinking
+    assert.match(ui.raw()[0], /\x1b\[5m\x1b\[91mbypass\x1b\[39m\x1b\[25m/);
     const beforeContext = strip(ui.raw()[0]).indexOf("bypass");
     ui.click(beforeContext, 0);
     assert.equal(ui.guardianRequests.length, 0, "the stand-in has no click zone");
