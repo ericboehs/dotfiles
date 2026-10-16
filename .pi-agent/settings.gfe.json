@@ -29,7 +29,7 @@
     }
   },
   "packages": [
-    "git:github.com/ericboehs/pi-boehsline@3d10a87378243affd269b4b9ab6c8542308f0418",
+    "git:github.com/ericboehs/pi-boehsline@34b14308e1ab7828a954f6ac71831dbac7ad1bf5",
     "git:github.com/ericboehs/pi-boehsline-va@7c9afaf2fd93b31fae4fd3b28f6b144a373ece48",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
