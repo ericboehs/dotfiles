@@ -29,7 +29,7 @@ import { appendFileSync, closeSync, copyFileSync, existsSync, fstatSync, type FS
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
@@ -2304,7 +2304,7 @@ export default function canvas(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  const canvasTool = defineTool({
     name: "canvas",
     label: "Canvas",
     description:
@@ -2525,5 +2525,14 @@ export default function canvas(pi: ExtensionAPI) {
       const what = a.remove ? `remove ${a.id}` : a.kind === "finding" ? "finding" : `${a.kind} ${a.id ?? ""}`;
       return new Text(`${theme.fg("toolTitle", theme.bold("canvas"))} ${theme.fg("muted", what)}${a.title ? theme.fg("dim", ` · ${a.title}`) : ""}`, 0, 0);
     },
+  });
+  pi.registerTool(canvasTool);
+
+  // Other extensions post sections without a tool call: pi.events.emit("canvas:put", { params, ctx, reply? }).
+  pi.events?.on?.("canvas:put", (p: any) => {
+    if (!p?.params || !p?.ctx) return;
+    canvasTool
+      .execute("canvas:put", p.params, undefined, undefined, p.ctx)
+      .then((r: unknown) => p.reply?.(null, r), (e: unknown) => p.reply?.(e));
   });
 }
