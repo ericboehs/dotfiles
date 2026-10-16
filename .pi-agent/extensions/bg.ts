@@ -143,6 +143,8 @@ const MAX_TIMER_MS = 2_147_483_647;
 /** Short output peek included in the "moved to background" tool result. */
 const ADOPT_TAIL_LINES = 5;
 const ADOPT_TAIL_CHARS = 400;
+/** Limit of `structuredContent.output` for scripts, same as built-in bash. */
+const STRUCTURED_OUTPUT_MAX_BYTES = 1024 * 1024;
 
 interface Job {
 	id: string;
@@ -337,6 +339,57 @@ function tailLines(logPath: string, windowBytes: number): string[] {
 	const all = raw.split("\n");
 	if (all.at(-1) === "") all.pop();
 	return all;
+}
+
+/**
+ * Built-in bash's `structuredContent`, which codemode scripts receive instead of
+ * text. `...base` keeps the built-in outputSchema, so results must match it.
+ * Over the limit, keep the head and tail around a marker, like the built-in.
+ */
+function structuredResult(job: Job): {
+	output: string;
+	truncated: boolean;
+	full_output_path?: string;
+	exit_code: number;
+	wall_time_seconds: number;
+} {
+	let output = "";
+	let truncated = false;
+	try {
+		const size = fs.statSync(job.logPath).size;
+		if (size <= STRUCTURED_OUTPUT_MAX_BYTES) {
+			output = fs.readFileSync(job.logPath, "utf8");
+		} else {
+			const headBytes = Math.floor(STRUCTURED_OUTPUT_MAX_BYTES / 2);
+			const tailBytes = STRUCTURED_OUTPUT_MAX_BYTES - headBytes;
+			const head = Buffer.alloc(headBytes);
+			const tail = Buffer.alloc(tailBytes);
+			const fd = fs.openSync(job.logPath, "r");
+			try {
+				fs.readSync(fd, head, 0, headBytes, 0);
+				fs.readSync(fd, tail, 0, tailBytes, size - tailBytes);
+			} finally {
+				fs.closeSync(fd);
+			}
+			// Cut at character boundaries: drop a partial trailing sequence from the
+			// head and leading continuation bytes from the tail.
+			const headText = new TextDecoder().decode(head, { stream: true });
+			let tailStart = 0;
+			while (tailStart < tail.length && ((tail[tailStart] ?? 0) & 0xc0) === 0x80) tailStart++;
+			const tailText = new TextDecoder().decode(tail.subarray(tailStart));
+			output = `${headText}\n\n[... ${size - headBytes - tailBytes} bytes omitted ...]\n\n${tailText}`;
+			truncated = true;
+		}
+	} catch {
+		// log not readable: report empty output with the exit code
+	}
+	return {
+		output,
+		truncated,
+		...(truncated ? { full_output_path: job.logPath } : {}),
+		exit_code: job.exitCode ?? 0,
+		wall_time_seconds: Math.round(((job.endedAt ?? Date.now()) - job.startedAt) / 100) / 10,
+	};
 }
 
 interface PanelDeps {
@@ -1089,10 +1142,11 @@ export default function (pi: ExtensionAPI) {
 						{ type: "text", text: `${text}\n\nCommand exited with code ${job.exitCode}` },
 					],
 					details,
+					structuredContent: structuredResult(job),
 					isError: true,
 				};
 			}
-			return { content: [{ type: "text", text }], details };
+			return { content: [{ type: "text", text }], details, structuredContent: structuredResult(job) };
 		},
 	} as Parameters<ExtensionAPI["registerTool"]>[0]);
 

@@ -102,3 +102,46 @@ test("a command without a timeout auto-backgrounds after the foreground budget",
 
   assert.match(textOf(result), /Still running after 1s — moved to background as job [0-9a-f]{6}/);
 });
+
+// Codemode scripts receive structuredContent, not text. `...base` keeps the
+// built-in bash outputSchema, so the foreground path must honor it.
+test("a foreground command returns the built-in structured result for scripts", async () => {
+  const { bash, ctx } = mount();
+  const result = await bash.execute("structured-ok", { command: "echo hi" }, undefined, undefined, ctx);
+
+  assert.ok(bash.outputSchema, "keeps the built-in outputSchema");
+  assert.equal(result.isError, undefined);
+  assert.equal(result.structuredContent.output, "hi\n");
+  assert.equal(result.structuredContent.truncated, false);
+  assert.equal(result.structuredContent.exit_code, 0);
+  assert.equal(typeof result.structuredContent.wall_time_seconds, "number");
+  assert.equal("full_output_path" in result.structuredContent, false);
+});
+
+test("a nonzero exit is an error for the model but still carries the exit code", async () => {
+  const { bash, ctx } = mount();
+  const result = await bash.execute("structured-fail", { command: "echo nope; exit 3" }, undefined, undefined, ctx);
+
+  assert.equal(result.isError, true);
+  assert.match(textOf(result), /Command exited with code 3/);
+  assert.equal(result.structuredContent.output, "nope\n");
+  assert.equal(result.structuredContent.exit_code, 3);
+});
+
+test("structured output over 1 MiB keeps head and tail and points at the log", async () => {
+  const { bash, ctx } = mount();
+  const result = await bash.execute(
+    "structured-big",
+    { command: "printf 'H'; head -c 1200000 /dev/zero | tr '\\0' x; printf 'T'" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  const out = result.structuredContent.output;
+
+  assert.equal(result.structuredContent.truncated, true);
+  assert.ok(out.startsWith("H") && out.endsWith("T"));
+  assert.match(out, /\[\.\.\. \d+ bytes omitted \.\.\.\]/);
+  assert.ok(Buffer.byteLength(out) < 1024 * 1024 + 100);
+  assert.match(result.structuredContent.full_output_path, /\.log$/);
+});
