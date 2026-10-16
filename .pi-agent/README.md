@@ -662,20 +662,17 @@ with the context, threshold and cache expiry behind it.
 | `PI_IDLE_COMPACT_DELAY_MS` | replaces the 54-minute wait (for testing) |
 | `PI_COMPACTION_DEBUG=<file>` | logs why each replay ran or was skipped |
 
-### Cache trace (temporary)
+### Why long cache retention matters
 
-`extensions/cache-trace.ts` records every Anthropic-shaped request to
-`~/.local/state/pi-cache-trace/YYYY-MM-DD.jsonl`: fingerprints of the tools,
-the system prompt and each message, then the cache read and write, the 5m/1h
-split and Copilot's billed AIU. It strips `cache_control` before comparing,
-because pi moves that marker to the last message on every request. When a
-request changes something the previous one already sent, `change` gives the
-JSON path and the types or lengths on each side, never the content. `miss`
-flags a read below half of the previous cached prefix. Copilot misses about
-15% of requests seconds apart, and controlled loops never reproduced that, so
-this records real sessions until a miss can be diffed against the request
-before it. It switches itself off at 10:00 UTC on 2026-10-16
-(`PI_CACHE_TRACE=0` stops it sooner); delete the file after that.
+A day-long trace of Copilot Claude requests (October 2026) found 30% of
+spend going to cache misses. Most came from sessions without
+`PI_CACHE_RETENTION=long`: their 5-minute caches expired, and Copilot's
+Vertex backend also evicted them early. With an identical prefix seconds
+apart, mid-session requests missed 10% of the time on 5-minute retention
+against 1% on 1-hour. The rest came from a system prompt that changed
+(a `/reload` after editing extensions, or a mode that adds or removes part
+of the prompt), changing the thinking effort mid-session (only system and
+tools stay cached), and idling for more than an hour.
 
 ## Session color
 
