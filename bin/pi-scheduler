@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# pi-scheduler now ships as a pi package (github.com/ericboehs/pi-scheduler).
+# pi-scheduler ships inside Boehsline (github.com/ericboehs/pi-boehsline,
+# packages/scheduler). Run that copy: the local checkout settings.<host>.json
+# points at on e14, else the one `pi install` cloned on the other hosts.
 #
-# ~/bin is a symlink to this directory, so this shim is what keeps the command
-# on PATH across every host without each one needing a hand-made symlink into
-# ~/.pi/agent/git. It execs the real CLI rather than wrapping it, so the file
-# the process sees is the package's own: `pi-scheduler install` bakes an
-# absolute path into the launchd job, and it must be the package path, not this.
+# ~/bin is a symlink to this directory, so this shim keeps the command on PATH
+# on every host. It execs the real CLI rather than wrapping it, so the file the
+# process sees is the package's own: `pi-scheduler install` bakes an absolute
+# path into the launchd job, and it must be the package path, not this.
 set -euo pipefail
 
-cli="${PI_AGENT_DIR:-$HOME/.pi/agent}/git/github.com/ericboehs/pi-scheduler/bin/pi-scheduler"
+agent="${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}"
+for root in "$HOME/Code/github.com/ericboehs/pi-boehsline" "$agent/git/github.com/ericboehs/pi-boehsline"; do
+  cli="$root/packages/scheduler/bin/pi-scheduler"
+  [ -x "$cli" ] && exec "$cli" "$@"
+done
 
-if [ ! -x "$cli" ]; then
-  echo "pi-scheduler: package not installed at $cli" >&2
-  echo "  pi install git:github.com/ericboehs/pi-scheduler" >&2
-  exit 127
-fi
-
-exec "$cli" "$@"
+echo "pi-scheduler: Boehsline not found (looked in ~/Code and $agent/git)" >&2
+echo "  pi install git:github.com/ericboehs/pi-boehsline" >&2
+exit 127
