@@ -24,6 +24,7 @@ afterEach(async () => {
 import { VERSION as RUNNING_PI_VERSION } from "@earendil-works/pi-coding-agent";
 import footer, {
   CHIP_MODES,
+  contextAboveThreshold,
   DEFAULT_CHIP_ORDER,
   FOOTER_CHIPS,
   minutesUntilClock,
@@ -1666,7 +1667,7 @@ test("/footer stands in an example for a selected chip with nothing to show", as
     const beforeContext = strip(ui.raw()[0]).indexOf("bypass");
     ui.click(beforeContext, 0);
     assert.equal(ui.guardianRequests.length, 0, "the stand-in has no click zone");
-    down(7); // Session name: unnamed session, so the example sits at the right end
+    down(8); // Session name (past the threshold row): unnamed session, so the example sits at the right end
     assert.match(strip(ui.raw()[0]), /session-name$/);
     down(1); // Extension statuses: none, so an example status row appears
     assert.equal(strip(ui.raw().at(-1)), "extension status");
@@ -1752,7 +1753,7 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
     list.handleInput("k");
     assert.match(rows().find((line) => line.startsWith("→")), /Git/);
 
-    for (let i = 0; i < 11; i += 1) list.handleInput("j"); // down to Session name
+    for (let i = 0; i < 12; i += 1) list.handleInput("j"); // down to Session name (past the threshold row)
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/);
     list.handleInput("K");
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/, "name row does not move");
@@ -1764,6 +1765,52 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
     list.handleInput("\x1bs");
     assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).order.slice(-2), ["rate", "boot"], "Alt+S saves the order");
     list.handleInput("\x1b");
+  });
+});
+
+test("context threshold: tokens or window share, unknown counts as below", () => {
+  assert.equal(contextAboveThreshold(undefined, 10, 100), true);
+  assert.equal(contextAboveThreshold("always", null, 100), true);
+  assert.equal(contextAboveThreshold(">50k", 50_000, 1_000_000), false);
+  assert.equal(contextAboveThreshold(">50k", 50_001, 1_000_000), true);
+  assert.equal(contextAboveThreshold(">25%", 250_001, 1_000_000), true);
+  assert.equal(contextAboveThreshold(">25%", 60_000, 200_000), true, "share of a smaller window");
+  assert.equal(contextAboveThreshold(">25%", 40_000, 200_000), false);
+  assert.equal(contextAboveThreshold(">100k", null, 1_000_000), false);
+});
+
+test("the context chip hides below its saved threshold", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ contextMin: ">50k" }));
+    let ui = await mount();
+    assert.doesNotMatch(ui.plain()[0], /41\/1m/, "41k is under 50k");
+    ui = await mount({ contextUsage: { tokens: 120_000, contextWindow: 1_000_000, percent: 12 } });
+    assert.match(ui.plain()[0], / 120\/1m/);
+    assert.equal(readFooterConfig().contextMin, ">50k");
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ contextMin: ">60%" }));
+    assert.equal(readFooterConfig().contextMin, undefined, "unknown thresholds fall back to always");
+  });
+});
+
+test("/footer's Context threshold row sits under Context and saves with Alt+S", async () => {
+  await withAgentDir(async (dir) => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    const shown = list.render(140).map(strip);
+    const at = shown.findIndex((line) => /Context\s+41\/1m/.test(line));
+    assert.match(shown[at + 1], /Context threshold\s+always/);
+    for (let i = 0; i < 7; i += 1) list.handleInput("j"); // Directory → … → Context threshold
+    assert.match(list.render(140).map(strip).find((line) => line.startsWith("→")), /Context threshold/);
+    assert.match(ui.raw()[0], /\x1b\[5m.*41/, "previews the context chip");
+    list.handleInput("J"); // not a chip: no move
+    assert.match(list.render(140).map(strip).find((line) => line.startsWith("→")), /Context threshold/);
+    list.handleInput("\r"); // always → >50k
+    list.handleInput("\x1b");
+    assert.doesNotMatch(ui.plain()[0], /41\/1m/, "applies to this session at once");
+    const again = await openChecklist(ui);
+    again.handleInput("\x1bs");
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), { hidden: [], contextMin: ">50k" });
+    again.handleInput("\x1b");
   });
 });
 

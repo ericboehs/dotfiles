@@ -465,7 +465,9 @@ value; the selected row's description says what it shows and what a click
 does. Enter or Space cycles the row's value: `shown`/`hidden`, or for chips
 with display modes, each mode then `hidden` (Directory name/full path, Git
 full/branch, Context tokens/percent, Idle compaction clock/countdown, Cost and
-Rate limits compact/detailed, Token rate number/with TTFT). `j`/`k` move the
+Rate limits compact/detailed, Token rate number/with TTFT). A Context
+threshold row under Context hides that chip until the context passes 50k,
+100k or 200k tokens, or 25%, 50% or 75% of the window. `j`/`k` move the
 selection; `J`/`K` or Shift+↑/↓ move the chip itself (the session name and the
 status row stay put). While the list is open the real footer is the preview:
 the selected chip blinks underlined, the rest go faint gray, hidden chips show

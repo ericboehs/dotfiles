@@ -155,6 +155,27 @@ export interface FooterConfig {
   hidden: Set<FooterChipId>;
   modes: Partial<Record<FooterChipId, string>>;
   order: FooterLineChipId[];
+  /** The context chip shows only above this (CONTEXT_THRESHOLDS); absent means always. */
+  contextMin?: string;
+}
+
+/** Context threshold choices for /footer, "always" first (the default). */
+export const CONTEXT_THRESHOLDS = ["always", ">50k", ">100k", ">200k", ">25%", ">50%", ">75%"] as const;
+
+/** The /footer row id for the context threshold; not a chip. */
+const CONTEXT_MIN_ROW = "contextMin";
+
+/**
+ * Whether the context chip clears its threshold: ">100k" compares tokens,
+ * ">50%" the share of the window. An unknown count (right after compaction)
+ * counts as below.
+ */
+export function contextAboveThreshold(threshold: string | undefined, tokens: number | null | undefined, window: number | undefined): boolean {
+  const match = /^>(\d+)(k|%)$/.exec(threshold ?? "");
+  if (!match) return true;
+  if (tokens == null) return false;
+  const n = Number(match[1]);
+  return match[2] === "k" ? tokens > n * 1000 : !!window && tokens > (window * n) / 100;
 }
 
 /** A chip's saved mode, or its default. */
@@ -193,7 +214,7 @@ export function footerConfigPath(): string {
 
 /** The saved config; unknown ids, unknown modes and a missing or broken file fall back to defaults. */
 export function readFooterConfig(): FooterConfig {
-  let parsed: { hidden?: unknown; modes?: unknown; order?: unknown } = {};
+  let parsed: { hidden?: unknown; modes?: unknown; order?: unknown; contextMin?: unknown } = {};
   try {
     parsed = JSON.parse(readFileSync(footerConfigPath(), "utf8")) ?? {};
   } catch {
@@ -210,12 +231,21 @@ export function readFooterConfig(): FooterConfig {
   const saved = Array.isArray(parsed.order) ? parsed.order.filter(known).filter(isLineChip) : [];
   const order = [...new Set(saved)];
   for (const id of DEFAULT_CHIP_ORDER) if (!order.includes(id)) order.push(id);
-  return { hidden, modes, order };
+  const contextMin =
+    typeof parsed.contextMin === "string" && (CONTEXT_THRESHOLDS as readonly string[]).includes(parsed.contextMin)
+      ? parsed.contextMin
+      : undefined;
+  return contextMin && contextMin !== "always" ? { hidden, modes, order, contextMin } : { hidden, modes, order };
 }
 
 /** Save the config, leaving out defaults so the file stays short. */
 export function writeFooterConfig(config: FooterConfig): void {
-  const out: { hidden: FooterChipId[]; modes?: Partial<Record<FooterChipId, string>>; order?: FooterLineChipId[] } = {
+  const out: {
+    hidden: FooterChipId[];
+    modes?: Partial<Record<FooterChipId, string>>;
+    order?: FooterLineChipId[];
+    contextMin?: string;
+  } = {
     hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
   };
   const modes = Object.fromEntries(
@@ -223,6 +253,7 @@ export function writeFooterConfig(config: FooterConfig): void {
   );
   if (Object.keys(modes).length > 0) out.modes = modes;
   if (config.order.join() !== DEFAULT_CHIP_ORDER.join()) out.order = config.order;
+  if (config.contextMin && config.contextMin !== "always") out.contextMin = config.contextMin;
   mkdirSync(agentDir(), { recursive: true });
   writeFileSync(footerConfigPath(), `${JSON.stringify(out, null, 2)}\n`);
 }
@@ -234,6 +265,7 @@ export function sameFooterConfig(a: FooterConfig, b: FooterConfig): boolean {
       hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
       modes: FOOTER_CHIPS.map((chip) => chipMode(config, chip.id) ?? ""),
       order: config.order,
+      contextMin: config.contextMin ?? "always",
     });
   return key(a) === key(b);
 }
@@ -1753,10 +1785,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
             ["thinking", color(BRIGHT_YELLOW, ctx.model?.reasoning ? shortThinking(pi.getThinkingLevel()) : "")],
             ["bypass", bypassed ? color(BRIGHT_RED, "bypass") : ""],
             // context-length / context-window share one segment (no spaces around "/"),
-            // or a single percent when the chip is toggled.
+            // or a single percent when the chip is toggled; hidden below the
+            // /footer threshold.
             [
               "context",
-              contextPercent
+              !contextAboveThreshold(footerConfig.contextMin, usage?.tokens, usage?.contextWindow)
+                ? ""
+                : contextPercent
                 ? color(
                     contextColorCode(usage?.tokens, usage?.contextWindow),
                     usage?.percent == null ? "?" : formatPercent(usage.percent),
@@ -2268,10 +2303,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
         const chipById = new Map<FooterChipId, (typeof FOOTER_CHIPS)[number]>(FOOTER_CHIPS.map((chip) => [chip.id, chip]));
         // Rows follow the footer: the saved order, then the name and statuses, which stay put.
         const buildItems = (): SettingItem[] =>
-          [...footerConfig.order, "name" as const, "statuses" as const].map((id) => {
+          [...footerConfig.order, "name" as const, "statuses" as const].flatMap((id) => {
             const chip = chipById.get(id)!;
             const sample = chipSamples.get(id);
-            return {
+            const item: SettingItem = {
               id,
               // The live value in the footer's own colours.
               label: `${chip.label.padEnd(labelWidth)}  ${sample ? truncateToWidth(sample, sampleWidth, "…") : "—"}`,
@@ -2280,6 +2315,18 @@ export default function footerExtension(pi: ExtensionAPI): void {
               currentValue: footerConfig.hidden.has(id) ? "hidden" : (chipMode(footerConfig, id) ?? "shown"),
               values: [...(CHIP_MODES[id] ?? ["shown"]), "hidden"],
             };
+            if (id !== "context") return [item];
+            // Its own row under Context, following it when Context moves.
+            return [
+              item,
+              {
+                id: CONTEXT_MIN_ROW,
+                label: "Context threshold".padEnd(labelWidth),
+                description: "Show the context chip only above this many tokens, or this share of the window.",
+                currentValue: footerConfig.contextMin ?? "always",
+                values: [...CONTEXT_THRESHOLDS],
+              },
+            ];
           });
         const listTheme: SettingsListTheme = {
           // Accent only the chip name: the sample after it keeps its colours.
@@ -2311,6 +2358,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }
         };
         const onChange = (id: string, value: string) => {
+          if (id === CONTEXT_MIN_ROW) {
+            footerConfig.contextMin = value;
+            changed();
+            return;
+          }
           const chip = id as FooterChipId;
           if (value === "hidden") {
             footerConfig.hidden.add(chip);
@@ -2336,18 +2388,20 @@ export default function footerExtension(pi: ExtensionAPI): void {
         let list = makeList();
         // SettingsList keeps its cursor private; read it to follow the
         // selection in the footer preview (search is off, so its index is ours).
-        const selectedId = (): FooterChipId | undefined => {
+        const selectedId = (): string | undefined => {
           const index = (list as unknown as { selectedIndex?: number }).selectedIndex;
-          return typeof index === "number" ? (items[index]?.id as FooterChipId | undefined) : undefined;
+          return typeof index === "number" ? items[index]?.id : undefined;
         };
         const syncPreview = () => {
-          previewChip = selectedId() ?? FOOTER_CHIPS[0].id;
+          const id = selectedId();
+          // The threshold row previews the chip it applies to.
+          previewChip = id === CONTEXT_MIN_ROW ? "context" : ((id as FooterChipId | undefined) ?? FOOTER_CHIPS[0].id);
           repaint?.();
         };
         // J/K or Shift+↑/↓: move the selected chip; the list is rebuilt in the
         // new order with the chip still selected.
         const move = (delta: 1 | -1) => {
-          const id = selectedId();
+          const id = selectedId() as FooterChipId | undefined;
           if (!id || !isLineChip(id)) return;
           const order = footerConfig.order;
           const from = order.indexOf(id);
