@@ -13,6 +13,8 @@ import test from "node:test";
 
 import {
   copilotUsageDisplay,
+  effectiveOooDays,
+  workdaysBetween,
   formatUsageCacheReport,
   grokUsageDisplay,
   opencodeGoCookieHeader,
@@ -244,7 +246,7 @@ test("Copilot caches a date-only reset without inventing a time", () => {
   const display = copilotUsageDisplay({ percent_remaining: 70, reset_date: "2023-12-01" }, undefined, NOW);
   assert.equal(display.resetDate, "2023-12-01");
   assert.equal(display.resetMs, undefined);
-  assert.match(display.value, /30%$/);
+  assert.match(display.value, /W: 30% ↓[\d.]+%\/d$/);
   const copilot = row("copilot-window", { "copilot-window": { ...display, fetchedAt: NOW - 30_000 } });
   assert.equal(copilot.resetDate, "2023-12-01");
   assert.equal(
@@ -254,6 +256,38 @@ test("Copilot caches a date-only reset without inventing a time", () => {
   const exhausted = copilotUsageDisplay({ percent_remaining: 0, reset_date: "2023-12-01" }, undefined, NOW);
   assert.match(exhausted.value, /↻2023-12-01$/, "the footer must not claim midnight precision");
   assert.equal(copilotUsageDisplay({ percent_remaining: 70, reset_date: "2023-02-30" }, undefined, NOW), undefined);
+});
+
+test("Copilot paces by local workdays and spreads what is left over the workdays ahead", () => {
+  // Cycle Oct 1 – Nov 1 2026 (local); now Fri Oct 16 at noon.
+  const reset = new Date(2026, 10, 1).toISOString();
+  const now = new Date(2026, 9, 16, 12).getTime();
+  // Elapsed: Oct 1–2, 5–9, 12–15 + half of the 16th = 11.5 of 22 workdays.
+  // Allowance: 41% over today + 10 more workdays = 3.7%/d.
+  assert.equal(copilotUsageDisplay({ percent_remaining: 41 }, reset, now).value, "11.5/22W: 59% ↓3.7%/d");
+  // Two OOO days ahead: 20 workdays, 41% over 9 days.
+  assert.equal(copilotUsageDisplay({ percent_remaining: 41 }, reset, now, 2).value, "11.5/20W: 59% ↓4.6%/d");
+  // Saturday adds no workday time; the allowance starts Monday.
+  const saturday = new Date(2026, 9, 17, 12).getTime();
+  assert.equal(copilotUsageDisplay({ percent_remaining: 41 }, reset, saturday).value, "12/22W: 59% ↓4.1%/d");
+  // More OOO than workdays left: no allowance to show.
+  assert.equal(copilotUsageDisplay({ percent_remaining: 41 }, reset, now, 15).value, "11.5/11.5W: 59%");
+});
+
+test("workdaysBetween weights partial weekdays and skips weekends", () => {
+  const friday = new Date(2026, 9, 16).getTime();
+  const monday = new Date(2026, 9, 19).getTime();
+  assert.equal(workdaysBetween(friday, monday), 1);
+  assert.equal(workdaysBetween(friday + 6 * 3_600_000, monday + 12 * 3_600_000), 1.25);
+  assert.equal(workdaysBetween(monday, friday), 0);
+});
+
+test("Copilot OOO days set in an earlier cycle no longer count", () => {
+  const reset = new Date("2026-11-01T00:00:00Z");
+  assert.equal(effectiveOooDays({ days: 2, setAt: "2026-10-05T00:00:00Z" }, reset), 2);
+  assert.equal(effectiveOooDays({ days: 2, setAt: "2026-09-28T00:00:00Z" }, reset), 0);
+  assert.equal(effectiveOooDays({ days: 2 }, reset), 2, "hand-edited, no stamp");
+  assert.equal(effectiveOooDays(undefined, reset), 0);
 });
 
 test("Copilot caches an exact timestamp only when supplied by the API", () => {

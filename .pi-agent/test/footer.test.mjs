@@ -229,6 +229,7 @@ async function mount(overrides = {}) {
 
   return {
     component,
+    events: pi.events,
     execCalls,
     sent,
     notices,
@@ -761,6 +762,51 @@ test("usage chips color by pace in compact and long forms", async () => {
       assert.equal(await shade(key, "4.8/5H: \u21bb3:45p", form), "31", `${key} ${form} red at limit reset`);
     }
   }
+});
+
+test("Copilot workday windows (W) pace-color and keep the allowance in compact form", async () => {
+  // 11/20W is 55% elapsed: 59% is 4 ahead (gray), 70% is 15 ahead (orange).
+  let ui = await mount({ statuses: new Map([["copilot-window", "11/20W: 59% ↓3.9%/d"]]) });
+  assert.match(ui.plain()[0], /59% ↓3\.9%\/d$/, "compact drops the window, keeps the allowance");
+  assert.match(ui.raw()[0], /\x1B\[90m59% ↓3\.9%\/d\x1B\[39m/);
+  ui = await mount({ statuses: new Map([["copilot-window", "11/20W: 70% ↓3.3%/d"]]) });
+  assert.match(ui.raw()[0], /\x1B\[38;5;208m70% ↓3\.3%\/d\x1B\[39m/);
+});
+
+test("Copilot OOO days read from footer.json and expire with the month", async () => {
+  await withAgentDir(async (dir) => {
+    const now = new Date().toISOString();
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ copilotOoo: "2", copilotOooSetAt: now }));
+    assert.equal(readFooterConfig().copilotOoo, "2");
+    assert.equal(readFooterConfig().copilotOooSetAt, now);
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ copilotOoo: "2", copilotOooSetAt: "2020-01-15T00:00:00Z" }));
+    assert.equal(readFooterConfig().copilotOoo, undefined, "set in an earlier cycle");
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ copilotOoo: "99" }));
+    assert.equal(readFooterConfig().copilotOoo, undefined, "out of range");
+  });
+});
+
+test("/footer's Copilot OOO row sits under Rate limits, emits the change and saves its stamp", async () => {
+  await withAgentDir(async (dir) => {
+    const ui = await mount();
+    const seen = [];
+    ui.events.on("footer:copilot-ooo", (data) => seen.push(data));
+    const list = await openChecklist(ui);
+    const shown = list.render(140).map(strip);
+    const at = shown.findIndex((line) => /^\s*(→ )?Rate limits/.test(line));
+    assert.match(shown[at + 1], /Copilot OOO days\s+0/);
+    const selected = () => list.render(140).map(strip).find((line) => line.startsWith("→"));
+    for (let i = 0; i < 30 && !/Copilot OOO/.test(selected()); i += 1) list.handleInput("j");
+    list.handleInput("\r"); // 0 → 1
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].days, 1);
+    assert.ok(Number.isFinite(Date.parse(seen[0].setAt)));
+    list.handleInput("\x1bs");
+    const saved = JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8"));
+    assert.equal(saved.copilotOoo, "1");
+    assert.equal(saved.copilotOooSetAt, seen[0].setAt);
+    list.handleInput("\x1b");
+  });
 });
 
 test("legacy trailing !s are stripped and still color by pace", async () => {
@@ -1669,7 +1715,7 @@ test("/footer stands in an example for a selected chip with nothing to show", as
     const beforeContext = strip(ui.raw()[0]).indexOf("bypass");
     ui.click(beforeContext, 0);
     assert.equal(ui.guardianRequests.length, 0, "the stand-in has no click zone");
-    down(8); // Session name (past the threshold row): unnamed session, so the example sits at the right end
+    down(9); // Session name (past the threshold and OOO rows): unnamed session, so the example sits at the right end
     assert.match(strip(ui.raw()[0]), /session-name$/);
     down(1); // Extension statuses: none, so an example status row appears
     assert.equal(strip(ui.raw().at(-1)), "extension status");
@@ -1757,7 +1803,7 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
     list.handleInput("k");
     assert.match(rows().find((line) => line.startsWith("→")), /Git/);
 
-    for (let i = 0; i < 13; i += 1) list.handleInput("j"); // down to Session name (past both condition rows)
+    for (let i = 0; i < 14; i += 1) list.handleInput("j"); // down to Session name (past all three condition rows)
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/);
     list.handleInput("K");
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/, "name row does not move");

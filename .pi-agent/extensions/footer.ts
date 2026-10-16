@@ -98,6 +98,9 @@ const AUTO_BUNDLE_LOCK_STALE_MIN = 10;
 /** Statuses rendered inline in the main line (in this order) instead of the status row. */
 const INLINE_STATUS_KEYS = ["codex-window", "copilot-window", "grok-window", "cerebras-window", "claude-bridge-window", "opencode-go-window"] as const;
 
+/** provider-usage listens: { days, setAt } from the /footer OOO row (same string there). */
+const FOOTER_COPILOT_OOO_EVENT = "footer:copilot-ooo";
+
 /** compaction/index.ts: "⏲ 10:54p" while the idle-compaction timer is armed. Shown dim after ctx. */
 const IDLE_COMPACT_STATUS = "idle-compact";
 
@@ -117,7 +120,7 @@ export const FOOTER_CHIPS = [
   { id: "context", label: "Context", example: "42k/1m", description: "Context tokens / window, or a percent, coloured as it fills. Click: flip for this session." },
   { id: "idle", label: "Idle compaction", example: "⏲ 2:41p", description: "When idle compaction fires (54 minutes after the last request): a clock time or a countdown. /idle explains when it is missing." },
   { id: "cost", label: "Cost", example: "$0.42", description: "Session cost, or a provider budget (ollama, baseten, openrouter) as a percent (compact) or total (detailed). Click: flip for this session." },
-  { id: "usage", label: "Rate limits", example: "57%", description: "Provider usage windows: Copilot premium-request share, Codex/Grok/Claude windows, compact or detailed. Click: flip for this session." },
+  { id: "usage", label: "Rate limits", example: "57%", description: "Provider usage windows: Copilot premium-request share over workdays (W) with the ↓%/d left per workday, Codex/Grok/Claude windows, compact or detailed. Click: flip for this session." },
   { id: "boot", label: "Boot time", example: "⚡775ms", description: "⚡ startup time, until the first message. Click: recent boot stats." },
   { id: "rate", label: "Token rate", example: "99", description: "Tokens per second of the last reply (live while streaming), alone or with the time to first token. Click: flip for this session." },
   { id: "name", label: "Session name", example: "session-name", description: "Session name, or the dim peer name other agents use. Click: prefill /auto-name." },
@@ -159,6 +162,10 @@ export interface FooterConfig {
   contextMin?: string;
   /** "unless clean default" hides the git chip on a clean default branch; absent means always. */
   gitWhen?: string;
+  /** Copilot workdays off still ahead this cycle ("0"–"15"); provider-usage reads it for the ↓%/d allowance. */
+  copilotOoo?: string;
+  /** When copilotOoo was set; provider-usage ignores it once a new Copilot cycle starts. */
+  copilotOooSetAt?: string;
 }
 
 /** Context threshold choices for /footer, "always" first (the default). */
@@ -182,6 +189,13 @@ export const CONDITION_ROWS = [
     label: "Context threshold",
     description: "Show the context chip only above this many tokens, or this share of the window.",
     values: [...CONTEXT_THRESHOLDS],
+  },
+  {
+    key: "copilotOoo",
+    chip: "usage",
+    label: "Copilot OOO days",
+    description: "Workdays off still ahead this Copilot cycle: the ↓%/d allowance spreads what is left over the other workdays. Lower it as you take them; it resets with the cycle.",
+    values: Array.from({ length: 16 }, (_, days) => String(days)),
   },
 ] as const satisfies readonly { key: keyof FooterConfig; chip: FooterChipId; label: string; description: string; values: readonly string[] }[];
 
@@ -263,6 +277,16 @@ export function readFooterConfig(): FooterConfig {
       config[row.key] = value;
     }
   }
+  if (config.copilotOoo) {
+    const setAt = (parsed as { copilotOooSetAt?: unknown }).copilotOooSetAt;
+    if (typeof setAt === "string") config.copilotOooSetAt = setAt;
+    // Copilot cycles start on the 1st (UTC): days set in an earlier month have expired.
+    const now = new Date();
+    if (typeof setAt === "string" && Date.parse(setAt) < Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) {
+      delete config.copilotOoo;
+      delete config.copilotOooSetAt;
+    }
+  }
   return config;
 }
 
@@ -272,6 +296,7 @@ export function writeFooterConfig(config: FooterConfig): void {
     hidden: FooterChipId[];
     modes?: Partial<Record<FooterChipId, string>>;
     order?: FooterLineChipId[];
+    copilotOooSetAt?: string;
   } & Partial<Record<ConditionKey, string>> = {
     hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
   };
@@ -284,6 +309,7 @@ export function writeFooterConfig(config: FooterConfig): void {
     const value = config[row.key];
     if (value && value !== row.values[0]) out[row.key] = value;
   }
+  if (out.copilotOoo && config.copilotOooSetAt) out.copilotOooSetAt = config.copilotOooSetAt;
   mkdirSync(agentDir(), { recursive: true });
   writeFileSync(footerConfigPath(), `${JSON.stringify(out, null, 2)}\n`);
 }
@@ -1494,9 +1520,9 @@ function paceWarningColorCode(value: string): number | string {
   return BRIGHT_BLACK;
 }
 
-/** Points ahead of pace for "elapsed/total[H|D]: percent%", or undefined when unparseable. */
+/** Points ahead of pace for "elapsed/total[H|D|W]: percent%" (W = workdays), or undefined when unparseable. */
 function parseWindowPace(value: string): number | undefined {
-  const match = /(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)[HD]:\s+(\d+(?:\.\d+)?)%/.exec(value);
+  const match = /(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)[HDW]:\s+(\d+(?:\.\d+)?)%/.exec(value);
   if (!match) return undefined;
   const elapsed = Number.parseFloat(match[1] as string);
   const total = Number.parseFloat(match[2] as string);
@@ -1511,7 +1537,7 @@ function stripBangs(value: string): string {
 }
 
 /** A window label like "1.2/5H:" — each such token starts a fresh window group. */
-const WINDOW_LABEL_RE = /^\d+(\.\d+)?\/\d+(\.\d+)?[HD]:$/;
+const WINDOW_LABEL_RE = /^\d+(\.\d+)?\/\d+(\.\d+)?[HDW]:$/;
 
 /** Split a multi-window chip so each window colors independently:
  *  "1.2/5H: 43% 3.4/7D: 80%" → ["1.2/5H: 43%", "3.4/7D: 80%"].
@@ -1530,7 +1556,7 @@ function windowGroups(value: string): string[] {
 
 /** Parsed long-form window: "3.5/5H: 4%" → "4%". */
 function parseWindowValue(group: string): string | undefined {
-  const raw = /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?[HD]:\s+(.+)$/.exec(group)?.[1];
+  const raw = /^\d+(?:\.\d+)?\/\d+(?:\.\d+)?[HDW]:\s+(.+)$/.exec(group)?.[1];
   return raw === undefined ? undefined : stripBangs(raw);
 }
 
@@ -2421,6 +2447,11 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const row = conditionRow(id);
           if (row) {
             footerConfig[row.key] = value;
+            if (row.key === "copilotOoo") {
+              footerConfig.copilotOooSetAt = new Date().toISOString();
+              // provider-usage recomputes the Copilot allowance with it, saved or not.
+              pi.events.emit(FOOTER_COPILOT_OOO_EVENT, { days: Number(value), setAt: footerConfig.copilotOooSetAt });
+            }
             changed();
             return;
           }

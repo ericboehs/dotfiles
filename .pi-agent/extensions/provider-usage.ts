@@ -848,10 +848,43 @@ function copilotUsedPercent(quota: QuotaSnapshot): number | undefined {
   return undefined;
 }
 
+/**
+ * Local Mon–Fri days between two instants, each day weighted by how much of
+ * it falls inside [fromMs, toMs). Local midnights, so DST days still count 1.
+ */
+export function workdaysBetween(fromMs: number, toMs: number): number {
+  if (!(toMs > fromMs)) return 0;
+  let total = 0;
+  const from = new Date(fromMs);
+  let day = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  while (day.getTime() < toMs) {
+    const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+    const weekday = day.getDay();
+    if (weekday !== 0 && weekday !== 6) {
+      const overlap = Math.min(next.getTime(), toMs) - Math.max(day.getTime(), fromMs);
+      if (overlap > 0) total += overlap / (next.getTime() - day.getTime());
+    }
+    day = next;
+  }
+  return total;
+}
+
+function startOfLocalDay(ms: number): number {
+  const date = new Date(ms);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+/**
+ * Workday-aware Copilot window: "11.5/21W: 59% ↓3.9%/d". W counts Mon–Fri
+ * days in the cycle minus `oooDays` (workdays off still ahead), so the footer's
+ * pace color ignores weekends. ↓ is the share left per workday from today on
+ * (today counts whole), what to spend daily to land on the reset.
+ */
 function formatCopilotQuota(
   quota: QuotaSnapshot,
   resetDateValue?: string,
   nowMs = Date.now(),
+  oooDays = 0,
 ): string | undefined {
   if (quota.unlimited) return "unlimited";
 
@@ -861,28 +894,70 @@ function formatCopilotQuota(
   if (percent === undefined || !reset) return undefined;
 
   const start = previousMonthlyReset(reset);
-  const totalMs = reset.getTime() - start.getTime();
-  if (totalMs <= 0) return undefined;
+  const resetMs = reset.getTime();
+  if (resetMs - start.getTime() <= 0) return undefined;
 
-  const elapsedMs = Math.max(0, Math.min(totalMs, nowMs - start.getTime()));
-  const elapsedDays = elapsedMs / 86_400_000;
-  const totalDays = totalMs / 86_400_000;
+  const now = Math.max(start.getTime(), Math.min(resetMs, nowMs));
+  const ooo = Math.max(0, oooDays);
+  const elapsed = workdaysBetween(start.getTime(), now);
+  const ahead = Math.max(0, workdaysBetween(now, resetMs) - ooo);
+  const total = elapsed + ahead;
+  if (!(total > 0)) return undefined;
   // 100% is not actionable; the reset is. Footer colors ↻ red.
-  const usage =
-    formatNumber(percent) === "100"
-      ? `↻${/^\d{4}-\d{2}-\d{2}$/.test(resetValue ?? "")
-        ? resetValue
-        : formatResetClock(reset.getTime(), nowMs)}`
-      : `${formatNumber(percent)}%`;
-  return `${formatNumber(elapsedDays)}/${formatNumber(totalDays)}D: ${usage}`;
+  if (formatNumber(percent) === "100") {
+    const when = /^\d{4}-\d{2}-\d{2}$/.test(resetValue ?? "")
+      ? resetValue
+      : formatResetClock(resetMs, nowMs);
+    return `${formatNumber(elapsed)}/${formatNumber(total)}W: ↻${when}`;
+  }
+  const allowanceDays = workdaysBetween(Math.max(start.getTime(), startOfLocalDay(now)), resetMs) - ooo;
+  const allowance = allowanceDays > 0 ? ` ↓${formatNumber((100 - percent) / allowanceDays)}%/d` : "";
+  return `${formatNumber(elapsed)}/${formatNumber(total)}W: ${formatNumber(percent)}%${allowance}`;
 }
+
+/** Footer's /footer OOO row: { days, setAt }; days set before this cycle began no longer count. */
+export interface CopilotOoo {
+  days: number;
+  setAt?: string;
+}
+
+/** OOO days that still apply to the cycle ending at `reset`. */
+export function effectiveOooDays(ooo: CopilotOoo | undefined, reset: Date | undefined): number {
+  if (!ooo || !(ooo.days > 0)) return 0;
+  if (!reset) return ooo.days;
+  const setAt = ooo.setAt ? Date.parse(ooo.setAt) : Number.NaN;
+  // No stamp (hand-edited file): trust it. A stamp from an earlier cycle: expired.
+  if (Number.isFinite(setAt) && setAt < previousMonthlyReset(reset).getTime()) return 0;
+  return ooo.days;
+}
+
+/** The OOO row from footer.json; a live /footer change overrides it via an event. */
+async function readCopilotOoo(): Promise<CopilotOoo | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(join(agentDirectory(), "footer.json"), "utf8")) as {
+      copilotOoo?: unknown;
+      copilotOooSetAt?: unknown;
+    };
+    const days = Number(parsed.copilotOoo);
+    if (!Number.isFinite(days) || days <= 0) return undefined;
+    return { days, ...(typeof parsed.copilotOooSetAt === "string" ? { setAt: parsed.copilotOooSetAt } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Set from footer's FOOTER_COPILOT_OOO_EVENT so unsaved /footer edits apply in this session. */
+let copilotOooOverride: CopilotOoo | undefined;
+
+export const FOOTER_COPILOT_OOO_EVENT = "footer:copilot-ooo";
 
 export function copilotUsageDisplay(
   quota: QuotaSnapshot,
   resetDateValue?: string,
   nowMs = Date.now(),
+  oooDays = 0,
 ): UsageDisplay | undefined {
-  const value = formatCopilotQuota(quota, resetDateValue, nowMs);
+  const value = formatCopilotQuota(quota, resetDateValue, nowMs, oooDays);
   if (!value) return undefined;
   if (quota.unlimited) return { value };
   const resetValue = quota.reset_date ?? resetDateValue;
@@ -920,7 +995,9 @@ async function fetchCopilot(ctx: ExtensionContext): Promise<UsageDisplay> {
   const quota = usage.quota_snapshots?.premium_interactions;
   if (!quota) throw new Error("premium interaction quota was not returned");
 
-  const display = copilotUsageDisplay(quota, usage.quota_reset_date);
+  const reset = parseResetDate(quota.reset_date ?? usage.quota_reset_date);
+  const ooo = effectiveOooDays(copilotOooOverride ?? (await readCopilotOoo()), reset);
+  const display = copilotUsageDisplay(quota, usage.quota_reset_date, Date.now(), ooo);
   if (!display) throw new Error("quota window could not be calculated");
   return display;
 }
@@ -2492,6 +2569,21 @@ export default function providerUsage(pi: ExtensionAPI): void {
 
   pi.on("model_select", (_event, ctx) => {
     refreshAll(ctx);
+  });
+
+  // /footer changed the OOO days: recompute the allowance now, unsaved edits included.
+  pi.events.on(FOOTER_COPILOT_OOO_EVENT, (payload: unknown) => {
+    const ooo = payload as Partial<CopilotOoo> | undefined;
+    copilotOooOverride = {
+      days: typeof ooo?.days === "number" && Number.isFinite(ooo.days) ? ooo.days : 0,
+      ...(typeof ooo?.setAt === "string" ? { setAt: ooo.setAt } : {}),
+    };
+    const ctx = latestCtx;
+    const driver = DRIVERS.find((candidate) => candidate.id === "copilot-window");
+    if (!ctx || !driver) return;
+    void refreshDriver(pi, ctx, driver, { force: true }).catch((err) => {
+      if (!isStaleCtxError(err)) throw err;
+    });
   });
 
   pi.on("agent_settled", (_event, ctx) => {
