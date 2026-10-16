@@ -157,13 +157,37 @@ export interface FooterConfig {
   order: FooterLineChipId[];
   /** The context chip shows only above this (CONTEXT_THRESHOLDS); absent means always. */
   contextMin?: string;
+  /** "unless clean default" hides the git chip on a clean default branch; absent means always. */
+  gitWhen?: string;
 }
 
 /** Context threshold choices for /footer, "always" first (the default). */
 export const CONTEXT_THRESHOLDS = ["always", ">50k", ">100k", ">200k", ">25%", ">50%", ">75%"] as const;
 
-/** The /footer row id for the context threshold; not a chip. */
-const CONTEXT_MIN_ROW = "contextMin";
+/**
+ * Rows in /footer that set when a chip shows, each listed under its chip and
+ * saved under its own key in footer.json; the first value is the default.
+ */
+export const CONDITION_ROWS = [
+  {
+    key: "gitWhen",
+    chip: "git",
+    label: "Git condition",
+    description: "Hide the git chip on the default branch when it is clean, with nothing to push or pull.",
+    values: ["always", "unless clean default"],
+  },
+  {
+    key: "contextMin",
+    chip: "context",
+    label: "Context threshold",
+    description: "Show the context chip only above this many tokens, or this share of the window.",
+    values: [...CONTEXT_THRESHOLDS],
+  },
+] as const satisfies readonly { key: keyof FooterConfig; chip: FooterChipId; label: string; description: string; values: readonly string[] }[];
+
+type ConditionKey = (typeof CONDITION_ROWS)[number]["key"];
+
+const conditionRow = (key: string) => CONDITION_ROWS.find((row) => row.key === key);
 
 /**
  * Whether the context chip clears its threshold: ">100k" compares tokens,
@@ -214,7 +238,7 @@ export function footerConfigPath(): string {
 
 /** The saved config; unknown ids, unknown modes and a missing or broken file fall back to defaults. */
 export function readFooterConfig(): FooterConfig {
-  let parsed: { hidden?: unknown; modes?: unknown; order?: unknown; contextMin?: unknown } = {};
+  let parsed: { hidden?: unknown; modes?: unknown; order?: unknown } & Partial<Record<ConditionKey, unknown>> = {};
   try {
     parsed = JSON.parse(readFileSync(footerConfigPath(), "utf8")) ?? {};
   } catch {
@@ -231,11 +255,15 @@ export function readFooterConfig(): FooterConfig {
   const saved = Array.isArray(parsed.order) ? parsed.order.filter(known).filter(isLineChip) : [];
   const order = [...new Set(saved)];
   for (const id of DEFAULT_CHIP_ORDER) if (!order.includes(id)) order.push(id);
-  const contextMin =
-    typeof parsed.contextMin === "string" && (CONTEXT_THRESHOLDS as readonly string[]).includes(parsed.contextMin)
-      ? parsed.contextMin
-      : undefined;
-  return contextMin && contextMin !== "always" ? { hidden, modes, order, contextMin } : { hidden, modes, order };
+  const config: FooterConfig = { hidden, modes, order };
+  // Unknown values fall back to the default, which is left out.
+  for (const row of CONDITION_ROWS) {
+    const value = parsed[row.key];
+    if (typeof value === "string" && value !== row.values[0] && (row.values as readonly string[]).includes(value)) {
+      config[row.key] = value;
+    }
+  }
+  return config;
 }
 
 /** Save the config, leaving out defaults so the file stays short. */
@@ -244,8 +272,7 @@ export function writeFooterConfig(config: FooterConfig): void {
     hidden: FooterChipId[];
     modes?: Partial<Record<FooterChipId, string>>;
     order?: FooterLineChipId[];
-    contextMin?: string;
-  } = {
+  } & Partial<Record<ConditionKey, string>> = {
     hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
   };
   const modes = Object.fromEntries(
@@ -253,7 +280,10 @@ export function writeFooterConfig(config: FooterConfig): void {
   );
   if (Object.keys(modes).length > 0) out.modes = modes;
   if (config.order.join() !== DEFAULT_CHIP_ORDER.join()) out.order = config.order;
-  if (config.contextMin && config.contextMin !== "always") out.contextMin = config.contextMin;
+  for (const row of CONDITION_ROWS) {
+    const value = config[row.key];
+    if (value && value !== row.values[0]) out[row.key] = value;
+  }
   mkdirSync(agentDir(), { recursive: true });
   writeFileSync(footerConfigPath(), `${JSON.stringify(out, null, 2)}\n`);
 }
@@ -265,7 +295,7 @@ export function sameFooterConfig(a: FooterConfig, b: FooterConfig): boolean {
       hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
       modes: FOOTER_CHIPS.map((chip) => chipMode(config, chip.id) ?? ""),
       order: config.order,
-      contextMin: config.contextMin ?? "always",
+      conditions: CONDITION_ROWS.map((row) => config[row.key] ?? row.values[0]),
     });
   return key(a) === key(b);
 }
@@ -543,6 +573,8 @@ interface GitState {
   dirty: boolean;
   ahead: boolean;
   behind: boolean;
+  /** origin/HEAD's branch, when the remote recorded one. */
+  defaultBranch?: string;
 }
 
 const EMPTY_GIT: GitState = { isRepo: false, dirty: false, ahead: false, behind: false };
@@ -577,9 +609,13 @@ class GitStatusCache {
     try {
       // Both run concurrently: rev-list is wasted work outside a repo or
       // without an upstream, but it costs nothing next to a serial round trip.
-      const [status, revList] = await Promise.all([
+      const [status, revList, originHead] = await Promise.all([
         this.pi.exec("git", ["status", "--porcelain=v1"], { cwd, timeout: GIT_TIMEOUT_MS }),
         this.pi.exec("git", ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], {
+          cwd,
+          timeout: GIT_TIMEOUT_MS,
+        }),
+        this.pi.exec("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
           cwd,
           timeout: GIT_TIMEOUT_MS,
         }),
@@ -592,6 +628,10 @@ class GitStatusCache {
           dirty: status.stdout.trim().length > 0,
           // Detached HEAD or no upstream configured: rev-list exits non-zero.
           ...parseAheadBehind(revList.code === 0 && !revList.killed ? revList.stdout : ""),
+          // "origin/master" → "master"; absent when origin/HEAD was never set.
+          ...(originHead.code === 0 && !originHead.killed && originHead.stdout.trim()
+            ? { defaultBranch: originHead.stdout.trim().replace(/^origin\//, "") }
+            : {}),
         };
       }
     } catch {
@@ -613,7 +653,8 @@ function sameGit(a: GitState, b: GitState): boolean {
     a.isRepo === b.isRepo &&
     a.dirty === b.dirty &&
     a.ahead === b.ahead &&
-    a.behind === b.behind
+    a.behind === b.behind &&
+    a.defaultBranch === b.defaultBranch
   );
 }
 
@@ -762,6 +803,21 @@ interface GitChip {
 }
 
 const EMPTY_GIT_CHIP: GitChip = { text: "", branchWidth: 0 };
+
+/**
+ * Whether the "unless clean default" Git condition hides the chip: on the
+ * default branch (origin/HEAD's, else main or master) with no changes and
+ * nothing to push or pull.
+ */
+export function gitChipHidden(
+  when: string | undefined,
+  branch: string | null,
+  state: { isRepo: boolean; dirty: boolean; ahead: boolean; behind: boolean; defaultBranch?: string },
+): boolean {
+  if (when !== "unless clean default" || !branch || !state.isRepo) return false;
+  const onDefault = state.defaultBranch ? branch === state.defaultBranch : branch === "main" || branch === "master";
+  return onDefault && !state.dirty && !state.ahead && !state.behind;
+}
 
 function formatGit(branch: string | null, state: GitState): GitChip {
   if (!branch) return EMPTY_GIT_CHIP;
@@ -1747,11 +1803,14 @@ export default function footerExtension(pi: ExtensionAPI): void {
           const usage = ctx.getContextUsage();
           const gitState = git.read(ctx.cwd, requestRender);
           const branch = footerData.getGitBranch();
-          // Git "branch" mode drops the dirty marker and the arrows (and their clicks).
-          const gitChip = formatGit(
-            branch,
-            chipMode(footerConfig, "git") === "branch" ? { ...gitState, dirty: false, ahead: false, behind: false } : gitState,
-          );
+          // Git "branch" mode drops the dirty marker and the arrows (and their clicks);
+          // the Git condition can hide the chip on a clean default branch.
+          const gitChip = gitChipHidden(footerConfig.gitWhen, branch, gitState)
+            ? EMPTY_GIT_CHIP
+            : formatGit(
+                branch,
+                chipMode(footerConfig, "git") === "branch" ? { ...gitState, dirty: false, ahead: false, behind: false } : gitState,
+              );
           const statuses = footerData.getExtensionStatuses();
           const usageValue = usageChip(provider);
           // theme is pi's live proxy, so a light/dark switch repaints with the right pair.
@@ -2315,16 +2374,17 @@ export default function footerExtension(pi: ExtensionAPI): void {
               currentValue: footerConfig.hidden.has(id) ? "hidden" : (chipMode(footerConfig, id) ?? "shown"),
               values: [...(CHIP_MODES[id] ?? ["shown"]), "hidden"],
             };
-            if (id !== "context") return [item];
-            // Its own row under Context, following it when Context moves.
+            const row = CONDITION_ROWS.find((condition) => condition.chip === id);
+            if (!row) return [item];
+            // Its own row under the chip, following it when the chip moves.
             return [
               item,
               {
-                id: CONTEXT_MIN_ROW,
-                label: "Context threshold".padEnd(labelWidth),
-                description: "Show the context chip only above this many tokens, or this share of the window.",
-                currentValue: footerConfig.contextMin ?? "always",
-                values: [...CONTEXT_THRESHOLDS],
+                id: row.key,
+                label: row.label.padEnd(labelWidth),
+                description: row.description,
+                currentValue: footerConfig[row.key] ?? row.values[0],
+                values: [...row.values],
               },
             ];
           });
@@ -2358,8 +2418,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }
         };
         const onChange = (id: string, value: string) => {
-          if (id === CONTEXT_MIN_ROW) {
-            footerConfig.contextMin = value;
+          const row = conditionRow(id);
+          if (row) {
+            footerConfig[row.key] = value;
             changed();
             return;
           }
@@ -2394,8 +2455,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
         };
         const syncPreview = () => {
           const id = selectedId();
-          // The threshold row previews the chip it applies to.
-          previewChip = id === CONTEXT_MIN_ROW ? "context" : ((id as FooterChipId | undefined) ?? FOOTER_CHIPS[0].id);
+          // A condition row previews the chip it applies to.
+          previewChip = (id && conditionRow(id)?.chip) || ((id as FooterChipId | undefined) ?? FOOTER_CHIPS[0].id);
           repaint?.();
         };
         // J/K or Shift+↑/↓: move the selected chip; the list is rebuilt in the

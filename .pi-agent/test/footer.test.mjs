@@ -25,6 +25,7 @@ import { VERSION as RUNNING_PI_VERSION } from "@earendil-works/pi-coding-agent";
 import footer, {
   CHIP_MODES,
   contextAboveThreshold,
+  gitChipHidden,
   DEFAULT_CHIP_ORDER,
   FOOTER_CHIPS,
   minutesUntilClock,
@@ -64,6 +65,7 @@ async function mount(overrides = {}) {
     costs = [0.0123, 0.5],
     porcelain = PORCELAIN,
     revList = "0\t0",
+    originHead = "origin/master\n",
     gitCode = 0,
   } = overrides;
 
@@ -124,7 +126,7 @@ async function mount(overrides = {}) {
     events,
     exec: async (command, args, options) => {
       execCalls.push({ command, args, options });
-      const stdout = args[0] === "rev-list" ? revList : porcelain;
+      const stdout = args[0] === "rev-list" ? revList : args[0] === "symbolic-ref" ? originHead : porcelain;
       return { stdout, stderr: "", code: gitCode, killed: false };
     },
     getThinkingLevel: () => thinkingLevel,
@@ -426,13 +428,13 @@ test("first render omits git and repaints when the refresh lands", async () => {
   assert.equal(ui.renderCount(), 1, "should repaint exactly once when git arrives");
 });
 
-test("git runs one porcelain + one rev-list per refresh, cached for 5s", async () => {
+test("git runs one porcelain + one rev-list + one origin/HEAD lookup per refresh, cached for 5s", async () => {
   const ui = await mount();
   await ui.settled();
   ui.plain();
   ui.plain();
-  assert.equal(ui.execCalls.length, 2);
-  assert.deepEqual(ui.execCalls.map((call) => call.args[0]).sort(), ["rev-list", "status"]);
+  assert.equal(ui.execCalls.length, 3);
+  assert.deepEqual(ui.execCalls.map((call) => call.args[0]).sort(), ["rev-list", "status", "symbolic-ref"]);
   assert.deepEqual(
     ui.execCalls.find((call) => call.args[0] === "status").args,
     ["status", "--porcelain=v1"],
@@ -1662,7 +1664,7 @@ test("/footer stands in an example for a selected chip with nothing to show", as
       for (let i = 0; i < n; i += 1) list.handleInput("\x1b[B");
     };
     assert.doesNotMatch(strip(ui.raw()[0]), / bypass/);
-    down(5); // Bypass: not bypassed, so the example shows, red like the real chip, blinking
+    down(6); // Bypass (past the Git condition row): not bypassed, so the example shows, red like the real chip, blinking
     assert.match(ui.raw()[0], /\x1b\[5m\x1b\[4m\x1b\[91mbypass\x1b\[39m\x1b\[24m\x1b\[25m/);
     const beforeContext = strip(ui.raw()[0]).indexOf("bypass");
     ui.click(beforeContext, 0);
@@ -1749,11 +1751,13 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
 
     list.handleInput("j");
     list.handleInput("j");
+    list.handleInput("j"); // past the Git condition row
     assert.match(rows().find((line) => line.startsWith("→")), /Provider/, "j moves the selection down");
+    list.handleInput("k");
     list.handleInput("k");
     assert.match(rows().find((line) => line.startsWith("→")), /Git/);
 
-    for (let i = 0; i < 12; i += 1) list.handleInput("j"); // down to Session name (past the threshold row)
+    for (let i = 0; i < 13; i += 1) list.handleInput("j"); // down to Session name (past both condition rows)
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/);
     list.handleInput("K");
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/, "name row does not move");
@@ -1764,6 +1768,56 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
     list.handleInput("K"); // above Boot time
     list.handleInput("\x1bs");
     assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).order.slice(-2), ["rate", "boot"], "Alt+S saves the order");
+    list.handleInput("\x1b");
+  });
+});
+
+test("git condition: hidden only on a clean default branch with nothing to push or pull", () => {
+  const clean = { isRepo: true, dirty: false, ahead: false, behind: false };
+  const when = "unless clean default";
+  assert.equal(gitChipHidden("always", "master", clean), false);
+  assert.equal(gitChipHidden(when, "master", clean), true, "main/master without origin/HEAD");
+  assert.equal(gitChipHidden(when, "main", clean), true);
+  assert.equal(gitChipHidden(when, "trunk", { ...clean, defaultBranch: "trunk" }), true, "origin/HEAD wins");
+  assert.equal(gitChipHidden(when, "master", { ...clean, defaultBranch: "trunk" }), false);
+  assert.equal(gitChipHidden(when, "feature", clean), false);
+  assert.equal(gitChipHidden(when, "master", { ...clean, dirty: true }), false);
+  assert.equal(gitChipHidden(when, "master", { ...clean, ahead: true }), false);
+  assert.equal(gitChipHidden(when, "master", { ...clean, behind: true }), false);
+  assert.equal(gitChipHidden(when, "master", { ...clean, isRepo: false }), false, "unknown yet: keep it");
+});
+
+test("the git chip hides on a clean default branch when its condition is saved", async () => {
+  await withAgentDir(async (dir) => {
+    writeFileSync(path.join(dir, "footer.json"), JSON.stringify({ gitWhen: "unless clean default" }));
+    assert.equal((await (await mount({ porcelain: "" })).settled())[0], "dotfiles gh opus hi 41/1m");
+    assert.match((await (await mount()).settled())[0], /^dotfiles master\* /, "dirty");
+    assert.match((await (await mount({ porcelain: "", revList: "0\t2" })).settled())[0], /^dotfiles master ⇡ /, "ahead");
+    assert.match((await (await mount({ porcelain: "", branch: "feature" })).settled())[0], /^dotfiles feature /);
+    assert.match(
+      (await (await mount({ porcelain: "", originHead: "origin/main\n" })).settled())[0],
+      /^dotfiles master /,
+      "master is not the default when origin/HEAD says main",
+    );
+  });
+});
+
+test("/footer's Git condition row sits under Git and saves with Alt+S", async () => {
+  await withAgentDir(async (dir) => {
+    const ui = await mount();
+    const list = await openChecklist(ui);
+    const shown = list.render(140).map(strip);
+    const at = shown.findIndex((line) => /^(→ |  )Git {2,}/.test(line));
+    assert.match(shown[at + 1], /Git condition\s+always/);
+    list.handleInput("j");
+    list.handleInput("j"); // Directory → Git → Git condition
+    assert.match(ui.raw()[0], /\x1b\[5m.*master/, "previews the git chip");
+    list.handleInput("\r"); // always → unless clean default
+    list.handleInput("\x1bs");
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8")), {
+      hidden: [],
+      gitWhen: "unless clean default",
+    });
     list.handleInput("\x1b");
   });
 });
@@ -1799,7 +1853,7 @@ test("/footer's Context threshold row sits under Context and saves with Alt+S", 
     const shown = list.render(140).map(strip);
     const at = shown.findIndex((line) => /Context\s+41\/1m/.test(line));
     assert.match(shown[at + 1], /Context threshold\s+always/);
-    for (let i = 0; i < 7; i += 1) list.handleInput("j"); // Directory → … → Context threshold
+    for (let i = 0; i < 8; i += 1) list.handleInput("j"); // Directory → … → Context threshold
     assert.match(list.render(140).map(strip).find((line) => line.startsWith("→")), /Context threshold/);
     assert.match(ui.raw()[0], /\x1b\[5m.*41/, "previews the context chip");
     list.handleInput("J"); // not a chip: no move
