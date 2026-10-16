@@ -9,7 +9,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { afterEach } from "node:test";
@@ -1579,20 +1579,53 @@ test("/footer lists every chip with its live value and saves toggles to footer.j
     const raw = list.render(140);
     assert.match(raw.find((line) => strip(line).includes("Directory")), /\x1B\[[0-9;]*mdotfiles/, "samples keep the footer's colours");
 
-    const saved = () => JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8"));
+    const file = path.join(dir, "footer.json");
+    const saved = () => JSON.parse(readFileSync(file, "utf8"));
+    const tail = () => list.render(140).map(strip).at(-1);
+    assert.doesNotMatch(tail(), /Unsaved|Saved/, "nothing to save yet");
+
     list.handleInput("\r"); // Enter cycles Directory: name → full path
-    assert.deepEqual(saved(), { hidden: [], modes: { dir: "full path" } });
+    assert.equal(existsSync(file), false, "session only: nothing written");
     assert.match(ui.plain()[0], /^\/Users\/someone\/Code\/github\.com\/someone\/dotfiles /, "applies to this session at once");
+    assert.match(tail(), /● Unsaved: these changes last this session only · Alt\+S to save for every session/);
+
+    list.handleInput("\x1bs"); // Alt+S
+    assert.deepEqual(saved(), { hidden: [], modes: { dir: "full path" } });
+    assert.match(tail(), /✓ Saved to .*footer\.json/);
 
     list.handleInput("\r"); // → hidden
-    assert.deepEqual(saved().hidden, ["dir"]);
+    assert.deepEqual(saved().hidden, [], "not saved until Alt+S");
+    assert.match(tail(), /Unsaved/);
     // Still previewed while the checklist is open: struck through, and blinking as the selection.
     assert.match(ui.raw()[0], /^\x1b\[9m\x1b\[5m.*dotfiles/);
     assert.ok(list.render(140).map(strip).some((line) => /Directory.*hidden/.test(line)));
 
-    list.handleInput("\r"); // → back to name, the default, so nothing saved
-    assert.deepEqual(saved(), { hidden: [] });
+    list.handleInput("\r"); // → back to name: still differs from the saved full path
+    assert.match(tail(), /Unsaved/);
+    list.handleInput("\x1bs");
+    assert.deepEqual(saved(), { hidden: [] }, "defaults are left out");
     assert.match(ui.plain()[0], /^dotfiles/);
+  });
+});
+
+test("unsaved /footer changes survive reopening, and a new session starts from the saved file", async () => {
+  await withAgentDir(async (dir) => {
+    const ui = await mount();
+    let list = await openChecklist(ui);
+    list.handleInput("\x1b[B"); // Git
+    list.handleInput("\r"); // full → branch
+    list.handleInput("\x1b");
+    assert.match(ui.plain()[0], /^dotfiles master gh /);
+
+    list = await openChecklist(ui);
+    const shown = list.render(140).map(strip);
+    assert.ok(shown.some((line) => /Git\s+master\s+branch/.test(line)), "reopened with the session's change");
+    assert.match(shown.at(-1), /Unsaved/);
+    list.handleInput("\x1b");
+
+    await ui.startSession();
+    assert.match(ui.plain()[0], /^dotfiles master\* gh /, "new session: back to the saved footer");
+    assert.equal(existsSync(path.join(dir, "footer.json")), false);
   });
 });
 
@@ -1698,17 +1731,17 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
   await withAgentDir(async (dir) => {
     const ui = await mount();
     const list = await openChecklist(ui);
-    const saved = () => JSON.parse(readFileSync(path.join(dir, "footer.json"), "utf8"));
+    const file = path.join(dir, "footer.json");
     const rows = () => list.render(140).map(strip).filter((line) => /shown|hidden|name|tokens|full|clock|compact|number/.test(line));
 
     list.handleInput("J"); // Directory down past Git
     assert.match(strip(ui.raw()[0]), /^master\* dotfiles gh /, "the footer follows");
-    assert.deepEqual(saved().order.slice(0, 2), ["git", "dir"]);
+    assert.equal(existsSync(file), false, "moves are session only too");
     assert.match(rows()[1], /→ Directory/, "the moved chip stays selected");
 
     list.handleInput("\x1b[1;2A"); // Shift+Up: back to the top
     assert.match(strip(ui.raw()[0]), /^dotfiles master\* gh /);
-    assert.equal(saved().order, undefined, "default order is not saved");
+    assert.doesNotMatch(list.render(140).map(strip).at(-1), /Unsaved/, "back to the saved order");
 
     list.handleInput("K"); // already first: no-op
     assert.match(strip(ui.raw()[0]), /^dotfiles master\* /);
@@ -1723,7 +1756,13 @@ test("/footer reorders with J/K or Shift+arrows, j/k navigate, and the name row 
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/);
     list.handleInput("K");
     assert.match(rows().find((line) => line.startsWith("→")), /Session name/, "name row does not move");
-    assert.equal(saved().order, undefined);
+    list.handleInput("\x1b[1;2A"); // Shift+Up on the name row: still nothing to save
+    assert.equal(existsSync(file), false);
+
+    list.handleInput("k"); // Token rate
+    list.handleInput("K"); // above Boot time
+    list.handleInput("\x1bs");
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).order.slice(-2), ["rate", "boot"], "Alt+S saves the order");
     list.handleInput("\x1b");
   });
 });

@@ -472,14 +472,17 @@ the selected chip blinks underlined, the rest go faint gray, hidden chips show
 struck through, and a chip with nothing to show right now stands in with an
 example.
 
-Choices save to `footer.json` in the agent directory, defaults left out:
+Changes apply to the current session only, and a warning under the list says
+so until Alt+S saves them to `footer.json` in the agent directory, defaults
+left out:
 
 ```json
 { "hidden": ["boot"], "modes": { "context": "percent" }, "order": ["git", "dir", "..."] }
 ```
 
-A saved mode is where each session starts; clicking a chip still flips it, for
-that session only. Chips added later start shown, in their default mode, after
+Reopening `/footer` keeps the session's unsaved changes; a new session starts
+from the saved file. A saved mode is where each session starts; clicking a chip
+still flips it, for that session only. Chips added later start shown, in their default mode, after
 the ones the file orders. `/footer off` and `/footer on` switch the whole
 footer for this session. Click zones are keyed by chip id, so hiding or moving
 a chip never breaks the others' clicks.

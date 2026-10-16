@@ -227,6 +227,17 @@ export function writeFooterConfig(config: FooterConfig): void {
   writeFileSync(footerConfigPath(), `${JSON.stringify(out, null, 2)}\n`);
 }
 
+/** Whether two configs would save the same file (defaults left out, hidden ids in any order). */
+export function sameFooterConfig(a: FooterConfig, b: FooterConfig): boolean {
+  const key = (config: FooterConfig) =>
+    JSON.stringify({
+      hidden: FOOTER_CHIPS.map((chip) => chip.id).filter((id) => config.hidden.has(id)),
+      modes: FOOTER_CHIPS.map((chip) => chipMode(config, chip.id) ?? ""),
+      order: config.order,
+    });
+  return key(a) === key(b);
+}
+
 /** Minutes until a footer clock label ("2:41p") next comes round, for the idle countdown. */
 export function minutesUntilClock(label: string, now: Date): number | undefined {
   const match = /(\d{1,2}):(\d{2})([ap])/.exec(label);
@@ -1550,6 +1561,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
   ];
   /** /footer's saved choices (hidden chips, start modes, order), from footer.json. */
   let footerConfig = readFooterConfig();
+  /** /footer changed footerConfig in this session and Alt+S has not saved it. */
+  let sessionEdited = false;
   /** The idle chip is showing a countdown, so the update tick repaints it. */
   let idleCountdownShown = false;
   /**
@@ -2244,8 +2257,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
         return;
       }
       if (!ctx.hasUI) return;
-      // Another session may have changed footer.json since this one read it.
-      footerConfig = readFooterConfig();
+      // Another session may have changed footer.json since this one read it;
+      // pick that up unless this session has changes of its own to keep.
+      if (!sessionEdited) footerConfig = readFooterConfig();
       await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
         const labelWidth = Math.max(...FOOTER_CHIPS.map((chip) => chip.label.length));
         // SettingsList aligns values after at most 36 label columns; a longer
@@ -2277,13 +2291,24 @@ export default function footerExtension(pi: ExtensionAPI): void {
           cursor: theme.fg("accent", "→ "),
           hint: (text) => theme.fg("dim", text),
         };
-        const save = () => {
+        // Changes apply to this session only; Alt+S writes them to footer.json.
+        let unsaved = !sameFooterConfig(footerConfig, readFooterConfig());
+        let justSaved = false;
+        const changed = () => {
+          sessionEdited = true;
+          unsaved = !sameFooterConfig(footerConfig, readFooterConfig());
+          justSaved = false;
+          repaint?.();
+        };
+        const persist = () => {
           try {
             writeFooterConfig(footerConfig);
+            sessionEdited = false;
+            unsaved = false;
+            justSaved = true;
           } catch (error) {
             ctx.ui.notify(`Could not save ${footerConfigPath()}: ${(error as Error).message}`, "warning");
           }
-          repaint?.();
         };
         const onChange = (id: string, value: string) => {
           const chip = id as FooterChipId;
@@ -2293,9 +2318,9 @@ export default function footerExtension(pi: ExtensionAPI): void {
             footerConfig.hidden.delete(chip);
             if (CHIP_MODES[chip]) footerConfig.modes[chip] = value;
           }
-          // A new start mode applies to this session at once, too.
+          // The new mode shows at once; clicks flip it from there.
           applySavedModes();
-          save();
+          changed();
         };
         const close = () => {
           previewChip = undefined;
@@ -2330,7 +2355,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           if (from < 0 || to < 0 || to >= order.length) return;
           order.splice(from, 1);
           order.splice(to, 0, id);
-          save();
+          changed();
           items = buildItems();
           list = makeList(id);
         };
@@ -2340,11 +2365,20 @@ export default function footerExtension(pi: ExtensionAPI): void {
           theme.fg("dim", "j/k select · J/K or ⇧↑/⇧↓ move · click a chip to flip its mode for this session"),
           "",
         ];
+        // The save state, under the list.
+        const status = (): string[] =>
+          unsaved
+            ? ["", theme.fg("warning", "● Unsaved: these changes last this session only · Alt+S to save for every session")]
+            : justSaved
+              ? ["", theme.fg("success", `✓ Saved to ${footerConfigPath().replace(homedir(), "~")}`)]
+              : [];
         return {
-          render: (width: number) => [...header().map((line) => truncateToWidth(line, width, "…")), ...list.render(width)],
+          render: (width: number) =>
+            [...header(), ...list.render(width), ...status()].map((line) => truncateToWidth(line, width, "…")),
           invalidate: () => list.invalidate(),
           handleInput: (data: string) => {
-            if (data === "J" || matchesKey(data, Key.shift("down"))) move(1);
+            if (matchesKey(data, Key.alt("s"))) persist();
+            else if (data === "J" || matchesKey(data, Key.shift("down"))) move(1);
             else if (data === "K" || matchesKey(data, Key.shift("up"))) move(-1);
             else if (data === "j") list.handleInput("\x1b[B");
             else if (data === "k") list.handleInput("\x1b[A");
@@ -2382,8 +2416,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
     lastRate = undefined;
     lastTtftMs = undefined;
     coldStart = event.reason === "startup";
-    // The click toggles start each session in the modes /footer saved.
+    // The click toggles start each session in the modes /footer saved, and
+    // unsaved /footer changes stay with the session they were made in.
     footerConfig = readFooterConfig();
+    sessionEdited = false;
     applySavedModes();
     apply(ctx);
     // Renders are event-driven, so an idle footer would otherwise miss a peer
