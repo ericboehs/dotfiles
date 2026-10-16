@@ -217,6 +217,8 @@ REPO_PATH = "ericboehs/dotfiles"
 # coworker details.
 "~/.pi/agent/AGENTS.md" = ".pi-agent/AGENTS.md"
 "~/.pi/agent/approval-guardian.json" = ".pi-agent/approval-guardian.json"
+# Boehsline (the pi extensions package): which opt-ins are on, plus personal paths.
+"~/.pi/agent/boehsline.json" = ".pi-agent/boehsline.json"
 # One directory link means a newly pulled extension appears immediately. Using
 # symlink-each here left existing hosts without new files until bootstrap ran.
 "~/.pi/agent/extensions" = ".pi-agent/extensions"

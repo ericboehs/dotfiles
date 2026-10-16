@@ -7,6 +7,8 @@
 !keybindings.json
 !AGENTS.md
 !approval-guardian.json
+# Boehsline opt-ins and personal paths (no work details: those live in pi-boehsline-va).
+!boehsline.json
 !web-search.json
 
 # Prompt templates. Zero token cost until invoked via /<name>.

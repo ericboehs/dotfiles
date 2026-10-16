@@ -1,15 +1,9 @@
 {
-  "lastChangelogVersion": "1.1.0",
+  "lastChangelogVersion": "1.3.0",
   "packages": [
-    "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
-    "git:github.com/ericboehs/pi-scheduler@787fa145547e9dd98e14e651e5ce55ac5d697535",
-    "git:github.com/ericboehs/pi-agent-link@f1ca296e98de3434125b64d7b3d303803f177455",
-    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f",
-    "git:github.com/ericboehs/pi-approval-guardian@384d523123d006bfa7e1445ce29190f14c832e64"
-  ],
-  "extensions": [
-    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts",
-    "-extensions/web-chat.ts"
+    "../../Code/github.com/ericboehs/pi-boehsline",
+    "../../Code/github.com/ericboehs/pi-boehsline-va",
+    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
   "skills": [
     "~/Code/github.com/ericboehs/agent-plugins/plugins/git-utils/skills",
@@ -42,6 +36,9 @@
   },
   "theme": "light/dark",
   "steeringMode": "all",
+  "defaultTools": [
+    "+codemode"
+  ],
   "transport": "auto",
   "quietStartup": false,
   "defaultProjectTrust": "always",
@@ -57,9 +54,7 @@
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6.1-sol",
     "opencode-go/glm-5.3",
-    "opencode-go/deepseek-v4.1-flash",
-    "opencode-go/muse-spark-1.3-contributor",
-    "opencode-go/cat-jam-free"
+    "opencode-go/deepseek-v4.1-flash"
   ],
   "retry": {
     "enabled": true,
