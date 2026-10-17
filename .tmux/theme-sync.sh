@@ -32,7 +32,6 @@ if [ "$resolved" = dark ]; then
   surface0="#313244"; surface1="#45475a"
   text="#cdd6f4"; status_fg="white"
   border="#191923"
-  clock="#a6adc8"
   dim="#585b70"           # surface2: window index while an agent is working there
   # Use truecolor: Ghostty's ANSI bright-white palette slot matches this background.
   attention="#ffffff" # completed agent or job waiting to be looked at
@@ -44,7 +43,6 @@ else
   surface0="#ccd0da"; surface1="#bcc0cc"
   text="#4c4f69"; status_fg="#4c4f69"
   border="#ccd0da"
-  clock="#6c6f85"
   dim="#9ca0b0"       # overlay0: window index while an agent is working there
   attention="#000000" # high contrast equivalent of #ffffff on a light background
   warn="#df8e1d"; crit="#d20f39"; peach="#fe640b"
@@ -81,7 +79,6 @@ tmux set-option -gq pane-border-style "fg=$border"
 tmux set-option -gq pane-active-border-style "fg=$accent"
 tmux set-option -gq @active_fg "$accent"
 tmux set-option -gq @time_fg "#8c8fa1"
-tmux set-option -gq @clock_fg "$clock"
 tmux set-option -gq @dim_fg "$dim"
 tmux set-option -gq @attention_fg "$attention"
 tmux set-option -gq @load_warn_fg "$warn"

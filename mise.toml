@@ -112,10 +112,6 @@ REPO_PATH = "ericboehs/dotfiles"
 "apt:btop" = { version = "latest", os = ["linux"] }
 # See brew:chafa above.
 "apt:chafa" = { version = "latest", os = ["linux"] }
-# .tmux/agenda.sh opens with `cal -A 1 -B 1`. Debian splits the BSD tools up
-# and `cal` rides in ncal rather than the bsdextrautils that carries the rest,
-# so a stock trixie box has no cal at all. macOS ships one.
-"apt:ncal" = { version = "latest", os = ["linux"] }
 # lsd is in universe on 22.04+ but missing on minimal images; the
 # bootstrap:linux-shims task installs the upstream .deb if this no-ops.
 "apt:lsd" = { version = "latest", os = ["linux"] }
@@ -173,7 +169,7 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.gitconfig.va-ghe" = ".gitconfig.va-ghe.example"
 # TPM installs into ~/.tmux/plugins/, which .gitignore excludes, so the whole
 # directory can be one link — which is also what gets every helper script
-# .tmux.conf binds (agenda.sh, btop.sh, goto-window.sh,
+# .tmux.conf binds (btop.sh, goto-window.sh,
 # session-jump.sh, status-daemon.sh, theme-sync.sh) onto a fresh machine.
 "~/.tmux" = ".tmux"
 # .zsh/path.zsh puts ~/bin at the front of $PATH, but nothing created it — on
