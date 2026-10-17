@@ -50,9 +50,6 @@
   "enabledModels": [
     "xai/grok-4.7",
     "github-copilot/claude-opus-5.5",
-    "github-copilot/claude-sonnet-5.5",
-    "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-6.1-sol",
     "opencode-go/glm-5.3",
     "opencode-go/deepseek-v4.1-flash"
   ],
