@@ -34,7 +34,7 @@ My code lives in `~/Code` and follows the `host/org/repo` structure:
 ## Research
 - **Use `qmd` to search Eric's knowledge base**: `qmd query "..."` (hybrid) or `qmd search "..."` (fast); scope with `-c <collection>` (`qmd collection list` shows them: `wiki`, `sessions`, `email`, `va-*` repos)
   - Before asking Eric to re-explain prior work, search the `sessions` collection first
-- **Slack:** Prefer `slk` CLI for Slack data (messages, search, unread, status).
+- **Slack:** Prefer `slk` CLI for Slack data (messages, search, unread, status). A `*.slack.com/archives/` URL means run `slk messages <url>` before answering. Do not ask which command. If he already named a subcommand, use that.
 
 ## Credentials
 - Prefer the **1Password CLI (`op`)** for all secrets; see skill `credentials` for syntax + reducing biometric prompts.
