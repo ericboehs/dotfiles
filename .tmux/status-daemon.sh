@@ -29,6 +29,12 @@
 # costs about four execs (sysctl, ioreg, tmux list-panes, and tmux set when a
 # value moved).
 #
+# Wake-ups: any line written to that FIFO ($run_dir/tick) triggers a pane-only
+# sweep (one or two execs) right away. zsh writes one from preexec
+# (~/.zsh/tmux-wake.zsh), so a window starting a shell job dims at once rather
+# than at the next scheduled sweep. Writers must open it O_NONBLOCK: after a
+# kill -9 the FIFO outlives its reader, and a blocking open would hang.
+#
 # Lifecycle: started from tmux.conf with `run-shell -b`. A per-server pid file
 # keeps it to one copy across config reloads; it exits when the server goes
 # away. Saving this file restarts it in place (it re-execs when the script is
@@ -414,11 +420,13 @@ agent_sweep() { # queues window/pane option changes onto tcmds
 published_gpu=$'\x01' published_load=$'\x01' # force the first publish
 tmux_failures=0
 
-sweep() {
-  local gpu_str load_str
+sweep() { # [panes]: a wake-up only needs pane state, not GPU/load (2 execs)
+  local gpu_str=$published_gpu load_str=$published_load
   tcmds=()
-  sample_gpu
-  sample_load
+  if [[ ${1:-} != panes ]]; then
+    sample_gpu
+    sample_load
+  fi
   # Status strings go first: tmux drops the rest of a command list after an
   # error, and a pane can vanish between list-panes and set-option.
   if [[ $gpu_str != "$published_gpu" || $load_str != "$published_load" ]]; then
@@ -462,5 +470,15 @@ while :; do
     last_sweep=$now
     sweep
   fi
-  read -rt 1 -u "$tick_fd"
+  if read -rt 1 -u "$tick_fd"; then
+    # A shell is about to run a command (zsh preexec, ~/.zsh/tmux-wake.zsh).
+    # preexec fires before zsh forks, so wait a beat for the job to own the
+    # tty (pane_current_command reads its foreground process), and swallow the
+    # rest of a burst while at it: a pasted block of commands wakes us once.
+    n=0
+    while read -rt 0.3 -u "$tick_fd" && ((++n < 50)); do :; done
+    printf -v now '%(%s)T' -1
+    last_sweep=$now
+    sweep panes
+  fi
 done

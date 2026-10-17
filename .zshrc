@@ -24,6 +24,8 @@ source "$HOME/.zsh/functions.zsh"
 
 # Tools
 source "$HOME/.zsh/tools.zsh"
+# Wakes tmux's status daemon on each command so busy windows dim at once.
+source "$HOME/.zsh/tmux-wake.zsh"
 
 # Prompt
 source "$HOME/.zsh/p10k.zsh"
