@@ -1,6 +1,6 @@
 {
   "//": "Boehsline settings (github.com/ericboehs/pi-boehsline). Linked to ~/.pi/agent/boehsline.json by mise. Work-specific settings come from the private pi-boehsline-va package, not from here.",
-  "enable": ["approval-guardian", "meeting", "omlx", "sc", "skill-modes", "tmux-attention", "update", "watch", "wiki-session-log"],
+  "enable": ["approval-guardian", "image-prune", "meeting", "omlx", "sc", "skill-modes", "tmux-attention", "update", "watch", "wiki-session-log"],
   "watch": { "dailyDir": "~/Documents/Wiki/daily" },
   "meeting": { "dailyDir": "~/Documents/Wiki/daily", "codeDir": "~/Code" },
   "wiki-session-log": { "command": ["~/bin/pi-session-sync"] }
