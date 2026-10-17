@@ -30,7 +30,7 @@
 # value moved).
 #
 # Wake-ups: any line written to that FIFO ($run_dir/tick) triggers a pane-only
-# sweep (one or two execs) right away. zsh writes one from preexec
+# sweep (one or two execs) right away. zsh writes one from preexec and precmd
 # (~/.zsh/tmux-wake.zsh), so a window starting a shell job dims at once rather
 # than at the next scheduled sweep. Writers must open it O_NONBLOCK: after a
 # kill -9 the FIFO outlives its reader, and a blocking open would hang.

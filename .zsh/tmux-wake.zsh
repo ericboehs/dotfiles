@@ -1,6 +1,7 @@
 # Nudge tmux's status daemon (~/.tmux/status-daemon.sh) whenever a command
-# starts, so a background window running a shell job dims its index at once
-# instead of at the daemon's next scheduled sweep (up to 15s when idle).
+# starts or finishes, so a background window running a shell job dims its index
+# at once, and brightens the moment the job ends, instead of waiting for the
+# daemon's next scheduled sweep (up to 15s when idle).
 #
 # No process is spawned: sysopen/syswrite are zsh/system builtins, and the
 # write lands on the daemon's private FIFO. Every exec on the VA Mac is audited
@@ -29,5 +30,30 @@ _tmux_wake() {
   exec {fd}>&-
 }
 
+# Starting a command wakes the daemon so the window dims; finishing one wakes
+# it again so the daemon sees the pane go idle and brightens the window
+# (@job_done) instead of waiting for its next 5s sweep.
+#
+# The finish wake is skipped for commands under a quarter second: the start
+# wake's sweep runs ~0.3s in, so anything quicker was never seen busy and has
+# nothing to announce. That keeps ls/cd/git status at one wake, not two. An
+# empty Enter runs no preexec, so it sends nothing at all.
+zmodload -F zsh/datetime p:EPOCHREALTIME 2>/dev/null
+typeset -g _tmux_wake_started=
+
+_tmux_wake_preexec() {
+  _tmux_wake_started=$EPOCHREALTIME
+  _tmux_wake
+}
+
+_tmux_wake_precmd() {
+  [[ -n $_tmux_wake_started ]] || return 0
+  local started=$_tmux_wake_started
+  _tmux_wake_started=
+  (( EPOCHREALTIME - started >= 0.25 )) && _tmux_wake
+  return 0
+}
+
 autoload -Uz add-zsh-hook
-add-zsh-hook preexec _tmux_wake
+add-zsh-hook preexec _tmux_wake_preexec
+add-zsh-hook precmd _tmux_wake_precmd

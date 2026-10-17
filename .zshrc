@@ -24,7 +24,7 @@ source "$HOME/.zsh/functions.zsh"
 
 # Tools
 source "$HOME/.zsh/tools.zsh"
-# Wakes tmux's status daemon on each command so busy windows dim at once.
+# Wakes tmux's status daemon as commands start/finish (dim/brighten at once).
 source "$HOME/.zsh/tmux-wake.zsh"
 
 # Prompt
