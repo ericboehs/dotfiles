@@ -21,9 +21,13 @@
 #
 # Cadence: the loop wakes every second but only checks appearance every two
 # (on macOS it asks `defaults` only when the global prefs plist changed, with a
-# 30s fallback) and does everything else every five. Sleeping is `read -t` on
-# a private FIFO, so idle ticks spawn nothing. A five-second sweep costs about
-# four execs (sysctl, ioreg, tmux list-panes, and tmux set when a value moved).
+# 30s fallback) and sweeps everything else every five seconds while any pane
+# is working, every fifteen while none is. Busy panes are what the sweep has to
+# watch closely (to catch the moment a job finishes); with nothing running, the
+# only thing to notice is something starting, and that can wait a few seconds.
+# Sleeping is `read -t` on a private FIFO, so idle ticks spawn nothing. A sweep
+# costs about four execs (sysctl, ioreg, tmux list-panes, and tmux set when a
+# value moved).
 #
 # Lifecycle: started from tmux.conf with `run-shell -b`. A per-server pid file
 # keeps it to one copy across config reloads; it exits when the server goes
@@ -380,6 +384,7 @@ agent_sweep() { # queues window/pane option changes onto tcmds
     fi
   done <<<"$panes"
 
+  [ -n "$newbusy" ] && panes_busy=1 || panes_busy=0
   if [ " $newbusy" != "$oldbusy" ]; then
     printf '%s' "$newbusy" >|"$busy_state"
     oldbusy=" $newbusy"
@@ -431,7 +436,9 @@ sweep() {
 }
 
 # --- main loop -------------------------------------------------------------------
-sweep_interval=${STATUS_DAEMON_INTERVAL:-5}
+busy_interval=${STATUS_DAEMON_INTERVAL:-5}
+idle_interval=${STATUS_DAEMON_IDLE_INTERVAL:-15}
+panes_busy=1 # sweep at the busy pace until the first sweep says otherwise
 theme_interval=2
 last_sweep=0
 last_theme=0
@@ -450,6 +457,7 @@ while :; do
     last_theme=$now
     theme_check
   fi
+  ((panes_busy)) && sweep_interval=$busy_interval || sweep_interval=$idle_interval
   if ((now - last_sweep >= sweep_interval)); then
     last_sweep=$now
     sweep
