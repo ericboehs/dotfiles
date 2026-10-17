@@ -69,8 +69,7 @@ session_format() {
 # status-daemon.sh samples on its own clock and publishes these options.
 right="\
 #[align=right]#[fg=#{E:@time_fg}]\
-#[range=right]#{E:@status_gpu}#{E:@status_load}#[norange] \
-#[fg=#{E:@clock_fg}]#[range=user|clock]%H:%M CT#[norange]#[fg=default]"
+#[range=right]#{E:@status_gpu}#{E:@status_load}#[norange]#[fg=default]"
 separator='#[fg=#{E:@dim_fg}]│#[fg=default] '
 
 formats=('' '' '' '' '')

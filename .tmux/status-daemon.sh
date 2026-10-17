@@ -135,7 +135,7 @@ theme_check() {
 #   > CPU count       red, runnable work is queueing behind the CPUs
 # The segment appears once any average reaches yellow. After they fall back,
 # the trio holds LOADAVG_LINGER seconds in grey so a spike cannot blink it in
-# and out, then the right side is just the clock.
+# and out, then the right side is empty.
 load_linger=${LOADAVG_LINGER:-30}
 load_busy=
 
