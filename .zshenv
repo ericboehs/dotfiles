@@ -17,6 +17,11 @@ source "$HOME/.zsh/path.zsh"
 # — and moving it must not quietly change what those names resolve to.
 path=("$HOME/.local/share/mise/shims" "$path[@]")
 
+# Temporary: run pi from the local checkout that adds /cd (wrapper in
+# ~/.pi/agent/bin/pi -> ~/Code/github.com/ericboehs/pi). Ahead of the mise shims
+# on purpose, so it shadows the installed pi. Remove once /cd lands upstream.
+path=("$HOME/.pi/agent/bin" "$path[@]")
+
 # GPG_TTY points gpg-agent's pinentry at this shell's terminal. Without it, any
 # passphrase prompt over ssh — key generation included — dies with
 # "agent_genkey failed: Timeout" (seen on coop). Guarded on stdin being a TTY
