@@ -33,6 +33,7 @@
   "defaultThinkingLevel": "xhigh",
   "modelThinkingLevels": {
     "github-copilot/claude-opus-5.5": "medium",
+    "anthropic/claude-opus-5-5": "medium",
     "github-copilot/claude-sonnet-5.5": "high",
     "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
     "ollama/glm-5.3-flash": "max",
