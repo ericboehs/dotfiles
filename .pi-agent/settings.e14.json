@@ -3,7 +3,8 @@
   "packages": [
     "../../Code/github.com/ericboehs/pi-boehsline",
     "../../Code/github.com/ericboehs/pi-boehsline-va",
-    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
+    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f",
+    "npm:pi-claude-subscription-connector"
   ],
   "skills": [
     "~/Code/github.com/ericboehs/agent-plugins/plugins/git-utils/skills",
