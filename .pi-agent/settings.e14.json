@@ -52,8 +52,9 @@
     "anthropicExtraUsage": false
   },
   "enabledModels": [
-    "xai/grok-4.7",
     "github-copilot/claude-opus-5.5",
+    "anthropic/claude-opus-5-5",
+    "xai/grok-4.7",
     "opencode-go/glm-5.3",
     "opencode-go/deepseek-v4.1-flash"
   ],
