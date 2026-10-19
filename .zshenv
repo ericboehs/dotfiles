@@ -38,6 +38,10 @@ fi
 # in .pi-agent/models.*.json.
 export PI_CACHE_RETENTION=long
 
+# The pi canvas page follows the Omarchy/system theme until one is picked on the
+# page (pi-boehsline canvas; a running daemon restarts when this changes).
+export PI_CANVAS_THEME=system
+
 # Machine-local env, the .zshenv counterpart to .zshrc's .zshrc.local. It has to
 # be here rather than there because the things that need it are not interactive:
 # a work box's AWS profile and gov-cloud regions, a Homebrew prefix that only
