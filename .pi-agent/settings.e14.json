@@ -6,7 +6,9 @@
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f",
     {
       "source": "npm:pi-claude-subscription-connector",
-      "extensions": ["-extensions/usage-status.ts"]
+      "extensions": [
+        "-extensions/usage-status.ts"
+      ]
     }
   ],
   "skills": [
@@ -30,14 +32,17 @@
   ],
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-5.5",
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "high",
   "modelThinkingLevels": {
     "github-copilot/claude-opus-5.5": "medium",
     "anthropic/claude-opus-5-5": "medium",
     "github-copilot/claude-sonnet-5.5": "high",
-    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "max",
-    "ollama/glm-5.3-flash": "max",
-    "inco/deepseek-v4.1-flash:fast": "high"
+    "openrouter/z-ai/glm-5.3-flash@preset/ox-alpha": "high",
+    "ollama/glm-5.3-flash": "high",
+    "inco/deepseek-v4.1-flash:fast": "high",
+    "opencode-go/glm-5.3": "high",
+    "opencode-go/deepseek-v4.1-flash": "high",
+    "xai/grok-4.7": "high"
   },
   "theme": "light/dark",
   "steeringMode": "all",
@@ -56,8 +61,8 @@
     "github-copilot/claude-opus-5.5",
     "anthropic/claude-opus-5-5",
     "xai/grok-4.7",
-    "opencode-go/glm-5.3",
-    "opencode-go/deepseek-v4.1-flash"
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode-go/glm-5.3"
   ],
   "retry": {
     "enabled": true,
