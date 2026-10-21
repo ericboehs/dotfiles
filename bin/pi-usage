@@ -1,0 +1,628 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# pi-usage — list provider usage from pi's shared usage cache.
+#
+# pi's provider-usage extension writes ~/.pi/agent/usage-cache.json so that N
+# concurrent agents share one API fetch per provider. This reads that file and
+# never fetches anything: values are as fresh as the last pi session's poll.
+
+require "date"
+require "json"
+
+HELP = <<~TEXT
+  pi-usage — list provider usage from pi's shared usage cache
+
+  Reads ~/.pi/agent/usage-cache.json (written by pi's provider-usage
+  extension). Never fetches: values are as fresh as the last pi poll.
+
+  Usage: pi-usage [options]
+    -v, --verbose        Show each provider's full detail block
+    -p, --provider NAME  Only providers matching NAME (id, label, or alias)
+    -s, --sort KEY       name | usage (default, least used first) | pace | age
+    -r, --reverse        Flip the sort order
+    -j, --json           Print the raw cache, pretty-printed
+        --stale MIN      Exit 1 if any shown entry is older than MIN minutes
+        --hide NAMES     Hide providers for this run (comma-separated)
+        --show NAMES     Unhide providers hidden in the config, for this run
+        --inactive       Show providers with no age (idle: not polled lately)
+        --all            Ignore the config's hide list and show inactive ones
+        --no-pace        Drop the pace arrows
+        --no-age         Drop the AGE column
+        --no-reset       Drop the second line of per-window resets
+        --config         Print the config file path and exit
+        --path           Print the cache file path and exit
+        --no-color       Disable ANSI color
+    -h, --help           Show this help
+
+  Config: $XDG_CONFIG_HOME/pi-usage/config.json (default ~/.config/pi-usage):
+
+    { "hide": ["baseten"], "sort": "usage", "hideInactive": true,
+      "pacing": true, "age": true, "reset": true, "color": true }
+
+  Each window chip lands in the column for its length (5h, 1d, 7d, or the
+  monthly cycle); a provider with several windows fills several columns, and a
+  column appears only when something has data for it. Dollar budgets that are
+  not windows (Baseten, Ollama, OpenRouter) get the SPEND column.
+  The second line under each cell is that window's own reset, so a plan with a
+  5h and a 7d cap shows both. PACE rides in the cell: ↓ means you are ahead of
+  pace (more used than time spent — slow down), ↑ means behind (you can speed
+  up). The figure is percentage points: usage percent minus the percent of the
+  window that has elapsed, so 28% with 14% elapsed reads ↓14. A cell is
+  green when there is nothing to do, yellow when either the fill or the pace
+  wants watching, and red when it will run out before the reset. A provider is
+  inactive when the cache has no fetchedAt: those chips only refresh while you
+  are on that provider.
+TEXT
+
+# id => [label, *aliases]. Aliases keep the old provider names working in
+# --provider/--hide (codex, claude, copilot, grok) after the relabel.
+DRIVERS = {
+  "codex-window" => ["openai", "codex", "openai-codex"],
+  "claude-window" => ["anthropic", "claude"],
+  "copilot-window" => ["github", "copilot", "github-copilot"],
+  "grok-window" => ["xai", "grok"],
+  "cerebras-window" => ["cerebras"],
+  "ollama-usage" => ["ollama"],
+  "opencode-go-window" => ["opencode", "opencode-go", "opencode-go-window"],
+  "baseten-usage" => ["baseten"],
+  "openrouter-usage" => ["openrouter"]
+}.freeze
+
+# Cache order mirrors the extension's DRIVERS array; it breaks sort ties.
+ORDER = DRIVERS.keys.freeze
+LABEL = DRIVERS.transform_values(&:first).freeze
+
+# Drivers that no longer exist: their keys stay in the cache file forever, but
+# showing them would misreport a provider that is gone.
+RETIRED = {
+  "claude-bridge-window" => "claude-bridge (Claude Code OAuth)"
+}.freeze
+
+# "1.7/5H: 0%" and, at 100%, the extension substitutes a reset clock ("↻1:23p").
+# Spans can be fractional (copilot paces in workdays: "13.6/22.2W: 66.9%").
+WINDOW_RE = %r{(?:(\d[\d.]*)/)?(\d+(?:\.\d+)?)\s*([HDWM])\s*:\s*(\d[\d.]*%|↻\S+)}i.freeze
+
+BUCKETS = %w[5h 1d 7d 1m].freeze
+BUCKET_TITLES = { "5h" => "5H", "1d" => "1D", "7d" => "7D", "1m" => "1M" }.freeze
+SPEND = "spend"
+SORTS = %w[name usage pace age].freeze
+
+def config_path
+  return ENV["PI_USAGE_CONFIG"] if ENV["PI_USAGE_CONFIG"]
+
+  base = ENV["XDG_CONFIG_HOME"]
+  base = File.join(Dir.home, ".config") if base.nil? || base.empty?
+  File.join(base, "pi-usage", "config.json")
+end
+
+CACHE_FILE = File.join(ENV["PI_AGENT_DIR"] || File.expand_path("~/.pi/agent"), "usage-cache.json")
+
+def load_config
+  path = config_path
+  return {} unless File.exist?(path)
+
+  parsed = JSON.parse(File.read(path))
+  return parsed if parsed.is_a?(Hash)
+
+  warn "pi-usage: #{path} is not a JSON object, ignoring it"
+  {}
+rescue JSON::ParserError => e
+  warn "pi-usage: #{path} is not valid JSON (#{e.message.lines.first&.strip}), ignoring it"
+  {}
+end
+
+opts = { verbose: false, json: false, provider: nil, stale: nil, hide: [], show: [], all: false,
+         inactive: false, pacing: nil, age: nil, reset: nil, sort: nil, reverse: false }
+
+args = ARGV.dup
+until args.empty?
+  arg = args.shift
+  case arg
+  when "-h", "--help" then puts HELP
+                        exit 0
+  when "-v", "--verbose" then opts[:verbose] = true
+  when "-j", "--json" then opts[:json] = true
+  when "--all" then opts[:all] = true
+  when "--inactive" then opts[:inactive] = true
+  when "-r", "--reverse" then opts[:reverse] = true
+  when "--no-pace" then opts[:pacing] = false
+  when "--pace" then opts[:pacing] = true
+  when "--no-age" then opts[:age] = false
+  when "--age" then opts[:age] = true
+  when "--no-reset" then opts[:reset] = false
+  when "--reset" then opts[:reset] = true
+  when "--no-color" then opts[:color] = false
+  when "--config" then puts config_path
+                     exit 0
+  when "--path" then puts CACHE_FILE
+                      exit 0
+  when "-p", "--provider" then opts[:provider] = args.shift
+  when "-s", "--sort" then opts[:sort] = args.shift
+  when "--stale" then opts[:stale] = Float(args.shift)
+  when "--hide" then opts[:hide].concat(args.shift.to_s.split(","))
+  when "--show" then opts[:show].concat(args.shift.to_s.split(","))
+  else
+    warn "pi-usage: unknown option #{arg} (try --help)"
+    exit 2
+  end
+end
+
+config = load_config
+opts[:color] = config["color"] if opts[:color].nil? && [true, false].include?(config["color"])
+opts[:color] = $stdout.tty? && !ENV["NO_COLOR"] if opts[:color].nil?
+opts[:pacing] = config["pacing"] if opts[:pacing].nil? && [true, false].include?(config["pacing"])
+opts[:pacing] = true if opts[:pacing].nil?
+opts[:age] = config["age"] if opts[:age].nil? && [true, false].include?(config["age"])
+opts[:age] = true if opts[:age].nil?
+opts[:reset] = config["reset"] if opts[:reset].nil? && [true, false].include?(config["reset"])
+opts[:reset] = true if opts[:reset].nil?
+opts[:sort] ||= config["sort"] if SORTS.include?(config["sort"])
+opts[:sort] ||= "usage"
+hide_inactive = [true, false].include?(config["hideInactive"]) ? config["hideInactive"] : true
+
+unless SORTS.include?(opts[:sort])
+  warn "pi-usage: unknown sort #{opts[:sort].inspect} (one of: #{SORTS.join(', ')})"
+  exit 2
+end
+
+unless File.exist?(CACHE_FILE)
+  warn "pi-usage: no cache at #{CACHE_FILE} — run a pi session first"
+  exit 1
+end
+
+cache = JSON.parse(File.read(CACHE_FILE))
+unless cache.is_a?(Hash)
+  warn "pi-usage: unexpected cache shape in #{CACHE_FILE}"
+  exit 1
+end
+
+if opts[:json]
+  puts JSON.pretty_generate(cache)
+  exit 0
+end
+
+def paint(text, code, enabled)
+  return text unless enabled
+  return text if text.nil? || text.empty?
+  return text if code.nil?
+
+  "\e[#{code}m#{text}\e[0m"
+end
+
+# Severity color for a percentage: green < 50, yellow < 80, red otherwise.
+# Green: nothing to do. Yellow: watch it. Red: it runs out before the reset (or
+# already has). A cell takes the worse of its two signals, because 28% is calm
+# on its own but not when it is 14pp ahead of the clock: at that rate the weekly
+# cap lands days before the window does.
+LEVEL_COLORS = %w[32 33 31].freeze
+
+def pct_level(pct)
+  return 0 if pct.nil?
+  return 0 if pct < 50
+  return 1 if pct < 80
+
+  2
+end
+
+def pace_level(delta)
+  return 0 if delta.nil?
+  return 2 if delta > 15
+  return 1 if delta > 5
+
+  0
+end
+
+def age_label(seconds)
+  return "—" if seconds.nil?
+  return "0s" if seconds < 60
+  return "#{(seconds / 60).floor}m" if seconds < 3600
+  return "#{(seconds / 3600).floor}h" if seconds < 86_400
+
+  "#{(seconds / 86_400).floor}d"
+end
+
+def age_color(seconds)
+  return "2" if seconds.nil?
+  return "2" if seconds < 300
+  return "0" if seconds < 3600
+
+  "31"
+end
+
+def clock_on(date, hour, min, mer)
+  h = hour % 12
+  h += 12 if mer.to_s.downcase.start_with?("p")
+  Time.new(date.year, date.month, date.day, h, min)
+end
+
+def format_reset(at)
+  return at.strftime("%-l:%M%P") if at.strftime("%F") == Time.now.strftime("%F")
+  return at.strftime("%a %-l:%M%P") if (at - Time.now) < 7 * 86_400
+
+  at.strftime("%b %-d")
+end
+
+# A reset token as the chips write it: "Mon 11:00a", "Sun 7:00p",
+# "Nov 9 6:16a", "Oct 26, 10:59 AM". Returns a Time (soonest reading of the
+# clock, since the chips never state a year).
+def parse_clock_token(text, now = Time.now)
+  return nil unless text.is_a?(String)
+
+  if (m = text.match(/([A-Z][a-z]{2}) (\d{1,2}),? (\d{1,2}):(\d{2})\s*([AP])\.?M?/i))
+    begin
+      date = Date.strptime("#{m[1]} #{m[2]} #{now.year}", "%b %d %Y")
+    rescue Date::Error
+      return nil
+    end
+    at = clock_on(date, m[3].to_i, m[4].to_i, m[5])
+    return at >= now - (180 * 86_400) ? at : clock_on(date.next_year(1), m[3].to_i, m[4].to_i, m[5])
+  end
+
+  m = text.match(/(?:(\w{3}) +)?(\d{1,2}):(\d{2})\s*([AP])\.?M?/i)
+  return nil unless m
+
+  base = now
+  if (wday = m[1])
+    target = %w[sun mon tue wed thu fri sat].index(wday.downcase)
+    base += 86_400 until base.wday == target if target
+  end
+  at = clock_on(base, m[2].to_i, m[3].to_i, m[4])
+  at += 86_400 if at < now && m[1].nil?
+  at += 7 * 86_400 if at < now && m[1]
+  at
+end
+
+# Resets are not always structured: the extension stores resetMs only for some
+# drivers, and full detail for the rest only in commandText. Parse it as a
+# fallback and pick the soonest upcoming reset.
+def parsed_resets(entry)
+  text = [entry["commandText"], entry["value"]].compact.join("\n")
+  now = Time.now
+  found = []
+
+  # "Fri, Sep 25, 1:29 AM CDT" -> month, day, clock
+  text.scan(/\b([A-Z][a-z]{2}) (\d{1,2}), (\d{1,2}):(\d{2}) ([AP]M)/) do |mon, day, hour, min, mer|
+    date = Date.strptime("#{mon} #{day} #{now.year}", "%b %d %Y")
+    at = clock_on(date, hour.to_i, min.to_i, mer)
+    at = clock_on(date.next_year(1), hour.to_i, min.to_i, mer) if at < now - (180 * 86_400)
+    found << at
+  rescue Date::Error
+    next
+  end
+
+  # "resets 1:23p", "resets Sun 7:00p", "resets Nov 9 6:16a"
+  text.scan(/resets?\s+(?:([A-Z][a-z]{2}) (\d{1,2})\s+)?(?:(\w{3}) )?(\d{1,2}):(\d{2})\s*([ap])/i) do |mon, day, wday, hour, min, mer|
+    base = now
+    if mon && day
+      base = Date.strptime("#{mon} #{day} #{now.year}", "%b %d %Y").to_time
+    elsif wday
+      target = %w[sun mon tue wed thu fri sat].index(wday.downcase)
+      base += 86_400 until base.wday == target if target
+    end
+    at = clock_on(base, hour.to_i, min.to_i, mer)
+    at += 86_400 if at < now && mon.nil? && wday.nil?
+    at += 7 * 86_400 if at < now && wday
+    found << at
+  rescue Date::Error
+    next
+  end
+
+  found.select { |at| at > now - 300 }.min
+end
+
+def reset_label(entry)
+  reset_ms = entry["resetMs"]
+  return format_reset(Time.at(reset_ms / 1000.0).localtime) if reset_ms.is_a?(Numeric) && reset_ms.positive?
+
+  reset_date = entry["resetDate"]
+  if reset_date.is_a?(String) && reset_date.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+    return Date.iso8601(reset_date).to_time.strftime("%b %-d")
+  end
+
+  parsed = parsed_resets(entry)
+  return format_reset(parsed) if parsed
+  return reset_date if reset_date.is_a?(String) && !reset_date.empty?
+
+  "—"
+end
+
+# Compact rendering of "<elapsed>/<span>: <pct>%" windows.
+def windows(value)
+  return [] unless value.is_a?(String)
+
+  parts = value.scan(WINDOW_RE).map do |elapsed, span, unit, shown|
+    limit = shown.start_with?("↻")
+    {
+      span: span.to_f,
+      unit: unit.downcase,
+      elapsed: elapsed&.to_f,
+      pct: limit ? 100.0 : shown.delete("%").to_f,
+      shown: limit ? nil : shown.delete("%"),
+      at_limit: limit,
+      limit_clock: limit ? shown.delete("↻") : nil
+    }
+  end
+  # The cerebras driver concatenates the same window twice; drop the repeats.
+  parts.chunk_while { |a, b| a == b }.map(&:first)
+end
+
+# Which column a window belongs in. Workdays ("22.2W") only ever describe a
+# monthly cycle, so they land in 1m whatever their size.
+def bucket_of(window)
+  case window[:unit]
+  when "h" then window[:span] <= 6 ? "5h" : (window[:span] <= 36 ? "1d" : "1m")
+  when "d"
+    return "1d" if window[:span] <= 1.5
+    return "7d" if window[:span] <= 10
+
+    "1m"
+  else "1m"
+  end
+end
+
+# Percentage points used beyond the share of the window that has elapsed.
+# Positive = burning too fast; nil when the value carries no elapsed time.
+def pace_delta(window)
+  return nil if window[:elapsed].nil? || window[:span].to_f <= 0
+
+  window[:pct] - ((window[:elapsed] / window[:span]) * 100)
+end
+
+# ↓ = ahead of pace (slow down), ↑ = behind (you can speed up). Under half a
+# point of drift reads as level rather than as a 0 arrow.
+def pace_text(delta)
+  return "0" if delta.abs < 0.5
+
+  "#{delta.positive? ? '↓' : '↑'}#{delta.abs.round}"
+end
+
+# A window's own reset: the API's exact clock when the detail line pairs it
+# with this window's percentage, else the reset the entry states for a
+# single-window row, else elapsed time projected from the last fetch.
+def window_reset(win, entry, row_reset, only_window)
+  return win[:limit_clock] if win[:at_limit]
+  # The detail line naming this window's percentage first: a one-window chip
+  # can still list other meters (Claude's idle 5h), whose reset comes first.
+  if (line = reset_on_line(entry, win[:shown]))
+    return line
+  end
+  return row_reset if only_window && row_reset != "—"
+
+  unit = { "h" => 3_600, "d" => 86_400 }[win[:unit]]
+  fetched = entry["fetchedAt"]
+  if unit && win[:elapsed] && fetched.is_a?(Numeric) && fetched.positive?
+    remaining = (win[:span] - win[:elapsed]) * unit
+    return format_reset(Time.at((fetched / 1000.0) + remaining)) if remaining >= 0
+  end
+
+  row_reset
+end
+
+# The reset printed next to a window's percentage in the detail block.
+def reset_on_line(entry, shown)
+  text = entry["commandText"]
+  return nil unless text.is_a?(String) && shown
+
+  text.lines(chomp: true).each do |line|
+    # Whole number only: 4% must not match a line reading 40% or 14%.
+    next unless line.match?(/(?<![\d.])#{Regexp.escape(shown.to_s)}%/)
+    next unless line.match?(/resets?/i)
+
+    at = parse_clock_token(line[/resets?\s+(.*)\z/i, 1])
+    return format_reset(at) if at
+  end
+  nil
+end
+
+# One comparable percentage per provider: the worst window, else a "$x of $y
+# (22%)" figure, else nothing.
+def usage_pct(wins, text)
+  return wins.map { |w| w[:pct] }.max unless wins.empty?
+
+  match = text.to_s.match(/(\d+(?:\.\d+)?)%/)
+  match && match[1].to_f
+end
+
+def matches?(key, names)
+  words = DRIVERS.fetch(key, [key]) + [key]
+  names.any? do |name|
+    needle = name.to_s.strip.downcase
+    next false if needle.empty?
+
+    words.any? { |word| word.downcase.include?(needle) || needle.include?(word.downcase) }
+  end
+end
+
+# Model-variant keys (claude-window:opus, claude-window:sonnet: the chip shows
+# the weekly meter of the family in use) are one provider. Fold them into the
+# base key, the freshest entry winning, as the extension's own readers do.
+cache.keys.grep(/:/).each do |key|
+  base = key.split(":", 2).first
+  entry = cache.delete(key)
+  fresh = ->(e) { e.is_a?(Hash) && e["fetchedAt"].is_a?(Numeric) ? e["fetchedAt"] : -1 }
+  cache[base] = entry if fresh.(entry) > fresh.(cache[base])
+end
+
+keys = cache.keys - RETIRED.keys
+sorted = (ORDER & keys) + (keys - ORDER)
+
+if opts[:provider]
+  sorted = sorted.select { |key| matches?(key, [opts[:provider]]) }
+  if sorted.empty?
+    warn "pi-usage: no provider matches #{opts[:provider].inspect}"
+    exit 1
+  end
+end
+
+now = Time.now.to_f
+rows = sorted.map do |key|
+  entry = cache[key].is_a?(Hash) ? cache[key] : {}
+  fetched_ms = entry["fetchedAt"]
+  age = fetched_ms.is_a?(Numeric) && fetched_ms.positive? ? now - (fetched_ms / 1000.0) : nil
+  wins = windows(entry["value"])
+  text = (entry["value"] || "—").to_s
+  row_reset = reset_label(entry)
+  paced = wins.filter_map { |w| (delta = pace_delta(w)) && w.merge(delta: delta) }
+
+  cells = Hash.new { |hash, bucket| hash[bucket] = [] }
+  wins.each do |win|
+    cells[bucket_of(win)] << {
+      shown: win[:shown],
+      pct: win[:pct],
+      delta: pace_delta(win),
+      reset: window_reset(win, entry, row_reset, wins.length == 1)
+    }
+  end
+
+  {
+    key: key,
+    label: LABEL.fetch(key, key.sub(/-(window|usage)$/, "")),
+    cells: cells,
+    spend: wins.empty? ? text : nil,
+    pct: usage_pct(wins, text),
+    worst: paced.max_by { |w| w[:delta] },
+    spread: paced.map { |w| [w[:span], w[:unit], w[:delta]] },
+    age: { text: age_label(age), color: age_color(age) },
+    age_seconds: age,
+    entry: entry,
+    reset: row_reset
+  }
+end
+
+rows.sort_by! do |row|
+  order = ORDER.index(row[:key]) || ORDER.length
+  case opts[:sort]
+  # Least used first: the provider with the most headroom leads.
+  when "usage" then [row[:pct] ? 0 : 1, row[:pct] || 0, order]
+  when "pace" then [row[:worst] ? 0 : 1, -(row[:worst] ? row[:worst][:delta] : 0), order]
+  when "age" then [row[:age_seconds] ? 0 : 1, row[:age_seconds] || 0, order]
+  else [row[:label].downcase]
+  end
+end
+rows.reverse! if opts[:reverse]
+
+hidden = opts[:all] ? [] : rows.select do |row|
+  (matches?(row[:key], Array(config["hide"])) || matches?(row[:key], opts[:hide])) &&
+    !matches?(row[:key], opts[:show])
+end
+rows -= hidden
+inactive = hide_inactive && !opts[:inactive] && !opts[:all] ? rows.select { |row| row[:age_seconds].nil? } : []
+rows -= inactive
+
+columns = BUCKETS.select { |bucket| rows.any? { |row| row[:cells][bucket].any? } }
+columns << SPEND if rows.any? { |row| row[:spend] }
+
+# A cell is its parts, so the percentage and the pace arrow can carry different
+# colors while the column still measures the plain text.
+def build_cell(entries, pacing)
+  parts = []
+  plain = +""
+  entries.each_with_index do |entry, index|
+    if index.positive?
+      parts << [" · ", "2"]
+      plain << " · "
+    end
+    pct = "#{entry[:shown] || '100'}%"
+    # One color per window: the worse of how full it is and how fast it is filling.
+    color = LEVEL_COLORS[[pct_level(entry[:pct]), pacing ? pace_level(entry[:delta]) : 0].max]
+    parts << [pct, color]
+    plain << pct
+    delta = entry[:delta]
+    next unless pacing && delta && delta.abs >= 0.5
+
+    suffix = " #{pace_text(delta)}"
+    parts << [suffix, color]
+    plain << suffix
+  end
+  { plain: plain, parts: parts }
+end
+
+EMPTY_CELL = { plain: "·", parts: [["·", "2"]] }.freeze
+
+rows.each do |row|
+  row[:rendered] = {}
+  columns.each do |column|
+    row[:rendered][column] =
+      if column == SPEND
+        { cell: row[:spend] ? { plain: row[:spend], parts: [[row[:spend], "0"]] } : EMPTY_CELL,
+          resets: row[:spend] && row[:reset] != "—" ? [row[:reset]] : [] }
+      elsif row[:cells][column].any?
+        entries = row[:cells][column].sort_by { |entry| entry[:pct] }
+        { cell: build_cell(entries, opts[:pacing]),
+          resets: entries.map { |entry| entry[:reset] }.compact.uniq - ["—"] }
+      else
+        { cell: EMPTY_CELL, resets: [] }
+      end
+  end
+end
+
+titles = columns.map { |column| column == SPEND ? "SPEND" : BUCKET_TITLES[column] }
+widths = [rows.map { |r| r[:label].length }.max || 0, "PROVIDER".length].max
+col_widths = columns.each_with_index.map do |column, index|
+  cells = rows.map { |row| row[:rendered][column][:cell][:plain].length }
+  resets = opts[:reset] ? rows.flat_map { |row| row[:rendered][column][:resets] }.map(&:length) : []
+  [cells.max || 0, resets.max || 0, titles[index].length].max
+end
+age_width = [rows.map { |r| r[:age][:text].length }.max || 0, "AGE".length].max
+
+header = ["PROVIDER".ljust(widths)]
+header.concat(titles.each_with_index.map { |title, index| title.ljust(col_widths[index]) })
+header << "AGE".ljust(age_width) if opts[:age]
+puts header.map { |cell| paint(cell, "1", opts[:color]) }.join("  ").rstrip
+puts paint("-" * (header.sum(&:length) + (2 * (header.length - 1))), "2", opts[:color])
+
+rows.each do |row|
+  cells = [paint(row[:label].ljust(widths), "1", opts[:color])]
+  columns.each_with_index do |column, index|
+    rendered = row[:rendered][column]
+    painted = rendered[:cell][:parts].map { |text, color| paint(text, color, opts[:color]) }.join
+    cells << painted + (" " * (col_widths[index] - rendered[:cell][:plain].length))
+  end
+  cells << paint(row[:age][:text], row[:age][:color], opts[:color]) if opts[:age]
+  puts cells.join("  ").rstrip
+
+  next unless opts[:reset]
+
+  # Second line: each window's own reset, so multi-window plans show both.
+  resets = columns.each_with_index.map do |column, index|
+    rendered = row[:rendered][column]
+    next " " * col_widths[index] if rendered[:resets].empty?
+
+    paint(rendered[:resets].join(" · ").ljust(col_widths[index]), "2", opts[:color])
+  end
+  next if columns.none? { |column| row[:rendered][column][:resets].any? }
+
+  puts ([" " * widths] + resets + ["" ]).join("  ").rstrip
+end
+
+unless hidden.empty?
+  puts
+  puts paint("hidden: #{hidden.map { |row| row[:label] }.join(', ')} (--all to show, or edit #{config_path})", "2", opts[:color])
+end
+unless inactive.empty?
+  puts
+  puts paint("inactive: #{inactive.map { |row| row[:label] }.join(', ')} (idle: only polled while you were on that provider; --inactive to show)", "2", opts[:color])
+end
+
+if opts[:verbose]
+  rows.each do |row|
+    detail = row[:entry]["commandText"] || row[:entry]["value"]
+    next unless detail.is_a?(String) && !detail.empty?
+
+    puts
+    puts paint(row[:label], "1", opts[:color]) + paint("  (#{row[:key]})", "2", opts[:color])
+    row[:spread].each do |span, unit, delta|
+      puts paint("  pace: #{span.to_i == span ? span.to_i : span}#{unit} #{pace_text(delta)}", "2", opts[:color])
+    end
+    detail.each_line { |l| puts "  #{l.chomp}" }
+  end
+end
+
+if opts[:stale]
+  stale = rows.select { |row| row[:age_seconds].nil? || row[:age_seconds] > opts[:stale] * 60 }
+  unless stale.empty?
+    warn "pi-usage: stale (>#{opts[:stale].to_i}m): #{stale.map { |r| r[:label] }.join(', ')}"
+    exit 1
+  end
+end
