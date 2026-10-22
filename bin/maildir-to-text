@@ -1,0 +1,225 @@
+#!/usr/bin/ruby
+# frozen_string_literal: true
+
+# Convert Maildir messages to plain text files for qmd indexing.
+#
+# Walks ~/Mail/<account>/ directories, extracts headers + body from each
+# message, and writes .txt files to ~/Mail/.index/<account>/<folder>/<uid>.txt.
+#
+# Skips Spam and Trash folders. Only processes new/changed messages
+# (compares mtime). Safe to run repeatedly via cron or launchd.
+#
+# Ruby 2.6+ compatible (macOS system Ruby), stdlib only.
+
+require 'base64'
+require 'digest/md5'
+require 'fileutils'
+
+MAIL_ROOT = File.join(Dir.home, 'Mail')
+INDEX_ROOT = File.join(MAIL_ROOT, '.index')
+SKIP_FOLDERS = %w[Spam Trash [Gmail]/Spam [Gmail]/Trash].freeze
+
+def strip_html(html)
+  text = html.gsub(/<(script|style)\b[^>]*>.*?<\/\1>/mi, '')
+  text.gsub!(/<\s*(br|p|div|tr|li|h[1-6])\b[^>]*\/?>/i, "\n")
+  text.gsub!(/<[^>]+>/, '')
+  text.gsub!('&amp;', '&')
+  text.gsub!('&lt;', '<')
+  text.gsub!('&gt;', '>')
+  text.gsub!('&quot;', '"')
+  text.gsub!('&#39;', "'")
+  text.gsub!('&nbsp;', ' ')
+  text.gsub!(/&#(\d+);/) { [$1.to_i].pack('U') }
+  text.strip
+end
+
+def decode_header(value)
+  return '' if value.nil?
+
+  value.gsub(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/) do
+    charset, encoding, encoded = $1, $2.upcase, $3
+    decoded = if encoding == 'B'
+                Base64.decode64(encoded)
+              else
+                encoded.gsub('_', ' ')
+                       .gsub(/=([0-9A-Fa-f]{2})/) { [$1].pack('H*') }
+              end
+    decoded.force_encoding(charset).encode('UTF-8', invalid: :replace, undef: :replace)
+  rescue StandardError
+    value
+  end
+end
+
+def decode_body(body, transfer_encoding, charset)
+  decoded = case transfer_encoding.to_s.strip.downcase
+            when 'base64'
+              Base64.decode64(body)
+            when 'quoted-printable'
+              body.gsub(/=\r?\n/, '')
+                  .gsub(/=([0-9A-Fa-f]{2})/) { [$1].pack('H*') }
+            else
+              body
+            end
+  charset = 'UTF-8' if charset.nil? || charset.empty?
+  decoded.force_encoding(charset).encode('UTF-8', invalid: :replace, undef: :replace)
+rescue Encoding::ConverterNotFoundError, ArgumentError
+  decoded.force_encoding('ASCII-8BIT').encode('UTF-8', invalid: :replace, undef: :replace)
+end
+
+def parse_headers(raw)
+  headers = {}
+  current_key = nil
+  raw.each_line do |line|
+    if line =~ /\A(\S+?):\s*(.*)/
+      current_key = $1
+      headers[current_key] = (headers[current_key] || '') + $2.rstrip
+    elsif current_key && line =~ /\A\s+(.*)/
+      headers[current_key] << ' ' << $1.rstrip
+    end
+  end
+  headers
+end
+
+def parse_content_type(headers)
+  ct = headers['Content-Type'] || 'text/plain'
+  type = ct.split(';').first.strip.downcase
+  charset = ct[/charset="?([^";]+)"?/i, 1]
+  boundary = ct[/boundary="?([^";]+)"?/i, 1]
+  [type, charset, boundary]
+end
+
+def parse_parts(body, boundary)
+  parts = []
+  sections = body.split("--#{boundary}")
+  sections[1..-1].each do |section|
+    break if section.start_with?('--')
+
+    section = section.sub(/\A\r?\n/, '')
+    header_body = section.split(/\r?\n\r?\n/, 2)
+    next unless header_body.length == 2
+
+    headers = parse_headers(header_body[0])
+    parts << { headers: headers, body: header_body[1] }
+  end
+  parts
+end
+
+def extract_text_body(parts)
+  plain = nil
+  html = nil
+  parts.each do |part|
+    type, charset, boundary = parse_content_type(part[:headers])
+    encoding = part[:headers]['Content-Transfer-Encoding']
+
+    if type == 'text/plain' && plain.nil?
+      plain = decode_body(part[:body], encoding, charset)
+    elsif type == 'text/html' && html.nil?
+      html = decode_body(part[:body], encoding, charset)
+    elsif type.start_with?('multipart/') && boundary
+      sub_parts = parse_parts(part[:body], boundary)
+      result = extract_text_body(sub_parts)
+      plain ||= result[:plain]
+      html ||= result[:html]
+    end
+  end
+  { plain: plain, html: html }
+end
+
+def extract_text(msg_path)
+  raw = File.read(msg_path, encoding: 'ASCII-8BIT')
+  header_section, body = raw.split(/\r?\n\r?\n/, 2)
+  return '' unless header_section && body
+
+  headers = parse_headers(header_section)
+  from = decode_header(headers['From'])
+  to = decode_header(headers['To'])
+  subject = decode_header(headers['Subject'])
+  date = headers['Date'] || ''
+
+  type, charset, boundary = parse_content_type(headers)
+  encoding = headers['Content-Transfer-Encoding']
+
+  text_body = if type.start_with?('multipart/') && boundary
+                parts = parse_parts(body, boundary)
+                result = extract_text_body(parts)
+                result[:plain] || (result[:html] && strip_html(result[:html])) || ''
+              elsif type == 'text/plain'
+                decode_body(body, encoding, charset)
+              elsif type == 'text/html'
+                strip_html(decode_body(body, encoding, charset))
+              else
+                ''
+              end
+
+  "From: #{from}\nTo: #{to}\nDate: #{date}\nSubject: #{subject}\n\n#{text_body}"
+end
+
+def stable_filename(msg_path)
+  Digest::MD5.hexdigest(File.basename(msg_path))[0, 12] + '.txt'
+end
+
+def skip_folder?(folder_name)
+  SKIP_FOLDERS.any? { |skip| folder_name.include?(skip) }
+end
+
+def process_account(account_path)
+  account_name = File.basename(account_path)
+  processed = 0
+  skipped = 0
+
+  Dir.glob(File.join(account_path, '**', '{cur,new}')).sort.each do |dir|
+    folder_path = File.dirname(dir)
+    folder_name = if folder_path == account_path
+                    '.'
+                  else
+                    folder_path.sub("#{account_path}/", '')
+                  end
+
+    next if skip_folder?(folder_name)
+
+    out_dir = File.join(INDEX_ROOT, account_name, folder_name)
+    FileUtils.mkdir_p(out_dir)
+
+    Dir.foreach(dir) do |filename|
+      next if filename.start_with?('.')
+
+      msg_path = File.join(dir, filename)
+      next unless File.file?(msg_path)
+
+      out_path = File.join(out_dir, stable_filename(msg_path))
+
+      if File.exist?(out_path) && File.mtime(out_path) >= File.mtime(msg_path)
+        skipped += 1
+        next
+      end
+
+      begin
+        text = extract_text(msg_path)
+        File.write(out_path, text, encoding: 'UTF-8')
+        processed += 1
+      rescue StandardError => e
+        warn "  SKIP #{filename}: #{e.message}"
+      end
+    end
+  end
+
+  [processed, skipped]
+end
+
+accounts = Dir.children(MAIL_ROOT)
+              .map { |name| File.join(MAIL_ROOT, name) }
+              .select { |path| File.directory?(path) && File.basename(path) != '.index' }
+              .sort
+
+total_processed = 0
+total_skipped = 0
+
+accounts.each do |account|
+  puts "Processing #{File.basename(account)}..."
+  processed, skipped = process_account(account)
+  total_processed += processed
+  total_skipped += skipped
+  puts "  #{processed} new, #{skipped} unchanged"
+end
+
+puts "\nDone: #{total_processed} processed, #{total_skipped} unchanged"

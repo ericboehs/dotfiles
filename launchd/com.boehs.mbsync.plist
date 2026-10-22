@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>Label</key>
+	<string>com.boehs.mbsync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/ericboehs/bin/mail-sync</string>
+		<string>-a</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>/Users/ericboehs/Library/Logs/mail-sync-launchd.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/ericboehs/Library/Logs/mail-sync-launchd.log</string>
+	<key>StartInterval</key>
+	<integer>900</integer>
+</dict>
+</plist>

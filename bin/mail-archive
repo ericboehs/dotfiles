@@ -1,0 +1,59 @@
+#!/bin/bash
+# Archive messages via himalaya, then fix UIDs so mbsync doesn't get duplicates.
+#
+# Usage:
+#   mail-archive <id> [id...]              # Archive from personal (default)
+#   mail-archive -a oddball <id> [id...]   # Archive from oddball
+#
+# The issue: himalaya's Maildir move assigns U= tags that collide with
+# existing mbsync-assigned UIDs. Fix: strip U= from newly created files
+# so mbsync can assign proper UIDs on next sync.
+
+set -e
+
+# Parse account flag
+account=""
+account_flag=""
+target="Archive"
+if [ "$1" = "-a" ]; then
+  account="$2"
+  account_flag="-a $2"
+  shift 2
+  if [ "$account" = "oddball" ]; then
+    target="[Gmail]/All Mail"
+  fi
+fi
+
+if [ $# -eq 0 ]; then
+  echo "Usage: mail-archive [-a account] <id> [id...]" >&2
+  exit 1
+fi
+
+# Determine the maildir path for the target folder
+if [ -n "$account" ]; then
+  maildir="$HOME/Mail/$account"
+else
+  maildir="$HOME/Mail/personal"
+fi
+
+target_dir="$maildir/$target"
+
+# Record timestamp just before the move
+marker=$(mktemp)
+
+# Do the move
+# shellcheck disable=SC2086
+himalaya message move "$target" "$@" $account_flag
+
+# Strip U= tags from any files created after the marker
+for dir in "$target_dir/cur" "$target_dir/new"; do
+  [ -d "$dir" ] || continue
+  find "$dir" -newer "$marker" -type f -name '*,U=*' | while read -r filepath; do
+    newpath=$(echo "$filepath" | sed 's/,U=[0-9]*//')
+    if [ "$filepath" != "$newpath" ]; then
+      mv "$filepath" "$newpath"
+    fi
+  done
+done
+
+rm -f "$marker"
