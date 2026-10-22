@@ -39,3 +39,4 @@ My code lives in `~/Code` and follows the `host/org/repo` structure:
 ## Credentials
 - Prefer the **1Password CLI (`op`)** for all secrets; see skill `credentials` for syntax + reducing biometric prompts.
 - **Never** write secret values to files, docs, issues, PRs, commits, or memory — treat them as ephemeral (pipes/args only).
+- **Running GUI-bound commands on gfew from e14:** plain `ssh gfew <cmd>` has no desktop session, so `screencapture` returns a blank background and the keychain/`fnox` stay locked. Run them inside gfew's tmux (started from the GUI): `ssh -o ClearAllForwardings=yes gfew 'tmux new-window -d -t code: "<cmd> > /tmp/out 2>&1"'`, then read or `scp` back `/tmp/out`.
