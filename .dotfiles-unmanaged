@@ -38,3 +38,7 @@ archive/*
 
 # Read by bin/dotfiles-host-links (bootstrap:launchd), not linked itself.
 .dotfiles-hosts
+
+# Project-scoped pi config: pi reads .pi/ from this checkout when run here
+# (the researcher subagent is for this repo), so it is not for $HOME.
+.pi/*
