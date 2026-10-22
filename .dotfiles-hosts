@@ -1,0 +1,21 @@
+# Links that belong on some machines only. [dotfiles] links everywhere, which
+# is wrong for anything that acts on its own: a plist in ~/Library/LaunchAgents
+# is loaded at login, so linking com.boehs.mbsync onto a Mac with no ~/Mail
+# would start a sync that fails every 15 minutes and pages Slack. These all
+# also hardcode /Users/ericboehs and e14-only data (~/Mail, the qmd index,
+# the Vault).
+#
+# bootstrap:launchd (bin/dotfiles-host-links --apply) links this host's rows,
+# loads any LaunchAgent whose definition changed, and unlinks rows dropped for
+# this host. dotfiles-link-check audits the same rows. Host keys resolve as in
+# bootstrap:pi: $PI_SETTINGS_HOST, then .pi-agent/host, then `hostname -s`.
+#
+# source (repo-relative)               target (trailing / = keep basename)   hosts
+launchd/com.boehs.mbsync.plist          ~/Library/LaunchAgents/                e14
+launchd/com.ericboehs.mosh-reaper.plist ~/Library/LaunchAgents/                e14
+launchd/com.ericboehs.qmd-warmup.plist  ~/Library/LaunchAgents/                e14
+launchd/com.qmd.mcp.plist               ~/Library/LaunchAgents/                e14
+launchd/com.qmd.update.plist            ~/Library/LaunchAgents/                e14
+# Collections point at e14's Vault, Mail and checkouts; qmd rewrites the file
+# through the link (writeFileSync), but drops YAML comments when it does.
+.config/qmd/index.yml                   ~/.config/qmd/index.yml                e14

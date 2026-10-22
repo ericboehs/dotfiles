@@ -109,6 +109,10 @@ managed_links() {
   [[ -d "$HOME/Code/va.ghe.com" ]] &&
     printf '%s\t%s\n' "$HOME/Code/va.ghe.com/AGENTS.md" "-"
 
+  # bootstrap:launchd: this host's rows of .dotfiles-hosts.
+  [[ -x "$root/bin/dotfiles-host-links" ]] &&
+    PI_DOTFILES_ROOT="$root" "$root/bin/dotfiles-host-links"
+
   return 0
 }
 
@@ -165,6 +169,12 @@ if [[ "$#" -eq 0 ]] && command -v git >/dev/null 2>&1 && [[ -d "$root/.git" ]]; 
   orphans="$work/orphans"
   git -C "$root" ls-files | sort > "$tracked"
   managed_links | cut -f2 | sed -n "s|^$root/||p" | sort -u > "$covered"
+  # A row meant for another host still reaches a machine, just not this one.
+  if [[ -x "$root/bin/dotfiles-host-links" ]]; then
+    PI_DOTFILES_ROOT="$root" "$root/bin/dotfiles-host-links" --all |
+      sed -n "s|^$root/||p" >> "$covered"
+    sort -u -o "$covered" "$covered"
+  fi
 
   : > "$found"
   while IFS= read -r file; do

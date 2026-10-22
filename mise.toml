@@ -467,7 +467,7 @@ echo "      the warm did not finish — re-run \`mise run bootstrap:nvim\`."
 
 [tasks.bootstrap]
 description = "Post-converge setup that needs the installed tools on PATH"
-depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:va-context", "bootstrap:va-wtf", "bootstrap:claude", "bootstrap:herdr"]
+depends = ["bootstrap:linux-shims", "bootstrap:tpm", "bootstrap:nvim", "bootstrap:pi", "bootstrap:va-context", "bootstrap:va-wtf", "bootstrap:claude", "bootstrap:herdr", "bootstrap:launchd"]
 
 [tasks."bootstrap:herdr"]
 description = "Install Herdr integrations for available coding agents"
@@ -502,6 +502,19 @@ copilot|copilot|${COPILOT_HOME:-$HOME/.copilot}
 cursor|cursor-agent|${CURSOR_CONFIG_DIR:-$HOME/.cursor}
 grok|grok|${GROK_HOME:-$HOME/.grok}
 EOF
+'''
+
+[tasks."bootstrap:launchd"]
+description = "Link this host's LaunchAgents and host-only config from .dotfiles-hosts"
+# The plists in launchd/ were tracked copies of hand-installed files, so an
+# edit here never reached launchd and a fresh Mac got none of them. They are
+# host-gated rather than [dotfiles] entries because a linked plist is a loaded
+# job: see .dotfiles-hosts. Runs after the tools step, since the qmd jobs it
+# loads call the mise-installed qmd.
+run = '''
+[ "$(uname)" = Darwin ] || exit 0
+root="${MISE_PROJECT_ROOT:-$PWD}"
+PI_DOTFILES_ROOT="$root" "$root/bin/dotfiles-host-links" --apply
 '''
 
 [tasks."bootstrap:linux-shims"]

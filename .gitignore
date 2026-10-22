@@ -20,6 +20,9 @@
 !.config/herdr/
 .config/herdr/*
 !.config/herdr/config.toml
+!.config/qmd/
+.config/qmd/*
+!.config/qmd/index.yml
 !.config/lsd/
 !.config/gitleaks/
 !.config/btop/

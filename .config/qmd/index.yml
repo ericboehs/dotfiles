@@ -1,0 +1,58 @@
+collections:
+  wiki:
+    path: /Users/ericboehs/Library/Mobile Documents/iCloud~md~obsidian/Documents/Vault
+    pattern: "**/*.md"
+    # pi sessions are indexed from ~/.pi/session-md (sessions collection); the
+    # wiki copies doubled every re-embed of a live session. 2026-10-22.
+    ignore:
+      - "AI Sessions/*-pi.md"
+    context:
+      "": "Eric's personal knowledge base: daily journals, home and shop projects, solar, plus VA/Oddball work notes"
+      eert: "VA EERT team (Engineering Excellence Response Team) work notes: engineering, platform tooling, developer experience"
+      oddball: Oddball company notes (federal contractor, VA work)
+      calls: Call and meeting notes
+      daily: Daily journal notes, YYYY-MM-DD format
+      solar: "Home solar power: inverters, wiring, panels, batteries"
+      AI Sessions: Exported AI assistant conversations
+  email:
+    path: /Users/ericboehs/Mail/.index
+    pattern: "**/*.txt"
+  sessions:
+    path: /Users/ericboehs/.pi/session-md
+    pattern: "**/*.md"
+    context:
+      "": Eric's past pi coding agent session transcripts, organized by project
+  va-eert:
+    path: /Users/ericboehs/Code/va.ghe.com/software/eert
+    pattern: "**/*.md"
+    context:
+      "": "VA EERT team repo: runbooks, projects, team info, tools"
+  va-devops:
+    path: /Users/ericboehs/Code/va.ghe.com/software/devops
+    pattern: "**/*.md"
+    context:
+      "": "VA DevOps docs: infrastructure, deployment, platform operations"
+  va-handbook:
+    path: /Users/ericboehs/Code/va.ghe.com/handbook/content
+    pattern: "**/*.md,**/*.mdx"
+    context:
+      "": VA/Oddball work handbook content (EERT engineering handbook)
+  va-vic:
+    path: /Users/ericboehs/Code/va.ghe.com/software/veterans-identification-card-vic-code
+    pattern: "**/*.md"
+    context:
+      "": "Veterans Identification Card (VIC) code repo docs"
+  va-fraud-engine:
+    path: /Users/ericboehs/Code/va.ghe.com/software/identity-fraud-engine
+    pattern: "**/*.md"
+    context:
+      "": "Identity fraud engine repo docs"
+  va-vets-api:
+    path: /Users/ericboehs/Code/va.ghe.com/software/vets-api
+    pattern: "**/*.md"
+    context:
+      "": "vets-api Rails codebase: VA backend services, modules, docs"
+models:
+  embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+  generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
+  rerank: hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf

@@ -35,3 +35,6 @@ channel.xml
 
 # Retired bin scripts, kept off $PATH on purpose. See archive/bin/README.md.
 archive/*
+
+# Read by bin/dotfiles-host-links (bootstrap:launchd), not linked itself.
+.dotfiles-hosts
