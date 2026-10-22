@@ -14,12 +14,24 @@
 #
 # Called by ~/.local/bin/qmd-update-job (every 30 min) and spawned by the
 # qmd-memory pi extension at session start/shutdown.
+#
+# Long sessions are split into parts of ~PART_BYTES, diagnosed 2026-10-22.
+# qmd embeds per document hash with no chunk reuse, so rewriting one
+# ever-growing file re-embedded all of it on every export: a 3.8MB session
+# cost ~2,000 chunks each time it was touched, orphaning the previous ~2,000,
+# and `qmd cleanup` was finding ~100k orphans two days after the last run.
+# Parts are filled greedily from the first turn, and the JSONL is append-only,
+# so once a part fills its bytes never change again; only the tail part is
+# re-embedded. Part 1 keeps the historical filename so short sessions are
+# untouched; later parts are <name>-partNN.md. Part headers deliberately omit
+# a total ("part 3 of N"), which would rewrite every part as N grows.
 
 require "json"
 require "fileutils"
 
 SESSIONS_DIR = ENV.fetch("PI_SESSIONS_DIR", File.expand_path("~/.pi/agent/sessions"))
 OUT_DIR      = ENV.fetch("PI_SESSION_MD_DIR", File.expand_path("~/.pi/session-md"))
+PART_BYTES   = Integer(ENV.fetch("PI_SESSION_MD_PART_BYTES", "150000"))
 
 exported = 0
 skipped  = 0
@@ -102,19 +114,52 @@ sessions.each do |src|
     end
 
     title = name || first_user || session_id
-    body  = +"# #{title}\n\n"
-    body << "- Session: #{session_id}\n"
-    body << "- Date: #{session_ts}\n" if session_ts
-    body << "- Project: #{project_dir}\n" if project_dir
-    body << "\n---\n\n"
-    turns.each do |role, text|
-      body << "## #{role}\n\n#{text.strip}\n\n"
+    header = lambda do |part|
+      h = +"# #{title}#{" (part #{part})" if part > 1}\n\n"
+      h << "- Session: #{session_id}\n"
+      h << "- Date: #{session_ts}\n" if session_ts
+      h << "- Project: #{project_dir}\n" if project_dir
+      h << "\n---\n\n"
     end
 
+    # Greedy fill from the start: a part closes when the next turn would push
+    # it past PART_BYTES (a single oversized turn gets a part to itself).
+    bodies = [header.call(1)]
+    part_len = 0
+    turns.each do |role, text|
+      chunk = "## #{role}\n\n#{text.strip}\n\n"
+      if part_len.positive? && part_len + chunk.bytesize > PART_BYTES
+        bodies << header.call(bodies.size + 1)
+        part_len = 0
+      end
+      bodies[-1] << chunk
+      part_len += chunk.bytesize
+    end
+
+    base  = dest.delete_suffix(".md")
+    paths = bodies.each_index.map { |i| i.zero? ? dest : format("%s-part%02d.md", base, i + 1) }
+
     FileUtils.mkdir_p(dest_dir)
-    tmp = "#{dest}.tmp-#{Process.pid}"
-    File.write(tmp, body)
-    File.rename(tmp, dest)
+    paths.zip(bodies).each do |path, body|
+      # Leave full parts byte-for-byte alone; that is the whole point.
+      next if File.exist?(path) && File.read(path, encoding: "UTF-8") == body
+
+      tmp = "#{path}.tmp-#{Process.pid}"
+      File.write(tmp, body)
+      File.rename(tmp, path)
+    end
+    # Part 1 may be unchanged; its mtime is still the up-to-date marker.
+    FileUtils.touch(dest)
+
+    # Parts left over from a rename (slug change) or an older layout. uuid[0,8]
+    # of a v7 UUID is a timestamp, so a sibling session started within the
+    # same minute can share it: delete only files that name this session.
+    Dir.glob(File.join(dest_dir, "*-#{uuid[0, 8]}{,-part[0-9][0-9]}.md")).each do |old|
+      next if paths.include?(old)
+      next unless File.foreach(old, encoding: "UTF-8").first(6).include?("- Session: #{session_id}\n")
+
+      File.delete(old)
+    end
     exported += 1
   rescue StandardError => e
     warn "pi-session-export: #{src}: #{e.class}: #{e.message}"
