@@ -1,0 +1,273 @@
+#!/bin/sh
+# Full mail sync: pull from IMAP, convert to text, update qmd index.
+# Run by ~/Library/LaunchAgents/com.boehs.mbsync.plist every 900s, via ~/bin
+# (this repo's bin/).
+#
+# Hazards this guards against, all diagnosed 2026-08-28:
+#
+#  1. Silent step failure. The previous version was a bare sequence of three
+#     commands with no status checks. `/Users/ericboehs/.bun/bin/qmd` had not
+#     existed since qmd moved to mise, so every run since then ended in a
+#     "No such file or directory" and the email index quietly stopped updating.
+#     The only evidence was exit code 127 in `launchctl list` and one line in a
+#     24MB log nobody reads. Each step is now checked explicitly.
+#
+#  2. mbsync errors that are not exit codes. A duplicate near-UID wedges a
+#     single mailbox -- mbsync prints "Maildir error: duplicate UID N in ..."
+#     and moves on, so the run can look successful while one folder stops
+#     syncing entirely. personal/Archive was frozen from 2026-06-24 to
+#     2026-08-28 this way: two months of mail, invisible, because the other 18
+#     boxes were fine. Output is scanned for these, and they count as failure.
+#
+#  3. Notification on state *change* only. A ping every 15 minutes for two
+#     months would be its own kind of silence.
+#
+#  4. A lock that outlives its owner, diagnosed 2026-09-18. `mkdir` on
+#     ~/.mbsync.lock is the mutex and the contended branch was a bare
+#     `exit 0`. On 2026-09-02 a run died mid-flight -- the machine slept --
+#     leaving the directory behind. Every 15-minute invocation for the next
+#     16 days hit the orphaned lock and exited 0, so launchd saw a clean
+#     status, and the state file still said `ok`, so hazard (3) guaranteed
+#     silence. Sixteen days of mail went unfetched and nothing said a word;
+#     it surfaced only when a message someone had sent a day earlier was
+#     missing. Locks now carry their owner's pid, are broken when that owner
+#     is dead or has held on past LOCK_MAX_AGE, and a break is an incident:
+#     it flips state to fail so hazard (3) pings instead of hiding it.
+#
+#  5. Alert fatigue from network blips, diagnosed 2026-10-22. Every failure
+#     in two months of log was a lone "Socket error ... timeout" (or TLS
+#     unexpected eof) from imap.gmail.com/fastmail.com, healed by the next
+#     run -- yet each produced a fail ping plus a recovered ping. Runs whose
+#     *only* problem is a socket error are now "transient": they are counted,
+#     and escalate to a real failure only after TRANSIENT_THRESHOLD in a row
+#     (i.e. ~two hours of no mail). Anything else -- duplicate UID, Maildir
+#     error, a non-socket mbsync failure, a broken step, a broken lock --
+#     still fails immediately, so hazards (1), (2) and (4) stay loud.
+#
+# Deliberately no `set -e`: every failure path is handled explicitly, and -e
+# would reintroduce exactly the surprise described in (1).
+
+set -u
+
+PATH="$HOME/bin:$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
+NO_COLOR=1
+export NO_COLOR
+
+LOG="$HOME/Library/Logs/mail-sync.log"
+STATE="$HOME/.cache/mail-sync/state"
+# Consecutive runs whose only problem was a network-level socket error.
+STREAK="$HOME/.cache/mail-sync/transient-streak"
+# 8 runs x 900s = two hours of failed pulls before anyone is pinged. See (5).
+TRANSIENT_THRESHOLD=8
+LOCKFILE="$HOME/.mbsync.lock"
+# How long a run may hold the lock before it is presumed wedged. A full sync
+# of all accounts plus reindex is minutes, not hours.
+LOCK_MAX_AGE=3600
+mkdir -p "$HOME/.cache/mail-sync" "$HOME/Library/Logs"
+
+ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+
+# Read the webhook from the login keychain at call time. It is never written to
+# disk, never echoed, and leaves the environment as soon as slack-noti returns.
+notify() {
+	hook=$(security find-generic-password -s fnox -a BOEHS_SLACK_NOTI_HOOK -w 2>/dev/null) || {
+		echo "notify: could not read BOEHS_SLACK_NOTI_HOOK from keychain"
+		return 0
+	}
+	BOEHS_SLACK_NOTI_HOOK="$hook" slack-noti "$1" >/dev/null 2>&1 ||
+		echo "notify: slack-noti failed"
+	unset hook
+}
+
+# True only when the ok/fail state actually flips, so a persistent outage sends
+# one message rather than one every quarter hour.
+transition() {
+	new="$1"
+	old=$(cat "$STATE" 2>/dev/null) || old=ok
+	printf '%s\n' "$new" >"$STATE"
+	[ "$new" != "$old" ]
+}
+
+# --- Lock ------------------------------------------------------------------
+# The lock is a directory, because mkdir is atomic. The pid written inside it
+# is what makes an abandoned lock distinguishable from a run that is simply
+# still working -- without it, the two look identical and one of them gets
+# waited on forever. See hazard (4).
+
+take_lock() {
+	mkdir "$LOCKFILE" 2>/dev/null || return 1
+	echo $$ >"$LOCKFILE/pid"
+}
+
+# True only while the lock is held by a mail-sync that still exists.
+holder_alive() {
+	if [ ! -f "$LOCKFILE/pid" ]; then
+		# A lock predating this scheme. Fall back to a process scan so the
+		# first run after this upgrade cannot stomp a live sibling.
+		pgrep -f 'mail-sync' 2>/dev/null | grep -qv "^$$\$"
+		return
+	fi
+	holder=$(cat "$LOCKFILE/pid" 2>/dev/null)
+	case $holder in '' | *[!0-9]*) return 1 ;; esac
+	kill -0 "$holder" 2>/dev/null || return 1
+	# A recycled pid belonging to something else is not our holder.
+	ps -p "$holder" -o command= 2>/dev/null | grep -q mail-sync
+}
+
+# Breaking a lock is always an incident: it means an earlier run died or hung
+# and every sync since then was skipped. Record it rather than pinging here --
+# the run is marked failed at the end, so hazard (3)'s machinery sends exactly
+# one message per incident instead of a break/recovered pair every 15 minutes.
+break_lock() {
+	LOCK_BROKEN="$1"
+	echo "=== $(ts) BREAKING LOCK: $1 ===" >>"$LOG" 2>&1
+	rm -rf "$LOCKFILE"
+}
+
+acquire_lock() {
+	LOCK_BROKEN=""
+	take_lock && return 0
+
+	lock_mtime=$(stat -f %m "$LOCKFILE" 2>/dev/null) || {
+		# Vanished between the mkdir and the stat: the holder just finished.
+		take_lock
+		return
+	}
+	age=$(($(date +%s) - lock_mtime))
+
+	if holder_alive; then
+		# The ordinary case: a previous run is still going. Stand down.
+		[ "$age" -lt "$LOCK_MAX_AGE" ] && return 1
+		# Alive but past the deadline -- wedged on a dead socket or a
+		# credential prompt. Retire it rather than inherit its silence.
+		holder=$(cat "$LOCKFILE/pid" 2>/dev/null)
+		kill -TERM "$holder" 2>/dev/null
+		i=0
+		while kill -0 "$holder" 2>/dev/null && [ "$i" -lt 10 ]; do
+			sleep 1
+			i=$((i + 1))
+		done
+		kill -KILL "$holder" 2>/dev/null
+		if [ -n "$holder" ]; then
+			break_lock "pid $holder held it ${age}s and was killed"
+		else
+			# Pidless lock plus a name match from the fallback scan: we know
+			# it is overdue, we just cannot say who owns it.
+			break_lock "held ${age}s by an unidentified process"
+		fi
+	else
+		break_lock "abandoned ${age}s ago by a run that is no longer alive"
+	fi
+
+	# Losing a race here means a third run won it; it can have it.
+	take_lock
+}
+
+acquire_lock || exit 0
+trap 'rm -rf "$LOCKFILE"' EXIT
+
+OUT=$(mktemp -t mail-sync) || exit 1
+trap 'rm -f "$OUT"; rm -rf "$LOCKFILE"' EXIT
+
+result=ok
+detail=""
+# Set when a failure is something other than a socket error; see hazard (5).
+hard=""
+
+{
+	echo "=== $(ts) start ==="
+
+	# --- 1. IMAP pull ---------------------------------------------------
+	# Both the exit status and the output matter: see hazard (2).
+	# rc is captured before anything else runs -- an assignment of its own
+	# resets $?, which silently turned every status into 0 in testing.
+	mbsync "$@" >"$OUT" 2>&1
+	rc=$?
+	cat "$OUT"
+	# Network-level errors (timeouts, TLS eof) vs. everything else.
+	socket=$(grep -E '^Socket error' "$OUT" | head -1)
+	other=$(grep -E '^(Maildir error|Error|IMAP error)|duplicate UID|Skipping' "$OUT" | head -1)
+
+	if [ "$rc" -ne 0 ]; then
+		result=fail
+		detail="mbsync exited $rc"
+		# A nonzero exit is only excused by a socket error it printed.
+		[ -z "$socket" ] && hard=1
+	fi
+
+	# Per-mailbox errors mbsync reports without failing the run. Match on
+	# its own wording; anything here means a folder is no longer syncing.
+	if [ -n "$other" ]; then
+		stuck=$(grep -oE 'duplicate UID [0-9]+ in [^ ]+' "$OUT" | head -1)
+		result=fail
+		hard=1
+		detail="${detail:+$detail; }mbsync reported a mailbox error${stuck:+: $stuck}"
+	fi
+	if [ -n "$socket" ]; then
+		result=fail
+		detail="${detail:+$detail; }$(printf '%s' "$socket" | sed -E 's/ \([0-9a-f.:]+\)//')"
+	fi
+
+	# --- 2. Plaintext extraction for the search index -------------------
+	if ! maildir-to-text; then
+		result=fail
+		hard=1
+		detail="${detail:+$detail; }maildir-to-text failed"
+	fi
+
+	# --- 3. qmd index ----------------------------------------------------
+	# Embeddings are handled by com.qmd.update (qmd-update-job), not here.
+	if ! qmd update -c email; then
+		result=fail
+		hard=1
+		detail="${detail:+$detail; }qmd update -c email failed"
+	fi
+
+	# A broken lock means the previous run left the pipeline wedged, so this
+	# run is an incident even if its own three steps were clean. Reporting it
+	# as a failure keeps the state file honest: the next uneventful run is
+	# what flips back to ok and sends the all-clear.
+	if [ -n "$LOCK_BROKEN" ]; then
+		result=fail
+		hard=1
+		detail="${detail:+$detail; }stale lock broken ($LOCK_BROKEN)"
+	fi
+
+	# Hazard (5): tolerate a short run of socket-only failures.
+	if [ "$result" = ok ] || [ -n "$hard" ]; then
+		echo 0 >"$STREAK"
+	else
+		streak=$(cat "$STREAK" 2>/dev/null)
+		case $streak in '' | *[!0-9]*) streak=0 ;; esac
+		streak=$((streak + 1))
+		echo "$streak" >"$STREAK"
+		detail="$detail; $streak consecutive network failures"
+	fi
+
+	if [ "$result" = fail ] && [ -z "$hard" ] && [ "$streak" -lt "$TRANSIENT_THRESHOLD" ]; then
+		# Leave the state file alone: a blip neither alerts nor, if we were
+		# already failing, counts as recovery.
+		echo "=== $(ts) TRANSIENT ($streak/$TRANSIENT_THRESHOLD): $detail ==="
+	elif [ "$result" = ok ]; then
+		echo "=== $(ts) done ==="
+		transition ok &&
+			notify ":white_check_mark: mail sync recovered"
+	else
+		echo "=== $(ts) FAILED: $detail ==="
+		transition fail &&
+			notify ":rotating_light: mail sync is failing ($detail). See ~/Library/Logs/mail-sync.log"
+	fi
+} >>"$LOG" 2>&1
+
+# Keep last ~2MB if log grows past 5MB.
+if [ -f "$LOG" ]; then
+	sz=$(wc -c <"$LOG" | tr -d ' ')
+	if [ "$sz" -gt 5242880 ]; then
+		tail -c 2097152 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+	fi
+fi
+
+# Surface the real result to launchd too, so `launchctl list` is a second,
+# independent signal instead of a permanent 0.
+[ "$result" = ok ]
