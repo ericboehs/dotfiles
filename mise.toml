@@ -849,8 +849,10 @@ fi
 
 PI_SKIP_VERSION_CHECK=1 pi list > "$packages"
 while IFS= read -r source; do
+  # A package with an extensions/skills filter in settings lists as
+  # "<source> (filtered)".
   path=$(awk -v source="  $source" '
-    $0 == source {
+    $0 == source || $0 == source " (filtered)" {
       if ((getline path) > 0 && path ~ /^    \//) { sub(/^ +/, "", path); print path; found = 1 }
     }
     END { exit !found }
