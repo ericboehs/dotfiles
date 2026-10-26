@@ -439,12 +439,13 @@ cmd_bootstrap() {
   # -t so mise's progress output renders and Ctrl-C reaches the guest. The
   # remote side sets its own PATH because a non-login ssh shell never sources
   # .zprofile, so the ~/.local/bin that mise.run installs into is absent.
+  # MISE_VERSION matches min_version in mise.toml; bump them together.
   ssh_with_key_tty "$ip" "
 set -eu
 export PATH=\"\$HOME/.local/bin:\$PATH\"
 dest=\"\$HOME/$REPO_PATH\"
 
-command -v mise >/dev/null || { echo '==> installing mise'; curl -fsSL https://mise.run | sh; }
+command -v mise >/dev/null || { echo '==> installing mise'; curl -fsSL https://mise.run | MISE_VERSION=v2026.10.19 sh; }
 
 if [ -d \"\$dest/.git\" ]; then
   echo \"==> updating \$dest to $ref\"

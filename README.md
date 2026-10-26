@@ -5,10 +5,14 @@ Personal dotfiles optimized for macOS and zsh. Features modern shell tools, comp
 ## Installation
 
 ```sh
-curl -fsSL https://mise.run | sh
+curl -fsSL https://mise.run | MISE_VERSION=v2026.10.19 sh
 git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
 cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 ```
+
+mise is pinned: the version above matches `min_version` in `mise.toml`. To
+move to a newer one, run `mise self-update <version>`, check that
+`mise bootstrap plan` still shows nothing to change, then bump both.
 
 Install mise from `mise.run`, not Homebrew. mise bootstraps itself, so it is
 deliberately absent from `[bootstrap.packages]` — whichever copy you install by

@@ -6,13 +6,17 @@
 #   mise bootstrap --skip macos-defaults # everything but the system prefs
 #
 # Prerequisites (chicken-and-egg — mise has to exist before it can bootstrap):
-#   curl -fsSL https://mise.run | sh
+#   curl -fsSL https://mise.run | MISE_VERSION=v2026.10.19 sh
 #   git clone https://github.com/ericboehs/dotfiles ~/Code/github.com/ericboehs/dotfiles
 #   cd ~/Code/github.com/ericboehs/dotfiles && mise trust && mise bootstrap
 
-# [bootstrap.packages] entries below use per-package `os` filters, which older
-# mise rejects with a bare "invalid type: map, expected a string".
-min_version = "2026.8.4"
+# mise is pinned here and in the install line above (keep the two in step).
+# min_version makes an older mise refuse this file instead of misreading it:
+# 2026.8.4 was the floor for the per-package `os` filters in
+# [bootstrap.packages], which older mise rejects with a bare "invalid type:
+# map, expected a string". Raising it is how a machine learns to
+# `mise self-update <version>`.
+min_version = "2026.10.19"
 
 [env]
 REPO_PATH = "ericboehs/dotfiles"
