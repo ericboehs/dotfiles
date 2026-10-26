@@ -32,9 +32,15 @@ keybind = super+z=text:\x1b[45;5u
 # for a bare ctrl+digit, so these have to be written out as modifyOtherKeys
 # sequences: `\x1b[27;<modifier>;<keycode>~`, modifier 5 being ctrl.
 #
-# The ctrl+shift+hjkl and ctrl+shift+1-9 equivalents used to be listed here too
-# and are not needed: Ghostty emits those on its own. It is only the unshifted
-# ctrl+digit that falls back to a legacy encoding tmux cannot tell apart.
+# Ctrl+Shift+hjkl (move window/session) and Ctrl+Shift+1-9 (switch session)
+# are spelled out the same way, modifier 6 being ctrl+shift. Ghostty does emit
+# those on its own, but only in a form tmux decodes while it has not asked for
+# extended keys. tmux 3.8 recognizes Ghostty from its XTVERSION reply and turns
+# on the extkeys feature by itself, after which Ghostty answers in
+# modifyOtherKeys form with the *shifted* keycode (H is 72, ! instead of 1) and
+# tmux reads C-H rather than C-S-h, so the bindings went dead after a Ghostty
+# restart. Writing them out pins the *unshifted* keycode (h is 104, not 72)
+# whatever mode tmux asks for.
 keybind = ctrl+1=text:\x1b[27;5;49~
 keybind = ctrl+2=text:\x1b[27;5;50~
 keybind = ctrl+3=text:\x1b[27;5;51~
@@ -45,11 +51,24 @@ keybind = ctrl+7=text:\x1b[27;5;55~
 keybind = ctrl+8=text:\x1b[27;5;56~
 keybind = ctrl+9=text:\x1b[27;5;57~
 
-# If a Ctrl+Shift key ever stops registering, write its line back the same way
-# rather than reaching for `set -as terminal-features 'xterm-ghostty:extkeys'`:
-# that makes tmux request the mode explicitly, but it also leaks extended keys
-# into applications that mishandle them. Modifier 6 is ctrl+shift, and the
-# payload carries the *unshifted* keycode (h is 104, not 72).
+keybind = ctrl+shift+h=text:\x1b[27;6;104~
+keybind = ctrl+shift+j=text:\x1b[27;6;106~
+keybind = ctrl+shift+k=text:\x1b[27;6;107~
+keybind = ctrl+shift+l=text:\x1b[27;6;108~
+keybind = ctrl+shift+1=text:\x1b[27;6;49~
+keybind = ctrl+shift+2=text:\x1b[27;6;50~
+keybind = ctrl+shift+3=text:\x1b[27;6;51~
+keybind = ctrl+shift+4=text:\x1b[27;6;52~
+keybind = ctrl+shift+5=text:\x1b[27;6;53~
+keybind = ctrl+shift+6=text:\x1b[27;6;54~
+keybind = ctrl+shift+7=text:\x1b[27;6;55~
+keybind = ctrl+shift+8=text:\x1b[27;6;56~
+keybind = ctrl+shift+9=text:\x1b[27;6;57~
+
+# Leave terminal-features alone rather than adding or stripping
+# 'xterm-ghostty:extkeys' by hand: the explicit lines above work in either mode,
+# and forcing the mode on leaks extended keys into applications that mishandle
+# them.
 
 
 # Send Option as Alt rather than composing accented characters, so every Alt key
