@@ -51,8 +51,6 @@ REPO_PATH = "ericboehs/dotfiles"
 "brew:zsh-autosuggestions" = { version = "latest", os = ["macos"] }
 "brew:gnupg" = { version = "latest", os = ["macos"] }
 "brew:tmux" = { version = "latest", os = ["macos"] }
-# Agent-aware persistent terminal workspace manager. Its config and integration
-# bootstrap are tracked below; runtime sessions/logs remain local.
 "brew:ripgrep" = { version = "latest", os = ["macos"] }
 "brew:fd" = { version = "latest", os = ["macos"] }
 "brew:lua" = { version = "latest", os = ["macos"] }
@@ -80,6 +78,94 @@ REPO_PATH = "ericboehs/dotfiles"
 # kitty graphics through tmux passthrough, or braille characters elsewhere.
 # Without it the extension silently falls back to pi's plain text rendering.
 "brew:chafa" = { version = "latest", os = ["macos"] }
+
+# Everything below was installed by hand before it was declared here, and
+# survived a 2026-10 triage that searched ~/Code, ~/bin, skills, LaunchAgents
+# and shell history for each one. Notes mark the non-obvious dependents.
+#
+# Mail, calendar and messaging.
+# isync provides mbsync, which ~/.local/bin/mbsync-lock wraps. neomutt renders
+# HTML mail through w3m (~/.mailcap) and opens links with urlscan (Ctrl-U in
+# .config/neomutt/neomuttrc).
+"brew:isync" = { version = "latest", os = ["macos"] }
+"brew:neomutt" = { version = "latest", os = ["macos"] }
+"brew:w3m" = { version = "latest", os = ["macos"] }
+"brew:urlscan" = { version = "latest", os = ["macos"] }
+"brew:ajrosen/tap/icalpal" = { version = "latest", os = ["macos"] }
+"brew:keith/formulae/reminders-cli" = { version = "latest", os = ["macos"] }
+"brew:steipete/tap/remindctl" = { version = "latest", os = ["macos"] }
+"brew:steipete/tap/imsg" = { version = "latest", os = ["macos"] }
+# Project dependencies that nothing else declares.
+# lego: botsun's lib/botsun/web_cert.rb issues its web certificate with it.
+# sox: `botsun desk listen` plays the streamed desktop audio through it.
+# pdftk-java: vets-api PDF stamping/datestamping, checked by its bin/setup.
+# shared-mime-info: vets-api pins mimemagic 0.4.3, whose `bundle install`
+#   needs the freedesktop MIME database.
+# gnu-sed: acronyms' scripts/check-spelling.sh calls gsed directly.
+"brew:lego" = { version = "latest", os = ["macos"] }
+"brew:sox" = { version = "latest", os = ["macos"] }
+"brew:pdftk-java" = { version = "latest", os = ["macos"] }
+"brew:shared-mime-info" = { version = "latest", os = ["macos"] }
+"brew:gnu-sed" = { version = "latest", os = ["macos"] }
+# Linters, tests and code tooling.
+# universal-ctags is the /opt/homebrew/bin/ctags that ~/.local/bin/ctags wraps.
+"brew:actionlint" = { version = "latest", os = ["macos"] }
+"brew:zizmor" = { version = "latest", os = ["macos"] }
+"brew:scorecard" = { version = "latest", os = ["macos"] }
+"brew:luacheck" = { version = "latest", os = ["macos"] }
+"brew:yamllint" = { version = "latest", os = ["macos"] }
+"brew:bats-core" = { version = "latest", os = ["macos"] }
+"brew:kcov" = { version = "latest", os = ["macos"] }
+"brew:cloc" = { version = "latest", os = ["macos"] }
+"brew:hyperfine" = { version = "latest", os = ["macos"] }
+"brew:onefetch" = { version = "latest", os = ["macos"] }
+"brew:lua-language-server" = { version = "latest", os = ["macos"] }
+"brew:universal-ctags" = { version = "latest", os = ["macos"] }
+"brew:ripgrep-all" = { version = "latest", os = ["macos"] }
+# Apple platform development.
+"brew:xcodegen" = { version = "latest", os = ["macos"] }
+"brew:swiftformat" = { version = "latest", os = ["macos"] }
+"brew:swiftlint" = { version = "latest", os = ["macos"] }
+"brew:ios-webkit-debug-proxy" = { version = "latest", os = ["macos"] }
+# Containers, cloud and infrastructure. colima pulls in lima, which botsun's
+# VMs run on.
+"brew:colima" = { version = "latest", os = ["macos"] }
+"brew:qemu" = { version = "latest", os = ["macos"] }
+"brew:helm" = { version = "latest", os = ["macos"] }
+"brew:terragrunt" = { version = "latest", os = ["macos"] }
+"brew:trivy" = { version = "latest", os = ["macos"] }
+"brew:flyctl" = { version = "latest", os = ["macos"] }
+"brew:redis" = { version = "latest", os = ["macos"] }
+"brew:dbmate" = { version = "latest", os = ["macos"] }
+# Network and HTTP.
+"brew:wget" = { version = "latest", os = ["macos"] }
+"brew:tcping" = { version = "latest", os = ["macos"] }
+"brew:httping" = { version = "latest", os = ["macos"] }
+"brew:telnet" = { version = "latest", os = ["macos"] }
+"brew:socat" = { version = "latest", os = ["macos"] }
+"brew:websocat" = { version = "latest", os = ["macos"] }
+"brew:tinyproxy" = { version = "latest", os = ["macos"] }
+"brew:wireguard-tools" = { version = "latest", os = ["macos"] }
+"brew:mkcert" = { version = "latest", os = ["macos"] }
+# Audio, music and media.
+"brew:mpd" = { version = "latest", os = ["macos"] }
+"brew:mpc" = { version = "latest", os = ["macos"] }
+"brew:mpdscribble" = { version = "latest", os = ["macos"] }
+"brew:mpv" = { version = "latest", os = ["macos"] }
+"brew:eye-d3" = { version = "latest", os = ["macos"] }
+"brew:switchaudio-osx" = { version = "latest", os = ["macos"] }
+"brew:xpdf" = { version = "latest", os = ["macos"] }
+# Hardware and IoT.
+"brew:esptool" = { version = "latest", os = ["macos"] }
+"brew:esphome" = { version = "latest", os = ["macos"] }
+"brew:mosquitto" = { version = "latest", os = ["macos"] }
+"brew:mqttui" = { version = "latest", os = ["macos"] }
+# System info, disk and AI tools.
+"brew:mactop" = { version = "latest", os = ["macos"] }
+"brew:fastfetch" = { version = "latest", os = ["macos"] }
+"brew:ncdu" = { version = "latest", os = ["macos"] }
+"brew:get-vix/vix/vix" = { version = "latest", os = ["macos"] }
+
 "brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
 # The apps the post-defaults hook pins to the Dock are deliberately NOT
 # declared here. Ghostty and Slack do have casks, but Homebrew installed them
@@ -114,6 +200,13 @@ REPO_PATH = "ericboehs/dotfiles"
 # lsd is in universe on 22.04+ but missing on minimal images; the
 # bootstrap:linux-shims task installs the upstream .deb if this no-ops.
 "apt:lsd" = { version = "latest", os = ["linux"] }
+
+# Third-party taps for the tapped formulae above (brew:<tap>/<formula>).
+[bootstrap.brew.taps]
+"ajrosen/tap" = "https://github.com/ajrosen/homebrew-tap.git"
+"get-vix/vix" = "https://github.com/get-vix/homebrew-vix.git"
+"keith/formulae" = "https://github.com/keith/homebrew-formulae.git"
+"steipete/tap" = "https://github.com/steipete/homebrew-tap.git"
 
 # ---------------------------------------------------------------------------
 # Git checkouts
