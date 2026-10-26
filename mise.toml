@@ -167,6 +167,10 @@ REPO_PATH = "ericboehs/dotfiles"
 "brew:get-vix/vix/vix" = { version = "latest", os = ["macos"] }
 
 "brew-cask:font-inconsolata-nerd-font" = { version = "latest", os = ["macos"] }
+# Ghostty's font-family (.config/ghostty/config). The cask brings the whole
+# family, so the italic and bold-italic styles that config names are real
+# faces rather than synthesized ones.
+"brew-cask:font-jetbrains-mono-nerd-font" = { version = "latest", os = ["macos"] }
 # The apps the post-defaults hook pins to the Dock are deliberately NOT
 # declared here. Ghostty and Slack do have casks, but Homebrew installed them
 # on request and mise refuses to take over a cask it does not own — it fails
