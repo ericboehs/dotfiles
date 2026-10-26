@@ -5,6 +5,8 @@
 # mise.toml is ignored by the global gitignore (per-project configs stay
 # local); this repo's copy is the machine setup itself, so track it
 !/mise.toml
+# Per-machine mise config environment (env = ["e14"] on e14, see mise.e14.toml)
+/.miserc.toml
 # ~/.claude is ignored by the global gitignore; re-include only what we track
 !/.claude/
 /.claude/*
@@ -17,7 +19,6 @@
 !.config/nvim/
 !.config/mise/
 !.config/ghostty/
-!.config/herdr/
 .config/herdr/*
 !.config/herdr/config.toml
 !.config/qmd/

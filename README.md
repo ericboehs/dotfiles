@@ -14,6 +14,16 @@ mise is pinned: the version above matches `min_version` in `mise.toml`. To
 move to a newer one, run `mise self-update <version>`, check that
 `mise bootstrap plan` still shows nothing to change, then bump both.
 
+Personal packages for e14 live in `mise.e14.toml`, which mise only loads when
+the `e14` config environment is on. On e14, turn it on once with an untracked
+`.miserc.toml` before bootstrapping:
+
+```sh
+printf 'env = ["e14"]\n' > .miserc.toml
+```
+
+Other machines (gfew keeps its own Brewfile in gfe-config) skip that file.
+
 Install mise from `mise.run`, not Homebrew. mise bootstraps itself, so it is
 deliberately absent from `[bootstrap.packages]` — whichever copy you install by
 hand is the one that runs. Homebrew's build disables `mise self-update` and
