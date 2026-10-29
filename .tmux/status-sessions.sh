@@ -34,10 +34,10 @@ fi
 
 # Evaluated inside #{S:...}, so the window loop gets the matching session's
 # context rather than whichever session the client is currently viewing.
-# Window ranges carry an exact session:window target. tmux assigns the first
-# character after a new range to the previous range, so each next-window range
-# begins before the preceding window's indicator. That makes the indicator its
-# right-side hit area and the following space the next window's left-side area.
+# Window ranges carry an exact session:window target. Ranges are half-open
+# [start, end) cells, so each next-window range begins after the preceding
+# window's indicator (bell dot or space). That gives every index one cell of
+# hit area on each side: the leading space and the trailing indicator.
 #
 # next_window_index (the tidy way to name that following window) only exists
 # in tmux 3.6+. 3.5a leaves it empty, so the range becomes `$0:` and
@@ -53,8 +53,8 @@ row="\
 #{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},#[fg=#{E:@active_fg}],#{?#{||:#{@special_activity},#{@job_done}},#[fg=#{E:@attention_fg} bold],#{?#{@agent_count},#[fg=#{E:@dim_fg}],}}}\
 #I\
 #{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},,#[fg=default nobold]}\
-#{?window_end_flag,#{?#{==:#{session_name},#{client_session}},#[range=user|new-window],#[norange]},#[range=user|#{session_id}:#{e|+:#{window_index},1}]}\
 #{?#{window_bell_flag},•, }\
+#{?window_end_flag,#{?#{==:#{session_name},#{client_session}},#[range=user|new-window],#[norange]},#[range=user|#{session_id}:#{e|+:#{window_index},1}]}\
 #{?#{&&:#{window_active},#{==:#{session_name},#{client_session}}},#[fg=default],}\
 }\
 #{?#{==:#{session_name},#{client_session}},#[fg=#{E:@time_fg}] + #[norange],}"
