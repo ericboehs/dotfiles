@@ -56,7 +56,9 @@ while IFS= read -r file; do
   [ -f "$file" ] || continue
   # Bounded read with NULs stripped: a symlink into a sibling repo can point at
   # a compiled binary, as bin/claude-code-proxy-or did before archive/.
-  shebang="$(head -c 512 "$file" 2>/dev/null | LC_ALL=C tr -d '\0' | head -1)"
+  # sed, not head -1: head exits after one line, tr takes SIGPIPE, and
+  # pipefail turns that into a failure (it did, intermittently, in CI).
+  shebang="$(head -c 512 "$file" 2>/dev/null | LC_ALL=C tr -d '\0' | sed -n 1p)"
   case "$shebang" in
     '#!'*ruby*) ruby_files+=("$file") ;;
     '#!'*node*) node_files+=("$file") ;;

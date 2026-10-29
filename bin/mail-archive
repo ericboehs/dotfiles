@@ -49,9 +49,8 @@ himalaya message move "$target" "$@" $account_flag
 for dir in "$target_dir/cur" "$target_dir/new"; do
   [ -d "$dir" ] || continue
   find "$dir" -newer "$marker" -type f -name '*,U=*' | while read -r filepath; do
-    newpath=$(echo "$filepath" | sed 's/,U=[0-9]*//')
-    if [ "$filepath" != "$newpath" ]; then
-      mv "$filepath" "$newpath"
+    if [[ "$filepath" =~ ^(.*),U=[0-9]+(.*)$ ]]; then
+      mv "$filepath" "${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
     fi
   done
 done
