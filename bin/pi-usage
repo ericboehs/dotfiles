@@ -50,7 +50,8 @@ HELP = <<~TEXT
   up). The figure is percentage points: usage percent minus the percent of the
   window that has elapsed, so 28% with 14% elapsed reads ↓14. A cell is
   green when there is nothing to do, yellow when either the fill or the pace
-  wants watching, and red when it will run out before the reset. A provider is
+  wants watching, and red when it will run out before the reset. The arrow is
+  colored by pace alone, so ↑ stays green even on a nearly full window. A provider is
   inactive when the cache has no fetchedAt: those chips only refresh while you
   are on that provider.
 TEXT
@@ -531,8 +532,10 @@ def build_cell(entries, pacing)
     delta = entry[:delta]
     next unless pacing && delta && delta.abs >= 0.5
 
+    # The arrow speaks only for pace: ↑ (behind, room to spare) is always green,
+    # even when the window itself is nearly full; ↓ takes its pace severity.
     suffix = " #{pace_text(delta)}"
-    parts << [suffix, color]
+    parts << [suffix, LEVEL_COLORS[pace_level(delta)]]
     plain << suffix
   end
   { plain: plain, parts: parts }
