@@ -24,7 +24,11 @@ python = "3.14"
 bun = "latest"
 node = "26"
 ruby = "4"
-fnox = "latest"
+# Pinned, not "latest": with the 10-day release-age floor, "latest" warns on
+# every resolve whenever a release is younger than the floor, and an installed
+# "latest" never moves on its own (this sat at 1.35.3 while 1.43.0 was out).
+# Bump deliberately, to a release older than the floor.
+fnox = "1.43.0"
 # Python's package/tool runner, and the one thing here that was already on
 # the machine without anything declaring it — an ad-hoc brew install a full
 # major behind (0.8.22) that a fresh bootstrap would never have made. Any
@@ -40,7 +44,8 @@ gitleaks = "latest"
 # shellcheck above — semgrep's rulesets change between releases, so "latest"
 # means a review can disagree with itself run to run.
 semgrep = "1.179.0"
-hk = "latest"
+# Pinned for the same reason as fnox above.
+hk = "2.9.0"
 pkl = "latest"
 # Pinned, not "latest": CI lints the same scripts with the same binary, and
 # shellcheck adds checks between releases — a floating version means the job and
