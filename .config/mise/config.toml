@@ -35,8 +35,8 @@ fnox = "1.43.0"
 # `uv tool` or `uv run` invocation was silently depending on that.
 uv = "latest"
 # Dev-env tooling: gitleaks (pre-commit secret scanning, referenced by
-# the .gitconfig hook), hk (project pre-commit manager, takes hk.pkl),
-# pkl (Apple's config language hk uses), watchexec (file-watch task runner).
+# the .gitconfig hook), watchexec (file-watch task runner). hk and pkl were
+# dropped: no project used an hk.pkl. Add them per project if one ever does.
 gitleaks = "latest"
 # semgrep rides along for the same reason: the security-review plugin shells
 # out to it as one of its deterministic scanners, and it was previously
@@ -44,9 +44,6 @@ gitleaks = "latest"
 # shellcheck above — semgrep's rulesets change between releases, so "latest"
 # means a review can disagree with itself run to run.
 semgrep = "1.179.0"
-# Pinned for the same reason as fnox above.
-hk = "2.9.0"
-pkl = "latest"
 # Pinned, not "latest": CI lints the same scripts with the same binary, and
 # shellcheck adds checks between releases — a floating version means the job and
 # the machine disagree about what is clean. Bumping this is a deliberate act:
