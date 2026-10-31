@@ -86,6 +86,13 @@ neovim = "0.12.4"
 # node puts a second pi on PATH ahead of the shim, where `pi update` can and does
 # move it off this pin without anything noticing.
 "npm:@earendil-works/pi-coding-agent" = "1.4.0"
+# OpenAI's Codex CLI, via aqua: the native Rust binary straight from GitHub
+# releases, so no node, no npm scripts, no aube provenance checks, and nothing
+# under installs/node/ for a node bump to delete. Pinned for the same reason
+# as fnox: the release-age floor makes "latest" warn whenever a release is
+# younger than the floor. Codex's own update prompt does not apply to this
+# install. Bump the pin deliberately instead.
+codex = { version = "0.163.0", backend = "aqua:openai/codex" }
 # Local markdown search (index + MCP daemon on :8181, see launchd/com.qmd.*).
 # Declared here rather than `npm i -g`: a global install lives under
 # installs/node/<version>/, so the node 26.8.1 -> 26.10.0 bump on 2026-09-23
