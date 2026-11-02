@@ -1,0 +1,109 @@
+#!/bin/bash
+# cursor-usage — this billing cycle's Cursor spend against the per-user limit.
+#
+# Usage:
+#   cursor-usage           # cycle, spend vs limit, tokens, per-model breakdown
+#   cursor-usage --short   # one line, e.g. for a tmux or prompt segment
+#   cursor-usage --json    # the merged raw responses
+#
+# Reads the Cursor CLI's login (macOS Keychain item "cursor-access-token",
+# account "cursor-user", written by `cursor-agent login`) and calls the
+# dashboard API the Cursor app uses. These endpoints are undocumented: they
+# came from the cursor-agent bundle and can change with any release.
+#
+#   GetMe                    -> teamId, userId
+#   GetCurrentBillingCycle   -> cycle start/end (epoch ms)
+#   GetAggregatedUsageEvents -> tokens and cents per model, this cycle
+#   GetHardLimit             -> hardLimitPerUser (assumed to be dollars per
+#                               billing cycle)
+#
+# The token never reaches argv, the screen or disk: it goes from `security`
+# straight into curl's stdin as a header.
+
+set -euo pipefail
+export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+API="https://api2.cursor.sh/aiserver.v1.DashboardService"
+MODE=text
+
+usage() { sed -n '2,/^$/p' "$0" | sed -E 's/^# ?//'; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+    --short) MODE=short; shift ;;
+    --json) MODE=json; shift ;;
+    *) echo "cursor-usage: unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if ! security find-generic-password -s cursor-access-token -a cursor-user >/dev/null 2>&1; then
+  echo "cursor-usage: no Cursor login in the Keychain; run: cursor-agent login" >&2
+  exit 1
+fi
+
+# call METHOD JSON_BODY — prints the response body; fails on non-200.
+call() {
+  local out code
+  out=$(security find-generic-password -s cursor-access-token -a cursor-user -w 2>/dev/null \
+    | awk '{printf "Authorization: Bearer %s\n", $0}' \
+    | curl -sS -X POST "$API/$1" -H @- \
+        -H 'Content-Type: application/json' -H 'Connect-Protocol-Version: 1' \
+        -H 'x-ghost-mode: true' -d "$2" -w '\n%{http_code}')
+  code=${out##*$'\n'}
+  out=${out%$'\n'*}
+  if [[ "$code" != 200 ]]; then
+    echo "cursor-usage: $1 returned HTTP $code: $(jq -r '.message // .' <<<"$out" 2>/dev/null | head -c 200)" >&2
+    [[ "$code" == 401 ]] && echo "cursor-usage: login expired? run: cursor-agent login" >&2
+    exit 1
+  fi
+  printf '%s' "$out"
+}
+
+me=$(call GetMe '{}')
+team=$(jq -r '.teamId' <<<"$me")
+user=$(jq -r '.userId' <<<"$me")
+cycle=$(call GetCurrentBillingCycle '{}')
+start=$(jq -r '.startDateEpochMillis' <<<"$cycle")
+end=$(jq -r '.endDateEpochMillis' <<<"$cycle")
+agg=$(call GetAggregatedUsageEvents "{\"teamId\":$team,\"userId\":$user,\"startDate\":\"$start\",\"endDate\":\"$end\"}")
+limit=$(call GetHardLimit "{\"teamId\":$team}")
+
+merged=$(jq -n --argjson me "$me" --argjson cycle "$cycle" --argjson agg "$agg" --argjson limit "$limit" \
+  '{me: ($me | {email, teamName, teamId, userId, isTeamAdmin}), cycle: $cycle, usage: $agg, limit: $limit}')
+
+if [[ "$MODE" == json ]]; then
+  jq . <<<"$merged"
+  exit 0
+fi
+
+jq -r --arg mode "$MODE" '
+  def dollars: . / 100 | (. * 100 | round / 100) | tostring | if test("\\.") then (if test("\\.[0-9]$") then . + "0" else . end) else . + ".00" end;
+  def kfmt: if . >= 1000000 then ((. / 100000 | round) / 10 | tostring) + "M"
+            elif . >= 1000 then ((. / 1000 | round) | tostring) + "K"
+            else tostring end;
+  def day: . / 1000 | strflocaltime("%b %-d");
+  (.usage.totalCostCents // 0) as $spent
+  | (.limit.hardLimitPerUser // null) as $lim
+  | ([.usage.totalInputTokens, .usage.totalOutputTokens, .usage.totalCacheWriteTokens, .usage.totalCacheReadTokens]
+      | map(. // "0" | tonumber) | add) as $tok
+  | (.cycle.startDateEpochMillis | tonumber) as $s
+  | (.cycle.endDateEpochMillis | tonumber) as $e
+  | ((($e / 1000) - now) / 86400 | if . < 0 then 0 else ceil end) as $left
+  | (if $lim then ($spent / ($lim * 100) * 100) else null end) as $pct
+  | if $mode == "short" then
+      "cursor $\($spent | dollars)" + (if $lim then "/$\($lim) (\($pct | . * 10 | round / 10)%)" else "" end) + " · \($left)d left"
+    else
+      "Cursor usage — \(.me.email) (\(.me.teamName))",
+      "Cycle:  \($s | day) – \($e | day)  (\($left) days left)",
+      "Spend:  $\($spent | dollars)" + (if $lim then " of $\($lim) per-user limit (\($pct | . * 10 | round / 10)%)" else " (no per-user limit reported)" end),
+      "Tokens: \($tok | kfmt) total (in \(.usage.totalInputTokens // "0" | tonumber | kfmt), out \(.usage.totalOutputTokens // "0" | tonumber | kfmt), cache write \(.usage.totalCacheWriteTokens // "0" | tonumber | kfmt), cache read \(.usage.totalCacheReadTokens // "0" | tonumber | kfmt))",
+      (if (.usage.aggregations // []) | length > 0 then
+        "",
+        "By model:",
+        (.usage.aggregations | sort_by(-.totalCents)[]
+          | ([.inputTokens, .outputTokens, .cacheWriteTokens, .cacheReadTokens] | map(. // "0" | tonumber) | add) as $mt
+          | "  \(.modelIntent | . + (" " * (32 - length)))  $\(.totalCents | dollars | . + (" " * (7 - length)))  \($mt | kfmt) tokens")
+      else empty end)
+    end
+' <<<"$merged"
