@@ -55,6 +55,10 @@
 "brew:lua-language-server" = { version = "latest", os = ["macos"] }
 "brew:universal-ctags" = { version = "latest", os = ["macos"] }
 "brew:ripgrep-all" = { version = "latest", os = ["macos"] }
+# Cursor, for a work seat. The CLI (cursor-agent) came from
+# cursor.com/install into ~/.local/bin and updates itself, so only the app is
+# declared. The app auto-updates too.
+"brew-cask:cursor" = { version = "latest", os = ["macos"] }
 # Apple platform development.
 "brew:xcodegen" = { version = "latest", os = ["macos"] }
 "brew:swiftformat" = { version = "latest", os = ["macos"] }
