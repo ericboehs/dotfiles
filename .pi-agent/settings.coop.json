@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "1.0.3",
   "packages": [
-    "git:github.com/ericboehs/pi-boehsline@cf0b4b3cd6826562124da83430c7521bf8dbc236",
+    "git:github.com/ericboehs/pi-boehsline@ddf6979dd4251bcdae21ad44b79d9980c8e9edf9",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
   "skills": [
