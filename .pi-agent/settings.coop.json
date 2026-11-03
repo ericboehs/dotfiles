@@ -1,8 +1,30 @@
 {
-  "lastChangelogVersion": "1.0.3",
+  "lastChangelogVersion": "1.5.0",
   "packages": [
-    "git:github.com/ericboehs/pi-boehsline@ddf6979dd4251bcdae21ad44b79d9980c8e9edf9",
-    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
+    "git:github.com/ericboehs/pi-approval-guardian@9d03cfd6ccd99190f6eb4f537686bd4bf29062fc",
+    "git:github.com/ericboehs/pi-context@a00fdbf97a444448db180f5e5f4c6118bf7c935a",
+    "git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758",
+    "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f",
+    {
+      "source": "../../Code/github.com/ericboehs/pi-boehsline",
+      "extensions": [
+        "extensions/opt-in/botsun-owner/index.ts",
+        "extensions/restart/index.ts",
+        "packages/agent-link/index.ts"
+      ],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    },
+    {
+      "source": "npm:pi-claude-subscription-connector",
+      "extensions": [
+        "-extensions/usage-status.ts"
+      ]
+    }
+  ],
+  "extensions": [
+    "~/Code/github.com/ericboehs/agent-plugins/pi/extensions/code-lint.ts"
   ],
   "skills": [
     "~/Code/github.com/ericboehs/agent-plugins/plugins/git-utils/skills",
@@ -24,7 +46,7 @@
     "~/Code/github.com/ericboehs/agent-plugins/pi/prompts"
   ],
   "defaultProvider": "opencode-go",
-  "defaultModel": "union-alpha",
+  "defaultModel": "deepseek-v4.1-flash",
   "defaultThinkingLevel": "xhigh",
   "modelThinkingLevels": {
     "github-copilot/claude-opus-5.5": "medium",
@@ -75,5 +97,10 @@
   "fullscreenScrollbar": "auto",
   "fullscreenExitOutput": "resume-hint",
   "enableInstallTelemetry": false,
-  "hideThinkingBlock": false
+  "hideThinkingBlock": false,
+  "extensionChangelogVersions": {
+    "{\"source\":\"git:github.com/ericboehs/pi-scheduler@13906a2799d0960869a4a4beb464b673f1fa1758\",\"scope\":\"user\"}": "0.2.0",
+    "{\"source\":\"git:github.com/ericboehs/pi-agent-link@adb68d89173e405156cd72f5bb8ae09c8e1ecb2e\",\"scope\":\"user\"}": "0.1.0",
+    "{\"source\":\"../../Code/github.com/ericboehs/pi-boehsline\",\"scope\":\"user\"}": "0.2.6"
+  }
 }
