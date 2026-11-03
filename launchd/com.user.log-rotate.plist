@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.log-rotate</string>
+
+    <!-- launchd expands neither ~ nor $HOME, so a shell does: this file stays
+         free of any host's home directory. The logs to rotate come from the
+         host's untracked ~/.config/log-rotate/files (see bin/log-rotate);
+         list ~/Library/Logs/log-rotate.log there too so this job's own log
+         rotates. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>exec "$HOME/bin/log-rotate" -k 4 &gt;&gt; "$HOME/Library/Logs/log-rotate.log" 2&gt;&amp;1</string>
+    </array>
+
+    <!-- Weekly, Sunday 03:15. If the Mac is asleep at that time launchd runs
+         the job once on the next wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>

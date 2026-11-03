@@ -16,6 +16,9 @@ launchd/com.ericboehs.mosh-reaper.plist ~/Library/LaunchAgents/                e
 launchd/com.ericboehs.qmd-warmup.plist  ~/Library/LaunchAgents/                e14
 launchd/com.qmd.mcp.plist               ~/Library/LaunchAgents/                e14
 launchd/com.qmd.update.plist            ~/Library/LaunchAgents/                e14
+# Weekly log rotation; which logs is the host's untracked
+# ~/.config/log-rotate/files, so this row names no host paths.
+launchd/com.user.log-rotate.plist       ~/Library/LaunchAgents/                gfe
 # Collections point at e14's Vault, Mail and checkouts; qmd rewrites the file
 # through the link (writeFileSync), but drops YAML comments when it does.
 .config/qmd/index.yml                   ~/.config/qmd/index.yml                e14

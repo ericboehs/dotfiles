@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # log-rotate — size-aware, gzip'd rotation for launchd-managed log files.
 #
-# Usage: log-rotate [-k KEEP] [-m MIN_BYTES] [-f] FILE [FILE...]
+# Usage: log-rotate [-k KEEP] [-m MIN_BYTES] [-f] [FILE...]
 #
 #   -k KEEP       generations of compressed backups to keep (default 4)
 #   -m MIN_BYTES  only rotate if the file is at least this big (default 1 MiB)
 #   -f            force: rotate regardless of size
 #
-# Env overrides: LOG_ROTATE_KEEP, LOG_ROTATE_MIN_BYTES
+# With no FILE, rotates the files listed in ~/.config/log-rotate/files (one
+# path per line, ~ expands, # comments). That list is per host and untracked,
+# so the tracked LaunchAgent never names a host's logs or home directory.
+#
+# Env overrides: LOG_ROTATE_KEEP, LOG_ROTATE_MIN_BYTES, LOG_ROTATE_LIST
 #
 # Rotation is copy+truncate rather than rename. launchd keeps an open fd on
 # every StandardOutPath/StandardErrorPath it manages, so renaming the file
@@ -19,9 +23,10 @@ set -euo pipefail
 
 KEEP="${LOG_ROTATE_KEEP:-4}"
 MIN_BYTES="${LOG_ROTATE_MIN_BYTES:-1048576}"  # 1 MiB
+LIST="${LOG_ROTATE_LIST:-$HOME/.config/log-rotate/files}"
 FORCE=0
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while getopts ':k:m:fh' opt; do
     case "$opt" in
@@ -34,6 +39,18 @@ while getopts ':k:m:fh' opt; do
     esac
 done
 shift $((OPTIND - 1))
+
+if (( $# == 0 )) && [[ -f $LIST ]]; then
+    files=()
+    while IFS= read -r line || [[ -n $line ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -n $line ]] || continue
+        files+=("${line/#\~\//$HOME/}")
+    done < "$LIST"
+    (( ${#files[@]} )) && set -- "${files[@]}"
+fi
 
 if (( $# == 0 )); then
     usage >&2
