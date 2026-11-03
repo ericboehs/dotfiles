@@ -148,6 +148,15 @@
 	event = post-commit
 	event = post-merge
 	command = "sh -c 'case \"$PWD\" in */.pi/agent/git/*) ;; *) exit 0 ;; esac; p=$(command -v pi-pin) || p=\"$HOME/bin/pi-pin\"; test -x \"$p\" || exit 0; exec \"$p\" --hook' pi-pin-hook"
+[hook "pi-pin-pulled"]
+	# After a pull in the dotfiles repo, bring every pinned package clone that
+	# is BEHIND its (possibly just bumped) pin up to it, one `pi update git:REPO`
+	# at a time, so a pin bumped on another machine takes effect here without a
+	# manual run. Never --extensions: AHEAD clones only warn. Global, so the test
+	# scopes it to a repo with bin/pi-pin and .pi-agent; post-merge cannot fail
+	# the merge. git appends hook args, hence the trailing $0.
+	event = post-merge
+	command = "sh -c 'test -x ./bin/pi-pin && test -d ./.pi-agent || exit 0; exec ./bin/pi-pin --pulled' pi-pin-pulled"
 [user]
 	signingkey = ~/.ssh/id_ed25519.pub
 [credential "https://github.ec.va.gov"]

@@ -12,6 +12,10 @@
 #   pi-pin --hook          the post-commit/post-merge hook: warn when the repo
 #                          git is running in is a pi-managed clone that just
 #                          moved past its pin (always exits 0)
+#   pi-pin --pulled        the post-merge hook in this repo: after a pull moves
+#                          the pins, bring each BEHIND clone up to its pin with
+#                          `pi update git:REPO` (never --extensions), and warn
+#                          about AHEAD/DIVERGED ones instead (always exits 0)
 #   pi-pin NAME            move NAME to the tip of its remote default branch
 #   pi-pin NAME REF        move NAME to a branch, tag or sha
 #
@@ -207,6 +211,45 @@ if [ "${1:-}" = --check ]; then
   exit $bad
 fi
 
+# --- the post-merge reconcile ---------------------------------------------
+# A bump runs on one machine, and reconciles that machine's clone. Every other
+# host gets the new pin with its next dotfiles pull, and until now kept running
+# the old code until somebody ran `pi update` there by hand. This closes that
+# gap one package at a time: a clone that is BEHIND its pin holds nothing the
+# pin lacks, so `pi update git:REPO` moves it safely. AHEAD and DIVERGED clones
+# are the ones `pi update --extensions` would throw away, so they only warn.
+if [ "${1:-}" = --pulled ]; then
+  while read -r repo; do
+    [ -n "$repo" ] || continue
+    ref=$(live_ref "$repo")
+    case "$ref" in -|"") continue ;; esac
+    classify "$repo" "$ref"
+    # A fresh bump names a commit the clone has never fetched; fetch once and
+    # look again, so ancestry decides rather than a guess.
+    if [ "$state" = unfetched ]; then
+      git -C "$PI_GIT/$repo" fetch -q origin 2>/dev/null
+      classify "$repo" "$ref"
+    fi
+    case "$state" in
+      behind | missing)
+        if ! command -v pi >/dev/null 2>&1; then
+          warn "pi-pin: $repo needs 'pi update git:$repo' (pi not on PATH)"
+          continue
+        fi
+        if PI_SKIP_VERSION_CHECK=1 pi update "git:$repo" >/dev/null 2>&1 &&
+          [ "$(clone_head "$repo")" = "$(git -C "$PI_GIT/$repo" rev-parse -q --verify "$ref^{commit}" 2>/dev/null)" ]; then
+          printf 'pi-pin: %s moved to its pin %s; /reload running sessions\n' "$repo" "$(short "$ref")" >&2
+        else
+          warn "pi-pin: pi update git:$repo did not reach $(short "$ref")"
+        fi
+        ;;
+      ahead | diverged) explain_rollback "$repo" ;;
+      unfetched) warn "pi-pin: $repo: pin $(short "$ref") not on origin yet" ;;
+    esac
+  done <<<"$(list_repos)"
+  exit 0
+fi
+
 # --- listing --------------------------------------------------------------
 if [ $# -eq 0 ] || [ "${1:-}" = --fetch ]; then
   fetch=0
@@ -273,7 +316,7 @@ if [ $# -eq 0 ] || [ "${1:-}" = --fetch ]; then
 fi
 
 case "${1:-}" in
-  -h | --help) sed -n '2,16p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h | --help) sed -n '2,20p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
   -*) die "pi-pin: unknown option $1 (try --help)" ;;
 esac
 

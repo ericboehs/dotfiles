@@ -204,3 +204,76 @@ test("a bump refuses to strand unpushed commits in the managed clone", async () 
   assert.equal(bump.status, 1);
   assert.match(bump.stderr, /1 unpushed commit the new pin does not contain/);
 });
+
+// A stand-in for `pi update git:REPO`: logs its arguments and resets the clone
+// to the pin, the way the real reconcile does, so --pulled can verify it.
+async function withFakePi(f, pin) {
+  const bin = join(f.root, "bin");
+  const log = join(f.root, "pi.log");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "pi"), [
+    "#!/bin/sh",
+    `echo "$*" >> '${log}'`,
+    `git -C '${f.clone}' fetch -q origin && git -C '${f.clone}' reset -q --hard '${pin}'`,
+    "",
+  ].join("\n"), { mode: 0o755 });
+  const run = (args = []) => spawnSync("bash", [piPin, ...args], {
+    cwd: f.root,
+    env: { ...gitEnv, HOME: f.home, PI_PIN_SETTINGS_DIR: join(f.root, "dots", ".pi-agent"), PATH: `${bin}:${process.env.PATH}` },
+    encoding: "utf8",
+  });
+  const calls = () => spawnSync("cat", [log], { encoding: "utf8" }).stdout.trim();
+  return { run, calls };
+}
+
+test("--pulled moves a BEHIND clone to its pin with a targeted pi update", async () => {
+  const f = await fixture();
+  await f.pinAt(f.c2);
+  git(f.clone, "reset", "-q", "--hard", f.c1);
+  const pi = await withFakePi(f, f.c2);
+
+  const pulled = pi.run(["--pulled"]);
+  assert.equal(pulled.status, 0);
+  assert.equal(pi.calls(), "update git:github.com/acme/widget");
+  assert.match(pulled.stderr, /moved to its pin/);
+  assert.equal(git(f.clone, "rev-parse", "HEAD"), f.c2);
+});
+
+test("--pulled fetches a pin the clone has never seen, then reconciles", async () => {
+  const f = await fixture();
+  git(f.clone, "reset", "-q", "--hard", f.c2);
+  const c3 = await commit(f.work, "h.txt", "eight\n");
+  git(f.work, "push", "-q", "origin", "main");
+  await f.pinAt(c3);
+  const pi = await withFakePi(f, c3);
+
+  const pulled = pi.run(["--pulled"]);
+  assert.equal(pulled.status, 0);
+  assert.equal(pi.calls(), "update git:github.com/acme/widget");
+  assert.equal(git(f.clone, "rev-parse", "HEAD"), c3);
+});
+
+test("--pulled leaves an AHEAD clone alone and warns, never reconciling it", async () => {
+  const f = await fixture();
+  await f.pinAt(f.c2);
+  const local = await commit(f.clone, "i.txt", "nine\n");
+  const pi = await withFakePi(f, f.c2);
+
+  const pulled = pi.run(["--pulled"]);
+  assert.equal(pulled.status, 0, "a post-merge hook must never fail");
+  assert.equal(pi.calls(), "");
+  assert.match(pulled.stderr, /would reset it to/);
+  assert.equal(git(f.clone, "rev-parse", "HEAD"), local);
+});
+
+test("--pulled is silent when every clone is at its pin", async () => {
+  const f = await fixture();
+  git(f.clone, "reset", "-q", "--hard", f.c2);
+  await f.pinAt(f.c2);
+  const pi = await withFakePi(f, f.c2);
+
+  const pulled = pi.run(["--pulled"]);
+  assert.equal(pulled.status, 0);
+  assert.equal(pulled.stderr, "");
+  assert.equal(pi.calls(), "");
+});

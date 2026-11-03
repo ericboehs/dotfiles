@@ -136,7 +136,11 @@ $EDITOR ~/.gitconfig.private
   resets it and silently drops the work. `bootstrap:pi` runs `pi-pin --check`
   first and refuses to reconcile over an ahead clone (`PI_PIN_DISCARD=1`
   overrides), and a global post-commit/post-merge hook (`pi-pin --hook`) warns
-  the moment a clone under `~/.pi/agent/git` moves past its pin.
+  the moment a clone under `~/.pi/agent/git` moves past its pin. A second
+  post-merge hook (`pi-pin --pulled`) covers the other hosts: when a dotfiles
+  pull brings in a pin bumped elsewhere, every clone now BEHIND its pin is
+  moved with a targeted `pi update git:REPO` (never `--extensions`), and AHEAD
+  ones only warn. Running sessions still need `/reload`.
 - `bootstrap:pi` converges the agent dir (per-host settings link, extension
   packages, pinned npm sources) and then normalizes the `pi` entrypoint per
   platform. Since pi 0.85 upstream ships its own pre-bundled build
@@ -179,7 +183,7 @@ Collection of utility scripts in `bin/` including:
 - **Tmux utilities**: notes, tmux-agent-save, tmux-agent-restore, tmux-title-format
 - **Story watchers**: hn-watch, macrumors-watch (Slack via slack-noti when a story's comments spike; `--install` loads a LaunchAgent that runs `--watch --notify`)
 - **Agent mesh**: grok-bot-peer and pi-link (symlinks into pi-agent-link's `contrib/grok-bot`; grok-bot-peer registers Grok as a peer session on this Mac)
-- **Pi**: pi-native (opt-in: official release binary, SHA-verified), pi-bundle (retires itself where upstream bundles; kept for older pi), pi-launch, pi-pin (bump a pinned package everywhere and reconcile its clone; lists and guards clones that drift from their pins), pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
+- **Pi**: pi-native (opt-in: official release binary, SHA-verified), pi-bundle (retires itself where upstream bundles; kept for older pi), pi-launch, pi-pin (bump a pinned package everywhere and reconcile its clone; lists and guards clones that drift from their pins; reconciles BEHIND clones after a dotfiles pull), pi-ext-check (typecheck + test extensions), pi-ext-prepush (pre-push hook running that check on the pushed sha)
 - **Setup integrity**: dotfiles-link-check (every managed path is still the symlink bootstrap made), dotfiles-host-links (`.dotfiles-hosts`: links for some machines only, like LaunchAgents and the qmd collection config; applied by `mise run bootstrap:launchd`), pi-profile-check (that, plus packages a local extension has replaced)
 - **Mail**: mail-sync (mbsync → maildir-to-text → `qmd update -c email`, run every 15 min by the `com.boehs.mbsync` LaunchAgent; Slack on ok/fail transitions only, network blips tolerated for 2 hours; LaunchAgent in `launchd/com.boehs.mbsync.plist`, linked on e14 by `.dotfiles-hosts`), maildir-to-text (Maildir → plain text for the qmd `email` collection), mail-archive (himalaya archive that strips colliding U= tags so mbsync assigns fresh UIDs)
 - **Throwaway macOS VMs**: `vm` (see below)
