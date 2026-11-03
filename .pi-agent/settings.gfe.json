@@ -33,5 +33,7 @@
     "git:github.com/ericboehs/pi-boehsline-va@41a90f63a3f5e0f8ee4bc4bf2ca1bb2903b0e103",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ],
-  "lastChangelogVersion": "0.85.1"
+  "lastChangelogVersion": "1.3.0",
+  "tuiMode": "fullscreen",
+  "fullscreenExitOutput": "resume-hint"
 }
