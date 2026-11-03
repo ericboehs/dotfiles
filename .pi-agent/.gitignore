@@ -57,6 +57,9 @@ html-plan/examples/*
 !extensions/
 extensions/*
 !extensions/*.ts
+# Host-only extensions (e.g. endpoints that must not be published). pi
+# discovers them like any extensions/*.ts, but they never reach the repo.
+extensions/*.local.ts
 # Generated and updated by `herdr integration install pi`; bootstrap recreates it.
 extensions/herdr-agent-state.ts
 # One level of subdirectory, .ts only. pi discovers extensions/<name>/index.ts
