@@ -109,25 +109,24 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
 
-      # bin/pi-ext-check borrows its types from the globally installed pi rather
-      # than pinning versions of its own, so CI has to reproduce that install.
-      # Both versions come from the tracked pins that bootstrap uses, so an
-      # upgrade lands in CI and on the machine together.
-      - name: Install node and pi at the tracked pins
+      # bin/pi-ext-check borrows its types from the pi it runs against rather
+      # than pinning versions of its own. Locally that is the fork checkout
+      # (bin/pi-locate); CI has no fork, so it installs this release with npm.
+      # Keep it at the version the fork is on.
+      - name: Install node at the tracked pin and pi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # mise resolves versions via the releases API
+          PI_VERSION: 1.5.0
         run: |
           set -e
           config=.config/mise/config.toml
           node_version=$(sed -n 's/^node = "\([^"]*\)"$/\1/p' "$config")
-          pi_version=$(sed -n 's|^"npm:@earendil-works/pi-coding-agent" = "\([^"]*\)"$|\1|p' "$config")
           [ -n "$node_version" ] || { echo "no node pin in $config"; exit 1; }
-          [ -n "$pi_version" ] || { echo "no pi pin in $config"; exit 1; }
-          echo "node $node_version, pi $pi_version"
+          echo "node $node_version, pi $PI_VERSION"
           mise use -g "node@$node_version"
-          # Plain npm, not mise's npm backend: pi-ext-check resolves the install
-          # through `npm root -g`, which only sees the active node's prefix.
-          npm install -g "@earendil-works/pi-coding-agent@$pi_version"
+          # Plain npm: bin/pi-locate falls back to `npm root -g`, which only sees
+          # the active node's prefix.
+          npm install -g "@earendil-works/pi-coding-agent@$PI_VERSION"
 
       # Import guard, tsc and the extension test suite. tsc alone would pass on
       # an extension that imports a gitignored helper, which aborts pi's launch

@@ -109,9 +109,10 @@ bin/pi-ext-check --typecheck-only
 bin/pi-ext-check --test-only
 ```
 
-The extensions are typechecked against the globally installed pi rather than a
-vendored dependency: `pi-ext-check` symlinks `.pi-agent/node_modules` to that
-install (`@earendil-works/pi-coding-agent`, `pi-tui`, `typebox`, `@types/node`)
+The extensions are typechecked against the pi they run on rather than a
+vendored dependency: `pi-ext-check` symlinks `.pi-agent/node_modules` to the
+fork checkout `bin/pi-locate` finds, or an `npm i -g` install in CI
+(`@earendil-works/pi-coding-agent`, `pi-tui`, `typebox`, `@types/node`)
 and runs `tsc` from `npx`. `tsconfig.json` sets `erasableSyntaxOnly`, because pi
 loads `.ts` extensions through Node's type stripping — syntax that needs real
 compilation (parameter properties, enums, namespaces) fails at load time

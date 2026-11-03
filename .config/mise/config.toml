@@ -75,17 +75,9 @@ neovim = "0.12.4"
 # `trust_policy_excludes = ["@playwright/cli@<version>"]` on this entry,
 # which should only bless a version after the same provenance check above.
 "npm:@playwright/cli" = "0.1.18"
-# Pi is pinned so its extension API and the bootstrapped package set move together.
-# After an upgrade lands here, run `mise run bootstrap:pi` to converge the
-# agent dir and re-check the entrypoint. Since 0.85 upstream ships its own
-# pre-bundled build, the stock npm entrypoint is the fastest option on every
-# machine — bin/pi-bundle detects that and exits without building, and
-# bin/pi-native stays a manual opt-in for experiments.
-#
-# Keep `pi` resolving to the mise shim. A stray `npm i -g` under the mise-managed
-# node puts a second pi on PATH ahead of the shim, where `pi update` can and does
-# move it off this pin without anything noticing.
-"npm:@earendil-works/pi-coding-agent" = "1.4.0"
+# pi itself is not here: it runs from the fork checkout
+# (~/Code/github.com/ericboehs/pi) through ~/.pi/agent/bin/pi, and updates with
+# the fork's scripts/sync-upstream.sh (pi-boehsline's /update runs it).
 # OpenAI's Codex CLI, via aqua: the native Rust binary straight from GitHub
 # releases, so no node, no npm scripts, no aube provenance checks, and nothing
 # under installs/node/ for a node bump to delete. Pinned for the same reason

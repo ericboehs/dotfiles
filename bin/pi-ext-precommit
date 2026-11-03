@@ -40,15 +40,10 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 # A machine without pi cannot run the check at all. Warn and let the commit
 # through rather than making a fresh clone uncommittable -- CI still gates.
-# Mirror pi-ext-check's resolution order: the mise pin is authoritative, and
-# `npm root -g` only finds pi where a stray global install exists.
-if ! pi_root="$(mise where npm:@earendil-works/pi-coding-agent 2>/dev/null)" ||
-  [ ! -d "$pi_root/node_modules/@earendil-works/pi-coding-agent" ]; then
-  if ! command -v npm >/dev/null 2>&1 ||
-    [ ! -d "$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent" ]; then
-    echo "pi-ext-precommit: pi not found via mise or npm, skipping the extension check" >&2
-    exit 0
-  fi
+# Same lookup as pi-ext-check: the fork checkout pi runs from, else npm -g.
+if ! "$root/bin/pi-locate" >/dev/null 2>&1; then
+  echo "pi-ext-precommit: pi not found (no built fork checkout, no npm -g), skipping the extension check" >&2
+  exit 0
 fi
 
 # --cached, so this reads the index the commit will use. Unborn HEAD is fine:

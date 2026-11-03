@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+# Print where pi's packages live, for tools that typecheck against them:
+#   <pi-coding-agent dir><TAB><dir holding pi-tui, pi-ai, typebox, @types/node>
+# Exits 1, printing nothing, when there is no pi to borrow from.
+#
+# Order:
+#   1. The fork checkout pi runs from (github.com/ericboehs/pi). PI_FORK_DIR
+#      names it; else ~/.pi/agent/bin/pi, the wrapper that execs the checkout's
+#      dist/ (its `exec node <root>/packages/coding-agent/dist/...` line); else
+#      ~/Code/github.com/ericboehs/pi. The monorepo root's node_modules holds
+#      the workspace links. Its types come from dist/, so it must be built.
+#   2. A plain `npm i -g` under the active node (CI installs one).
+#
+# There is deliberately no mise step: pi is no longer installed by mise.
+
+set -euo pipefail
+
+fork_ok() {
+  [ -f "$1/packages/coding-agent/dist/index.d.ts" ] && [ -d "$1/node_modules/@earendil-works/pi-tui" ]
+}
+
+fork_from_wrapper() {
+  local bin="$HOME/.pi/agent/bin/pi" line
+  [ -f "$bin" ] || return 0
+  line="$(sed -n 's|^exec node \(.*\)/packages/coding-agent/dist/.*|\1|p' "$bin" | head -1)"
+  # gfew's wrapper says $HOME literally; e14's has the path spelled out.
+  line="${line//\$HOME/$HOME}"
+  line="${line//\$\{HOME\}/$HOME}"
+  printf '%s\n' "${line/#\~/$HOME}"
+}
+
+for root in "${PI_FORK_DIR:-}" "$(fork_from_wrapper)" "$HOME/Code/github.com/ericboehs/pi"; do
+  [ -n "$root" ] || continue
+  if fork_ok "$root"; then
+    printf '%s\t%s\n' "$root/packages/coding-agent" "$root/node_modules"
+    exit 0
+  fi
+done
+
+if command -v npm >/dev/null 2>&1; then
+  global="$(npm root -g 2>/dev/null || true)"
+  pkg="$global/@earendil-works/pi-coding-agent"
+  if [ -n "$global" ] && [ -d "$pkg" ]; then
+    # npm nests pi's dependencies under the package, or hoists them beside it.
+    if [ -d "$pkg/node_modules/@earendil-works/pi-tui" ]; then
+      printf '%s\t%s\n' "$pkg" "$pkg/node_modules"
+    else
+      printf '%s\t%s\n' "$pkg" "$global"
+    fi
+    exit 0
+  fi
+fi
+
+exit 1

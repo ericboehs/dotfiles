@@ -8,12 +8,12 @@
 # helper typechecks green and then aborts pi's entire launch on any host that
 # clones it. bin/pi-ext-imports is the guard for that class.
 #
-# pi loads these extensions from the globally installed @earendil-works/pi-coding-agent,
-# so this borrows that install's types rather than pinning any dependency
-# versions here: .pi-agent/package.json exists only to mark the directory ESM
-# for tsc and Node, and .pi-agent/node_modules/ gets symlinks to the global pi,
-# pi-ai, pi-tui, typebox and @types/node, which is enough for both tsc and Node's ESM
-# resolver.
+# pi loads these extensions from the pi it runs (the fork checkout, see
+# bin/pi-locate), so this borrows that pi's types rather than pinning any
+# dependency versions here: .pi-agent/package.json exists only to mark the
+# directory ESM for tsc and Node, and .pi-agent/node_modules/ gets symlinks to
+# pi, pi-ai, pi-tui, typebox and @types/node, which is enough for both tsc and
+# Node's ESM resolver.
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "Usage: $(basename "$0") [--typecheck-only|--test-only]"
   echo ""
   echo "Check imports (pi-ext-imports), typecheck (tsc) and smoke-test (node --test)"
-  echo "the pi extensions. Links .pi-agent/node_modules to the globally installed pi"
+  echo "the pi extensions. Links .pi-agent/node_modules to the pi bin/pi-locate finds"
   echo "first. --typecheck-only runs the import guard too; both are static checks."
   exit 0
 fi
@@ -63,27 +63,15 @@ if ! command -v npm >/dev/null; then
   exit 1
 fi
 
-# Resolve pi from mise first. The pin in .config/mise/config.toml is the
-# authoritative install; `npm root -g` only finds pi on a machine that also has
-# a stray `npm i -g` under the active node, which is exactly the shim-shadowing
-# trap that let e14 drift to 0.86.1 while the pin said 0.85.1. gfew never had
-# that stray copy, so this script -- and the commit hooks that call it -- had
-# been failing there outright.
-PI_PKG=""
-if command -v mise >/dev/null; then
-  mise_root="$(mise where npm:@earendil-works/pi-coding-agent 2>/dev/null || true)"
-  if [ -n "$mise_root" ] && [ -d "$mise_root/node_modules/@earendil-works/pi-coding-agent" ]; then
-    PI_PKG="$mise_root/node_modules/@earendil-works/pi-coding-agent"
-  fi
-fi
-if [ -z "$PI_PKG" ] && [ -d "$(npm root -g)/@earendil-works/pi-coding-agent" ]; then
-  PI_PKG="$(npm root -g)/@earendil-works/pi-coding-agent"
-fi
-if [ -z "$PI_PKG" ]; then
-  echo -e "${RED}❌ pi not found via mise or npm root -g${NC}" >&2
-  echo "   Install it with: mise install" >&2
+# The fork checkout pi runs from, else a plain `npm i -g` (CI). bin/pi-locate
+# prints the package and the directory holding its dependencies.
+if ! located="$("$REPO/bin/pi-locate")"; then
+  echo -e "${RED}❌ pi not found: no built fork checkout and no npm -g install${NC}" >&2
+  echo "   Build the fork (npm run build in ~/Code/github.com/ericboehs/pi) or set PI_FORK_DIR" >&2
   exit 1
 fi
+PI_PKG="${located%%$'\t'*}"
+PI_DEPS="${located#*$'\t'}"
 
 # Extension-local dependencies are runtime state and stay gitignored. Restore
 # them from each tracked lockfile before checking so a fresh clone behaves like
@@ -96,15 +84,8 @@ for manifest in "$PI_AGENT"/extensions/*/package.json; do
     --ignore-scripts --no-audit --no-fund
 done
 
-# mise's npm backend uses a pnpm-style virtual store, so pi's dependencies sit
-# in a shared root rather than nested under the package. A plain `npm i -g`
-# nests them. Find whichever layout this machine has.
-if [ -d "$PI_PKG/node_modules/@earendil-works/pi-tui" ]; then
-  PI_DEPS="$PI_PKG/node_modules"
-elif [ -d "$mise_root/node_modules/.mise/node_modules/@earendil-works/pi-tui" ]; then
-  PI_DEPS="$mise_root/node_modules/.mise/node_modules"
-else
-  echo -e "${RED}❌ cannot locate pi's dependencies under $PI_PKG${NC}" >&2
+if [ ! -d "$PI_DEPS/@earendil-works/pi-tui" ]; then
+  echo -e "${RED}❌ cannot locate pi's dependencies under $PI_DEPS${NC}" >&2
   exit 1
 fi
 
