@@ -43,7 +43,7 @@ HELP = <<~TEXT
   Each window chip lands in the column for its length (5h, 1d, 7d, or the
   monthly cycle); a provider with several windows fills several columns, and a
   column appears only when something has data for it. Dollar budgets that are
-  not windows (Baseten, Ollama, OpenRouter) get the SPEND column.
+  not windows (Baseten, Cursor, Ollama, OpenRouter) get the SPEND column.
   The second line under each cell is that window's own reset, so a plan with a
   5h and a 7d cap shows both. PACE rides in the cell: ↓ means you are ahead of
   pace (more used than time spent — slow down), ↑ means behind (you can speed
@@ -67,7 +67,8 @@ DRIVERS = {
   "ollama-usage" => ["ollama"],
   "opencode-go-window" => ["opencode", "opencode-go", "opencode-go-window"],
   "baseten-usage" => ["baseten"],
-  "openrouter-usage" => ["openrouter"]
+  "openrouter-usage" => ["openrouter"],
+  "cursor-usage" => ["cursor"]
 }.freeze
 
 # Cache order mirrors the extension's DRIVERS array; it breaks sort ties.
