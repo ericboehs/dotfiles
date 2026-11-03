@@ -12,7 +12,7 @@
   },
   "enableInstallTelemetry": false,
   "packages": [
-    "git:github.com/ericboehs/pi-boehsline@e4433b1129d191f50ec9ccfff59833951dbc58c3",
+    "git:github.com/ericboehs/pi-boehsline@eb6326396bccdcc7089106ce776a7a1624bf1490",
     "git:github.com/ericboehs/agent-notify@3787106d66f79493d7301995e06c2e537c091a4f"
   ]
 }
