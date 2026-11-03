@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# log-rotate — size-aware, gzip'd rotation for launchd-managed log files.
+#
+# Usage: log-rotate [-k KEEP] [-m MIN_BYTES] [-f] FILE [FILE...]
+#
+#   -k KEEP       generations of compressed backups to keep (default 4)
+#   -m MIN_BYTES  only rotate if the file is at least this big (default 1 MiB)
+#   -f            force: rotate regardless of size
+#
+# Env overrides: LOG_ROTATE_KEEP, LOG_ROTATE_MIN_BYTES
+#
+# Rotation is copy+truncate rather than rename. launchd keeps an open fd on
+# every StandardOutPath/StandardErrorPath it manages, so renaming the file
+# would leave the service appending to an unlinked inode forever, and the
+# "rotated" log would never grow again. Truncating in place keeps that fd
+# valid (the files are opened O_APPEND, so writes resume at offset 0).
+
+set -euo pipefail
+
+KEEP="${LOG_ROTATE_KEEP:-4}"
+MIN_BYTES="${LOG_ROTATE_MIN_BYTES:-1048576}"  # 1 MiB
+FORCE=0
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+
+while getopts ':k:m:fh' opt; do
+    case "$opt" in
+        k) KEEP="$OPTARG" ;;
+        m) MIN_BYTES="$OPTARG" ;;
+        f) FORCE=1 ;;
+        h) usage; exit 0 ;;
+        :) echo "log-rotate: -$OPTARG requires an argument" >&2; exit 2 ;;
+        \?) echo "log-rotate: unknown option -$OPTARG" >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if (( $# == 0 )); then
+    usage >&2
+    exit 2
+fi
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+say() { printf '%s %s\n' "$(ts)" "$*"; }
+
+human() {
+    local b=$1
+    if   (( b >= 1048576 )); then printf '%.1fM' "$(bc -l <<< "$b/1048576")"
+    elif (( b >= 1024 ));    then printf '%.1fK' "$(bc -l <<< "$b/1024")"
+    else printf '%dB' "$b"
+    fi
+}
+
+rotate() {
+    local log=$1 size i
+
+    if [[ ! -f $log ]]; then
+        say "SKIP $log (no such file)"
+        return 0
+    fi
+
+    size=$(stat -f%z "$log" 2>/dev/null || echo 0)
+    if (( FORCE == 0 )) && (( size < MIN_BYTES )); then
+        say "SKIP $log ($(human "$size") < $(human "$MIN_BYTES") threshold)"
+        return 0
+    fi
+
+    # Migrate legacy uncompressed .1 backups left by older in-script rotators.
+    if [[ -f $log.1 && ! -f $log.1.gz ]]; then
+        gzip -f "$log.1"
+    fi
+
+    # Shift generations: .3.gz -> .4.gz, .2.gz -> .3.gz, .1.gz -> .2.gz.
+    # The oldest kept generation is overwritten and falls off the end.
+    for (( i = KEEP - 1; i >= 1; i-- )); do
+        if [[ -f "$log.$i.gz" ]]; then
+            mv -f "$log.$i.gz" "$log.$((i + 1)).gz"
+        fi
+    done
+    # Drop anything beyond the retention window (e.g. after lowering -k).
+    local old gen
+    for old in "$log".*.gz; do
+        [[ -e $old ]] || continue
+        gen=${old%.gz}; gen=${gen##*.}
+        if [[ $gen =~ ^[0-9]+$ ]] && (( gen > KEEP )); then
+            rm -f "$old"
+        fi
+    done
+
+    cp "$log" "$log.1"
+    : > "$log"
+    gzip -f "$log.1"
+
+    printf '%s ROTATED: previous log (%s) saved to %s\n' \
+        "$(ts)" "$(human "$size")" "$(basename "$log").1.gz" >> "$log"
+    say "ROTATED $log ($(human "$size")) -> $(basename "$log").1.gz, keeping $KEEP"
+}
+
+status=0
+for f in "$@"; do
+    rotate "$f" || status=1
+done
+exit "$status"
