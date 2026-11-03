@@ -228,6 +228,10 @@ REPO_PATH = "ericboehs/dotfiles"
 "~/.pi/agent/artifact-skills" = ".pi-agent/artifact-skills"
 # Vendored html-plan skill behind /html-plan. One directory link, same reason.
 "~/.pi/agent/html-plan" = ".pi-agent/html-plan"
+# Subagent definitions (agents/*.md) for the subagent tool. One directory link,
+# so an agent added on one machine reaches the others with a pull. Published,
+# so keep agent prompts free of work-specific rules; those belong in the tools.
+"~/.pi/agent/agents" = ".pi-agent/agents"
 # symlink-each because the directory is shared: prompts written for one machine
 # and never tracked (checkin.md) sit beside the tracked ones and should stay.
 "~/.pi/agent/prompts" = { source = ".pi-agent/prompts", mode = "symlink-each" }
