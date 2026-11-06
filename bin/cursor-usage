@@ -101,9 +101,9 @@ jq -r --arg mode "$MODE" '
       (if (.usage.aggregations // []) | length > 0 then
         "",
         "By model:",
-        (.usage.aggregations | sort_by(-.totalCents)[]
+        (.usage.aggregations | sort_by(-(.totalCents // 0))[]
           | ([.inputTokens, .outputTokens, .cacheWriteTokens, .cacheReadTokens] | map(. // "0" | tonumber) | add) as $mt
-          | "  \(.modelIntent | . + (" " * (32 - length)))  $\(.totalCents | dollars | . + (" " * (7 - length)))  \($mt | kfmt) tokens")
+          | "  \(.modelIntent | . + (" " * (32 - length)))  $\(.totalCents // 0 | dollars | . + (" " * (7 - length)))  \($mt | kfmt) tokens")
       else empty end)
     end
 ' <<<"$merged"
