@@ -92,6 +92,7 @@ if [[ -n $TMUX && -z $PI_HYPERLINKS && -z $PI_NO_HYPERLINKS_REFRESH ]]; then
     [[ $v == 0 || $v == 1 ]] && export PI_HYPERLINKS=$v
   fi
   (
+    mkdir -p "${pi_hyperlinks_cache:h}" 2>/dev/null
     features=$(tmux display-message -p '#{client_termfeatures}' 2>/dev/null) || exit 0
     case ,${features}, in
       *,hyperlinks,*) printf 1 ;;
