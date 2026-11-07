@@ -47,7 +47,7 @@ scp -q -o ClearAllForwardings=yes "$task" "coop:coop-workers/$name.md"
 
 ssh_coop bash -s -- "$name" "$repo" "$wt" "$done_file" "$models" <<'REMOTE'
 set -euo pipefail
-name=$1 repo=$2 wt=~/$3 done_file=$4 models=$5
+name=$1 repo=$2 wt=~/$3 done_file=${4-} models=${5-}
 cd ~/coop-workers
 for f in run.sh supervise.sh; do mv "$f.new" "$f"; chmod +x "$f"; done
 rm -f "$name.result"
