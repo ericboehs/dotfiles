@@ -2,8 +2,9 @@
 # supervise.sh NAME WORKTREE [DONE_FILE]: runs NAME's task (~/coop-workers/NAME.md) down a chain of
 # models ($MODELS, space separated), or adopts the run already going in tmux window code:NAME.
 #
-# Default chain: xai/grok-4.7, opencode-go/deepseek-v4.1-flash, anthropic/claude-sonnet-5, then
-# Cursor (cursor-agent, claude-opus-5-5-high, billed to Eric's seat: only once the others are out).
+# Default chain: xai/grok-4.7, then opencode-go/deepseek-v4.1-flash. Others on request through
+# MODELS: anthropic/claude-sonnet-5, or cursor (cursor-agent, claude-opus-5-5-high, billed to
+# Eric's seat: only when he allows Cursor).
 # Never baseten, and never grok through opencode-go (it burned the Go limit): grok is xai/ only.
 #
 # A model fails when it exits non-zero, finishes without DONE_FILE in the worktree, stalls (its log
@@ -14,7 +15,7 @@
 # is told to pick up what the earlier ones left in the worktree.
 # Writes ~/coop-workers/NAME.result: "ok <model>" or "failed"; notes in NAME.supervise.
 name=$1 wt=$2 done_file=$3 d=~/coop-workers stall=${STALL:-900}
-read -r -a models <<< "${MODELS:-xai/grok-4.7 opencode-go/deepseek-v4.1-flash anthropic/claude-sonnet-5 cursor}"
+read -r -a models <<< "${MODELS:-xai/grok-4.7 opencode-go/deepseek-v4.1-flash}"
 log() { echo "$(date +%FT%T) $*" >> "$d/$name.supervise"; }
 rm -f "$d/$name.result"
 
