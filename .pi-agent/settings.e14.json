@@ -1,5 +1,5 @@
 {
-  "disabledProviders": ["baseten"],
+  "disabledProviders": ["baseten", "fireworks"],
   "lastChangelogVersion": "1.4.0",
   "packages": [
     "../../Code/github.com/ericboehs/pi-boehsline",
