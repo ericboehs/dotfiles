@@ -1,4 +1,5 @@
 {
+  "disabledProviders": ["baseten"],
   "lastChangelogVersion": "1.5.0",
   "packages": [
     "git:github.com/ericboehs/pi-approval-guardian@9d03cfd6ccd99190f6eb4f537686bd4bf29062fc",

@@ -1,4 +1,5 @@
 {
+  "disabledProviders": ["baseten"],
   "lastChangelogVersion": "1.4.0",
   "packages": [
     "../../Code/github.com/ericboehs/pi-boehsline",
