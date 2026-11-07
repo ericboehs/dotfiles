@@ -3,7 +3,7 @@
 #
 #   --repo REPO     repo under ~/Code/github.com/ericboehs on coop (default pi-boehsline)
 #   --done FILE     file the task writes when finished (default REPORT-NAME.md)
-#   --models "A B"  model chain (default in supervise.sh: xai grok-4.7, then opencode-go ds4.1f;
+#   --models "A B"  model chain (default in supervise.sh: opencode-go ds4.1f, then anthropic sonnet-5;
 #                   also anthropic/claude-sonnet-5 or cursor on request)
 #   --wait          block until it finishes and print the result (else: coop-worker --wait-only NAME)
 #
