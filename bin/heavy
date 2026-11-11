@@ -22,6 +22,11 @@ set -uo pipefail
 
 [ $# -gt 0 ] || { echo "usage: heavy <command> [args...]" >&2; exit 64; }
 
+# Already inside a heavy command (bin/check under heavy runs its own xcodebuilds through heavy):
+# the slot is held, so run at once. Waiting would deadlock on our own slot.
+[ "${HEAVY_HELD:-}" = 1 ] && exec "$@"
+export HEAVY_HELD=1
+
 slots=${HEAVY_SLOTS:-1}
 min_idle=${HEAVY_MIN_IDLE:-25}
 dir="$HOME/Library/Caches/heavy"
