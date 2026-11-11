@@ -5,11 +5,13 @@
 #   HEAVY_SLOTS=1 heavy bin/check --ios
 #
 # Three brakes:
-#  1. Slots: at most HEAVY_SLOTS (default 2) heavy commands at once, across every shell and agent.
+#  1. Slots: at most HEAVY_SLOTS (default 1) heavy commands at once, across every shell and agent.
 #     A command waits for a free slot. Locks are lockf(1) files in ~/Library/Caches/heavy, and a
 #     slot frees itself when its command exits or dies.
-#  2. Load gate: it doesn't start while the 1-minute load is over HEAVY_MAX_LOAD (default 1.5x the
-#     core count).
+#  2. CPU gate: it doesn't start while the CPU is less than HEAVY_MIN_IDLE percent idle (default
+#     25, sampled over a second). Not the load average: a booting simulator and utility-clamped
+#     builds put hundreds of threads in the run queue while the CPU is a third idle (load 900+ on
+#     2026-11-10 with nothing wrong), so a load gate held work back for no reason.
 #  3. Priority: it runs under `taskpolicy -c utility` (efficiency cores first, below interactive
 #     work) and `nice -n 10`.
 #
@@ -20,17 +22,17 @@ set -uo pipefail
 
 [ $# -gt 0 ] || { echo "usage: heavy <command> [args...]" >&2; exit 64; }
 
-slots=${HEAVY_SLOTS:-2}
-cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
-max_load=${HEAVY_MAX_LOAD:-$((cores * 3 / 2))}
+slots=${HEAVY_SLOTS:-1}
+min_idle=${HEAVY_MIN_IDLE:-25}
 dir="$HOME/Library/Caches/heavy"
 mkdir -p "$dir"
 
-load1() { sysctl -n vm.loadavg | awk '{print int($2)}'; }
+# Percent idle over the last second (top's second sample; the first is since boot).
+idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub("%", "", v); print int(v) }'; }
 
 waited=0
 while :; do
-  if [ "$(load1)" -lt "$max_load" ]; then
+  if [ "$(idle)" -ge "$min_idle" ]; then
     for n in $(seq 1 "$slots"); do
       lockf -s -t 0 "$dir/slot-$n" taskpolicy -c utility nice -n 10 "$@"
       status=$?
@@ -38,7 +40,7 @@ while :; do
     done
   fi
   if [ $((waited % 60)) -eq 0 ]; then
-    echo "heavy: waiting for a slot (load $(load1), max $max_load, $slots slots): $1" >&2
+    echo "heavy: waiting for a slot (CPU $(idle)% idle, needs $min_idle%; $slots slot(s)): $1" >&2
   fi
   sleep 10
   waited=$((waited + 10))
