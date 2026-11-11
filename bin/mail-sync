@@ -44,6 +44,14 @@
 #     error, a non-socket mbsync failure, a broken step, a broken lock --
 #     still fails immediately, so hazards (1), (2) and (4) stay loud.
 #
+#  6. Reboots are not wedges, diagnosed 2026-11-10. The Mac crashed twice in
+#     one afternoon, each time mid-run, and each reboot left a dead owner's
+#     lock behind. Hazard (4)'s break fired correctly but paged both times,
+#     and the very next run healed it. A lock last touched before the current
+#     boot can only belong to a run the reboot killed; that is a lost run, not
+#     a stuck pipeline. It is now broken and logged without counting as an
+#     incident. A dead owner from *this* boot is still loud.
+#
 # Deliberately no `set -e`: every failure path is handled explicitly, and -e
 # would reintroduce exactly the surprise described in (1).
 
@@ -125,6 +133,9 @@ break_lock() {
 	rm -rf "$LOCKFILE"
 }
 
+# Seconds since the epoch at which this boot began; empty if unknown.
+BOOT_TIME=$(sysctl -n kern.boottime 2>/dev/null | sed -nE 's/^[{] sec = ([0-9]+),.*/\1/p')
+
 acquire_lock() {
 	LOCK_BROKEN=""
 	take_lock && return 0
@@ -156,6 +167,10 @@ acquire_lock() {
 			# it is overdue, we just cannot say who owns it.
 			break_lock "held ${age}s by an unidentified process"
 		fi
+	elif [ -n "$BOOT_TIME" ] && [ "$lock_mtime" -lt "$BOOT_TIME" ]; then
+		# Hazard (6): its owner died in a reboot. Log it, but don't page.
+		echo "=== $(ts) clearing lock left by a run the reboot interrupted (${age}s old) ===" >>"$LOG" 2>&1
+		rm -rf "$LOCKFILE"
 	else
 		break_lock "abandoned ${age}s ago by a run that is no longer alive"
 	fi
