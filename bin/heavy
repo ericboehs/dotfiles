@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# heavy: run a heavy command (xcodebuild, a test suite, bin/check) without swamping the Mac.
+#
+#   heavy xcodebuild -project ios/Botsun.xcodeproj ...
+#   HEAVY_SLOTS=1 heavy bin/check --ios
+#
+# Three brakes:
+#  1. Slots: at most HEAVY_SLOTS (default 2) heavy commands at once, across every shell and agent.
+#     A command waits for a free slot. Locks are lockf(1) files in ~/Library/Caches/heavy, and a
+#     slot frees itself when its command exits or dies.
+#  2. Load gate: it doesn't start while the 1-minute load is over HEAVY_MAX_LOAD (default 1.5x the
+#     core count).
+#  3. Priority: it runs under `taskpolicy -c utility` (efficiency cores first, below interactive
+#     work) and `nice -n 10`.
+#
+# Exit status is the command's own. If the command itself exits 75 (EX_TEMPFAIL, the code lockf
+# uses for a busy lock), heavy treats the slot as busy and retries; that's an accepted rare
+# ambiguity.
+set -uo pipefail
+
+[ $# -gt 0 ] || { echo "usage: heavy <command> [args...]" >&2; exit 64; }
+
+slots=${HEAVY_SLOTS:-2}
+cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
+max_load=${HEAVY_MAX_LOAD:-$((cores * 3 / 2))}
+dir="$HOME/Library/Caches/heavy"
+mkdir -p "$dir"
+
+load1() { sysctl -n vm.loadavg | awk '{print int($2)}'; }
+
+waited=0
+while :; do
+  if [ "$(load1)" -lt "$max_load" ]; then
+    for n in $(seq 1 "$slots"); do
+      lockf -s -t 0 "$dir/slot-$n" taskpolicy -c utility nice -n 10 "$@"
+      status=$?
+      [ "$status" -ne 75 ] && exit "$status"
+    done
+  fi
+  if [ $((waited % 60)) -eq 0 ]; then
+    echo "heavy: waiting for a slot (load $(load1), max $max_load, $slots slots): $1" >&2
+  fi
+  sleep 10
+  waited=$((waited + 10))
+done
