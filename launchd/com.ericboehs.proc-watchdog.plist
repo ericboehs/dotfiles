@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ericboehs.proc-watchdog</string>
+  <key>ProgramArguments</key><array><string>/Users/ericboehs/bin/proc-watchdog</string></array>
+  <key>StartInterval</key><integer>20</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardErrorPath</key><string>/Users/ericboehs/.local/state/proc-watchdog.err</string>
+</dict>
+</plist>

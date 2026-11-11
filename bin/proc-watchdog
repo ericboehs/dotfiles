@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# proc-watchdog: stop a runaway process group before it takes the Mac down.
+#
+# Run every 20s by launchd (com.ericboehs.proc-watchdog). For each process group of this user with
+# more than WATCHDOG_MAX_GROUP members (default 300), it sends SIGSTOP to the whole group, logs it,
+# and posts a notification. It never resumes one: a fork bomb shouldn't come back. Inspect it, then
+# `kill -CONT -<pgid>` or `kill -KILL -<pgid>`.
+#
+# Normal groups are tiny (a shell, a build, a booted simulator's services run under launchd_sim in
+# their own groups, all well under 50). The fork bomb of 2026-11-10 (a test re-running itself as
+# its subagent child) was one group of thousands: load 848 and a hard reboot.
+#
+#   proc-watchdog            check once and act
+#   proc-watchdog --dry-run  say what it would stop
+set -uo pipefail
+
+max=${WATCHDOG_MAX_GROUP:-300}
+log="$HOME/.local/state/proc-watchdog.log"
+dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
+me=$(id -un)
+mkdir -p "$(dirname "$log")"
+
+say() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$log"; [ $dry = 1 ] && echo "$*"; }
+
+ps -Ao pgid=,user= | awk -v me="$me" -v max="$max" '$2 == me { c[$1]++ } END { for (g in c) if (c[g] > max) print g, c[g] }' |
+while read -r pgid count; do
+  [ "$pgid" -gt 1 ] || continue
+  [ "$pgid" = "$$" ] && continue
+  leader=$(ps -o args= -p "$pgid" 2>/dev/null | cut -c1-120)
+  sample=$(ps -Ao pgid=,args= | awk -v g="$pgid" '$1 == g { $1 = ""; print }' | sort | uniq -c | sort -nr | head -1 | cut -c1-120)
+  if [ $dry = 1 ]; then
+    say "would stop group $pgid ($count processes; leader: ${leader:-gone}; most: $sample)"
+    continue
+  fi
+  kill -STOP -- "-$pgid" 2>/dev/null
+  say "STOPPED group $pgid ($count processes; leader: ${leader:-gone}; most: $sample). Resume: kill -CONT -$pgid; end it: kill -KILL -$pgid"
+  osascript -e "display notification \"Stopped process group $pgid ($count processes). See ~/.local/state/proc-watchdog.log\" with title \"proc-watchdog\" sound name \"Basso\"" >/dev/null 2>&1 || true
+done
+exit 0
