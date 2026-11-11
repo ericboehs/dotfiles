@@ -57,8 +57,13 @@ if command -v fnox >/dev/null 2>&1; then
   # `zsh -ic "pi ..."` (tmux windows, pi-restart-all) runs its command before any idle prompt,
   # so sched never fires there and pi starts without COPILOT_TOKEN: load it synchronously when
   # zsh was given a command string. Interactive shells keep the deferred load.
+  # Capped at 10s: a fresh hook-env can wait on a keychain or 1Password prompt nobody is there to
+  # answer (a tmux window opened overnight), and the command must still run without the secrets.
   if [[ -n ${ZSH_EXECUTION_STRING:-} ]]; then
-    eval "$(command fnox hook-env -s zsh --if-missing ignore </dev/null 2>/dev/null)"
+    local -a _fnox_cap=()
+    (( $+commands[timeout] )) && _fnox_cap=(timeout 10)  # an array: zsh doesn't split words
+    eval "$($_fnox_cap fnox hook-env -s zsh --if-missing ignore </dev/null 2>/dev/null)"
+    unset _fnox_cap
   elif (( $+functions[_fnox_hook] )); then
     sched +0 _fnox_hook
   fi
