@@ -15,11 +15,19 @@ require "json"
 require "net/http"
 require "optparse"
 require "fileutils"
+require "digest"
+require "open3"
 
 COMFY_DIR = File.expand_path(ENV.fetch("H3_COMFY_DIR", "~/Code/github.com/comfyanonymous/ComfyUI"))
 HOST = ENV.fetch("H3_HOST", "127.0.0.1")
+# The server always listens on loopback unless H3_LISTEN says otherwise; HOST
+# (what we connect to) and LISTEN (what ComfyUI binds to) are separate so a
+# remote H3_HOST doesn't silently expose an unauthenticated ComfyUI to the LAN.
+LISTEN = ENV.fetch("H3_LISTEN", "127.0.0.1")
 PORT = Integer(ENV.fetch("H3_PORT", "8188"))
 LOG = File.expand_path("~/Library/Logs/comfyui.log")
+PID_FILE = File.expand_path("~/Library/Caches/h3/comfy.pid")
+warn "h3: warning: ComfyUI will listen on #{LISTEN}, not just loopback" unless %w[127.0.0.1 localhost ::1].include?(LISTEN)
 
 opts = {size: nil, images: [], aspect: "1:1", seed: nil, steps: 6, open: true, prefix: "h3",
         unet: "MiniMax-H3-Image-Pruned-Q4_K_M.gguf",
@@ -31,7 +39,7 @@ parser = OptionParser.new do |o|
   o.on("-s", "--size N", Integer, "area as an N×N square (default 2048, or the first image's size)") { |v| opts[:size] = v }
   o.on("-i", "--image FILE", "reference/edit image; repeat for more. The first is the one edited;",
        "refer to them in the prompt as <Picture 1>, <Picture 2>, ...") { |v| opts[:images] << File.expand_path(v) }
-  o.on("-a", "--aspect W:H", "aspect ratio, e.g. 16:9, 3:2, 9:16 (default 1:1)") { |v| opts[:aspect] = v }
+  o.on("-a", "--aspect W:H", "aspect ratio, e.g. 16:9, 3:2, 9:16 (default 1:1)") { |v| opts[:aspect] = v; opts[:aspect_given] = true }
   o.on("--seed N", Integer, "seed (default random)") { |v| opts[:seed] = v }
   o.on("--steps N", Integer, "sampling steps (default 6; the model is distilled for 6)") { |v| opts[:steps] = v }
   o.on("--prefix NAME", "output filename prefix (default h3)") { |v| opts[:prefix] = v }
@@ -41,8 +49,11 @@ parser = OptionParser.new do |o|
   o.on("--stop", "stop the background ComfyUI server and exit") { opts[:stop] = true }
   o.on("-h", "--help") { puts o; exit }
 end
-ARGV_ASPECT = ARGV.any? { |a| a.start_with?("-a", "--aspect") }
-parser.parse!
+begin
+  parser.parse!
+rescue OptionParser::ParseError => e
+  abort "h3: #{e.message}\n#{parser}"
+end
 
 def http
   Net::HTTP.new(HOST, PORT).tap { |h| h.open_timeout = 2; h.read_timeout = 30 }
@@ -50,19 +61,35 @@ end
 
 def up?
   http.get("/system_stats").is_a?(Net::HTTPSuccess)
-rescue SystemCallError, Net::OpenTimeout, Net::ReadTimeout, IOError
+rescue SystemCallError, Net::OpenTimeout, Net::ReadTimeout, IOError, SocketError, Net::HTTPBadResponse
   false
 end
 
-def pids
-  found = `pgrep -f "#{COMFY_DIR}/main.py|main.py --listen #{HOST} --port #{PORT}"`.split
-  found += `lsof -ti tcp:#{PORT} -sTCP:LISTEN 2>/dev/null`.split # the process actually serving
-  found.map(&:to_i).uniq
+# The source of truth for "is this our ComfyUI" is the pid we wrote when we
+# spawned it (see below), confirmed still alive and still running main.py —
+# not whatever happens to be listening on the port, which --stop used to kill.
+def comfy_pid
+  return nil unless File.exist?(PID_FILE)
+  pid = File.read(PID_FILE).to_i
+  return nil unless pid.positive?
+  cmd, status = Open3.capture2("ps", "-o", "command=", "-p", pid.to_s)
+  return nil unless status.success? && cmd.include?("#{COMFY_DIR}/main.py")
+  pid
 end
 
 if opts[:stop]
-  ps = pids
-  ps.empty? ? puts("ComfyUI isn't running") : (Process.kill("TERM", *ps); puts "stopped ComfyUI (#{ps.join(", ")})")
+  pid = comfy_pid
+  if pid
+    begin
+      Process.kill("TERM", -pid) # whole process group; started with pgroup: true
+    rescue Errno::ESRCH, Errno::EPERM
+      # already gone, or belongs to someone else now
+    end
+    FileUtils.rm_f(PID_FILE)
+    puts "stopped ComfyUI (#{pid})"
+  else
+    puts "ComfyUI isn't running"
+  end
   exit
 end
 
@@ -74,13 +101,12 @@ if opts[:queue]
     cond = g.values.find { |n| n["class_type"] == "MiniMaxH3ImageConditioning" }
     text = cond ? cond.dig("inputs", "prompt").to_s : g.values.map { |n| n["class_type"] }.join(",")
     w, h = cond&.dig("inputs", "width"), cond&.dig("inputs", "height")
-    size = w.to_i.zero? ? "img size" : "#{w}×#{h}"
+    size = (w.is_a?(Integer) && w.positive?) ? "#{w}×#{h}" : "img size"
     "#{item[1][0, 8]}  #{size.ljust(9)}  #{text.gsub(/\s+/, " ")[0, 70]}"
   end
   running = q["queue_running"].map(&desc)
   pending = q["queue_pending"].sort_by { |i| i[0] }.map(&desc)
-  log = [LOG, "/tmp/comfy.log"].select { |f| File.exist?(f) }.max_by { |f| File.mtime(f) }
-  step = log && File.open(log) { |f| f.seek([f.size - 4000, 0].max); f.read }.split(/[\r\n]/).reverse
+  step = File.exist?(LOG) && File.open(LOG) { |f| f.seek([f.size - 4000, 0].max); f.read }.split(/[\r\n]/).reverse
                     .find { |l| l =~ %r{\d+/\d+ \[} }&.strip
   puts running.empty? ? "running: nothing" : "running: #{running.first}"
   puts "  step:  #{step}" if step && running.any?
@@ -94,8 +120,9 @@ prompt = $stdin.read.to_s.strip if prompt.empty? && !$stdin.tty?
 abort parser.to_s if prompt.empty?
 
 opts[:images].each { |f| abort "h3: no such image #{f}" unless File.file?(f) }
-aspect_given = ARGV_ASPECT
-if opts[:images].any? && opts[:size].nil? && !aspect_given
+abort "h3: --size must be > 0" if opts[:size] && !opts[:size].positive?
+abort "h3: --steps must be > 0" unless opts[:steps].positive?
+if opts[:images].any? && opts[:size].nil? && !opts[:aspect_given]
   width = height = 0 # ComfyUI uses image 1's size
 else
   aw, ah = opts[:aspect].split(":").map(&:to_f)
@@ -111,19 +138,25 @@ unless up?
   python = File.join(COMFY_DIR, ".venv/bin/python")
   abort "h3: no ComfyUI venv at #{python}" unless File.executable?(python)
   FileUtils.mkdir_p(File.dirname(LOG))
+  FileUtils.mkdir_p(File.dirname(PID_FILE))
   warn "h3: starting ComfyUI (log #{LOG})"
   pid = Process.spawn({"PYTORCH_ENABLE_MPS_FALLBACK" => "1"},
-                      python, "#{COMFY_DIR}/main.py", "--listen", HOST, "--port", PORT.to_s,
+                      python, "#{COMFY_DIR}/main.py", "--listen", LISTEN, "--port", PORT.to_s,
                       chdir: COMFY_DIR, out: [LOG, "a"], err: [LOG, "a"], pgroup: true)
-  Process.detach(pid)
+  File.write(PID_FILE, pid.to_s)
+  watcher = Process.detach(pid)
   deadline = Time.now + 180
-  sleep 1 until up? || Time.now > deadline
+  sleep 1 until up? || !watcher.alive? || Time.now > deadline
+  abort "h3: ComfyUI exited while starting; see #{LOG}" if !up? && !watcher.alive?
   abort "h3: ComfyUI didn't come up in 3 min; see #{LOG}" unless up?
 end
 
 def upload(path)
   boundary = "h3#{rand(2**64).to_s(16)}"
-  name = "h3_#{File.basename(path)}"
+  # Content-addressed so two queued jobs that both reference e.g. -i me.jpg
+  # (from different directories, or edited in between) don't clobber each
+  # other's upload on the server while one is still pending.
+  name = "h3_#{Digest::SHA256.file(path).hexdigest[0, 16]}#{File.extname(path)}"
   body = "--#{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"#{name}\"\r\n" \
          "Content-Type: application/octet-stream\r\n\r\n".b + File.binread(path) +
          "\r\n--#{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\ntrue\r\n--#{boundary}--\r\n".b
@@ -153,8 +186,9 @@ opts[:images].each_with_index do |path, i|
 end
 
 res = http.post("/prompt", JSON.generate(prompt: graph), "Content-Type" => "application/json")
-body = JSON.parse(res.body)
-abort "h3: ComfyUI rejected the job: #{res.body}" unless res.is_a?(Net::HTTPSuccess) && body["prompt_id"]
+abort "h3: ComfyUI rejected the job: #{res.body}" unless res.is_a?(Net::HTTPSuccess)
+body = JSON.parse(res.body) rescue abort("h3: ComfyUI rejected the job: #{res.body}")
+abort "h3: ComfyUI rejected the job: #{res.body}" unless body["prompt_id"]
 id = body["prompt_id"]
 q = JSON.parse(http.get("/queue").body) rescue {}
 queued = q.fetch("queue_running", []).size + q.fetch("queue_pending", []).size - 1
@@ -162,6 +196,9 @@ size_desc = width.zero? ? "size of image 1" : "#{width}×#{height}"
 warn "h3: #{size_desc}#{", #{opts[:images].size} image(s)" if opts[:images].any?}, seed #{seed}, job #{id[0, 8]}#{" (#{queued} ahead in queue)" if queued.positive?}"
 
 started = Time.now
+timeout = Integer(ENV.fetch("H3_TIMEOUT", 30 * 60))
+deadline = started + timeout
+last_queue_check = started
 loop do
   sleep 3
   hist = JSON.parse(http.get("/history/#{id}").body)[id]
@@ -174,13 +211,30 @@ loop do
     img = hist.dig("outputs", "8", "images", 0)
     abort "h3: finished without an image: #{hist["status"].to_json}" unless img
     path = File.join(COMFY_DIR, "output", img["subfolder"].to_s, img["filename"])
+    $stderr.print "\r\e[K" if $stderr.tty?
     warn format("h3: done in %ds", Time.now - started)
     puts path
     system("open", path) if opts[:open]
     break
   end
+  if Time.now - last_queue_check > 30
+    q = JSON.parse(http.get("/queue").body)
+    still_queued = (q["queue_running"] + q["queue_pending"]).any? { |item| item[1] == id }
+    abort "h3: job #{id[0, 8]} dropped out of ComfyUI's queue; see #{LOG}" unless still_queued
+    last_queue_check = Time.now
+  end
+  abort "h3: gave up after #{timeout}s waiting for ComfyUI (H3_TIMEOUT); see #{LOG}" if Time.now > deadline
   $stderr.print "\rh3: rendering… #{(Time.now - started).to_i}s " if $stderr.tty?
+rescue SystemCallError, Net::ReadTimeout, IOError
+  abort "h3: lost ComfyUI; see #{LOG}"
 rescue Interrupt
-  http.post("/interrupt", "") rescue nil
-  abort "\nh3: interrupted (sent interrupt to ComfyUI)"
+  q = JSON.parse(http.get("/queue").body) rescue {}
+  pending_ids = q.fetch("queue_pending", []).map { |item| item[1] }
+  if pending_ids.include?(id)
+    http.post("/queue", JSON.generate(delete: [id]), "Content-Type" => "application/json") rescue nil
+    abort "\nh3: interrupted (cancelled job #{id[0, 8]}, which hadn't started)"
+  else
+    http.post("/interrupt", JSON.generate(prompt_id: id), "Content-Type" => "application/json") rescue nil
+    abort "\nh3: interrupted (sent interrupt to ComfyUI)"
+  end
 end
