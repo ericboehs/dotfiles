@@ -24,10 +24,12 @@ HOST = ENV.fetch("H3_HOST", "127.0.0.1")
 # (what we connect to) and LISTEN (what ComfyUI binds to) are separate so a
 # remote H3_HOST doesn't silently expose an unauthenticated ComfyUI to the LAN.
 LISTEN = ENV.fetch("H3_LISTEN", "127.0.0.1")
+LOOPBACK = %w[127.0.0.1 localhost ::1].freeze
 PORT = Integer(ENV.fetch("H3_PORT", "8188"))
+TIMEOUT = Integer(ENV.fetch("H3_TIMEOUT", "1800"), 10)
+abort "h3: H3_TIMEOUT must be a positive integer" unless TIMEOUT.positive?
 LOG = File.expand_path("~/Library/Logs/comfyui.log")
 PID_FILE = File.expand_path("~/Library/Caches/h3/comfy.pid")
-warn "h3: warning: ComfyUI will listen on #{LISTEN}, not just loopback" unless %w[127.0.0.1 localhost ::1].include?(LISTEN)
 
 opts = {size: nil, images: [], aspect: "1:1", seed: nil, steps: 6, open: true, prefix: "h3",
         unet: "MiniMax-H3-Image-Pruned-Q4_K_M.gguf",
@@ -80,13 +82,31 @@ end
 if opts[:stop]
   pid = comfy_pid
   if pid
-    begin
+    killed = begin
       Process.kill("TERM", -pid) # whole process group; started with pgroup: true
+      true
     rescue Errno::ESRCH, Errno::EPERM
-      # already gone, or belongs to someone else now
+      false # already gone, or belongs to someone else now
     end
     FileUtils.rm_f(PID_FILE)
-    puts "stopped ComfyUI (#{pid})"
+    if killed
+      alive = true
+      10.times do
+        begin
+          Process.kill(0, pid)
+        rescue Errno::ESRCH
+          alive = false
+          break
+        end
+        sleep 1
+      end
+      Process.kill("KILL", -pid) if alive
+      puts "stopped ComfyUI (#{pid})"
+    else
+      puts "ComfyUI (#{pid}) was already gone"
+    end
+  elsif up?
+    puts "ComfyUI is up on #{PORT} but wasn't started by h3 (pid file missing); pids: `lsof -ti tcp:#{PORT} -sTCP:LISTEN`"
   else
     puts "ComfyUI isn't running"
   end
@@ -137,28 +157,44 @@ seed = opts[:seed] || rand(2**48)
 unless up?
   python = File.join(COMFY_DIR, ".venv/bin/python")
   abort "h3: no ComfyUI venv at #{python}" unless File.executable?(python)
+  if !LOOPBACK.include?(HOST) && HOST != LISTEN
+    abort "h3: H3_HOST=#{HOST} isn't loopback and ComfyUI isn't up there; " \
+          "set H3_LISTEN=#{HOST} to expose it, or start ComfyUI yourself"
+  end
   FileUtils.mkdir_p(File.dirname(LOG))
   FileUtils.mkdir_p(File.dirname(PID_FILE))
-  warn "h3: starting ComfyUI (log #{LOG})"
-  pid = Process.spawn({"PYTORCH_ENABLE_MPS_FALLBACK" => "1"},
-                      python, "#{COMFY_DIR}/main.py", "--listen", LISTEN, "--port", PORT.to_s,
-                      chdir: COMFY_DIR, out: [LOG, "a"], err: [LOG, "a"], pgroup: true)
-  File.write(PID_FILE, pid.to_s)
-  watcher = Process.detach(pid)
-  deadline = Time.now + 180
-  sleep 1 until up? || !watcher.alive? || Time.now > deadline
-  abort "h3: ComfyUI exited while starting; see #{LOG}" if !up? && !watcher.alive?
-  abort "h3: ComfyUI didn't come up in 3 min; see #{LOG}" unless up?
+  lock = File.open("#{PID_FILE}.lock", File::CREAT | File::RDWR)
+  lock.flock(File::LOCK_EX)
+  begin
+    unless up?
+      warn "h3: warning: ComfyUI will listen on #{LISTEN}, not just loopback" unless LOOPBACK.include?(LISTEN)
+      warn "h3: starting ComfyUI (log #{LOG})"
+      pid = Process.spawn({"PYTORCH_ENABLE_MPS_FALLBACK" => "1"},
+                          python, "#{COMFY_DIR}/main.py", "--listen", LISTEN, "--port", PORT.to_s,
+                          chdir: COMFY_DIR, out: [LOG, "a"], err: [LOG, "a"], pgroup: true)
+      watcher = Process.detach(pid)
+      deadline = Time.now + 180
+      sleep 1 until up? || !watcher.alive? || Time.now > deadline
+      abort "h3: ComfyUI exited while starting; see #{LOG}" if !up? && !watcher.alive?
+      abort "h3: ComfyUI didn't come up in 3 min; see #{LOG}" unless up?
+      File.write(PID_FILE, pid.to_s) if up? && watcher.alive?
+    end
+  ensure
+    lock.flock(File::LOCK_UN)
+    lock.close
+  end
 end
 
 def upload(path)
   boundary = "h3#{rand(2**64).to_s(16)}"
+  data = File.binread(path)
   # Content-addressed so two queued jobs that both reference e.g. -i me.jpg
   # (from different directories, or edited in between) don't clobber each
   # other's upload on the server while one is still pending.
-  name = "h3_#{Digest::SHA256.file(path).hexdigest[0, 16]}#{File.extname(path)}"
+  ext = File.extname(path).downcase[/\A\.[a-z0-9]{1,5}\z/].to_s
+  name = "h3_#{Digest::SHA256.hexdigest(data)[0, 16]}#{ext}"
   body = "--#{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"#{name}\"\r\n" \
-         "Content-Type: application/octet-stream\r\n\r\n".b + File.binread(path) +
+         "Content-Type: application/octet-stream\r\n\r\n".b + data +
          "\r\n--#{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\ntrue\r\n--#{boundary}--\r\n".b
   res = http.post("/upload/image", body, "Content-Type" => "multipart/form-data; boundary=#{boundary}")
   abort "h3: upload of #{path} failed: #{res.body}" unless res.is_a?(Net::HTTPSuccess)
@@ -196,8 +232,8 @@ size_desc = width.zero? ? "size of image 1" : "#{width}×#{height}"
 warn "h3: #{size_desc}#{", #{opts[:images].size} image(s)" if opts[:images].any?}, seed #{seed}, job #{id[0, 8]}#{" (#{queued} ahead in queue)" if queued.positive?}"
 
 started = Time.now
-timeout = Integer(ENV.fetch("H3_TIMEOUT", 30 * 60))
-deadline = started + timeout
+timeout = TIMEOUT
+deadline = nil
 last_queue_check = started
 loop do
   sleep 3
@@ -219,22 +255,31 @@ loop do
   end
   if Time.now - last_queue_check > 30
     q = JSON.parse(http.get("/queue").body)
-    still_queued = (q["queue_running"] + q["queue_pending"]).any? { |item| item[1] == id }
-    abort "h3: job #{id[0, 8]} dropped out of ComfyUI's queue; see #{LOG}" unless still_queued
+    running_ids = q["queue_running"].map { |item| item[1] }
+    still_queued = running_ids.include?(id) || q["queue_pending"].any? { |item| item[1] == id }
+    unless still_queued
+      next if JSON.parse(http.get("/history/#{id}").body)[id]
+      abort "h3: job #{id} dropped out of ComfyUI's queue; see #{LOG}"
+    end
+    deadline ||= Time.now + timeout if running_ids.include?(id)
     last_queue_check = Time.now
   end
-  abort "h3: gave up after #{timeout}s waiting for ComfyUI (H3_TIMEOUT); see #{LOG}" if Time.now > deadline
+  abort "h3: gave up after #{timeout}s waiting for job #{id} to render; see `h3 -q`" if deadline && Time.now > deadline
   $stderr.print "\rh3: rendering… #{(Time.now - started).to_i}s " if $stderr.tty?
-rescue SystemCallError, Net::ReadTimeout, IOError
+rescue SystemCallError, Net::ReadTimeout, Net::OpenTimeout, IOError, JSON::ParserError
   abort "h3: lost ComfyUI; see #{LOG}"
 rescue Interrupt
-  q = JSON.parse(http.get("/queue").body) rescue {}
+  trap("INT", "IGNORE")
+  fast = http
+  fast.read_timeout = 3
+  q = JSON.parse(fast.get("/queue").body) rescue {}
   pending_ids = q.fetch("queue_pending", []).map { |item| item[1] }
   if pending_ids.include?(id)
-    http.post("/queue", JSON.generate(delete: [id]), "Content-Type" => "application/json") rescue nil
+    fast.post("/queue", JSON.generate(delete: [id]), "Content-Type" => "application/json") rescue nil
+    fast.post("/interrupt", JSON.generate(prompt_id: id), "Content-Type" => "application/json") rescue nil
     abort "\nh3: interrupted (cancelled job #{id[0, 8]}, which hadn't started)"
   else
-    http.post("/interrupt", JSON.generate(prompt_id: id), "Content-Type" => "application/json") rescue nil
+    fast.post("/interrupt", JSON.generate(prompt_id: id), "Content-Type" => "application/json") rescue nil
     abort "\nh3: interrupted (sent interrupt to ComfyUI)"
   end
 end
