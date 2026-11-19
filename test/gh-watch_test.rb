@@ -3,8 +3,8 @@
 # Tests for bin/gh-watch. Run: ruby test/gh-watch_test.rb
 #
 # The script runs as a subprocess against a TCPServer fake of the GitHub REST
-# and GraphQL APIs (GH_WATCH_API_BASE), with a fake `gh` on PATH for the token
-# and GH_WATCH_NOW for the clock.
+# and GraphQL APIs (GHWATCH_TEST_API_BASE, loopback only), with a fake `gh` on
+# PATH for the token and GHWATCH_TEST_NOW for the clock.
 
 require 'minitest/autorun'
 require 'json'
@@ -28,9 +28,14 @@ end
 
 # A tiny HTTP/1.1 server: one request per connection, routed by a block.
 class FakeGitHub
-  Request = Struct.new(:method, :target, :headers, :body, keyword_init: true) do
-    def path = target.split('?').first
-    def json = JSON.parse(body)
+  Request = Struct.new(:http_method, :target, :headers, :body, keyword_init: true) do
+    def path
+      target.split('?').first
+    end
+
+    def json
+      JSON.parse(body)
+    end
   end
 
   attr_reader :requests, :port
@@ -43,14 +48,26 @@ class FakeGitHub
     @thread = Thread.new { loop { handle(@server.accept) } }
   end
 
-  def base = "http://127.0.0.1:#{@port}"
+  def base
+    "http://127.0.0.1:#{@port}"
+  end
 
   def stop
     @thread.kill
     @server.close
   end
 
-  def graphql_requests = @requests.select { |r| r.path == '/graphql' }
+  def graphql_requests
+    @requests.select { |r| r.path == '/graphql' }
+  end
+
+  def main_queries
+    graphql_requests.select { |r| r.json['query'].include?('closed: pullRequests') }
+  end
+
+  def detail_queries
+    graphql_requests.select { |r| r.json['query'].include?('p0: pullRequest(') }
+  end
 
   private
 
@@ -63,7 +80,7 @@ class FakeGitHub
       headers[k.strip.downcase] = v.strip
     end
     body = headers['content-length'] ? sock.read(headers['content-length'].to_i) : ''
-    req = Request.new(method: method, target: target, headers: headers, body: body)
+    req = Request.new(http_method: method, target: target, headers: headers, body: body)
     @requests << req
     status, extra, payload = @router.call(req)
     payload = payload.is_a?(String) ? payload : JSON.generate(payload)
@@ -118,8 +135,8 @@ module Fixtures
     { 'id' => 'T_1', 'comments' => conn(comments) }
   end
 
-  def inline(id, who, at, path, body)
-    comment(id, who, at, body).merge('path' => path)
+  def inline(id, who, at, path, body, review: nil)
+    comment(id, who, at, body).merge('path' => path, 'pullRequestReview' => review && { 'databaseId' => review })
   end
 
   def closed(number:, state:, closed_at:, by: 'bob', updated: closed_at)
@@ -149,9 +166,17 @@ class GhWatchTest < Minitest::Test
     FileUtils.mkdir_p(@state_dir)
     @bin = File.join(@tmp, 'bin')
     FileUtils.mkdir_p(@bin)
+    @gh_log = File.join(@tmp, 'gh.log')
     File.write(File.join(@bin, 'gh'), <<~SH)
       #!/bin/sh
-      if [ "$1 $2 $3" = "auth token --hostname" ] && [ "$4" = "github.com" ]; then echo #{TOKEN}; exit 0; fi
+      echo "$* ent=${GH_ENTERPRISE_TOKEN:-}" >> #{@gh_log}
+      if [ "$1 $2 $3" = "auth status --hostname" ]; then
+        case "$4" in github.com|ghe.example.com) exit 0 ;; esac
+      fi
+      if [ "$1 $2 $3" = "auth token --hostname" ]; then
+        if [ "$4" = "github.com" ]; then echo #{TOKEN}; exit 0; fi
+        if [ "$4" = "ghe.example.com" ] && [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then echo "$GH_ENTERPRISE_TOKEN"; exit 0; fi
+      fi
       echo "not logged in" >&2; exit 1
     SH
     File.chmod(0o755, File.join(@bin, 'gh'))
@@ -167,7 +192,7 @@ class GhWatchTest < Minitest::Test
 
   def server
     @server ||= FakeGitHub.new do |req|
-      custom = @routes.find { |pattern, _| req.target.match?(pattern) || "#{req.method} #{req.path}" == pattern }
+      custom = @routes.find { |pattern, _| req.target.match?(pattern) || "#{req.http_method} #{req.path}" == pattern }
       if custom
         custom[1].call(req)
       elsif req.path == '/repos/acme/widgets/pulls'
@@ -175,13 +200,26 @@ class GhWatchTest < Minitest::Test
       elsif req.path == '/repos/acme/widgets/issues' && req.target.match?(/per_page=1(&|\z)/)
         [200, { 'ETag' => 'W/"i1"' }, []]
       elsif req.path == '/graphql'
-        [200, {}, @gql]
+        [200, {}, req.json['query'].include?('p0: pullRequest(') ? details_for(req) : @gql]
       elsif req.path == '/user'
         [200, {}, { 'login' => 'octocat' }]
       else
         [404, {}, { 'message' => 'Not Found' }]
       end
     end
+  end
+
+  # The nested reviews/comments query, answered from the open PRs in @gql.
+  def details_for(req)
+    open = @gql.dig('data', 'repository', 'open', 'nodes')
+    repo = {}
+    req.json['variables'].each do |k, v|
+      next unless (m = k.match(/\An(\d+)\z/))
+
+      node = open.find { |p| p['number'] == v }
+      repo["p#{m[1]}"] = node&.slice('number', 'reviews', 'comments', 'reviewThreads')
+    end
+    { 'data' => { 'repository' => repo, 'rateLimit' => { 'cost' => 1, 'remaining' => 4996 } } }
   end
 
   def write_state(state)
@@ -195,9 +233,10 @@ class GhWatchTest < Minitest::Test
 
   def run_watch(*args, env: {})
     full_env = {
-      'PATH' => "#{@bin}:#{ENV.fetch('PATH')}", 'GH_WATCH_API_BASE' => server.base, 'GH_WATCH_NOW' => NOW.iso8601,
+      'PATH' => "#{@bin}:#{ENV.fetch('PATH')}", 'GHWATCH_TEST_API_BASE' => server.base, 'GHWATCH_TEST_NOW' => NOW.iso8601,
       'WATCHER_STATE_DIR' => @state_dir, 'WATCHER_REPO' => 'acme/widgets', 'WATCHER_HOST' => 'github.com',
-      'WATCHER_ME' => 'octocat', 'GH_TOKEN' => nil, 'GITHUB_TOKEN' => nil
+      'WATCHER_ME' => 'octocat', 'WATCHER_CWD' => nil, 'GH_TOKEN' => nil, 'GITHUB_TOKEN' => nil,
+      'GH_ENTERPRISE_TOKEN' => nil, 'GITHUB_ENTERPRISE_TOKEN' => nil
     }.merge(env)
     args = ['--jsonl'] if args.empty?
     out, err, st = Open3.capture3(full_env, RbConfig.ruby, SCRIPT, *args)
@@ -211,7 +250,9 @@ class GhWatchTest < Minitest::Test
     JSON.parse(File.read(File.join(@state_dir, 'state.json.next')))
   end
 
-  def by_id(events) = events.to_h { |e| [e['id'], e] }
+  def by_id(events)
+    events.to_h { |e| [e['id'], e] }
+  end
 
   # ---- first sight, change check, refresh ------------------------------
 
@@ -220,7 +261,7 @@ class GhWatchTest < Minitest::Test
                           pr(number: 6, created: ago(600), author: 'bob')])
     events = run_watch
     assert_equal 0, @status, @err
-    assert_equal ['gh:opened:6'], events.map { |e| e['id'] }
+    assert_equal(['gh:opened:6'], events.map { |e| e['id'] })
     assert_equal 'info', events.first['kind']
     st = next_state
     assert_equal SHA_A, st['prs']['5']['head']
@@ -230,12 +271,12 @@ class GhWatchTest < Minitest::Test
     assert_equal "Bearer #{TOKEN}", server.requests.first.headers['authorization']
   end
 
-  def test_304_skips_graphql_and_advances_since
+  def test_304_skips_graphql_and_holds_since
     write_state(base_state('etag' => @etag))
     assert_empty run_watch
     assert_equal 0, @status, @err
     assert_empty server.graphql_requests
-    assert_equal NOW.iso8601, next_state['since']
+    assert_equal ago(300), next_state['since'], 'no query read anything'
     assert_equal ago(120), next_state['last_full']
   end
 
@@ -244,7 +285,8 @@ class GhWatchTest < Minitest::Test
     run_watch
     assert_equal 1, server.graphql_requests.size
     assert_equal @etag, next_state['etag']
-    assert_equal NOW.iso8601, next_state['last_full']
+    assert_equal NOW.iso8601, next_state['since']
+    assert_equal ago(120), next_state['last_full'], 'last_full marks the five-minute refresh only'
   end
 
   def test_pending_ci_bypasses_304
@@ -252,8 +294,8 @@ class GhWatchTest < Minitest::Test
                            'prs' => { '5' => { 'head' => SHA_A, 'ci' => 'pending', 'head_at' => ago(200) } }))
     @gql = graphql(open: [pr(number: 5, rollup: 'SUCCESS')])
     events = run_watch
-    assert_equal 1, server.graphql_requests.size
-    assert_equal ["gh:ci:5:#{SHA_A[0, 12]}:success"], events.map { |e| e['id'] }
+    assert_equal 1, server.main_queries.size
+    assert_equal(["gh:ci:5:#{SHA_A[0, 12]}:success"], events.map { |e| e['id'] })
   end
 
   def test_five_minute_full_refresh
@@ -278,7 +320,7 @@ class GhWatchTest < Minitest::Test
                            'prs' => { '5' => { 'head' => SHA_B, 'ci' => 'success' } }))
     @gql = graphql(open: [pr(number: 5)])
     assert_empty run_watch # first sight again: no PUSH for the changed head
-    assert_equal 1, server.graphql_requests.size
+    assert_equal 1, server.main_queries.size
     assert_equal 'acme/widgets', next_state['repo']
   end
 
@@ -297,7 +339,8 @@ class GhWatchTest < Minitest::Test
     ev = by_id(run_watch)
     sha = SHA_B[0, 12]
     ci5 = ev.fetch("gh:ci:5:#{SHA_A[0, 12]}:failure")
-    assert_equal %w[act CI failure ci], ci5.values_at('kind', 'verb', 'state', 'actor')
+    assert_equal %w[act CI failure octocat], ci5.values_at('kind', 'verb', 'state', 'actor'),
+                 'CI on my PR wakes me even though I am its actor'
     assert_equal 'https://github.com/acme/widgets/pull/5/checks', ci5['url']
     refute ev.key?("gh:push:6:#{sha}"), 'own push is skipped'
     assert_equal 'info', ev.fetch("gh:ci:6:#{sha}:success")['kind']
@@ -369,7 +412,7 @@ class GhWatchTest < Minitest::Test
     @gql = graphql(open: [pr(number: 5, author: 'octocat',
                              reviews: [review(101, 'alice', 'CHANGES_REQUESTED', ago(60))],
                              comments: [comment(203, 'dependabot', ago(20), 'bump', type: 'Bot')])])
-    assert_equal %w[info info], run_watch('--jsonl', '--act-on', 'none').map { |e| e['kind'] }
+    assert_equal(%w[info info], run_watch('--jsonl', '--act-on', 'none').map { |e| e['kind'] })
     ev = by_id(run_watch('--jsonl', '--no-wake-actors', 'alice'))
     assert_equal 0, @status, @err
     assert_equal 'info', ev['gh:review:101']['kind']
@@ -382,7 +425,7 @@ class GhWatchTest < Minitest::Test
                           pr(number: 9, author: 'zed', created: ago(100)),
                           pr(number: 10, author: 'dependabot', author_type: 'Bot', created: ago(100))])
     ev = by_id(run_watch('--jsonl', '--wake-authors', 'Alice'))
-    assert_equal %w[act info info], %w[8 9 10].map { |n| ev["gh:opened:#{n}"]['kind'] }
+    assert_equal(%w[act info info], %w[8 9 10].map { |n| ev["gh:opened:#{n}"]['kind'] })
     assert_equal 'dependabot[bot]', ev['gh:opened:10']['actor']
 
     @routes['GET /orgs/acme/teams/core/members'] = ->(_) { [200, {}, [{ 'login' => 'zed' }]] }
@@ -395,7 +438,7 @@ class GhWatchTest < Minitest::Test
     write_state(base_state('team' => team))
     before = server.requests.count { |r| r.path.start_with?('/orgs/') }
     run_watch('--jsonl', '--wake-team', 'acme/core')
-    assert_equal before, server.requests.count { |r| r.path.start_with?('/orgs/') }
+    assert_equal(before, server.requests.count { |r| r.path.start_with?('/orgs/') })
   end
 
   def test_merged_and_closed
@@ -415,15 +458,17 @@ class GhWatchTest < Minitest::Test
     write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
     @gql = graphql(open: [pr(number: 5, comments: [comment(202, 'bob', ago(20))], comments_more: true)])
     @routes[%r{\A/graphql}] = lambda do |req|
-      if req.json['query'].include?('pullRequest(number:')
+      if req.json['query'].include?('pullRequest(number: $number)')
         assert_equal 'CUR', req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => { 'comments' => conn([comment(201, 'alice', ago(40))]) } },
                                 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif req.json['query'].include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
       else
         [200, {}, @gql]
       end
     end
-    assert_equal %w[gh:comment:201 gh:comment:202], run_watch.map { |e| e['id'] }
+    assert_equal(%w[gh:comment:201 gh:comment:202], run_watch.map { |e| e['id'] })
   end
 
   def test_event_cap_holds_since_at_first_unemitted
@@ -438,7 +483,7 @@ class GhWatchTest < Minitest::Test
   def test_base_branch_filter
     write_state(base_state)
     @gql = graphql(open: [pr(number: 8, created: ago(10), base: 'main'), pr(number: 9, created: ago(10), base: 'dev')])
-    assert_equal ['gh:opened:9'], run_watch('--jsonl', '--base', 'dev').map { |e| e['id'] }
+    assert_equal(['gh:opened:9'], run_watch('--jsonl', '--base', 'dev').map { |e| e['id'] })
   end
 
   # ---- issues -----------------------------------------------------------
@@ -452,7 +497,7 @@ class GhWatchTest < Minitest::Test
         { 'number' => 42, 'title' => 'A PR', 'created_at' => ago(60), 'state' => 'open', 'pull_request' => {},
           'user' => { 'login' => 'bob' } },
         { 'number' => 43, 'title' => 'Done', 'created_at' => ago(90_000), 'state' => 'closed', 'closed_at' => '2026-11-19T11:59:00Z',
-          'user' => { 'login' => 'bob' }, 'closed_by' => { 'login' => 'carol' } }
+          'user' => { 'login' => 'bob' } }
       ]]
     end
     @routes[%r{issues/comments\?}] = lambda do |_|
@@ -466,7 +511,7 @@ class GhWatchTest < Minitest::Test
     assert_equal %w[issue:40 OPENED open], ev['gh:opened:40'].values_at('subject', 'verb', 'state')
     assert_equal 'https://github.com/acme/widgets/issues/40', ev['gh:opened:40']['url']
     assert_equal %w[issue:41 conversation still\ broken], ev['gh:comment:501'].values_at('subject', 'state', 'untrusted')
-    assert_equal 'carol', ev['gh:closed:43:20261119115900']['actor']
+    assert_equal 'unknown', ev['gh:closed:43:20261119115900']['actor'], 'issue lists have no closed_by'
     assert_equal 'W/"i1"', next_state['issues_etag']
     assert_empty server.graphql_requests, 'PR etag 304 and nothing pending'
   end
@@ -523,7 +568,7 @@ class GhWatchTest < Minitest::Test
     run_watch('--once', '--text', '--repo', 'acme/widgets')
     assert_equal 0, @status, @err
     assert_includes @out, '[info] OPENED pr:6 open by alice "PR 6 title"'
-    assert_includes @out, 'rateLimit cost 3'
+    assert_includes @out, 'rateLimit cost 4' # heads 3 + details 1
   end
 
   # ---- repo resolution ----------------------------------------------------
@@ -556,17 +601,26 @@ class GhWatchTest < Minitest::Test
     @gql = graphql
     [['git@github.com:acme/widgets.git', 'origin'], ['https://github.com/acme/widgets.git', 'upstream']].each do |url, name|
       dir = git_repo(url, name)
-      run_watch(env: { 'WATCHER_REPO' => nil, 'WATCHER_HOST' => nil, 'WATCHER_CWD' => dir })
+      run_watch('--once', '--text', '--state-dir', @state_dir,
+                env: { 'WATCHER_REPO' => nil, 'WATCHER_HOST' => nil, 'WATCHER_CWD' => dir })
       assert_equal 0, @status, @err
-      assert_equal 'acme/widgets', next_state['repo']
-      assert_equal 'github.com', next_state['host']
+      st = JSON.parse(File.read(File.join(@state_dir, 'state.json')))
+      assert_equal 'acme/widgets', st['repo']
+      assert_equal 'github.com', st['host']
     end
   end
 
   def test_not_a_git_repo
-    run_watch(env: { 'WATCHER_REPO' => nil, 'WATCHER_CWD' => @tmp })
+    run_watch('--once', '--text', env: { 'WATCHER_REPO' => nil, 'WATCHER_CWD' => @tmp })
     assert_equal 2, @status
     assert_match(/not a git repo/, @err)
+  end
+
+  def test_jsonl_with_cwd_but_no_repo_refuses_the_remote
+    dir = git_repo('git@github.com:acme/widgets.git')
+    run_watch(env: { 'WATCHER_REPO' => nil, 'WATCHER_HOST' => nil, 'WATCHER_CWD' => dir })
+    assert_equal [2, "gh-watch: WATCHER_CWD is set without WATCHER_REPO; pass --repo OWNER/NAME\n"], [@status, @err]
+    assert_empty server.requests
   end
 
   # ---- token safety ---------------------------------------------------------
@@ -584,6 +638,184 @@ class GhWatchTest < Minitest::Test
     run_watch
     assert_equal 2, @status
     assert_equal 1, server.requests.size
+  end
+
+  def test_remote_host_needs_gh_auth_status_and_gets_no_env_token
+    env = { 'WATCHER_REPO' => nil, 'WATCHER_HOST' => nil, 'GH_ENTERPRISE_TOKEN' => 'env-secret' }
+    dir = git_repo('git@evil.example.com:acme/widgets.git')
+    run_watch('--once', '--text', env: env.merge('WATCHER_CWD' => dir))
+    assert_equal [2, "gh-watch: remote host evil.example.com is not logged in to gh; pass --host and --repo\n"],
+                 [@status, @err]
+    assert_equal ["auth status --hostname evil.example.com ent="], File.readlines(@gh_log, chomp: true)
+    assert_empty server.requests
+
+    # A logged-in remote host still never sees the env token.
+    FileUtils.rm_rf(dir)
+    dir = git_repo('git@ghe.example.com:acme/widgets.git')
+    File.write(@gh_log, '')
+    run_watch('--once', '--text', env: env.merge('WATCHER_CWD' => dir))
+    assert_equal 2, @status
+    assert_match(/no gh auth for ghe\.example\.com/, @err)
+    assert(File.readlines(@gh_log, chomp: true).all? { |l| l.end_with?('ent=') })
+
+    # A host the user configured keeps its enterprise token.
+    File.write(@gh_log, '')
+    run_watch(env: { 'WATCHER_HOST' => 'ghe.example.com', 'GH_ENTERPRISE_TOKEN' => 'env-secret' })
+    assert_equal 0, @status, @err
+    assert_equal ['auth token --hostname ghe.example.com ent=env-secret'], File.readlines(@gh_log, chomp: true)
+    assert_equal 'Bearer env-secret', server.requests.last.headers['authorization']
+  end
+
+  def test_test_api_base_must_be_loopback
+    %w[https://evil.example.com http://10.0.0.1:8080 not-a-url].each do |base|
+      run_watch(env: { 'GHWATCH_TEST_API_BASE' => base })
+      assert_equal [2, "gh-watch: GHWATCH_TEST_API_BASE must be a loopback URL\n"], [@status, @err], base
+    end
+    refute File.exist?(@gh_log), 'refused before any token is fetched'
+  end
+
+  def test_ghe_fallback_only_on_first_request_without_cache
+    fake = Class.new do
+      attr_reader :urls
+
+      def initialize
+        @urls = []
+      end
+
+      def request(_method, url, **)
+        @urls << url
+        url.start_with?('https://api.example.ghe.com/') ? [200, {}, '{"login":"x"}'] : [404, {}, '{}']
+      end
+    end
+    bases = GhWatch.api_bases('example.ghe.com')
+    http = fake.new
+    api = GhWatch::Api.new(http: http, host: 'example.ghe.com', bases: bases, fallback: true)
+    api.get('/repos/a/b/pulls')
+    assert_equal 'https://api.example.ghe.com', api.bases[:rest]
+    assert_equal %w[https://example.ghe.com/api/v3/repos/a/b/pulls https://api.example.ghe.com/repos/a/b/pulls], http.urls
+
+    api = GhWatch::Api.new(http: fake.new, host: 'example.ghe.com', bases: bases, fallback: false)
+    assert_raises(GhWatch::ApiError) { api.get('/repos/a/b/pulls') }
+
+    # A later 404 (a team without read:org, say) never rewrites the bases.
+    flaky = fake.new
+    def flaky.request(_method, url, **)
+      @urls << url
+      @urls.size == 1 ? [200, {}, '{}'] : [404, {}, '{}']
+    end
+    api = GhWatch::Api.new(http: flaky, host: 'example.ghe.com', bases: bases, fallback: true)
+    api.get('/repos/a/b/pulls')
+    assert_raises(GhWatch::ApiError) { api.get('/orgs/a/teams/b/members') }
+    assert_equal 'https://example.ghe.com/api/v3', api.bases[:rest]
+  end
+
+  # ---- query cost, cap, paging --------------------------------------------
+
+  def test_nested_query_only_for_updated_prs
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' },
+                                      '6' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    @gql = graphql(open: [pr(number: 5, updated: ago(30), comments: [comment(201, 'alice', ago(30))]),
+                          pr(number: 6, updated: ago(4000), comments: [comment(202, 'alice', ago(10))])])
+    assert_equal(['gh:comment:201'], run_watch.map { |e| e['id'] })
+    main = server.main_queries.first.json['query']
+    assert_includes main, 'pullRequests(states: [OPEN], first: 50'
+    refute_includes main, 'reviews(', 'the heads query has no nested connections'
+    assert_equal 1, server.detail_queries.size
+    assert_equal({ 'owner' => 'acme', 'name' => 'widgets', 'n0' => 5 }, server.detail_queries.first.json['variables'])
+    assert_equal 4, next_state['rate_limit']['cost']
+  end
+
+  def test_heads_beyond_the_cap_carry_over_until_refresh
+    old = { '5' => { 'head' => SHA_A, 'ci' => 'none' }, '99' => { 'head' => SHA_A, 'ci' => 'none' } }
+    write_state(base_state('prs' => old))
+    @gql = graphql(open: [pr(number: 5, updated: ago(4000))])
+    @gql['data']['repository']['open']['pageInfo'] = { 'hasNextPage' => true, 'endCursor' => 'NEXT' }
+    @routes['POST /graphql'] = lambda do |req|
+      if req.json['query'].include?('closed: pullRequests')
+        [200, {}, @gql]
+      else
+        assert_equal 'NEXT', req.json['variables']['openAfter']
+        [200, {}, { 'data' => { 'repository' => { 'open' => {
+          'pageInfo' => { 'hasNextPage' => false }, 'nodes' => [pr(number: 99, updated: ago(9000), head: SHA_B, head_author: 'bob')]
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      end
+    end
+    assert_empty run_watch
+    assert_equal 1, server.graphql_requests.size, 'no paging between refreshes'
+    assert_equal %w[5 99], next_state['prs'].keys.sort, '#99 keeps its snapshot'
+
+    write_state(base_state('prs' => old, 'last_full' => ago(301)))
+    assert_equal(["gh:push:99:#{SHA_B[0, 12]}"], run_watch.map { |e| e['id'] })
+    assert_equal NOW.iso8601, next_state['last_full']
+  end
+
+  def test_cap_then_304_forces_a_query_for_the_dropped_events
+    write_state(base_state)
+    @gql = graphql(open: (1..205).map { |n| pr(number: n, created: ago(250 - n)) })
+    assert_equal 200, run_watch.size
+    st = next_state
+    assert st['backlog']
+    write_state(st)
+    before = server.main_queries.size
+    ids = run_watch.map { |e| e['id'] } # the PR etag now answers 304
+    assert_equal 0, @status, @err
+    assert_equal before + 1, server.main_queries.size
+    assert_includes ids, 'gh:opened:205'
+    refute next_state.key?('backlog')
+    assert_equal NOW.iso8601, next_state['since']
+  end
+
+  def test_max_pages_is_a_failure
+    write_state(base_state('etag' => @etag))
+    @routes[/issues\?state=all&sort=updated&direction=asc/] = ->(_) { [200, {}, []] }
+    @routes[%r{issues/comments\?}] = lambda do |_|
+      [200, { 'Link' => "<#{server.base}/repos/acme/widgets/issues/comments?page=2>; rel=\"next\"" }, []]
+    end
+    run_watch('--jsonl', '--issues', 'on')
+    assert_equal [2, "gh-watch: more than 20 pages from /repos/acme/widgets/issues/comments\n"], [@status, @err]
+    refute File.exist?(File.join(@state_dir, 'state.json.next'))
+  end
+
+  def test_pending_ci_bypass_expires_after_an_hour
+    write_state(base_state('etag' => @etag,
+                           'prs' => { '5' => { 'head' => SHA_A, 'ci' => 'pending', 'head_at' => ago(3601) } }))
+    run_watch
+    assert_equal 0, @status, @err
+    assert_empty server.graphql_requests
+  end
+
+  # ---- logins, reviews, errors ----------------------------------------------
+
+  def test_me_is_case_insensitive
+    write_state(base_state('me' => nil, 'prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    @gql = graphql(open: [pr(number: 5, author: 'octocat', head: SHA_B, head_author: 'octocat',
+                             reviews: [review(104, 'octocat', 'CHANGES_REQUESTED', ago(40))],
+                             comments: [comment(201, 'alice', ago(30))])])
+    ev = by_id(run_watch(env: { 'WATCHER_ME' => 'OctoCat' }))
+    assert_equal 0, @status, @err
+    refute ev.key?("gh:push:5:#{SHA_B[0, 12]}"), 'own push is skipped'
+    assert_equal 'info', ev['gh:review:104']['kind']
+    assert_equal 'act', ev['gh:comment:201']['kind'], 'still my PR'
+  end
+
+  def test_commented_review_wrapping_inline_comments_is_skipped
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    @gql = graphql(open: [pr(number: 5, author: 'octocat',
+                             reviews: [review(120, 'alice', 'COMMENTED', ago(40)),
+                                       review(121, 'alice', 'COMMENTED', ago(30), 'overall: nice')],
+                             threads: [thread(inline(310, 'alice', ago(40), 'a.rb', 'x', review: 120),
+                                              inline(311, 'alice', ago(30), 'b.rb', 'y', review: 121))])])
+    ev = by_id(run_watch)
+    assert_equal %w[gh:inline:310 gh:inline:311 gh:review:121], ev.keys.sort
+    assert_equal 'act', ev['gh:inline:310']['kind']
+  end
+
+  def test_unexpected_data_is_an_internal_error
+    write_state(base_state)
+    @gql = graphql(open: [pr(number: 5).merge('commits' => 'oops')])
+    run_watch
+    assert_equal [2, "gh-watch: internal error TypeError\n"], [@status, @err]
+    refute File.exist?(File.join(@state_dir, 'state.json.next'))
   end
 
   # ---- id stability -------------------------------------------------------

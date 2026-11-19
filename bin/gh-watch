@@ -9,11 +9,18 @@
 #   gh-watch --jsonl                     # WATCHER_STATE_DIR=... set by the host
 #
 # Each poll is a conditional REST request first (an ETag on the newest pull
-# request; a 304 is free), and one GraphQL query only when something moved,
-# CI is still pending, or five minutes have passed. Auth comes from
-# `gh auth token --hostname HOST` and is only ever sent to that host's API.
+# request; a 304 is free), and GraphQL only when something moved, CI is still
+# pending, or five minutes have passed. GraphQL is split: a cheap heads query
+# (the 50 most recently updated open PRs, every open PR on the five-minute
+# refresh) and a nested reviews/comments query only for PRs updated since the
+# last poll. Auth comes from `gh auth token --hostname HOST` and is only ever
+# sent to that host's API.
 #
-# Tests: ruby test/gh-watch_test.rb
+# Measured rateLimit cost: cli/cli (60 open PRs), first run with every head
+# paged plus the nested query for PRs updated in the last hour: 2 points.
+#
+# Tests: ruby test/gh-watch_test.rb (GHWATCH_TEST_API_BASE, loopback only, and
+# GHWATCH_TEST_NOW are test hooks)
 
 require 'fileutils'
 require 'json'
@@ -60,7 +67,11 @@ module GhWatch
   MAX_EVENTS = 200
   MAX_CONN = 100         # most nodes gathered per connection when paging back
   MAX_PAGES = 20
-  CI_ACTOR = 'ci'        # CI results have no human actor; never `me`
+  HEADS_PER_PAGE = 50    # the heads query covers this many open PRs between refreshes
+  DETAILS_BATCH = 10     # PRs per nested reviews/comments query
+  ENTERPRISE_TOKENS = %w[GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN].freeze
+  DOTCOM_TOKENS = %w[GH_TOKEN GITHUB_TOKEN].freeze
+  LOOPBACK = %w[127.0.0.1 localhost ::1].freeze
 
   module_function
 
@@ -103,6 +114,16 @@ module GhWatch
     login.to_s.downcase.delete_suffix('[bot]')
   end
 
+  # The same GitHub login, ignoring case; 'unknown' and empty never match.
+  def same_login?(left, right)
+    a = norm_login(left)
+    !a.empty? && a != 'unknown' && a == norm_login(right)
+  end
+
+  def nodes(conn)
+    conn.is_a?(Hash) ? Array(conn['nodes']).grep(Hash) : []
+  end
+
   def clean(text, max)
     s = text.to_s.dup.force_encoding('UTF-8').scrub('')
     s = s.gsub(/[[:cntrl:]]/, ' ').gsub(/\s+/, ' ').strip
@@ -124,13 +145,13 @@ module GhWatch
   end
 
   def now_from_env(env)
-    raw = env['GH_WATCH_NOW'].to_s
+    raw = env['GHWATCH_TEST_NOW'].to_s
     return Time.now.utc if raw.empty?
     return Time.at(Integer(raw)).utc if raw.match?(/\A\d+\z/)
 
     Time.iso8601(raw).utc
   rescue ArgumentError
-    raise Failure, "bad GH_WATCH_NOW: #{raw[0, 40]}"
+    raise Failure, "bad GHWATCH_TEST_NOW: #{raw[0, 40]}"
   end
 
   # A pending-or-not CI state for one head, from the rollup's state.
@@ -144,10 +165,19 @@ module GhWatch
     'none'
   end
 
-  def token_for(host, env = ENV)
-    child = {}
-    # Never let an env token meant for github.com reach another host.
-    %w[GH_TOKEN GITHUB_TOKEN].each { |k| child[k] = nil } unless host == 'github.com' || env['GH_WATCH_API_BASE']
+  # A token for host from gh. Env tokens never cross hosts: github.com ones
+  # stay off other hosts, and a host read from a git remote (not configured
+  # by the user) gets no env token at all and must be a `gh auth status` host.
+  def token_for(host, from_remote: false)
+    strip = if host == 'github.com' then ENTERPRISE_TOKENS
+            elsif from_remote then DOTCOM_TOKENS + ENTERPRISE_TOKENS
+            else DOTCOM_TOKENS
+            end
+    child = strip.to_h { |k| [k, nil] }
+    if from_remote && host != 'github.com'
+      _out, _err, st = Open3.capture3(child, 'gh', 'auth', 'status', '--hostname', host)
+      raise Failure, "remote host #{host} is not logged in to gh; pass --host and --repo" unless st.success?
+    end
     out, _err, st = Open3.capture3(child, 'gh', 'auth', 'token', '--hostname', host)
     token = out.strip
     raise Failure, "no gh auth for #{host} (run: gh auth login --hostname #{host})" unless st.success? && !token.empty?
@@ -159,8 +189,6 @@ module GhWatch
 
   # Thin Net::HTTP wrapper: https only, no redirects, auth only to known hosts.
   class Http
-    LOOPBACK = %w[127.0.0.1 localhost ::1].freeze
-
     def initialize(token:, auth_hosts:, allow_loopback_http: false)
       @token = token
       @auth_hosts = auth_hosts
@@ -193,7 +221,7 @@ module GhWatch
     private
 
     def check!(method, uri)
-      host = uri.host.to_s.downcase
+      host = uri.hostname.to_s.downcase
       loopback = @allow_loopback_http && uri.scheme == 'http' && LOOPBACK.include?(host)
       raise ApiError.new(method, uri.path, 'ERR', 'refusing non-https URL') unless uri.scheme == 'https' || loopback
       raise ApiError.new(method, uri.path, 'ERR', "refusing to send auth to #{host}") unless @auth_hosts.include?(host)
@@ -204,11 +232,12 @@ module GhWatch
   class Api
     attr_reader :bases, :cost
 
-    def initialize(http:, host:, bases:, override: false)
+    # fallback: the *.ghe.com api. retry may fire, once, on the first request.
+    def initialize(http:, host:, bases:, override: false, fallback: false)
       @http = http
       @host = host
       @bases = bases
-      @override = override
+      @fallback = fallback && !override
       @cost = 0
       @remaining = nil
     end
@@ -220,7 +249,9 @@ module GhWatch
       url = path_or_url.start_with?('http') ? path_or_url : @bases[:rest] + path_or_url
       headers = etag ? { 'If-None-Match' => etag } : {}
       status, res, body = @http.request('GET', url, headers: headers)
-      if status == 404 && ghe_fallback?(url)
+      fallback = @fallback
+      @fallback = false
+      if status == 404 && fallback && ghe_fallback?(url)
         @bases = { rest: "https://api.#{@host}", graphql: "https://api.#{@host}/graphql" }
         return get(path_or_url.start_with?('http') ? path_or_url.sub(%r{\Ahttps://[^/]+/api/v3}, @bases[:rest]) : path_or_url, etag: etag)
       end
@@ -230,16 +261,17 @@ module GhWatch
       [status, parse(body, 'GET', url, status), res['ETag'], next_link(res['Link'])]
     end
 
-    # Every page of a list endpoint.
+    # Every page of a list endpoint; more than MAX_PAGES is a failure, not a
+    # silent truncation that would move `since` past unread items.
     def get_all(path)
       items = []
       url = path
       MAX_PAGES.times do
         _, json, _, url = get(url)
-        items.concat(Array(json))
-        break unless url
+        items.concat(Array(json).grep(Hash))
+        return items unless url
       end
-      items
+      raise Failure, "more than #{MAX_PAGES} pages from #{URI(path).path}"
     end
 
     def graphql(query, variables)
@@ -248,11 +280,17 @@ module GhWatch
       raise ApiError.new('POST', URI(url).path, status, message(body)) unless status == 200
 
       json = parse(body, 'POST', url, status)
+      raise ApiError.new('POST', URI(url).path, status, 'invalid JSON') unless json.is_a?(Hash)
+
       errs = Array(json['errors'])
-      raise ApiError.new('POST', URI(url).path, status, "graphql: #{errs.first['message']}") unless errs.empty?
+      unless errs.empty?
+        msg = errs.first.is_a?(Hash) ? errs.first['message'] : ''
+        raise ApiError.new('POST', URI(url).path, status, "graphql: #{msg}")
+      end
+      raise ApiError.new('POST', URI(url).path, status, 'graphql: no data') unless json['data'].is_a?(Hash)
 
       rl = json.dig('data', 'rateLimit')
-      if rl
+      if rl.is_a?(Hash)
         @cost += rl['cost'].to_i
         @remaining = rl['remaining']
       end
@@ -262,7 +300,7 @@ module GhWatch
     private
 
     def ghe_fallback?(url)
-      !@override && @host.end_with?('.ghe.com') && url.start_with?("https://#{@host}/api/v3")
+      @host.end_with?('.ghe.com') && url.start_with?("https://#{@host}/api/v3")
     end
 
     def parse(body, method, url, status)
@@ -292,16 +330,21 @@ module GhWatch
     DBID = 'databaseId fullDatabaseId'
     REVIEW = "#{DBID} state #{AUTHOR} submittedAt body".freeze
     COMMENT = "#{DBID} #{AUTHOR} createdAt body".freeze
-    INLINE = "#{DBID} path #{AUTHOR} createdAt body".freeze
+    INLINE = "#{DBID} path #{AUTHOR} createdAt body pullRequestReview { databaseId }".freeze
     PAGE = 'pageInfo { hasPreviousPage startCursor }'
     THREAD = "id comments(last: 10) { #{PAGE} nodes { #{INLINE} } }".freeze
     CONN_FIELDS = {
       'reviews' => REVIEW, 'comments' => COMMENT, 'reviewThreads' => THREAD
     }.freeze
 
+    # Cheap: no nested connections beyond the head commit.
     OPEN_PR = <<~GQL
       number title createdAt updatedAt baseRefName headRefOid #{AUTHOR}
       commits(last: 1) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
+    GQL
+    # Heavy: only for PRs updated since the last poll.
+    DETAIL_PR = <<~GQL
+      number
       reviews(last: 20) { #{PAGE} nodes { #{REVIEW} } }
       comments(last: 20) { #{PAGE} nodes { #{COMMENT} } }
       reviewThreads(last: 20) { #{PAGE} nodes { #{THREAD} } }
@@ -310,7 +353,7 @@ module GhWatch
       number title state closedAt mergedAt updatedAt baseRefName #{AUTHOR} mergedBy { __typename login }
       timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) { nodes { ... on ClosedEvent { actor { __typename login } } } }
     GQL
-    OPEN_CONN = 'pullRequests(states: [OPEN], first: 50, after: $openAfter, ' \
+    OPEN_CONN = "pullRequests(states: [OPEN], first: #{HEADS_PER_PAGE}, after: $openAfter, " \
                 "orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { #{OPEN_PR} } }".freeze
     CLOSED_CONN = 'pullRequests(states: [MERGED, CLOSED], first: 50, after: $closedAfter, ' \
                   "orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { #{CLOSED_PR} } }".freeze
@@ -334,6 +377,18 @@ module GhWatch
         #{RATE}
       }
     GQL
+
+    # One query for up to DETAILS_BATCH PRs, aliased p0..pN.
+    def self.details(count)
+      vars = (0...count).map { |i| "$n#{i}: Int!" }.join(', ')
+      prs = (0...count).map { |i| "p#{i}: pullRequest(number: $n#{i}) { #{DETAIL_PR} }" }.join("\n")
+      <<~GQL
+        query($owner: String!, $name: String!, #{vars}) {
+          repository(owner: $owner, name: $name) { #{prs} }
+          #{RATE}
+        }
+      GQL
+    end
 
     def self.pr_conn(conn)
       <<~GQL
@@ -464,7 +519,8 @@ module GhWatch
       @name = name
       @now = now
       @old = state['host'] == host && state['repo'] == "#{owner}/#{name}" ? state : {}
-      @prs = @old.fetch('prs', {})
+      prs = @old['prs']
+      @prs = prs.is_a?(Hash) ? prs.select { |_, v| v.is_a?(Hash) } : {}
       @no_wake = opts.no_wake.map { |a| GhWatch.norm_login(a) }
       @full_id = !@old['no_full_database_id']
     end
@@ -475,9 +531,9 @@ module GhWatch
       since = @now - FIRST_WINDOW if first
       @qsince = since - OVERLAP
       @pending = []
-      @me = resolve_me
-      @team = resolve_team
 
+      # The change check goes first: it is the only request that may switch a
+      # *.ghe.com host to its api. base.
       etag, pr_changed = change_check("/repos/#{@owner}/#{@name}/pulls?state=all&sort=updated&direction=desc&per_page=1",
                                       @old['etag'])
       issues_etag = @old['issues_etag']
@@ -486,12 +542,16 @@ module GhWatch
         issues_etag, issues_changed = change_check("/repos/#{@owner}/#{@name}/issues?state=all&sort=updated&direction=desc&per_page=1",
                                                    issues_etag)
       end
+      @me = resolve_me
+      @team = resolve_team
 
-      full = pr_changed || pending_ci? || stale_full?
-      new_prs = full ? full_query : @prs
+      # Events dropped by the cap last run force a query even after a 304.
+      refresh = stale_full?
+      full = pr_changed || pending_ci? || refresh || @old['backlog'] == true
+      new_prs = full ? full_query(refresh) : @prs
       issues_query(new_prs) if issues_changed
 
-      finalize(etag: etag, issues_etag: issues_etag, full: full, new_prs: new_prs)
+      finalize(etag: etag, issues_etag: issues_etag, full: full, refresh: refresh, new_prs: new_prs)
     end
 
     private
@@ -514,7 +574,7 @@ module GhWatch
       return @old['me'] if @old['me'].to_s.match?(ACTOR_RE) && @old['me'] != 'unknown'
 
       _, json, = @api.get('/user')
-      GhWatch.actor(json['login'])
+      GhWatch.actor(json.is_a?(Hash) ? json['login'] : nil)
     end
 
     def resolve_team
@@ -560,37 +620,82 @@ module GhWatch
       retry
     end
 
-    def full_query
+    # Heads for open PRs (the newest HEADS_PER_PAGE, or all on a refresh),
+    # closed PRs back to @qsince, then nested reviews/comments only for the
+    # open PRs updated since @qsince.
+    def full_query(refresh)
       vars = { owner: @owner, name: @name }
-      data = gql(Queries::MAIN, vars)
-      open_conn = data.dig('repository', 'open')
-      closed_conn = data.dig('repository', 'closed')
-      raise Failure, "repository #{@owner}/#{@name} not found" unless open_conn
+      repo = gql(Queries::MAIN, vars)['repository']
+      raise Failure, "repository #{@owner}/#{@name} not found" unless repo.is_a?(Hash) && repo['open'].is_a?(Hash)
 
-      open = open_conn['nodes'].dup
-      info = open_conn['pageInfo']
-      pages = 1
-      while info['hasNextPage'] && pages < MAX_PAGES
-        c = gql(Queries::OPEN_PAGE, vars.merge(openAfter: info['endCursor'])).dig('repository', 'open')
-        open.concat(c['nodes'])
-        info = c['pageInfo']
-        pages += 1
-      end
-
-      closed = closed_conn['nodes'].dup
-      info = closed_conn['pageInfo']
-      pages = 1
-      while info['hasNextPage'] && pages < MAX_PAGES && (GhWatch.parse_time(closed.last&.dig('updatedAt')) || @now) >= @qsince
-        c = gql(Queries::CLOSED_PAGE, vars.merge(closedAfter: info['endCursor'])).dig('repository', 'closed')
-        closed.concat(c['nodes'])
-        info = c['pageInfo']
-        pages += 1
-      end
+      open, all_open = open_heads(repo['open'], vars, refresh)
+      closed = closed_prs(repo['closed'], vars)
+      open = open.select { |pr| base_ok?(pr) && pr['number'].is_a?(Integer) }
+      details = fetch_details(open.select { |pr| updated_since?(pr) }.map { |pr| pr['number'] })
 
       new_prs = {}
-      open.each { |pr| open_pr(pr, new_prs) if base_ok?(pr) }
+      open.each { |pr| open_pr(pr, details[pr['number']], new_prs) }
       closed.each { |pr| closed_pr(pr) if base_ok?(pr) }
+      carry_over(new_prs, closed) unless all_open
       new_prs
+    end
+
+    def open_heads(conn, vars, refresh)
+      open = GhWatch.nodes(conn)
+      info = conn['pageInfo'] || {}
+      pages = 1
+      while refresh && info['hasNextPage'] && pages < MAX_PAGES
+        c = gql(Queries::OPEN_PAGE, vars.merge(openAfter: info['endCursor'])).dig('repository', 'open')
+        break unless c.is_a?(Hash)
+
+        open.concat(GhWatch.nodes(c))
+        info = c['pageInfo'] || {}
+        pages += 1
+      end
+      [open, !info['hasNextPage']]
+    end
+
+    def closed_prs(conn, vars)
+      closed = GhWatch.nodes(conn)
+      info = (conn.is_a?(Hash) && conn['pageInfo']) || {}
+      pages = 1
+      while info['hasNextPage'] && (GhWatch.parse_time(closed.last&.dig('updatedAt')) || @now) >= @qsince
+        raise Failure, "more than #{MAX_PAGES} pages of closed pull requests" if pages >= MAX_PAGES
+
+        c = gql(Queries::CLOSED_PAGE, vars.merge(closedAfter: info['endCursor'])).dig('repository', 'closed')
+        raise Failure, 'closed pull requests page missing' unless c.is_a?(Hash)
+
+        closed.concat(GhWatch.nodes(c))
+        info = c['pageInfo'] || {}
+        pages += 1
+      end
+      closed
+    end
+
+    def updated_since?(pr)
+      updated = GhWatch.parse_time(pr['updatedAt'])
+      updated.nil? || updated >= @qsince
+    end
+
+    # { number => detail node } for the given open PRs, DETAILS_BATCH a query.
+    def fetch_details(numbers)
+      details = {}
+      numbers.each_slice(DETAILS_BATCH) do |batch|
+        vars = { owner: @owner, name: @name }
+        batch.each_with_index { |n, i| vars[:"n#{i}"] = n }
+        repo = gql(Queries.details(batch.size), vars)['repository']
+        next unless repo.is_a?(Hash)
+
+        batch.each_with_index { |n, i| details[n] = repo["p#{i}"] if repo["p#{i}"].is_a?(Hash) }
+      end
+      details
+    end
+
+    # Open PRs outside this run's heads keep their snapshot until a refresh
+    # sees every open PR, unless they just closed.
+    def carry_over(new_prs, closed)
+      gone = closed.map { |pr| pr['number'].to_s }
+      @prs.each { |key, snap| new_prs[key] ||= snap unless gone.include?(key) }
     end
 
     def base_ok?(pr)
@@ -603,13 +708,16 @@ module GhWatch
     end
 
     def gql_actor(obj)
+      obj = nil unless obj.is_a?(Hash)
       GhWatch.actor(obj && obj['login'], obj && obj['__typename'])
     end
 
     # Page a pull request connection back until it covers @qsince (max 100).
     def complete(number, conn_name, conn, ts_key)
-      nodes = conn['nodes'].dup
-      info = conn['pageInfo']
+      return [] unless conn.is_a?(Hash)
+
+      nodes = GhWatch.nodes(conn)
+      info = conn['pageInfo'] || {}
       while info['hasPreviousPage'] && nodes.size < MAX_CONN
         if ts_key
           oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
@@ -617,33 +725,39 @@ module GhWatch
         end
         c = gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
         c = c.dig('repository', 'pullRequest', conn_name)
-        nodes = c['nodes'] + nodes
-        info = c['pageInfo']
+        break unless c.is_a?(Hash)
+
+        nodes = GhWatch.nodes(c) + nodes
+        info = c['pageInfo'] || {}
       end
       nodes
     end
 
     def complete_thread(thread)
       conn = thread['comments']
-      nodes = conn['nodes'].dup
-      info = conn['pageInfo']
+      return [] unless conn.is_a?(Hash)
+
+      nodes = GhWatch.nodes(conn)
+      info = conn['pageInfo'] || {}
       while info['hasPreviousPage'] && nodes.size < MAX_CONN
         oldest = GhWatch.parse_time(nodes.first&.dig('createdAt'))
         break if oldest && oldest < @qsince
 
         c = gql(Queries::THREAD_COMMENTS, id: thread['id'], before: info['startCursor']).dig('node', 'comments')
-        nodes = c['nodes'] + nodes
-        info = c['pageInfo']
+        break unless c.is_a?(Hash)
+
+        nodes = GhWatch.nodes(c) + nodes
+        info = c['pageInfo'] || {}
       end
       nodes
     end
 
-    def open_pr(pr, new_prs)
+    def open_pr(pr, detail, new_prs)
       n = pr['number']
       key = n.to_s
       title = pr['title']
       author = gql_actor(pr['author'])
-      mine = author == @me
+      mine = GhWatch.same_login?(author, @me)
       old = @prs[key]
 
       created = GhWatch.parse_time(pr['createdAt'])
@@ -670,24 +784,42 @@ module GhWatch
       # First sight records the head and CI and says nothing about them.
       if old && head.match?(SHA_RE)
         sha12 = head[0, 12]
-        if old['head'] != head && head_author != @me
+        if old['head'] != head && !GhWatch.same_login?(head_author, @me)
           add(at: @now, id: "gh:push:#{n}:#{sha12}", verb: 'PUSH', actor: head_author, subject: "pr:#{n}", number: n,
               sha: sha12, title: title, url: "#{repo_path}/commit/#{head}", pr: [key, old])
         end
         if %w[success failure].include?(ci) && (old['head'] != head || old['ci'] != ci)
+          # The PR author is the actor; add() never demotes a CI act for being `me`.
           act = ci == 'failure' && mine && @opts.act_on.include?('ci_failure')
-          add(at: @now, id: "gh:ci:#{n}:#{sha12}:#{ci}", verb: 'CI', actor: CI_ACTOR, subject: "pr:#{n}", number: n,
+          add(at: @now, id: "gh:ci:#{n}:#{sha12}:#{ci}", verb: 'CI', actor: author, subject: "pr:#{n}", number: n,
               state: ci, sha: sha12, title: title, url: "#{repo_path}/pull/#{n}/checks", act: act, pr: [key, old])
         end
       end
 
-      updated = GhWatch.parse_time(pr['updatedAt'])
-      return if updated && updated < @qsince # nothing new in its threads
-
-      pr_comments(n, pr, mine)
+      pr_comments(n, detail, mine) if detail
     end
 
     def pr_comments(n, pr, mine)
+      # Inline comments first: a COMMENTED review with no body that only
+      # wraps them would wake twice, so it is skipped below.
+      wrapped = []
+      complete(n, 'reviewThreads', pr['reviewThreads'], nil).each do |thread|
+        complete_thread(thread).each do |c|
+          at = GhWatch.parse_time(c['createdAt'])
+          id = db_id(c)
+          next unless at && at >= @qsince && id
+
+          review_id = c.dig('pullRequestReview', 'databaseId')
+          wrapped << review_id.to_s if review_id
+          who = gql_actor(c['author'])
+          body = GhWatch.clean(c['body'], 300)
+          untrusted = body.empty? ? nil : "#{c['path']}: #{body}"
+          add(at: at, id: "gh:inline:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
+              state: 'inline', untrusted: untrusted, url: "#{repo_path}/pull/#{n}#discussion_r#{id}",
+              act: review_comment_act?(who, mine))
+        end
+      end
+
       complete(n, 'comments', pr['comments'], 'createdAt').each do |c|
         at = GhWatch.parse_time(c['createdAt'])
         id = db_id(c)
@@ -704,27 +836,13 @@ module GhWatch
         id = db_id(r)
         state = r['state'].to_s.upcase
         next unless at && at >= @qsince && id && STATES.include?(state) && state != 'PENDING'
+        next if state == 'COMMENTED' && GhWatch.clean(r['body'], 300).empty? && wrapped.include?(r['databaseId'].to_s)
 
         who = gql_actor(r['author'])
         act = (state == 'CHANGES_REQUESTED' && other?(who) && @opts.act_on.include?('changes_requested')) ||
               (state == 'COMMENTED' && review_comment_act?(who, mine))
         add(at: at, id: "gh:review:#{id}", verb: 'REVIEW', actor: who, subject: "pr:#{n}", number: n, state: state,
             untrusted: r['body'], url: "#{repo_path}/pull/#{n}#pullrequestreview-#{id}", act: act)
-      end
-
-      complete(n, 'reviewThreads', pr['reviewThreads'], nil).each do |thread|
-        complete_thread(thread).each do |c|
-          at = GhWatch.parse_time(c['createdAt'])
-          id = db_id(c)
-          next unless at && at >= @qsince && id
-
-          who = gql_actor(c['author'])
-          body = GhWatch.clean(c['body'], 300)
-          untrusted = body.empty? ? nil : "#{c['path']}: #{body}"
-          add(at: at, id: "gh:inline:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
-              state: 'inline', untrusted: untrusted, url: "#{repo_path}/pull/#{n}#discussion_r#{id}",
-              act: review_comment_act?(who, mine))
-        end
       end
     end
 
@@ -745,7 +863,7 @@ module GhWatch
     end
 
     def other?(who)
-      who != @me && who != 'unknown' && !@no_wake.include?(GhWatch.norm_login(who))
+      !GhWatch.same_login?(who, @me) && who != 'unknown' && !@no_wake.include?(GhWatch.norm_login(who))
     end
 
     def review_comment_act?(who, mine)
@@ -769,6 +887,8 @@ module GhWatch
         closed = GhWatch.parse_time(i['closed_at'])
         next unless i['state'] == 'closed' && closed && closed >= @qsince
 
+        # Issue lists carry no closed_by (only the single-issue endpoint
+        # does), so this is usually 'unknown'.
         add(at: closed, id: "gh:closed:#{n}:#{GhWatch.digits(i['closed_at'])}", verb: 'CLOSED',
             actor: GhWatch.actor(i.dig('closed_by', 'login')), subject: "issue:#{n}", number: n, state: 'closed',
             title: title, url: "#{repo_path}/issues/#{n}")
@@ -782,7 +902,7 @@ module GhWatch
         n = m[2].to_i
         pr = m[1] == 'pull'
         who = GhWatch.actor(c.dig('user', 'login'))
-        mine = pr && new_prs.dig(n.to_s, 'author') == @me
+        mine = pr && GhWatch.same_login?(new_prs.dig(n.to_s, 'author'), @me)
         url = pr ? "#{repo_path}/pull/#{n}#issuecomment-#{c['id']}" : "#{repo_path}/issues/#{n}"
         add(at: at, id: "gh:comment:#{c['id']}", verb: 'COMMENT', actor: who, subject: "#{pr ? 'pr' : 'issue'}:#{n}",
             number: n, state: 'conversation', untrusted: c['body'], url: url, act: review_comment_act?(who, mine))
@@ -796,8 +916,9 @@ module GhWatch
       return if @pending.any? { |p| p[:event]['id'] == id } # first source wins
 
       actor = 'unknown' unless actor.to_s.match?(ACTOR_RE)
-      ev = { 'id' => id, 'kind' => act && actor != @me ? 'act' : 'info', 'actor' => actor, 'subject' => subject,
-             'verb' => verb, 'number' => number }
+      # Your own actions never wake you, except CI: its actor is the PR author.
+      kind = act && (verb == 'CI' || !GhWatch.same_login?(actor, @me)) ? 'act' : 'info'
+      ev = { 'id' => id, 'kind' => kind, 'actor' => actor, 'subject' => subject, 'verb' => verb, 'number' => number }
       ev['state'] = state if state
       ev['sha'] = sha if sha
       t = GhWatch.clean(title, 80)
@@ -816,7 +937,7 @@ module GhWatch
         (ev['state'].nil? || STATES.include?(ev['state'])) && (ev['sha'].nil? || ev['sha'].match?(SHA_RE))
     end
 
-    def finalize(etag:, issues_etag:, full:, new_prs:)
+    def finalize(etag:, issues_etag:, full:, refresh:, new_prs:)
       sorted = @pending.sort_by { |p| [p[:at], p[:seq]] }
       kept = sorted.first(MAX_EVENTS)
       dropped = sorted.drop(MAX_EVENTS)
@@ -828,14 +949,18 @@ module GhWatch
         key, old = p[:pr]
         new_prs[key] = old
       end
-      since = dropped.empty? ? @now : [dropped.map { |p| p[:at] }.min, @now].min
+      # `since` moves only past what a PR query read: a 304 run keeps it, and
+      # it stops at the first event the cap dropped.
+      since = full ? @now : (GhWatch.parse_time(@old['since']) || @now)
+      since = [since, dropped.map { |p| p[:at] }.min, @now].compact.min
       @events = kept.map { |p| p[:event] }
 
       @state = {
         'version' => 1, 'host' => @host, 'repo' => "#{@owner}/#{@name}", 'since' => GhWatch.iso(since),
-        'last_full' => full ? GhWatch.iso(@now) : @old['last_full'], 'etag' => etag, 'me' => @me,
+        'last_full' => refresh ? GhWatch.iso(@now) : @old['last_full'], 'etag' => etag, 'me' => @me,
         'prs' => new_prs, 'api_rest' => @api.bases[:rest]
       }
+      @state['backlog'] = true unless dropped.empty?
       @state['issues_etag'] = issues_etag if @opts.issues
       @state['team'] = @team_cache if @team_cache
       @state['no_full_database_id'] = true unless @full_id
@@ -866,6 +991,9 @@ module GhWatch
     rescue Failure => e
       warn "gh-watch: #{e.message}"
       2
+    rescue StandardError => e
+      warn "gh-watch: internal error #{e.class}"
+      2
     end
 
     private
@@ -875,9 +1003,14 @@ module GhWatch
       repos = @opts.repos.dup
       repos << env('WATCHER_REPO') if repos.empty? && env('WATCHER_REPO')
       if repos.empty?
+        # The watcher host leaves WATCHER_REPO unset when the remote's host is
+        # not one it trusts; never fall back to that remote here.
+        raise Failure, 'WATCHER_CWD is set without WATCHER_REPO; pass --repo OWNER/NAME' if @opts.jsonl? && env('WATCHER_CWD')
+
         remote = git_remote(env('WATCHER_CWD') || Dir.pwd)
         raise Failure, 'not a git repo with a GitHub remote; pass --repo OWNER/NAME' unless remote
 
+        @host_from_remote = host.nil?
         host ||= remote[0]
         repos << "#{remote[1]}/#{remote[2]}"
       end
@@ -918,20 +1051,39 @@ module GhWatch
       url && GhWatch.parse_remote(url)
     end
 
+    # Test hook: a fake API on a loopback address. Anything else is refused,
+    # so a stray variable can never redirect the token.
+    def test_api_base
+      raw = env('GHWATCH_TEST_API_BASE')
+      return nil unless raw
+
+      uri = begin
+        URI(raw)
+      rescue URI::InvalidURIError
+        nil
+      end
+      ok = uri && %w[http https].include?(uri.scheme) && LOOPBACK.include?(uri.hostname.to_s.downcase)
+      raise Failure, 'GHWATCH_TEST_API_BASE must be a loopback URL' unless ok
+
+      raw
+    end
+
     def build_api(host, state)
-      override = env('GH_WATCH_API_BASE')
+      override = test_api_base
       bases = GhWatch.api_bases(host, override)
-      bases = { rest: state['api_rest'], graphql: "#{state['api_rest']}/graphql" } if !override && state['host'] == host &&
-                                                                                     state['api_rest'] == "https://api.#{host}" && host.end_with?('.ghe.com')
+      cached = state['host'] == host ? state['api_rest'] : nil
+      bases = { rest: cached, graphql: "#{cached}/graphql" } if !override && cached == "https://api.#{host}" &&
+                                                               host.end_with?('.ghe.com')
       auth_hosts = if override
-                     [URI(override).host.to_s.downcase]
+                     [URI(override).hostname.to_s.downcase]
                    elsif host == 'github.com'
                      ['api.github.com']
                    else
                      [host, "api.#{host}"]
                    end
-      http = Http.new(token: GhWatch.token_for(host, @env), auth_hosts: auth_hosts, allow_loopback_http: !override.nil?)
-      Api.new(http: http, host: host, bases: bases, override: !override.nil?)
+      token = GhWatch.token_for(host, from_remote: @host_from_remote == true)
+      http = Http.new(token: token, auth_hosts: auth_hosts, allow_loopback_http: !override.nil?)
+      Api.new(http: http, host: host, bases: bases, override: !override.nil?, fallback: cached.nil?)
     end
 
     def read_state(dir)
