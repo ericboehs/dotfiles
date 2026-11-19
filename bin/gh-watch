@@ -1,0 +1,1010 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# gh-watch: poll one GitHub repo for pull request (and optionally issue)
+# activity and print it as events, either JSON Lines for a watcher host or
+# plain lines for a human.
+#
+#   gh-watch --once --text --repo octocat/hello-world
+#   gh-watch --jsonl                     # WATCHER_STATE_DIR=... set by the host
+#
+# Each poll is a conditional REST request first (an ETag on the newest pull
+# request; a 304 is free), and one GraphQL query only when something moved,
+# CI is still pending, or five minutes have passed. Auth comes from
+# `gh auth token --hostname HOST` and is only ever sent to that host's API.
+#
+# Tests: ruby test/gh-watch_test.rb
+
+require 'fileutils'
+require 'json'
+require 'net/http'
+require 'open3'
+require 'optparse'
+require 'time'
+require 'tmpdir'
+require 'uri'
+
+module GhWatch
+  # An error that ends the run with exit 2 and one stderr line.
+  class Failure < StandardError; end
+
+  # A failed API call: "<METHOD> <path> -> <status> <short msg>".
+  class ApiError < Failure
+    def initialize(method, path, status, msg)
+      short = msg.to_s.gsub(/\s+/, ' ').strip[0, 120]
+      super("#{method} #{path} -> #{status} #{short}".strip)
+    end
+  end
+
+  ACTOR_RE = /\A[A-Za-z0-9-]{1,39}(\[bot\])?\z/
+  NAME_RE = /\A[\w.-]{1,100}\z/
+  HOST_RE = /\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\z/
+  SLUG_RE = %r{\A[\w.-]{1,100}/[\w.-]{1,100}\z}
+  ID_RE = /\A[A-Za-z0-9:._-]{1,120}\z/
+  SUBJECT_RE = /\A(pr|issue):\d{1,7}\z/
+  SHA_RE = /\A[0-9a-f]{7,40}\z/
+  URL_PATH_RE = %r{\A/[\w.-]+/[\w.-]+/(?:pull/\d+(?:\#(?:issuecomment-|discussion_r|pullrequestreview-)\d+|/(?:checks|files|commits))?|issues/\d+|commit/[0-9a-f]{7,40})\z}
+  VERBS = %w[OPENED MERGED CLOSED COMMENT REVIEW PUSH CI].freeze
+  STATES = %w[open closed merged conversation inline APPROVED CHANGES_REQUESTED COMMENTED
+              DISMISSED PENDING success failure].freeze
+  ACT_RULES = %w[changes_requested ci_failure review_comment team_pr].freeze
+  DEFAULT_NO_WAKE = %w[dependabot github-actions copilot copilot-pull-request-reviewer copilot-swe-agent].freeze
+  FAILURE_STATES = %w[failure error cancelled timed_out action_required startup_failure].freeze
+
+  OVERLAP = 120          # seconds re-queried before `since`
+  FULL_EVERY = 300       # a full GraphQL query at least this often
+  FIRST_WINDOW = 3600    # the first run looks back this far
+  NULL_CI_WINDOW = 600   # a head with no rollup yet counts as pending this long
+  PENDING_BYPASS = 3600  # pending CI stops forcing full queries after this
+  TEAM_TTL = 86_400
+  MAX_EVENTS = 200
+  MAX_CONN = 100         # most nodes gathered per connection when paging back
+  MAX_PAGES = 20
+  CI_ACTOR = 'ci'        # CI results have no human actor; never `me`
+
+  module_function
+
+  # [host, owner, name] from an https, ssh:// or scp-style git remote, or nil.
+  def parse_remote(url)
+    url = url.to_s.strip
+    m = url.match(%r{\Ahttps?://(?:[^@/]+@)?([^/:]+)(?::\d+)?/([^/]+)/([^/]+?)(?:\.git)?/?\z}) ||
+        url.match(%r{\Assh://(?:[^@/]+@)?([^/:]+)(?::\d+)?/([^/]+)/([^/]+?)(?:\.git)?/?\z}) ||
+        url.match(%r{\A(?:[^@/]+@)?([^/:]+):([^/]+)/([^/]+?)(?:\.git)?/?\z})
+    return nil unless m
+
+    host, owner, name = m.captures
+    return nil unless host.match?(HOST_RE) && owner.match?(NAME_RE) && name.match?(NAME_RE)
+
+    [host.downcase, owner, name]
+  end
+
+  # REST and GraphQL bases for a host.
+  def api_bases(host, override = nil)
+    if override
+      base = override.chomp('/')
+      return { rest: base, graphql: "#{base}/graphql" }
+    end
+    return { rest: 'https://api.github.com', graphql: 'https://api.github.com/graphql' } if host == 'github.com'
+
+    { rest: "https://#{host}/api/v3", graphql: "https://#{host}/api/graphql" }
+  end
+
+  # GraphQL returns bot logins bare ("dependabot"); REST adds "[bot]". Emit
+  # the REST form everywhere so both sources name a bot the same way.
+  def actor(login, typename = nil)
+    login = login.to_s
+    return 'unknown' if login.empty? || login == 'ghost'
+
+    login = "#{login}[bot]" if typename == 'Bot' && !login.end_with?('[bot]')
+    login.match?(ACTOR_RE) ? login : 'unknown'
+  end
+
+  def norm_login(login)
+    login.to_s.downcase.delete_suffix('[bot]')
+  end
+
+  def clean(text, max)
+    s = text.to_s.dup.force_encoding('UTF-8').scrub('')
+    s = s.gsub(/[[:cntrl:]]/, ' ').gsub(/\s+/, ' ').strip
+    s.length > max ? s[0, max] : s
+  end
+
+  def digits(timestamp)
+    timestamp.to_s.gsub(/\D/, '')
+  end
+
+  def iso(time)
+    time.utc.iso8601
+  end
+
+  def parse_time(str)
+    str.nil? || str.to_s.empty? ? nil : Time.iso8601(str.to_s)
+  rescue ArgumentError
+    nil
+  end
+
+  def now_from_env(env)
+    raw = env['GH_WATCH_NOW'].to_s
+    return Time.now.utc if raw.empty?
+    return Time.at(Integer(raw)).utc if raw.match?(/\A\d+\z/)
+
+    Time.iso8601(raw).utc
+  rescue ArgumentError
+    raise Failure, "bad GH_WATCH_NOW: #{raw[0, 40]}"
+  end
+
+  # A pending-or-not CI state for one head, from the rollup's state.
+  def ci_state(rollup, head_at, now)
+    s = rollup.to_s.downcase
+    return 'success' if s == 'success'
+    return 'failure' if FAILURE_STATES.include?(s)
+    return 'pending' if %w[pending expected].include?(s)
+    return 'pending' if s.empty? && head_at && now - head_at < NULL_CI_WINDOW
+
+    'none'
+  end
+
+  def token_for(host, env = ENV)
+    child = {}
+    # Never let an env token meant for github.com reach another host.
+    %w[GH_TOKEN GITHUB_TOKEN].each { |k| child[k] = nil } unless host == 'github.com' || env['GH_WATCH_API_BASE']
+    out, _err, st = Open3.capture3(child, 'gh', 'auth', 'token', '--hostname', host)
+    token = out.strip
+    raise Failure, "no gh auth for #{host} (run: gh auth login --hostname #{host})" unless st.success? && !token.empty?
+
+    token
+  rescue Errno::ENOENT
+    raise Failure, 'gh CLI not found on PATH'
+  end
+
+  # Thin Net::HTTP wrapper: https only, no redirects, auth only to known hosts.
+  class Http
+    LOOPBACK = %w[127.0.0.1 localhost ::1].freeze
+
+    def initialize(token:, auth_hosts:, allow_loopback_http: false)
+      @token = token
+      @auth_hosts = auth_hosts
+      @allow_loopback_http = allow_loopback_http
+    end
+
+    attr_writer :auth_hosts
+
+    def request(method, url, headers: {}, body: nil)
+      uri = URI(url)
+      check!(method, uri)
+      req = (method == 'POST' ? Net::HTTP::Post : Net::HTTP::Get).new(uri)
+      req['Authorization'] = "Bearer #{@token}"
+      req['Accept'] = 'application/vnd.github+json'
+      req['User-Agent'] = 'gh-watch (ericboehs/dotfiles)'
+      headers.each { |k, v| req[k] = v }
+      if body
+        req['Content-Type'] = 'application/json'
+        req.body = body
+      end
+      res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https',
+                                                open_timeout: 10, read_timeout: 20) { |h| h.request(req) }
+      [res.code.to_i, res, res.body.to_s]
+    rescue Failure
+      raise
+    rescue StandardError => e
+      raise ApiError.new(method, uri&.path, 'ERR', e.class.name)
+    end
+
+    private
+
+    def check!(method, uri)
+      host = uri.host.to_s.downcase
+      loopback = @allow_loopback_http && uri.scheme == 'http' && LOOPBACK.include?(host)
+      raise ApiError.new(method, uri.path, 'ERR', 'refusing non-https URL') unless uri.scheme == 'https' || loopback
+      raise ApiError.new(method, uri.path, 'ERR', "refusing to send auth to #{host}") unless @auth_hosts.include?(host)
+    end
+  end
+
+  # REST + GraphQL against one host, with the *.ghe.com api. fallback.
+  class Api
+    attr_reader :bases, :cost
+
+    def initialize(http:, host:, bases:, override: false)
+      @http = http
+      @host = host
+      @bases = bases
+      @override = override
+      @cost = 0
+      @remaining = nil
+    end
+
+    attr_reader :remaining
+
+    # GET a REST path. Returns [status, json, etag, next_url]. 304 only if etag given.
+    def get(path_or_url, etag: nil)
+      url = path_or_url.start_with?('http') ? path_or_url : @bases[:rest] + path_or_url
+      headers = etag ? { 'If-None-Match' => etag } : {}
+      status, res, body = @http.request('GET', url, headers: headers)
+      if status == 404 && ghe_fallback?(url)
+        @bases = { rest: "https://api.#{@host}", graphql: "https://api.#{@host}/graphql" }
+        return get(path_or_url.start_with?('http') ? path_or_url.sub(%r{\Ahttps://[^/]+/api/v3}, @bases[:rest]) : path_or_url, etag: etag)
+      end
+      return [304, nil, etag, nil] if status == 304 && etag
+      raise ApiError.new('GET', URI(url).path, status, message(body)) unless status.between?(200, 299)
+
+      [status, parse(body, 'GET', url, status), res['ETag'], next_link(res['Link'])]
+    end
+
+    # Every page of a list endpoint.
+    def get_all(path)
+      items = []
+      url = path
+      MAX_PAGES.times do
+        _, json, _, url = get(url)
+        items.concat(Array(json))
+        break unless url
+      end
+      items
+    end
+
+    def graphql(query, variables)
+      url = @bases[:graphql]
+      status, _res, body = @http.request('POST', url, body: JSON.generate(query: query, variables: variables))
+      raise ApiError.new('POST', URI(url).path, status, message(body)) unless status == 200
+
+      json = parse(body, 'POST', url, status)
+      errs = Array(json['errors'])
+      raise ApiError.new('POST', URI(url).path, status, "graphql: #{errs.first['message']}") unless errs.empty?
+
+      rl = json.dig('data', 'rateLimit')
+      if rl
+        @cost += rl['cost'].to_i
+        @remaining = rl['remaining']
+      end
+      json['data']
+    end
+
+    private
+
+    def ghe_fallback?(url)
+      !@override && @host.end_with?('.ghe.com') && url.start_with?("https://#{@host}/api/v3")
+    end
+
+    def parse(body, method, url, status)
+      JSON.parse(body)
+    rescue JSON::ParserError
+      raise ApiError.new(method, URI(url).path, status, 'invalid JSON')
+    end
+
+    def message(body)
+      JSON.parse(body)['message'].to_s
+    rescue StandardError
+      ''
+    end
+
+    def next_link(link)
+      link.to_s.split(',').each do |part|
+        m = part.match(/<([^>]+)>;\s*rel="next"/)
+        return m[1] if m
+      end
+      nil
+    end
+  end
+
+  # Field sets requested for each pull request connection.
+  module Queries
+    AUTHOR = 'author { __typename login }'
+    DBID = 'databaseId fullDatabaseId'
+    REVIEW = "#{DBID} state #{AUTHOR} submittedAt body".freeze
+    COMMENT = "#{DBID} #{AUTHOR} createdAt body".freeze
+    INLINE = "#{DBID} path #{AUTHOR} createdAt body".freeze
+    PAGE = 'pageInfo { hasPreviousPage startCursor }'
+    THREAD = "id comments(last: 10) { #{PAGE} nodes { #{INLINE} } }".freeze
+    CONN_FIELDS = {
+      'reviews' => REVIEW, 'comments' => COMMENT, 'reviewThreads' => THREAD
+    }.freeze
+
+    OPEN_PR = <<~GQL
+      number title createdAt updatedAt baseRefName headRefOid #{AUTHOR}
+      commits(last: 1) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
+      reviews(last: 20) { #{PAGE} nodes { #{REVIEW} } }
+      comments(last: 20) { #{PAGE} nodes { #{COMMENT} } }
+      reviewThreads(last: 20) { #{PAGE} nodes { #{THREAD} } }
+    GQL
+    CLOSED_PR = <<~GQL
+      number title state closedAt mergedAt updatedAt baseRefName #{AUTHOR} mergedBy { __typename login }
+      timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) { nodes { ... on ClosedEvent { actor { __typename login } } } }
+    GQL
+    OPEN_CONN = 'pullRequests(states: [OPEN], first: 50, after: $openAfter, ' \
+                "orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { #{OPEN_PR} } }".freeze
+    CLOSED_CONN = 'pullRequests(states: [MERGED, CLOSED], first: 50, after: $closedAfter, ' \
+                  "orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { #{CLOSED_PR} } }".freeze
+    RATE = 'rateLimit { cost remaining limit resetAt }'
+
+    MAIN = <<~GQL
+      query($owner: String!, $name: String!, $openAfter: String, $closedAfter: String) {
+        repository(owner: $owner, name: $name) { open: #{OPEN_CONN} closed: #{CLOSED_CONN} }
+        #{RATE}
+      }
+    GQL
+    OPEN_PAGE = <<~GQL
+      query($owner: String!, $name: String!, $openAfter: String) {
+        repository(owner: $owner, name: $name) { open: #{OPEN_CONN} }
+        #{RATE}
+      }
+    GQL
+    CLOSED_PAGE = <<~GQL
+      query($owner: String!, $name: String!, $closedAfter: String) {
+        repository(owner: $owner, name: $name) { closed: #{CLOSED_CONN} }
+        #{RATE}
+      }
+    GQL
+
+    def self.pr_conn(conn)
+      <<~GQL
+        query($owner: String!, $name: String!, $number: Int!, $before: String) {
+          repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+            #{conn}(last: 50, before: $before) { #{PAGE} nodes { #{CONN_FIELDS.fetch(conn)} } }
+          } }
+          #{RATE}
+        }
+      GQL
+    end
+
+    THREAD_COMMENTS = <<~GQL
+      query($id: ID!, $before: String) {
+        node(id: $id) { ... on PullRequestReviewThread {
+          comments(last: 50, before: $before) { #{PAGE} nodes { #{INLINE} } }
+        } }
+        #{RATE}
+      }
+    GQL
+
+    def self.without_full_id(query)
+      query.gsub(' fullDatabaseId', '')
+    end
+  end
+
+  # Settings for one run, from argv and the environment.
+  class Options
+    attr_accessor :mode, :repos, :host, :me, :state_dir, :wake_team, :wake_authors, :no_wake,
+                  :act_on, :issues, :url_host, :base, :env
+
+    def initialize(argv, env)
+      @env = env
+      @mode = :text
+      @repos = []
+      @wake_authors = []
+      @no_wake = DEFAULT_NO_WAKE.dup
+      @act_on = ACT_RULES.dup
+      @issues = false
+      parse!(argv)
+    end
+
+    def jsonl?
+      @mode == :jsonl
+    end
+
+    def dry_run?
+      @env['WATCHER_DRY_RUN'].to_s == '1'
+    end
+
+    def parser
+      OptionParser.new do |o|
+        o.banner = 'Usage: gh-watch (--jsonl | --once --text) [options]'
+        o.separator ''
+        o.separator 'Poll a GitHub repo for pull request (and issue) activity.'
+        o.separator ''
+        o.on('--jsonl', 'Watcher contract: JSON Lines on stdout, state in $WATCHER_STATE_DIR') { @mode = :jsonl }
+        o.on('--once', 'Poll once and exit (the only text mode for now)') { @mode = :text }
+        o.on('--text', 'Human-readable lines (default)') { @mode = :text }
+        o.on('--state-dir DIR', 'Text mode: keep state here instead of a temp dir') { |v| @state_dir = v }
+        o.on('--repo OWNER/NAME', 'Repo to watch (repeatable; default: git remote of $WATCHER_CWD or .)') do |v|
+          @repos << v
+        end
+        o.on('--host HOST', 'GitHub host (default: $WATCHER_HOST, the remote host, or github.com)') do |v|
+          @host = v.downcase
+        end
+        o.on('--me LOGIN', 'Your login on HOST (default: $WATCHER_ME, else GET /user)') { |v| @me = v }
+        o.on('--wake-team ORG/SLUG', 'New PRs from this team are act (members cached 24 h; needs read:org)') do |v|
+          @wake_team = v
+        end
+        o.on('--wake-authors A,B', Array, 'New PRs from these logins are act') { |v| @wake_authors = v }
+        # OptionParser reads any --no-* as a negated switch, so take_no_wake! handles this one.
+        o.separator "        --no-wake-actors A,B         Never act for these actors (default: #{DEFAULT_NO_WAKE.join(',')})"
+        o.on('--act-on RULES', Array, "Act rules to keep on (default: #{ACT_RULES.join(',')}; 'none' for none)") do |v|
+          @act_on = v == ['none'] ? [] : v
+        end
+        o.on('--issues on|off', %w[on off], 'Also watch issues (default off)') { |v| @issues = v == 'on' }
+        o.on('--url-host HOST', 'Host for event URLs; must equal --host') { |v| @url_host = v.downcase }
+        o.on('--base BRANCH', 'Only PRs into this base branch (default: all)') { |v| @base = v }
+        o.on('-h', '--help', 'Show this help') do
+          puts o
+          puts <<~TXT
+
+            Environment (--jsonl): WATCHER_STATE_DIR (required), WATCHER_ME, WATCHER_DRY_RUN=1,
+            WATCHER_CWD, WATCHER_REPO, WATCHER_HOST. Exit 2 with one stderr line on any failure.
+
+            Events: OPENED MERGED CLOSED COMMENT REVIEW PUSH CI. Act rules: changes_requested (by
+            someone else), ci_failure (on your PR), review_comment (others' COMMENTED reviews and
+            comments on your PR), team_pr (a new PR from --wake-team/--wake-authors).
+          TXT
+          exit 0
+        end
+      end
+    end
+
+    def parse!(argv)
+      take_no_wake!(argv)
+      parser.parse!(argv)
+      raise Failure, "unexpected argument: #{argv.first}" unless argv.empty?
+
+      bad = @act_on - ACT_RULES
+      raise Failure, "unknown --act-on rule: #{bad.first}" unless bad.empty?
+      raise Failure, '--wake-team must be ORG/SLUG' if @wake_team && !@wake_team.match?(SLUG_RE)
+    rescue OptionParser::ParseError => e
+      raise Failure, e.message
+    end
+
+    def take_no_wake!(argv)
+      while (i = argv.index { |a| a == '--no-wake-actors' || a.start_with?('--no-wake-actors=') })
+        arg = argv.delete_at(i)
+        value = arg.include?('=') ? arg.split('=', 2)[1] : argv.delete_at(i)
+        raise Failure, 'missing argument: --no-wake-actors' if value.nil?
+
+        @no_wake = value.split(',').map(&:strip).reject(&:empty?)
+      end
+    end
+  end
+
+  # One poll of one repo: change check, maybe a full query, events, new state.
+  class Poller
+    attr_reader :events, :state, :api
+
+    def initialize(opts:, api:, host:, owner:, name:, state:, now:)
+      @opts = opts
+      @api = api
+      @host = host
+      @owner = owner
+      @name = name
+      @now = now
+      @old = state['host'] == host && state['repo'] == "#{owner}/#{name}" ? state : {}
+      @prs = @old.fetch('prs', {})
+      @no_wake = opts.no_wake.map { |a| GhWatch.norm_login(a) }
+      @full_id = !@old['no_full_database_id']
+    end
+
+    def run
+      first = @old['since'].nil?
+      since = GhWatch.parse_time(@old['since']) || (@now - FIRST_WINDOW)
+      since = @now - FIRST_WINDOW if first
+      @qsince = since - OVERLAP
+      @pending = []
+      @me = resolve_me
+      @team = resolve_team
+
+      etag, pr_changed = change_check("/repos/#{@owner}/#{@name}/pulls?state=all&sort=updated&direction=desc&per_page=1",
+                                      @old['etag'])
+      issues_etag = @old['issues_etag']
+      issues_changed = false
+      if @opts.issues
+        issues_etag, issues_changed = change_check("/repos/#{@owner}/#{@name}/issues?state=all&sort=updated&direction=desc&per_page=1",
+                                                   issues_etag)
+      end
+
+      full = pr_changed || pending_ci? || stale_full?
+      new_prs = full ? full_query : @prs
+      issues_query(new_prs) if issues_changed
+
+      finalize(etag: etag, issues_etag: issues_etag, full: full, new_prs: new_prs)
+    end
+
+    private
+
+    def repo_path
+      "/#{@owner}/#{@name}"
+    end
+
+    def change_check(path, etag)
+      status, _json, new_etag, = @api.get(path, etag: etag)
+      return [etag, false] if status == 304
+
+      [new_etag || etag, true]
+    end
+
+    def resolve_me
+      given = @opts.me || @opts.env['WATCHER_ME']
+      given = nil if given.to_s.empty?
+      return GhWatch.actor(given) if given
+      return @old['me'] if @old['me'].to_s.match?(ACTOR_RE) && @old['me'] != 'unknown'
+
+      _, json, = @api.get('/user')
+      GhWatch.actor(json['login'])
+    end
+
+    def resolve_team
+      members = @opts.wake_authors.map { |a| GhWatch.norm_login(a) }
+      slug = @opts.wake_team
+      @team_cache = nil
+      return members unless slug
+
+      cached = @old['team']
+      fetched = GhWatch.parse_time(cached && cached['fetched_at'])
+      if cached && cached['slug'] == slug && fetched && @now - fetched < TEAM_TTL
+        @team_cache = cached
+      else
+        org, team = slug.split('/', 2)
+        list = @api.get_all("/orgs/#{org}/teams/#{team}/members?per_page=100")
+        @team_cache = { 'slug' => slug, 'members' => list.map { |m| GhWatch.actor(m['login']) }.uniq.sort,
+                        'fetched_at' => GhWatch.iso(@now) }
+      end
+      members + @team_cache['members'].map { |m| GhWatch.norm_login(m) }
+    end
+
+    def pending_ci?
+      @prs.values.any? do |pr|
+        at = GhWatch.parse_time(pr['head_at'])
+        pr['ci'] == 'pending' && (at.nil? || @now - at < PENDING_BYPASS)
+      end
+    end
+
+    def stale_full?
+      last = GhWatch.parse_time(@old['last_full'])
+      last.nil? || @now - last >= FULL_EVERY
+    end
+
+    # ---- GraphQL -----------------------------------------------------------
+
+    def gql(query, vars)
+      query = Queries.without_full_id(query) unless @full_id
+      @api.graphql(query, vars)
+    rescue ApiError => e
+      raise unless @full_id && e.message.include?('fullDatabaseId')
+
+      @full_id = false # older servers: fall back to databaseId
+      retry
+    end
+
+    def full_query
+      vars = { owner: @owner, name: @name }
+      data = gql(Queries::MAIN, vars)
+      open_conn = data.dig('repository', 'open')
+      closed_conn = data.dig('repository', 'closed')
+      raise Failure, "repository #{@owner}/#{@name} not found" unless open_conn
+
+      open = open_conn['nodes'].dup
+      info = open_conn['pageInfo']
+      pages = 1
+      while info['hasNextPage'] && pages < MAX_PAGES
+        c = gql(Queries::OPEN_PAGE, vars.merge(openAfter: info['endCursor'])).dig('repository', 'open')
+        open.concat(c['nodes'])
+        info = c['pageInfo']
+        pages += 1
+      end
+
+      closed = closed_conn['nodes'].dup
+      info = closed_conn['pageInfo']
+      pages = 1
+      while info['hasNextPage'] && pages < MAX_PAGES && (GhWatch.parse_time(closed.last&.dig('updatedAt')) || @now) >= @qsince
+        c = gql(Queries::CLOSED_PAGE, vars.merge(closedAfter: info['endCursor'])).dig('repository', 'closed')
+        closed.concat(c['nodes'])
+        info = c['pageInfo']
+        pages += 1
+      end
+
+      new_prs = {}
+      open.each { |pr| open_pr(pr, new_prs) if base_ok?(pr) }
+      closed.each { |pr| closed_pr(pr) if base_ok?(pr) }
+      new_prs
+    end
+
+    def base_ok?(pr)
+      @opts.base.nil? || pr['baseRefName'] == @opts.base
+    end
+
+    def db_id(node)
+      id = node['fullDatabaseId'] || node['databaseId']
+      id.to_s.match?(/\A\d+\z/) ? id.to_s : nil
+    end
+
+    def gql_actor(obj)
+      GhWatch.actor(obj && obj['login'], obj && obj['__typename'])
+    end
+
+    # Page a pull request connection back until it covers @qsince (max 100).
+    def complete(number, conn_name, conn, ts_key)
+      nodes = conn['nodes'].dup
+      info = conn['pageInfo']
+      while info['hasPreviousPage'] && nodes.size < MAX_CONN
+        if ts_key
+          oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+          break if oldest && oldest < @qsince
+        end
+        c = gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
+        c = c.dig('repository', 'pullRequest', conn_name)
+        nodes = c['nodes'] + nodes
+        info = c['pageInfo']
+      end
+      nodes
+    end
+
+    def complete_thread(thread)
+      conn = thread['comments']
+      nodes = conn['nodes'].dup
+      info = conn['pageInfo']
+      while info['hasPreviousPage'] && nodes.size < MAX_CONN
+        oldest = GhWatch.parse_time(nodes.first&.dig('createdAt'))
+        break if oldest && oldest < @qsince
+
+        c = gql(Queries::THREAD_COMMENTS, id: thread['id'], before: info['startCursor']).dig('node', 'comments')
+        nodes = c['nodes'] + nodes
+        info = c['pageInfo']
+      end
+      nodes
+    end
+
+    def open_pr(pr, new_prs)
+      n = pr['number']
+      key = n.to_s
+      title = pr['title']
+      author = gql_actor(pr['author'])
+      mine = author == @me
+      old = @prs[key]
+
+      created = GhWatch.parse_time(pr['createdAt'])
+      if created && created >= @qsince
+        team = @opts.act_on.include?('team_pr') && @team.include?(GhWatch.norm_login(author))
+        add(at: created, id: "gh:opened:#{n}", verb: 'OPENED', actor: author, subject: "pr:#{n}", number: n,
+            state: 'open', title: title, url: "#{repo_path}/pull/#{n}", act: team)
+      end
+
+      commit = pr.dig('commits', 'nodes', 0, 'commit') || {}
+      head = (pr['headRefOid'] || commit['oid']).to_s
+      head_author = GhWatch.actor(commit.dig('author', 'user', 'login'))
+      head_at = if old && old['head'] == head
+                  GhWatch.parse_time(old['head_at'])
+                elsif old
+                  @now
+                else
+                  GhWatch.parse_time(commit['committedDate']) || @now
+                end
+      ci = GhWatch.ci_state(commit.dig('statusCheckRollup', 'state'), head_at, @now)
+      snap = { 'head' => head, 'ci' => ci, 'head_at' => GhWatch.iso(head_at || @now), 'author' => author }
+      new_prs[key] = snap
+
+      # First sight records the head and CI and says nothing about them.
+      if old && head.match?(SHA_RE)
+        sha12 = head[0, 12]
+        if old['head'] != head && head_author != @me
+          add(at: @now, id: "gh:push:#{n}:#{sha12}", verb: 'PUSH', actor: head_author, subject: "pr:#{n}", number: n,
+              sha: sha12, title: title, url: "#{repo_path}/commit/#{head}", pr: [key, old])
+        end
+        if %w[success failure].include?(ci) && (old['head'] != head || old['ci'] != ci)
+          act = ci == 'failure' && mine && @opts.act_on.include?('ci_failure')
+          add(at: @now, id: "gh:ci:#{n}:#{sha12}:#{ci}", verb: 'CI', actor: CI_ACTOR, subject: "pr:#{n}", number: n,
+              state: ci, sha: sha12, title: title, url: "#{repo_path}/pull/#{n}/checks", act: act, pr: [key, old])
+        end
+      end
+
+      updated = GhWatch.parse_time(pr['updatedAt'])
+      return if updated && updated < @qsince # nothing new in its threads
+
+      pr_comments(n, pr, mine)
+    end
+
+    def pr_comments(n, pr, mine)
+      complete(n, 'comments', pr['comments'], 'createdAt').each do |c|
+        at = GhWatch.parse_time(c['createdAt'])
+        id = db_id(c)
+        next unless at && at >= @qsince && id
+
+        who = gql_actor(c['author'])
+        add(at: at, id: "gh:comment:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
+            state: 'conversation', untrusted: c['body'], url: "#{repo_path}/pull/#{n}#issuecomment-#{id}",
+            act: review_comment_act?(who, mine))
+      end
+
+      complete(n, 'reviews', pr['reviews'], 'submittedAt').each do |r|
+        at = GhWatch.parse_time(r['submittedAt'])
+        id = db_id(r)
+        state = r['state'].to_s.upcase
+        next unless at && at >= @qsince && id && STATES.include?(state) && state != 'PENDING'
+
+        who = gql_actor(r['author'])
+        act = (state == 'CHANGES_REQUESTED' && other?(who) && @opts.act_on.include?('changes_requested')) ||
+              (state == 'COMMENTED' && review_comment_act?(who, mine))
+        add(at: at, id: "gh:review:#{id}", verb: 'REVIEW', actor: who, subject: "pr:#{n}", number: n, state: state,
+            untrusted: r['body'], url: "#{repo_path}/pull/#{n}#pullrequestreview-#{id}", act: act)
+      end
+
+      complete(n, 'reviewThreads', pr['reviewThreads'], nil).each do |thread|
+        complete_thread(thread).each do |c|
+          at = GhWatch.parse_time(c['createdAt'])
+          id = db_id(c)
+          next unless at && at >= @qsince && id
+
+          who = gql_actor(c['author'])
+          body = GhWatch.clean(c['body'], 300)
+          untrusted = body.empty? ? nil : "#{c['path']}: #{body}"
+          add(at: at, id: "gh:inline:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
+              state: 'inline', untrusted: untrusted, url: "#{repo_path}/pull/#{n}#discussion_r#{id}",
+              act: review_comment_act?(who, mine))
+        end
+      end
+    end
+
+    def closed_pr(pr)
+      closed_at = GhWatch.parse_time(pr['closedAt'])
+      return unless closed_at && closed_at >= @qsince
+
+      n = pr['number']
+      merged = pr['state'].to_s.upcase == 'MERGED' || pr['mergedAt']
+      who = if merged
+              gql_actor(pr['mergedBy'])
+            else
+              gql_actor(pr.dig('timelineItems', 'nodes', 0, 'actor'))
+            end
+      kind = merged ? 'merged' : 'closed'
+      add(at: closed_at, id: "gh:#{kind}:#{n}:#{GhWatch.digits(pr['closedAt'])}", verb: kind.upcase, actor: who,
+          subject: "pr:#{n}", number: n, state: kind, title: pr['title'], url: "#{repo_path}/pull/#{n}")
+    end
+
+    def other?(who)
+      who != @me && who != 'unknown' && !@no_wake.include?(GhWatch.norm_login(who))
+    end
+
+    def review_comment_act?(who, mine)
+      mine && other?(who) && @opts.act_on.include?('review_comment')
+    end
+
+    # ---- Issues (REST) -----------------------------------------------------
+
+    def issues_query(new_prs)
+      since = URI.encode_www_form_component(GhWatch.iso(@qsince))
+      @api.get_all("/repos/#{@owner}/#{@name}/issues?state=all&sort=updated&direction=asc&per_page=100&since=#{since}").each do |i|
+        next if i.key?('pull_request')
+
+        n = i['number']
+        title = i['title']
+        created = GhWatch.parse_time(i['created_at'])
+        if created && created >= @qsince
+          add(at: created, id: "gh:opened:#{n}", verb: 'OPENED', actor: GhWatch.actor(i.dig('user', 'login')),
+              subject: "issue:#{n}", number: n, state: 'open', title: title, url: "#{repo_path}/issues/#{n}")
+        end
+        closed = GhWatch.parse_time(i['closed_at'])
+        next unless i['state'] == 'closed' && closed && closed >= @qsince
+
+        add(at: closed, id: "gh:closed:#{n}:#{GhWatch.digits(i['closed_at'])}", verb: 'CLOSED',
+            actor: GhWatch.actor(i.dig('closed_by', 'login')), subject: "issue:#{n}", number: n, state: 'closed',
+            title: title, url: "#{repo_path}/issues/#{n}")
+      end
+
+      @api.get_all("/repos/#{@owner}/#{@name}/issues/comments?sort=updated&direction=asc&per_page=100&since=#{since}").each do |c|
+        at = GhWatch.parse_time(c['created_at'])
+        m = c['html_url'].to_s.match(%r{/(pull|issues)/(\d+)#issuecomment-(\d+)\z})
+        next unless at && at >= @qsince && m && c['id'].to_s == m[3]
+
+        n = m[2].to_i
+        pr = m[1] == 'pull'
+        who = GhWatch.actor(c.dig('user', 'login'))
+        mine = pr && new_prs.dig(n.to_s, 'author') == @me
+        url = pr ? "#{repo_path}/pull/#{n}#issuecomment-#{c['id']}" : "#{repo_path}/issues/#{n}"
+        add(at: at, id: "gh:comment:#{c['id']}", verb: 'COMMENT', actor: who, subject: "#{pr ? 'pr' : 'issue'}:#{n}",
+            number: n, state: 'conversation', untrusted: c['body'], url: url, act: review_comment_act?(who, mine))
+      end
+    end
+
+    # ---- Events and state --------------------------------------------------
+
+    def add(at:, id:, verb:, actor:, subject:, number:, state: nil, sha: nil, title: nil, untrusted: nil, url: nil,
+            act: false, pr: nil)
+      return if @pending.any? { |p| p[:event]['id'] == id } # first source wins
+
+      actor = 'unknown' unless actor.to_s.match?(ACTOR_RE)
+      ev = { 'id' => id, 'kind' => act && actor != @me ? 'act' : 'info', 'actor' => actor, 'subject' => subject,
+             'verb' => verb, 'number' => number }
+      ev['state'] = state if state
+      ev['sha'] = sha if sha
+      t = GhWatch.clean(title, 80)
+      ev['title'] = t unless t.empty?
+      u = GhWatch.clean(untrusted, 300)
+      ev['untrusted'] = u unless u.empty?
+      full_url = url && "https://#{@host}#{url}"
+      ev['url'] = full_url if url&.match?(URL_PATH_RE) && full_url.length <= 300
+      return unless valid?(ev)
+
+      @pending << { at: at, event: ev, pr: pr, seq: @pending.size }
+    end
+
+    def valid?(ev)
+      ev['id'].match?(ID_RE) && ev['subject'].match?(SUBJECT_RE) && VERBS.include?(ev['verb']) &&
+        (ev['state'].nil? || STATES.include?(ev['state'])) && (ev['sha'].nil? || ev['sha'].match?(SHA_RE))
+    end
+
+    def finalize(etag:, issues_etag:, full:, new_prs:)
+      sorted = @pending.sort_by { |p| [p[:at], p[:seq]] }
+      kept = sorted.first(MAX_EVENTS)
+      dropped = sorted.drop(MAX_EVENTS)
+      new_prs = new_prs.dup
+      # A PUSH/CI left out keeps the old snapshot so it is reported next run.
+      dropped.each do |p|
+        next unless p[:pr]
+
+        key, old = p[:pr]
+        new_prs[key] = old
+      end
+      since = dropped.empty? ? @now : [dropped.map { |p| p[:at] }.min, @now].min
+      @events = kept.map { |p| p[:event] }
+
+      @state = {
+        'version' => 1, 'host' => @host, 'repo' => "#{@owner}/#{@name}", 'since' => GhWatch.iso(since),
+        'last_full' => full ? GhWatch.iso(@now) : @old['last_full'], 'etag' => etag, 'me' => @me,
+        'prs' => new_prs, 'api_rest' => @api.bases[:rest]
+      }
+      @state['issues_etag'] = issues_etag if @opts.issues
+      @state['team'] = @team_cache if @team_cache
+      @state['no_full_database_id'] = true unless @full_id
+      @state['rate_limit'] = { 'cost' => @api.cost, 'remaining' => @api.remaining } if full
+      self
+    end
+  end
+
+  # Repo, host, state and output for a whole invocation.
+  class CLI
+    def initialize(argv, env, out: $stdout)
+      @argv = argv
+      @env = env
+      @out = out
+    end
+
+    def run
+      @opts = Options.new(@argv.dup, @env)
+      targets = resolve_targets
+      if @opts.jsonl?
+        raise Failure, '--jsonl watches exactly one repo' unless targets.size == 1
+
+        run_jsonl(*targets.first)
+      else
+        run_text(targets)
+      end
+      0
+    rescue Failure => e
+      warn "gh-watch: #{e.message}"
+      2
+    end
+
+    private
+
+    def resolve_targets
+      host = @opts.host || env('WATCHER_HOST')
+      repos = @opts.repos.dup
+      repos << env('WATCHER_REPO') if repos.empty? && env('WATCHER_REPO')
+      if repos.empty?
+        remote = git_remote(env('WATCHER_CWD') || Dir.pwd)
+        raise Failure, 'not a git repo with a GitHub remote; pass --repo OWNER/NAME' unless remote
+
+        host ||= remote[0]
+        repos << "#{remote[1]}/#{remote[2]}"
+      end
+      host ||= 'github.com'
+      raise Failure, "bad host: #{host[0, 60]}" unless host.match?(HOST_RE)
+      raise Failure, "--url-host #{@opts.url_host} must equal the host #{host}" if @opts.url_host && @opts.url_host != host
+
+      repos.uniq.map do |r|
+        owner, name = r.split('/', 2)
+        raise Failure, "bad repo: #{r[0, 60]} (want OWNER/NAME)" unless owner&.match?(NAME_RE) && name&.match?(NAME_RE)
+
+        [host, owner, name]
+      end
+    end
+
+    def env(key)
+      v = @env[key].to_s
+      v.empty? ? nil : v
+    end
+
+    def git(dir, *args)
+      out, _err, st = Open3.capture3('git', '-c', 'core.fsmonitor=', '-C', dir, *args)
+      st.success? ? out.strip : nil
+    rescue Errno::ENOENT
+      nil
+    end
+
+    # Prefer origin, else the first remote. Any git error (including
+    # dubious ownership) counts as "not a git repo".
+    def git_remote(dir)
+      return nil unless File.directory?(dir)
+
+      url = git(dir, 'remote', 'get-url', 'origin')
+      unless url
+        first = git(dir, 'remote').to_s.split("\n").first
+        url = git(dir, 'remote', 'get-url', first) if first
+      end
+      url && GhWatch.parse_remote(url)
+    end
+
+    def build_api(host, state)
+      override = env('GH_WATCH_API_BASE')
+      bases = GhWatch.api_bases(host, override)
+      bases = { rest: state['api_rest'], graphql: "#{state['api_rest']}/graphql" } if !override && state['host'] == host &&
+                                                                                     state['api_rest'] == "https://api.#{host}" && host.end_with?('.ghe.com')
+      auth_hosts = if override
+                     [URI(override).host.to_s.downcase]
+                   elsif host == 'github.com'
+                     ['api.github.com']
+                   else
+                     [host, "api.#{host}"]
+                   end
+      http = Http.new(token: GhWatch.token_for(host, @env), auth_hosts: auth_hosts, allow_loopback_http: !override.nil?)
+      Api.new(http: http, host: host, bases: bases, override: !override.nil?)
+    end
+
+    def read_state(dir)
+      path = File.join(dir, 'state.json')
+      return {} unless File.exist?(path)
+
+      s = JSON.parse(File.read(path))
+      s.is_a?(Hash) ? s : {}
+    rescue JSON::ParserError
+      {} # a corrupt state starts over from first sight
+    end
+
+    def write_next(dir, state)
+      nxt = File.join(dir, 'state.json.next')
+      tmp = "#{nxt}.tmp-#{Process.pid}"
+      File.open(tmp, 'w', 0o600) do |f|
+        f.write(JSON.pretty_generate(state))
+        f.flush
+        f.fsync
+      end
+      File.rename(tmp, nxt)
+      nxt
+    rescue SystemCallError => e
+      FileUtils.rm_f(tmp) if tmp
+      raise Failure, "cannot write state: #{e.class.name}"
+    end
+
+    def poll(host, owner, name, dir)
+      state = read_state(dir)
+      api = build_api(host, state)
+      Poller.new(opts: @opts, api: api, host: host, owner: owner, name: name, state: state,
+                 now: GhWatch.now_from_env(@env)).run
+    end
+
+    def run_jsonl(host, owner, name)
+      dir = env('WATCHER_STATE_DIR')
+      raise Failure, 'WATCHER_STATE_DIR is required with --jsonl' unless dir && File.directory?(dir)
+
+      poller = poll(host, owner, name, dir)
+      write_next(dir, poller.state) unless @opts.dry_run?
+      poller.events.each { |e| @out.puts JSON.generate(e) }
+    end
+
+    def run_text(targets)
+      tmp = @opts.state_dir ? nil : Dir.mktmpdir('gh-watch')
+      root = @opts.state_dir || tmp
+      targets.each do |host, owner, name|
+        dir = targets.size > 1 ? File.join(root, owner, name) : root
+        FileUtils.mkdir_p(dir)
+        poller = poll(host, owner, name, dir)
+        nxt = write_next(dir, poller.state)
+        File.rename(nxt, File.join(dir, 'state.json')) # no host here to commit it
+        @out.puts "== #{host}/#{owner}/#{name}: #{poller.events.size} event(s)"
+        poller.events.each { |e| @out.puts text_line(e) }
+        rl = poller.state['rate_limit']
+        @out.puts "   (graphql rateLimit cost #{rl['cost']}, remaining #{rl['remaining']})" if rl
+      end
+    ensure
+      FileUtils.rm_rf(tmp) if tmp
+    end
+
+    def text_line(e)
+      parts = ["[#{e['kind']}]", e['verb'], e['subject']]
+      parts << e['state'] if e['state']
+      parts << e['sha'] if e['sha']
+      parts << "by #{e['actor']}"
+      parts << "\"#{e['title']}\"" if e['title']
+      line = parts.join(' ')
+      line += "\n    #{e['url']}" if e['url']
+      line += "\n    > #{e['untrusted']}" if e['untrusted']
+      line
+    end
+  end
+end
+
+exit GhWatch::CLI.new(ARGV, ENV).run if $PROGRAM_NAME == __FILE__

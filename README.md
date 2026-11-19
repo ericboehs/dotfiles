@@ -179,7 +179,7 @@ Enhanced replacements for common commands:
 
 Collection of utility scripts in `bin/` including:
 
-- **GitHub**: gh-sprint (EERT board issues by sprint)
+- **GitHub**: gh-sprint (EERT board issues by sprint), gh-watch (see below)
 - **Tmux utilities**: notes, tmux-agent-save, tmux-agent-restore, tmux-title-format
 - **Story watchers**: hn-watch, macrumors-watch (Slack via slack-noti when a story's comments spike; `--install` loads a LaunchAgent that runs `--watch --notify`)
 - **Agent mesh**: grok-bot-peer and pi-link (symlinks into pi-agent-link's `contrib/grok-bot`; grok-bot-peer registers Grok as a peer session on this Mac)
@@ -190,6 +190,27 @@ Collection of utility scripts in `bin/` including:
 
 Retired scripts live in `archive/bin/`, off `$PATH`; its README says what each
 one did and when it last ran.
+
+### gh-watch
+
+`bin/gh-watch` polls one repo for pull request activity (opened, merged,
+closed, comments, inline comments, reviews, pushes, CI results; issues with
+`--issues on`). Each poll is a conditional REST request (a 304 is free) and one
+GraphQL query only when something changed, CI is pending, or five minutes have
+passed. Auth comes from `gh auth token --hostname HOST` and is only sent to
+that host's API.
+
+```sh
+gh-watch --once --text --repo octocat/hello-world   # human-readable, temp state
+gh-watch --jsonl                                     # watcher contract; needs WATCHER_STATE_DIR
+gh-watch --help                                      # act rules, wake team/authors, base filter
+```
+
+`--jsonl` reads `state.json` from `$WATCHER_STATE_DIR`, writes only
+`state.json.next` (the host commits it on exit 0), and exits 2 with one stderr
+line like `gh-watch: GET /repos/acme/widgets/pulls -> 403 ...` on any failure.
+The repo and host come from `WATCHER_REPO`/`WATCHER_HOST`, `--repo`/`--host`, or
+the git remote of `WATCHER_CWD`/`.`. Tests: `ruby test/gh-watch_test.rb`.
 
 ## Throwaway macOS VMs
 
