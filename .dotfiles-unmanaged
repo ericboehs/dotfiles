@@ -33,6 +33,9 @@ channel.xml
 *.example
 *.example.json
 
+# Tests for bin/ scripts (ruby test/<name>_test.rb), run from the repo.
+test/*
+
 # Retired bin scripts, kept off $PATH on purpose. See archive/bin/README.md.
 archive/*
 
