@@ -18,7 +18,8 @@ SCRIPT = File.expand_path('../bin/gh-watch', __dir__)
 load SCRIPT
 
 NOW = Time.utc(2026, 11, 19, 12, 0, 0)
-TOKEN = 'test-token-abc123'
+TOKEN = 'test-token-abc123' # what the fake `gh auth token` prints
+FAKE_TOKEN = 'ghwatch-test-token' # what gh-watch sends to a test API base
 SHA_A = 'a' * 40
 SHA_B = 'b' * 40
 
@@ -236,7 +237,7 @@ class GhWatchTest < Minitest::Test
       'PATH' => "#{@bin}:#{ENV.fetch('PATH')}", 'GHWATCH_TEST_API_BASE' => server.base, 'GHWATCH_TEST_NOW' => NOW.iso8601,
       'WATCHER_STATE_DIR' => @state_dir, 'WATCHER_REPO' => 'acme/widgets', 'WATCHER_HOST' => 'github.com',
       'WATCHER_ME' => 'octocat', 'WATCHER_CWD' => nil, 'GH_TOKEN' => nil, 'GITHUB_TOKEN' => nil,
-      'GH_ENTERPRISE_TOKEN' => nil, 'GITHUB_ENTERPRISE_TOKEN' => nil
+      'GH_ENTERPRISE_TOKEN' => nil, 'GITHUB_ENTERPRISE_TOKEN' => nil, 'GHWATCH_TEST_TOKEN' => nil
     }.merge(env)
     args = ['--jsonl'] if args.empty?
     out, err, st = Open3.capture3(full_env, RbConfig.ruby, SCRIPT, *args)
@@ -268,7 +269,7 @@ class GhWatchTest < Minitest::Test
     assert_equal 'failure', st['prs']['5']['ci']
     assert_equal NOW.iso8601, st['since']
     assert_equal 'octocat', st['me']
-    assert_equal "Bearer #{TOKEN}", server.requests.first.headers['authorization']
+    assert_equal "Bearer #{FAKE_TOKEN}", server.requests.first.headers['authorization']
   end
 
   def test_304_skips_graphql_and_holds_since
@@ -559,8 +560,24 @@ class GhWatchTest < Minitest::Test
     assert_equal 2, @status
     run_watch(env: { 'WATCHER_STATE_DIR' => nil })
     assert_equal [2, "gh-watch: WATCHER_STATE_DIR is required with --jsonl\n"], [@status, @err]
-    run_watch(env: { 'WATCHER_HOST' => 'example.com' })
+    token_for('example.com')
     assert_match(/no gh auth for example\.com/, @err)
+  end
+
+  def test_dot_names_are_rejected
+    ['../..', 'acme/..', './widgets', 'acme/...'].each do |repo|
+      run_watch('--jsonl', '--repo', repo)
+      assert_equal 2, @status, repo
+      assert_match(/bad repo/, @err, repo)
+    end
+    run_watch('--once', '--text', '--state-dir', @state_dir, '--repo', 'acme/widgets', '--repo', '../..')
+    assert_equal 2, @status
+    assert_empty server.requests, 'refused before any directory or request'
+    assert_nil GhWatch.parse_remote('git@github.com:../widgets.git')
+    assert_nil GhWatch.parse_remote('https://github.com/acme/..')
+    assert_equal ['github.com', 'acme', 'w.x'], GhWatch.parse_remote('git@github.com:acme/w.x.git')
+    run_watch('--jsonl', '--wake-team', 'acme/..')
+    assert_equal [2, "gh-watch: --wake-team must be ORG/SLUG\n"], [@status, @err]
   end
 
   def test_text_mode_once
@@ -640,30 +657,53 @@ class GhWatchTest < Minitest::Test
     assert_equal 1, server.requests.size
   end
 
+  # GhWatch.token_for in a subprocess with the fake gh on PATH and only the
+  # token variables given (the test API base path never calls it).
+  def token_for(host, from_remote: false, env: {})
+    full_env = { 'PATH' => "#{@bin}:#{ENV.fetch('PATH')}", 'GH_TOKEN' => nil, 'GITHUB_TOKEN' => nil,
+                 'GH_ENTERPRISE_TOKEN' => nil, 'GITHUB_ENTERPRISE_TOKEN' => nil }.merge(env)
+    code = 'load ARGV[0]; begin; print GhWatch.token_for(ARGV[1], from_remote: ARGV[2] == "1"); ' \
+           'rescue GhWatch::Failure => e; warn e.message; exit 2; end'
+    out, @err, st = Open3.capture3(full_env, RbConfig.ruby, '-e', code, SCRIPT, host, from_remote ? '1' : '0')
+    @status = st.exitstatus
+    out
+  end
+
+  def gh_log_lines
+    File.exist?(@gh_log) ? File.readlines(@gh_log, chomp: true) : []
+  end
+
   def test_remote_host_needs_gh_auth_status_and_gets_no_env_token
-    env = { 'WATCHER_REPO' => nil, 'WATCHER_HOST' => nil, 'GH_ENTERPRISE_TOKEN' => 'env-secret' }
-    dir = git_repo('git@evil.example.com:acme/widgets.git')
-    run_watch('--once', '--text', env: env.merge('WATCHER_CWD' => dir))
-    assert_equal [2, "gh-watch: remote host evil.example.com is not logged in to gh; pass --host and --repo\n"],
-                 [@status, @err]
-    assert_equal ["auth status --hostname evil.example.com ent="], File.readlines(@gh_log, chomp: true)
-    assert_empty server.requests
+    env = { 'GH_ENTERPRISE_TOKEN' => 'env-secret' }
+    token_for('evil.example.com', from_remote: true, env: env)
+    assert_equal [2, "remote host evil.example.com is not logged in to gh; pass --host and --repo\n"], [@status, @err]
+    assert_equal ['auth status --hostname evil.example.com ent='], gh_log_lines
 
     # A logged-in remote host still never sees the env token.
-    FileUtils.rm_rf(dir)
-    dir = git_repo('git@ghe.example.com:acme/widgets.git')
     File.write(@gh_log, '')
-    run_watch('--once', '--text', env: env.merge('WATCHER_CWD' => dir))
+    token_for('ghe.example.com', from_remote: true, env: env)
     assert_equal 2, @status
     assert_match(/no gh auth for ghe\.example\.com/, @err)
-    assert(File.readlines(@gh_log, chomp: true).all? { |l| l.end_with?('ent=') })
+    assert(gh_log_lines.all? { |l| l.end_with?('ent=') })
 
     # A host the user configured keeps its enterprise token.
     File.write(@gh_log, '')
-    run_watch(env: { 'WATCHER_HOST' => 'ghe.example.com', 'GH_ENTERPRISE_TOKEN' => 'env-secret' })
+    assert_equal 'env-secret', token_for('ghe.example.com', env: env)
+    assert_equal ['auth token --hostname ghe.example.com ent=env-secret'], gh_log_lines
+  end
+
+  def test_test_api_base_never_gets_the_gh_token
+    write_state(base_state)
+    run_watch
     assert_equal 0, @status, @err
-    assert_equal ['auth token --hostname ghe.example.com ent=env-secret'], File.readlines(@gh_log, chomp: true)
-    assert_equal 'Bearer env-secret', server.requests.last.headers['authorization']
+    refute File.exist?(@gh_log), 'gh is never asked for a token'
+    assert_equal(["Bearer #{FAKE_TOKEN}"], server.requests.map { |r| r.headers['authorization'] }.uniq)
+
+    write_state(base_state)
+    run_watch(env: { 'GHWATCH_TEST_TOKEN' => 'chosen-by-test' })
+    assert_equal 0, @status, @err
+    assert_equal 'Bearer chosen-by-test', server.requests.last.headers['authorization']
+    refute(server.requests.any? { |r| r.headers['authorization'].to_s.include?(TOKEN) })
   end
 
   def test_test_api_base_must_be_loopback
@@ -763,6 +803,65 @@ class GhWatchTest < Minitest::Test
     assert_includes ids, 'gh:opened:205'
     refute next_state.key?('backlog')
     assert_equal NOW.iso8601, next_state['since']
+  end
+
+  def open_page(nodes, more)
+    { 'data' => { 'repository' => { 'open' => {
+      'pageInfo' => { 'hasNextPage' => more, 'endCursor' => more ? 'NEXT2' : nil }, 'nodes' => nodes
+    } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }
+  end
+
+  def test_heads_page_on_while_updated_since_between_refreshes
+    old = %w[5 6 7].to_h { |n| [n, { 'head' => SHA_A, 'ci' => 'none' }] }
+    write_state(base_state('prs' => old))
+    @gql = graphql(open: [pr(number: 5, updated: ago(30))])
+    @gql['data']['repository']['open']['pageInfo'] = { 'hasNextPage' => true, 'endCursor' => 'NEXT' }
+    pages = []
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('closed: pullRequests') then [200, {}, @gql]
+      elsif q.include?('p0: pullRequest(') then [200, {}, details_for(req)]
+      else
+        pages << req.json['variables']['openAfter']
+        [200, {}, open_page([pr(number: 6, updated: ago(60), head: SHA_B, head_author: 'bob'),
+                             pr(number: 7, updated: ago(9000))], true)]
+      end
+    end
+    assert_equal(["gh:push:6:#{SHA_B[0, 12]}"], run_watch.map { |e| e['id'] })
+    assert_equal 0, @status, @err
+    assert_equal ['NEXT'], pages, 'stops once the last head is older than since'
+    assert_equal %w[5 6 7], next_state['prs'].keys.sort
+    assert_equal NOW.iso8601, next_state['since']
+  end
+
+  def test_truncated_connection_inside_the_window_is_a_failure
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    many = (1..100).map { |i| comment(1000 + i, 'bob', ago(100 - (i / 2))) }
+    @gql = graphql(open: [pr(number: 5, comments: many, comments_more: true)])
+    run_watch
+    assert_equal [2, "gh-watch: more than 100 comments in the window\n"], [@status, @err]
+    refute File.exist?(File.join(@state_dir, 'state.json.next'))
+
+    # Reaching back past since is complete even at the cap.
+    many[0] = comment(1001, 'bob', ago(4000))
+    @gql = graphql(open: [pr(number: 5, comments: many, comments_more: true)])
+    assert_equal 99, run_watch.size
+    assert_equal 0, @status, @err
+  end
+
+  def test_missing_details_is_a_failure
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    @gql = graphql(open: [pr(number: 5, comments: [comment(201, 'alice', ago(30))])])
+    @routes['POST /graphql'] = lambda do |req|
+      if req.json['query'].include?('p0: pullRequest(')
+        [200, {}, { 'data' => { 'repository' => nil, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      else
+        [200, {}, @gql]
+      end
+    end
+    assert_empty run_watch
+    assert_equal [2, "gh-watch: pull request details missing\n"], [@status, @err]
+    refute File.exist?(File.join(@state_dir, 'state.json.next'))
   end
 
   def test_max_pages_is_a_failure

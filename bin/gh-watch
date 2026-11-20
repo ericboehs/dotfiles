@@ -72,6 +72,7 @@ module GhWatch
   ENTERPRISE_TOKENS = %w[GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN].freeze
   DOTCOM_TOKENS = %w[GH_TOKEN GITHUB_TOKEN].freeze
   LOOPBACK = %w[127.0.0.1 localhost ::1].freeze
+  TEST_TOKEN = 'ghwatch-test-token' # sent to GHWATCH_TEST_API_BASE when GHWATCH_TEST_TOKEN is unset
 
   module_function
 
@@ -84,9 +85,15 @@ module GhWatch
     return nil unless m
 
     host, owner, name = m.captures
-    return nil unless host.match?(HOST_RE) && owner.match?(NAME_RE) && name.match?(NAME_RE)
+    return nil unless host.match?(HOST_RE) && name_ok?(owner) && name_ok?(name)
 
     [host.downcase, owner, name]
+  end
+
+  # An owner or repo name: NAME_RE, but never `.` or `..` (or any all-dots
+  # name), which would walk out of a state directory.
+  def name_ok?(str)
+    str.is_a?(String) && str.match?(NAME_RE) && !str.match?(/\A\.+\z/)
   end
 
   # REST and GraphQL bases for a host.
@@ -491,7 +498,7 @@ module GhWatch
 
       bad = @act_on - ACT_RULES
       raise Failure, "unknown --act-on rule: #{bad.first}" unless bad.empty?
-      raise Failure, '--wake-team must be ORG/SLUG' if @wake_team && !@wake_team.match?(SLUG_RE)
+      raise Failure, '--wake-team must be ORG/SLUG' if @wake_team && !(@wake_team.match?(SLUG_RE) && @wake_team.split('/').all? { |s| GhWatch.name_ok?(s) })
     rescue OptionParser::ParseError => e
       raise Failure, e.message
     end
@@ -644,7 +651,14 @@ module GhWatch
       open = GhWatch.nodes(conn)
       info = conn['pageInfo'] || {}
       pages = 1
-      while refresh && info['hasNextPage'] && pages < MAX_PAGES
+      # Between refreshes, keep paging while the newest-first list still
+      # reaches back to @qsince, so a busy interval loses no PRs.
+      while info['hasNextPage'] && (refresh || updated_since?(open.last || {}))
+        if pages >= MAX_PAGES
+          raise Failure, "more than #{MAX_PAGES} pages of open pull requests" unless refresh
+
+          break
+        end
         c = gql(Queries::OPEN_PAGE, vars.merge(openAfter: info['endCursor'])).dig('repository', 'open')
         break unless c.is_a?(Hash)
 
@@ -684,7 +698,7 @@ module GhWatch
         vars = { owner: @owner, name: @name }
         batch.each_with_index { |n, i| vars[:"n#{i}"] = n }
         repo = gql(Queries.details(batch.size), vars)['repository']
-        next unless repo.is_a?(Hash)
+        raise Failure, 'pull request details missing' unless repo.is_a?(Hash)
 
         batch.each_with_index { |n, i| details[n] = repo["p#{i}"] if repo["p#{i}"].is_a?(Hash) }
       end
@@ -730,7 +744,19 @@ module GhWatch
         nodes = GhWatch.nodes(c) + nodes
         info = c['pageInfo'] || {}
       end
+      truncated!(conn_name, nodes, info, ts_key)
       nodes
+    end
+
+    # Stopping at MAX_CONN while the oldest node still falls inside the
+    # window would drop events and still advance since: fail instead.
+    def truncated!(conn_name, nodes, info, ts_key)
+      return unless ts_key && info['hasPreviousPage'] && nodes.size >= MAX_CONN
+
+      oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+      return if oldest && oldest < @qsince
+
+      raise Failure, "more than #{MAX_CONN} #{conn_name} in the window"
     end
 
     def complete_thread(thread)
@@ -1020,7 +1046,7 @@ module GhWatch
 
       repos.uniq.map do |r|
         owner, name = r.split('/', 2)
-        raise Failure, "bad repo: #{r[0, 60]} (want OWNER/NAME)" unless owner&.match?(NAME_RE) && name&.match?(NAME_RE)
+        raise Failure, "bad repo: #{r[0, 60]} (want OWNER/NAME)" unless GhWatch.name_ok?(owner) && GhWatch.name_ok?(name)
 
         [host, owner, name]
       end
@@ -1081,7 +1107,12 @@ module GhWatch
                    else
                      [host, "api.#{host}"]
                    end
-      token = GhWatch.token_for(host, from_remote: @host_from_remote == true)
+      # Never send a real token to a test listener over plain http.
+      token = if override
+                env('GHWATCH_TEST_TOKEN') || TEST_TOKEN
+              else
+                GhWatch.token_for(host, from_remote: @host_from_remote == true)
+              end
       http = Http.new(token: token, auth_hosts: auth_hosts, allow_loopback_http: !override.nil?)
       Api.new(http: http, host: host, bases: bases, override: !override.nil?, fallback: cached.nil?)
     end
