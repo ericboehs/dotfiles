@@ -2,17 +2,22 @@
 # heavy: run a heavy command (xcodebuild, a test suite, bin/check) without swamping the Mac.
 #
 #   heavy xcodebuild -project ios/Botsun.xcodeproj ...
-#   HEAVY_SLOTS=1 heavy bin/check --ios
+#   HEAVY_SLOTS=1 heavy bin/check --ios   # one at a time, e.g. while you work
 #
-# Three brakes:
-#  1. Slots: at most HEAVY_SLOTS (default 1) heavy commands at once, across every shell and agent.
+# Four brakes:
+#  1. Slots: at most HEAVY_SLOTS (default 2) heavy commands at once, across every shell and agent.
 #     A command waits for a free slot. Locks are lockf(1) files in ~/Library/Caches/heavy, and a
-#     slot frees itself when its command exits or dies.
+#     slot frees itself when its command exits or dies. Two slots (2026-11-20): one let five agents
+#     queue for hours while the CPU sat mostly idle. The iPad UI lanes stay one at a time through
+#     bin/check's own lock (~/Library/Caches/botsun/ipad-checks.lock).
 #  2. CPU gate: it doesn't start while the CPU is less than HEAVY_MIN_IDLE percent idle (default
 #     25, sampled over a second). Not the load average: a booting simulator and utility-clamped
 #     builds put hundreds of threads in the run queue while the CPU is a third idle (load 900+ on
 #     2026-11-10 with nothing wrong), so a load gate held work back for no reason.
-#  3. Priority: it runs under `taskpolicy -c utility` (efficiency cores first, below interactive
+#  3. Simulators: it doesn't start while more than HEAVY_MAX_SIMS (default 4) simulators are
+#     booted. Each stock simulator is ~180 daemons and ~4 GB (2026-11-19: six booted pushed the
+#     load to 190); agents leave them running. HEAVY_MAX_SIMS=0 turns the brake off.
+#  4. Priority: it runs under `taskpolicy -c utility` (efficiency cores first, below interactive
 #     work) and `nice -n 10`.
 #
 # Exit status is the command's own. If the command itself exits 75 (EX_TEMPFAIL, the code lockf
@@ -27,17 +32,22 @@ set -uo pipefail
 [ "${HEAVY_HELD:-}" = 1 ] && exec "$@"
 export HEAVY_HELD=1
 
-slots=${HEAVY_SLOTS:-1}
+slots=${HEAVY_SLOTS:-2}
 min_idle=${HEAVY_MIN_IDLE:-25}
+max_sims=${HEAVY_MAX_SIMS:-4}
 dir="$HOME/Library/Caches/heavy"
 mkdir -p "$dir"
+
+# Booted simulators (0 when there's no simctl).
+sims() { xcrun simctl list devices booted 2>/dev/null | grep -c '(Booted)'; }
+sims_ok() { [ "$max_sims" -eq 0 ] || [ "$(sims)" -le "$max_sims" ]; }
 
 # Percent idle over the last second (top's second sample; the first is since boot).
 idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub("%", "", v); print int(v) }'; }
 
 waited=0
 while :; do
-  if [ "$(idle)" -ge "$min_idle" ]; then
+  if sims_ok && [ "$(idle)" -ge "$min_idle" ]; then
     for n in $(seq 1 "$slots"); do
       lockf -s -t 0 "$dir/slot-$n" taskpolicy -c utility nice -n 10 "$@"
       status=$?
@@ -45,7 +55,11 @@ while :; do
     done
   fi
   if [ $((waited % 60)) -eq 0 ]; then
-    echo "heavy: waiting for a slot (CPU $(idle)% idle, needs $min_idle%; $slots slot(s)): $1" >&2
+    if sims_ok; then
+      echo "heavy: waiting for a slot (CPU $(idle)% idle, needs $min_idle%; $slots slot(s)): $1" >&2
+    else
+      echo "heavy: waiting: $(sims) simulators booted, max $max_sims (xcrun simctl list devices booted): $1" >&2
+    fi
   fi
   sleep 10
   waited=$((waited + 10))
