@@ -45,8 +45,23 @@ sims_ok() { [ "$max_sims" -eq 0 ] || [ "$(sims)" -le "$max_sims" ]; }
 # Percent idle over the last second (top's second sample; the first is since boot).
 idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub("%", "", v); print int(v) }'; }
 
+# A temporary override, re-read on every pass so waiting commands pick it up: the file
+# ~/Library/Caches/heavy/slots holds "SLOTS UNTIL-EPOCH [MIN-IDLE]" (e.g. "3 1795420800 10");
+# past UNTIL it's ignored. HEAVY_SLOTS / HEAVY_MIN_IDLE set in the environment still win.
+override_slots() {
+  read -r n until idle_min < "$dir/slots" 2>/dev/null || return
+  case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
+  [ "$(date +%s)" -lt "$until" ] || return
+  [ -z "${HEAVY_SLOTS:-}" ] && slots=$n
+  [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ] && min_idle=$idle_min
+  return 0
+}
+
 waited=0
 while :; do
+  slots=${HEAVY_SLOTS:-2}
+  min_idle=${HEAVY_MIN_IDLE:-25}
+  override_slots
   if sims_ok && [ "$(idle)" -ge "$min_idle" ]; then
     for n in $(seq 1 "$slots"); do
       lockf -s -t 0 "$dir/slot-$n" taskpolicy -c utility nice -n 10 "$@"
