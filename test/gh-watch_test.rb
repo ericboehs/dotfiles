@@ -834,19 +834,25 @@ class GhWatchTest < Minitest::Test
     assert_equal NOW.iso8601, next_state['since']
   end
 
-  def test_truncated_connection_inside_the_window_is_a_failure
+  def test_truncated_connection_inside_the_window_holds_since_and_warns
     write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
     many = (1..100).map { |i| comment(1000 + i, 'bob', ago(100 - (i / 2))) }
     @gql = graphql(open: [pr(number: 5, comments: many, comments_more: true)])
-    run_watch
-    assert_equal [2, "gh-watch: more than 100 comments in the window\n"], [@status, @err]
-    refute File.exist?(File.join(@state_dir, 'state.json.next'))
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal 100, events.size, 'what was fetched is still emitted'
+    assert_equal "gh-watch: acme/widgets#5 comments truncated at 100 nodes; " \
+                 "holding since at #{ago(100)} to retry the rest next poll\n", @err
+    assert_equal ago(100), next_state['since'], 'since holds at the oldest fetched timestamp'
+    assert next_state['backlog']
 
-    # Reaching back past since is complete even at the cap.
+    # Reaching back past since is complete even at the cap: no truncation.
     many[0] = comment(1001, 'bob', ago(4000))
     @gql = graphql(open: [pr(number: 5, comments: many, comments_more: true)])
     assert_equal 99, run_watch.size
     assert_equal 0, @status, @err
+    assert_empty @err
+    refute next_state['backlog']
   end
 
   def test_missing_details_is_a_failure

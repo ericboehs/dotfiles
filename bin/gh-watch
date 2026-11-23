@@ -538,6 +538,7 @@ module GhWatch
       since = @now - FIRST_WINDOW if first
       @qsince = since - OVERLAP
       @pending = []
+      @truncate_floor = nil
 
       # The change check goes first: it is the only request that may switch a
       # *.ghe.com host to its api. base.
@@ -744,19 +745,25 @@ module GhWatch
         nodes = GhWatch.nodes(c) + nodes
         info = c['pageInfo'] || {}
       end
-      truncated!(conn_name, nodes, info, ts_key)
+      truncated!(number, conn_name, nodes, info, ts_key)
       nodes
     end
 
     # Stopping at MAX_CONN while the oldest node still falls inside the
-    # window would drop events and still advance since: fail instead.
-    def truncated!(conn_name, nodes, info, ts_key)
+    # window would drop events. Rather than raise and wedge the repo (since
+    # never advances, so every later poll hits the same busy PR), keep what
+    # was fetched and hold `since` at the oldest fetched timestamp so the
+    # next poll re-covers the gap; warn loudly so it's visible.
+    def truncated!(number, conn_name, nodes, info, ts_key)
       return unless ts_key && info['hasPreviousPage'] && nodes.size >= MAX_CONN
 
       oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
       return if oldest && oldest < @qsince
 
-      raise Failure, "more than #{MAX_CONN} #{conn_name} in the window"
+      floor = oldest || @qsince
+      @truncate_floor = [@truncate_floor, floor].compact.min
+      warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} truncated at #{MAX_CONN} nodes; " \
+           "holding since at #{GhWatch.iso(floor)} to retry the rest next poll"
     end
 
     def complete_thread(thread)
@@ -978,7 +985,7 @@ module GhWatch
       # `since` moves only past what a PR query read: a 304 run keeps it, and
       # it stops at the first event the cap dropped.
       since = full ? @now : (GhWatch.parse_time(@old['since']) || @now)
-      since = [since, dropped.map { |p| p[:at] }.min, @now].compact.min
+      since = [since, dropped.map { |p| p[:at] }.min, @truncate_floor, @now].compact.min
       @events = kept.map { |p| p[:event] }
 
       @state = {
@@ -986,7 +993,7 @@ module GhWatch
         'last_full' => refresh ? GhWatch.iso(@now) : @old['last_full'], 'etag' => etag, 'me' => @me,
         'prs' => new_prs, 'api_rest' => @api.bases[:rest]
       }
-      @state['backlog'] = true unless dropped.empty?
+      @state['backlog'] = true if !dropped.empty? || @truncate_floor
       @state['issues_etag'] = issues_etag if @opts.issues
       @state['team'] = @team_cache if @team_cache
       @state['no_full_database_id'] = true unless @full_id
