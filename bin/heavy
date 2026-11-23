@@ -32,6 +32,9 @@ set -uo pipefail
 [ "${HEAVY_HELD:-}" = 1 ] && exec "$@"
 export HEAVY_HELD=1
 
+case "${HEAVY_SLOTS:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_SLOTS must be a number: $HEAVY_SLOTS" >&2; exit 64 ;; esac
+case "${HEAVY_MIN_IDLE:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_MIN_IDLE must be a number: $HEAVY_MIN_IDLE" >&2; exit 64 ;; esac
+
 slots=${HEAVY_SLOTS:-2}
 min_idle=${HEAVY_MIN_IDLE:-25}
 max_sims=${HEAVY_MAX_SIMS:-4}
@@ -48,12 +51,19 @@ idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub(
 # A temporary override, re-read on every pass so waiting commands pick it up: the file
 # ~/Library/Caches/heavy/slots holds "SLOTS UNTIL-EPOCH [MIN-IDLE]" (e.g. "3 1795420800 10");
 # past UNTIL it's ignored. HEAVY_SLOTS / HEAVY_MIN_IDLE set in the environment still win.
+override_msg=""
 override_slots() {
-  read -r n until idle_min < "$dir/slots" 2>/dev/null || return
+  override_msg=""
+  local n until idle_min now
+  read -r n until idle_min < "$dir/slots" 2>/dev/null || [ -n "${n:-}" ] || return
   case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
-  [ "$(date +%s)" -lt "$until" ] || return
+  [ -n "$until" ] && [ "$n" -ge 1 ] || return
+  now=$(date +%s)
+  [ "$now" -lt "$until" ] || return
+  [ "$until" -le $((now + 7 * 24 * 3600)) ] || return
   [ -z "${HEAVY_SLOTS:-}" ] && slots=$n
   [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ] && min_idle=$idle_min
+  override_msg=" (override until $(date -r "$until"))"
   return 0
 }
 
@@ -62,7 +72,9 @@ while :; do
   slots=${HEAVY_SLOTS:-2}
   min_idle=${HEAVY_MIN_IDLE:-25}
   override_slots
-  if sims_ok && [ "$(idle)" -ge "$min_idle" ]; then
+  [ "$slots" -ge 1 ] || slots=1
+  cur_idle=$(idle)
+  if sims_ok && [ "$cur_idle" -ge "$min_idle" ]; then
     for n in $(seq 1 "$slots"); do
       lockf -s -t 0 "$dir/slot-$n" taskpolicy -c utility nice -n 10 "$@"
       status=$?
@@ -71,7 +83,7 @@ while :; do
   fi
   if [ $((waited % 60)) -eq 0 ]; then
     if sims_ok; then
-      echo "heavy: waiting for a slot (CPU $(idle)% idle, needs $min_idle%; $slots slot(s)): $1" >&2
+      echo "heavy: waiting for a slot (CPU $cur_idle% idle, needs $min_idle%; $slots slot(s)$override_msg): $1" >&2
     else
       echo "heavy: waiting: $(sims) simulators booted, max $max_sims (xcrun simctl list devices booted): $1" >&2
     fi
