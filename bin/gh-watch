@@ -350,9 +350,11 @@ module GhWatch
       number title createdAt updatedAt baseRefName headRefOid #{AUTHOR}
       commits(last: 1) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
     GQL
-    # Heavy: only for PRs updated since the last poll.
+    # Heavy: only for PRs updated since the last poll, plus any PR with a
+    # resume entry (see drain_stuck_resumes). state and author let the latter
+    # tell a still-open-but-quiet PR from one that is closed, merged or gone.
     DETAIL_PR = <<~GQL
-      number
+      number state #{AUTHOR}
       reviews(last: 20) { #{PAGE} nodes { #{REVIEW} } }
       comments(last: 20) { #{PAGE} nodes { #{COMMENT} } }
       reviewThreads(last: 20) { #{PAGE} nodes { #{THREAD} } }
@@ -531,11 +533,29 @@ module GhWatch
       @prs = prs.is_a?(Hash) ? prs.select { |_, v| v.is_a?(Hash) } : {}
       @no_wake = opts.no_wake.map { |a| GhWatch.norm_login(a) }
       @full_id = !@old['no_full_database_id']
-      # { "<pr number>:<connection name>" => { 'cursor' => <startCursor>, 'target' => <iso since> } } for a
-      # comments/reviews connection that hit MAX_CONN before reaching `since`: where to resume paging
-      # backward from, and how far back it still needs to reach. See drain_backlog.
+      # { "<pr number>:<connection name>" => [{ 'cursor' => <startCursor>, 'target' => <iso since> }, ...] }
+      # for a comments/reviews connection that hit MAX_CONN before reaching `since`: where to resume
+      # paging backward from, and how far back it still needs to reach. Normally one segment; a second
+      # appears if the connection truncates again while the first is still draining (see truncated!).
+      # drain_backlog always drains segment 0; the list stays in discovery order. Migration: a state
+      # file written before this round stored one bare hash per key instead of a list, so it is wrapped
+      # in a one-element array here. That migration is transparent -- the segment's cursor and target
+      # are unchanged, so draining continues exactly where it left off.
       resume = @old['resume']
-      @resume = resume.is_a?(Hash) ? resume.select { |_, v| v.is_a?(Hash) } : {}
+      @resume = if resume.is_a?(Hash)
+                  resume.each_with_object({}) do |(k, v), acc|
+                    segments = if v.is_a?(Array)
+                                 v.select { |s| s.is_a?(Hash) }
+                               elsif v.is_a?(Hash)
+                                 [v]
+                               else
+                                 []
+                               end
+                    acc[k] = segments unless segments.empty?
+                  end
+                else
+                  {}
+                end
     end
 
     def run
@@ -644,13 +664,40 @@ module GhWatch
       open, all_open = open_heads(repo['open'], vars, refresh)
       closed = closed_prs(repo['closed'], vars)
       open = open.select { |pr| base_ok?(pr) && pr['number'].is_a?(Integer) }
-      details = fetch_details(open.select { |pr| updated_since?(pr) }.map { |pr| pr['number'] })
+      open_numbers = open.select { |pr| updated_since?(pr) }.map { |pr| pr['number'] }
+      # A PR with a resume entry must keep draining even if it goes quiet (not
+      # "updated since" @qsince) -- that quiet is exactly how a resume entry
+      # gets stuck forever otherwise: open_numbers above would never include
+      # it again, yet @old['backlog'] forces `full` on every later poll for
+      # nothing. See drain_stuck_resumes.
+      resume_numbers = @resume.keys.map { |k| k.split(':', 2).first.to_i }.uniq
+      details = fetch_details((open_numbers + resume_numbers).uniq)
 
       new_prs = {}
       open.each { |pr| open_pr(pr, details[pr['number']], new_prs) }
       closed.each { |pr| closed_pr(pr) if base_ok?(pr) }
       carry_over(new_prs, closed) unless all_open
+      drain_stuck_resumes(resume_numbers - open.map { |pr| pr['number'] }, details)
       new_prs
+    end
+
+    # A resume entry for a PR that open_heads didn't surface this poll (gone
+    # quiet, or closed/merged/gone entirely) never gets another chance through
+    # the normal `open.each { ... pr_comments ... }` path above. Drain it
+    # directly using the detail fetch_details already fetched for it (see
+    # full_query): `state` tells "still open, just quiet" from "closed or
+    # gone" -- the latter drops the resume entry instead of requerying it,
+    # and every other connection's, forever.
+    def drain_stuck_resumes(numbers, details)
+      numbers.each do |n|
+        detail = details[n]
+        if detail.is_a?(Hash) && detail['state'] == 'OPEN'
+          mine = GhWatch.same_login?(gql_actor(detail['author']), @me)
+          pr_comments(n, detail, mine)
+        else
+          @resume.delete_if { |key, _| key.start_with?("#{n}:") }
+        end
+      end
     end
 
     def open_heads(conn, vars, refresh)
@@ -770,30 +817,46 @@ module GhWatch
     # connection first truncated, fixed for the life of the resume entry: the
     # live @qsince has since moved on and no longer marks where the gap ends.
     def drain_backlog(number, conn_name, ts_key, key)
-      resume = @resume[key]
-      return [] unless resume
+      segments = @resume[key]
+      return [] unless segments && !segments.empty?
 
+      resume = segments.first
       target = GhWatch.parse_time(resume['target'])
       nodes = []
       info = { 'hasPreviousPage' => true, 'startCursor' => resume['cursor'] }
+      bad_page = false
       while info['hasPreviousPage'] && nodes.size < MAX_CONN
         oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
         break if target && oldest && oldest < target
 
         c = gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
         c = c.dig('repository', 'pullRequest', conn_name)
-        break unless c.is_a?(Hash)
+        unless c.is_a?(Hash)
+          bad_page = true
+          break
+        end
 
         nodes = GhWatch.nodes(c) + nodes
         info = c['pageInfo'] || {}
       end
 
-      oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
-      if info['hasPreviousPage'] && nodes.size >= MAX_CONN && !(target && oldest && oldest < target)
-        @resume[key] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
-      else
-        @resume.delete(key)
+      # A failed or empty page is not "finished": leave this segment (and
+      # @resume[key]) exactly as it was so the next poll retries from the
+      # same cursor, instead of looking like the gap is closed and dropping
+      # the rest of it.
+      unless bad_page
+        oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+        if info['hasPreviousPage'] && nodes.size >= MAX_CONN && !(target && oldest && oldest < target)
+          segments[0] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
+        else
+          segments.shift
+          @resume.delete(key) if segments.empty?
+        end
       end
+      # The last page fetched (or the very first one, if hasPreviousPage was
+      # already false) can reach past `target`: keep only nodes at or after it
+      # so events from before the window are never (re-)emitted.
+      nodes.select! { |n| (t = GhWatch.parse_time(n[ts_key])) && (target.nil? || t >= target) }
       nodes.each { |n| n[BACKLOG_MARK] = true }
       nodes
     end
@@ -806,14 +869,25 @@ module GhWatch
     # with the (unrelated, nearer-the-top) point the fresh walk stopped at.
     def truncated!(key, number, conn_name, nodes, info, ts_key)
       return unless ts_key && info['hasPreviousPage'] && nodes.size >= MAX_CONN
-      return if @resume.key?(key)
 
       oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
       return if oldest && oldest < @qsince
 
-      @resume[key] = { 'cursor' => info['startCursor'], 'target' => GhWatch.iso(@qsince) }
-      warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} truncated at #{MAX_CONN} nodes; " \
-           'resuming the rest over the next poll(s)'
+      segment = { 'cursor' => info['startCursor'], 'target' => GhWatch.iso(@qsince) }
+      segments = @resume[key]
+      if segments.nil? || segments.empty?
+        @resume[key] = [segment]
+        warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} truncated at #{MAX_CONN} nodes; " \
+             'resuming the rest over the next poll(s)'
+      else
+        # drain_backlog already owns segments[0] (the gap nearest `since`); this
+        # is a second, more recent gap piling up above it while that drain is
+        # still in progress -- track its edge instead of silently losing it.
+        # Only one extra segment is kept: it is refreshed to the latest edge
+        # each poll (no repeat warning) until segment 0 finishes draining and
+        # this one takes its place.
+        segments[1] = segment
+      end
     end
 
     def complete_thread(thread)

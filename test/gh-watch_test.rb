@@ -864,7 +864,8 @@ class GhWatchTest < Minitest::Test
                  "resuming the rest over the next poll(s)\n", @err
     assert_equal NOW.iso8601, next_state['since'], "since keeps moving -- draining the gap doesn't wedge it"
     assert next_state['backlog']
-    assert_equal 'CUR', next_state.dig('resume', '5:comments', 'cursor')
+    assert_equal 1, next_state.dig('resume', '5:comments').size
+    assert_equal 'CUR', next_state.dig('resume', '5:comments', 0, 'cursor')
 
     # Second poll: commit the state, keep the same unchanged top page (nothing
     # new arrived), and answer the stored cursor's request with the rest of
@@ -890,6 +891,254 @@ class GhWatchTest < Minitest::Test
     assert_equal older.map { |c| "gh:comment:#{c['fullDatabaseId']}" }.sort, ids2.sort, 'the gap is fetched exactly once'
     assert_empty(ids2 & events1.map { |e| e['id'] }, 'no event already emitted is repeated')
     refute next_state.key?('resume'), 'the connection has fully drained'
+    refute next_state['backlog']
+  end
+
+  def test_drain_backlog_filters_nodes_older_than_its_target
+    # drain_backlog's last page (hasPreviousPage false) is "the rest of the
+    # connection's history" and is not filtered by the live @qsince (it's a
+    # backlog page, bypassing that check by design). Anything in it older
+    # than the segment's own target must still not be marked and emitted, or
+    # events from before the window get emitted again.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    mixed = [comment(801, 'bob', ago(900)), comment(802, 'bob', ago(600)),
+             comment(803, 'bob', ago(450)), comment(804, 'bob', ago(100))]
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil }, 'nodes' => mixed }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal %w[gh:comment:803 gh:comment:804], events.map { |e| e['id'] }.sort,
+                 'only nodes at or after target are emitted; the rest of this stale page is dropped silently'
+    refute next_state.key?('resume')
+    refute next_state['backlog']
+  end
+
+  def test_resume_entry_drains_across_several_quiet_polls_with_advancing_now
+    # A PR that goes quiet (never "updated since" @qsince) is exactly how a
+    # resume entry used to get stuck forever: complete/drain_backlog only ran
+    # for PRs selected by updated_since?, so a draining PR that fell silent
+    # never got fetch_details again, and the resume entry -- plus the
+    # `backlog: true` full query it forces on every later poll -- lived
+    # forever. PR 5 here never gets touched across three advancing polls; the
+    # drain must still finish, with the cursor advancing each time.
+    # The connection's history is far older than the live window (target 10_000s
+    # back); each intermediate page below returns a full MAX_CONN-sized chunk so
+    # drain_backlog stops after exactly one round trip per poll (nodes.size hits
+    # the cap) rather than looping again inside the same poll.
+    quiet_pr = pr(number: 5, updated: ago(100_000))
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none', 'head_at' => ago(900) } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR0', 'target' => ago(10_000) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [quiet_pr])
+
+    chunk1 = (1..100).map { |i| comment(900 + i, 'bob', ago(9_999 - i)) }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR0', req.json['variables']['before']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR1' }, 'nodes' => chunk1 }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events1 = run_watch
+    assert_equal 0, @status, @err
+    assert_equal 100, events1.size, 'the quiet PR still drains'
+    assert next_state['backlog']
+    assert_equal 'CUR1', next_state.dig('resume', '5:comments', 0, 'cursor')
+    write_state(next_state)
+
+    chunk2 = (1..100).map { |i| comment(1000 + i, 'bob', ago(9_899 - i)) }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR1', req.json['variables']['before']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR2' }, 'nodes' => chunk2 }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events2 = run_watch(env: { 'GHWATCH_TEST_NOW' => (NOW + 600).iso8601 })
+    assert_equal 0, @status, @err
+    assert_equal 100, events2.size, 'still quiet, still draining -- the cursor advanced'
+    assert next_state['backlog']
+    assert_equal 'CUR2', next_state.dig('resume', '5:comments', 0, 'cursor')
+    write_state(next_state)
+
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR2', req.json['variables']['before']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                          'nodes' => [comment(1101, 'bob', ago(9797))] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events3 = run_watch(env: { 'GHWATCH_TEST_NOW' => (NOW + 1200).iso8601 })
+    assert_equal 0, @status, @err
+    assert_equal ['gh:comment:1101'], events3.map { |e| e['id'] }, 'the gap finishes draining'
+    refute next_state.key?('resume')
+    refute next_state['backlog']
+    ids = (events1 + events2 + events3).map { |e| e['id'] }
+    assert_equal ids.uniq.size, ids.size, 'no event is ever repeated across the drain'
+  end
+
+  def test_resume_entry_is_dropped_once_the_pr_is_no_longer_open
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    # PR 5 merged: open_heads no longer returns it at all, so without the fix
+    # the forced `backlog: true` full query would run forever for nothing.
+    @gql = graphql(closed: [closed(number: 5, state: 'MERGED', closed_at: ago(30))])
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert(events.map { |e| e['id'] }.any? { |id| id.start_with?('gh:merged:5:') })
+    refute next_state.key?('resume'), 'draining a PR that is no longer open is pointless; the entry is dropped'
+    refute next_state['backlog']
+  end
+
+  def test_a_second_truncation_while_draining_tracks_a_second_segment
+    # One truncated connection is already mid-drain (segment 0, resuming from
+    # CUR0 down to an old target). A burst of >=100 brand-new comments this
+    # poll truncates the *live* top of the same connection too -- a second,
+    # more recent gap stacking on top of the one already draining. Both must
+    # survive the poll, not just the one drain_backlog already owns.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR0', 'target' => ago(10_000) }] },
+                           'backlog' => true))
+    fresh_top = (1..100).map { |i| comment(2000 + i, 'bob', ago(300 - i)) } # all inside this poll's window
+    @gql = graphql(open: [pr(number: 5, comments: fresh_top, comments_more: true)])
+    # A full MAX_CONN-sized chunk, same reasoning as the quiet-polls test: this
+    # keeps segment 0 active (hasPreviousPage true) after exactly one round
+    # trip, so truncated! sees a still-non-empty resume list when it runs next
+    # and appends a segment instead of starting a fresh (re-warning) list.
+    segment0_chunk = (1..100).map { |i| comment(3000 + i, 'bob', ago(9_999 - i)) }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR0', req.json['variables']['before'], 'drain_backlog resumes segment 0, not the fresh top'
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR1' }, 'nodes' => segment0_chunk }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_empty @err, 'no repeat warning -- the connection already had an active drain'
+    segments = next_state.dig('resume', '5:comments')
+    assert_equal 2, segments.size
+    assert_equal 'CUR1', segments[0]['cursor'], 'segment 0 is still the original drain, now advanced'
+    assert_equal 'CUR', segments[1]['cursor'], "segment 1 is the new gap, at the fresh top page's own cursor"
+    ids = events.map { |e| e['id'] }
+    assert_equal 200, ids.uniq.size, 'segment 0 (100 backlog nodes) plus the fresh top page (100 nodes), no overlap'
+  end
+
+  def test_a_failed_page_during_a_drain_leaves_the_resume_entry_unchanged
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        # A malformed/empty page: no `pullRequest` at all.
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => nil }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_empty events, 'nothing was actually fetched'
+    assert_empty @err
+    assert next_state['backlog'], 'the gap is still open'
+    assert_equal [{ 'cursor' => 'CUR', 'target' => ago(500) }], next_state.dig('resume', '5:comments'),
+                 'a failed page does not look like "finished"; the entry is untouched'
+  end
+
+  def test_resume_migrates_from_the_old_single_hash_format
+    # Before this round, state stored one bare hash per key instead of a list
+    # of segments. A file written by that version must still drain correctly.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => { 'cursor' => 'CUR', 'target' => ago(500) } },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR', req.json['variables']['before']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                          'nodes' => [comment(701, 'bob', ago(300))] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal ['gh:comment:701'], events.map { |e| e['id'] }
+    refute next_state.key?('resume'), 'the migrated entry drains to completion like any other'
+    refute next_state['backlog']
+  end
+
+  def test_truncated_reviews_connection_resumes_from_its_stored_cursor
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:reviews' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('reviews(last: 50')
+        assert_equal 'CUR', req.json['variables']['before'], 'resumes from exactly the stored cursor'
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'reviews' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                         'nodes' => [review(501, 'carol', 'APPROVED', ago(300), 'lgtm')] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal ['gh:review:501'], events.map { |e| e['id'] }
+    refute next_state.key?('resume')
     refute next_state['backlog']
   end
 
