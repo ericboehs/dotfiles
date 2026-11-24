@@ -34,11 +34,31 @@ export HEAVY_HELD=1
 
 case "${HEAVY_SLOTS:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_SLOTS must be a number: $HEAVY_SLOTS" >&2; exit 64 ;; esac
 case "${HEAVY_MIN_IDLE:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_MIN_IDLE must be a number: $HEAVY_MIN_IDLE" >&2; exit 64 ;; esac
+case "${HEAVY_MAX_SIMS:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_MAX_SIMS must be a number: $HEAVY_MAX_SIMS" >&2; exit 64 ;; esac
+# 0-100: a gate that can never be satisfied (>100) or never trips (negative,
+# unreachable since the case above already rejects non-digits) hangs forever.
+if [ -n "${HEAVY_MIN_IDLE:-}" ] && [ "$HEAVY_MIN_IDLE" -gt 100 ]; then
+  echo "heavy: HEAVY_MIN_IDLE must be 0-100: $HEAVY_MIN_IDLE" >&2
+  exit 64
+fi
 
-slots=${HEAVY_SLOTS:-2}
 min_idle=${HEAVY_MIN_IDLE:-25}
 max_sims=${HEAVY_MAX_SIMS:-4}
 dir="$HOME/Library/Caches/heavy"
+# Both HEAVY_SLOTS and the override file (below, re-read every pass) feed
+# into clamp_slots: ncpu caps slots so neither a bogus env value nor a stale
+# or tampered override file can turn the brake off by way of a huge slot
+# count. The length check runs first and is deliberately crude (a plain glob,
+# no arithmetic) so a slots value with enough digits to overflow `seq`/test's
+# integers -- which would otherwise print errors instead of throttling --
+# never reaches them.
+ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
+case "$ncpu" in *[!0-9]* | '') ncpu=8 ;; esac
+clamp_slots() {
+  case "$slots" in ????*) slots=9999 ;; esac
+  [ "$slots" -ge 1 ] || slots=1
+  [ "$slots" -le "$ncpu" ] || slots="$ncpu"
+}
 mkdir -p "$dir"
 
 # Booted simulators (0 when there's no simctl).
@@ -54,16 +74,26 @@ idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub(
 override_msg=""
 override_slots() {
   override_msg=""
-  local n until idle_min now
+  local n until idle_min now applied
   read -r n until idle_min < "$dir/slots" 2>/dev/null || [ -n "${n:-}" ] || return
   case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
   [ -n "$until" ] && [ "$n" -ge 1 ] || return
   now=$(date +%s)
   [ "$now" -lt "$until" ] || return
   [ "$until" -le $((now + 7 * 24 * 3600)) ] || return
-  [ -z "${HEAVY_SLOTS:-}" ] && slots=$n
-  [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ] && min_idle=$idle_min
-  override_msg=" (override until $(date -r "$until"))"
+  # The message says the override applied; show it only when it actually did
+  # -- an env var already set wins over the file (see the two lines below),
+  # and otherwise the message was just noise describing a file nothing used.
+  applied=
+  if [ -z "${HEAVY_SLOTS:-}" ]; then
+    slots=$n
+    applied=1
+  fi
+  if [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ]; then
+    min_idle=$idle_min
+    applied=1
+  fi
+  [ -n "$applied" ] && override_msg=" (override until $(date -r "$until"))"
   return 0
 }
 
@@ -72,7 +102,7 @@ while :; do
   slots=${HEAVY_SLOTS:-2}
   min_idle=${HEAVY_MIN_IDLE:-25}
   override_slots
-  [ "$slots" -ge 1 ] || slots=1
+  clamp_slots
   cur_idle=$(idle)
   if sims_ok && [ "$cur_idle" -ge "$min_idle" ]; then
     for n in $(seq 1 "$slots"); do
