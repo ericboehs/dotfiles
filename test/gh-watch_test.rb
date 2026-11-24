@@ -112,7 +112,7 @@ module Fixtures
          author_type: 'User', comments_more: false)
     {
       'number' => number, 'title' => "PR #{number}\ttitle", 'createdAt' => created, 'updatedAt' => updated,
-      'baseRefName' => base, 'headRefOid' => head, 'author' => author(author, author_type),
+      'state' => 'OPEN', 'baseRefName' => base, 'headRefOid' => head, 'author' => author(author, author_type),
       'commits' => { 'nodes' => [{ 'commit' => {
         'oid' => head, 'committedDate' => committed,
         'author' => { 'user' => head_author && { 'login' => head_author } },
@@ -218,7 +218,7 @@ class GhWatchTest < Minitest::Test
       next unless (m = k.match(/\An(\d+)\z/))
 
       node = open.find { |p| p['number'] == v }
-      repo["p#{m[1]}"] = node&.slice('number', 'reviews', 'comments', 'reviewThreads')
+      repo["p#{m[1]}"] = node&.slice('number', 'state', 'baseRefName', 'author', 'reviews', 'comments', 'reviewThreads')
     end
     { 'data' => { 'repository' => repo, 'rateLimit' => { 'cost' => 1, 'remaining' => 4996 } } }
   end
@@ -1082,10 +1082,258 @@ class GhWatchTest < Minitest::Test
     events = run_watch
     assert_equal 0, @status, @err
     assert_empty events, 'nothing was actually fetched'
-    assert_empty @err
+    assert_empty @err, 'a single failed attempt does not warn yet'
     assert next_state['backlog'], 'the gap is still open'
-    assert_equal [{ 'cursor' => 'CUR', 'target' => ago(500) }], next_state.dig('resume', '5:comments'),
-                 'a failed page does not look like "finished"; the entry is untouched'
+    assert_equal [{ 'cursor' => 'CUR', 'target' => ago(500), 'attempts' => 1 }], next_state.dig('resume', '5:comments'),
+                 'a failed page does not look like "finished"; the cursor is untouched but the attempt is counted'
+  end
+
+  def test_a_resume_cursor_that_always_fails_is_dropped_after_max_attempts
+    # Nothing ever comes back for this cursor (the comments connection
+    # always answers with no pullRequest). Without a cap this retries --
+    # and forces a full query via `backlog: true` -- forever.
+    state = base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                       'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                       'backlog' => true)
+    @gql = graphql(open: [pr(number: 5)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => nil }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    (GhWatch::RESUME_MAX_ATTEMPTS - 1).times do |i|
+      write_state(state)
+      events = run_watch
+      assert_equal 0, @status, @err
+      assert_empty events
+      assert_empty @err, "attempt #{i + 1} does not warn yet"
+      assert next_state['backlog'], 'the gap is still open'
+      segments = next_state.dig('resume', '5:comments')
+      assert_equal 1, segments.size
+      assert_equal i + 1, segments[0]['attempts']
+      state = next_state
+    end
+
+    write_state(state)
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_empty events
+    assert_match(/failed #{GhWatch::RESUME_MAX_ATTEMPTS} times in a row; giving up/, @err)
+    refute next_state.key?('resume'), 'the segment is dropped after too many failed attempts in a row'
+    refute next_state['backlog']
+  end
+
+  def test_a_failed_second_page_during_a_drain_advances_past_the_good_first_page
+    # The resumed walk fetches page 1 fine (50 nodes, still hasPreviousPage)
+    # and page 2 fails. Page 1's nodes are still emitted this poll; leaving
+    # the stored cursor where it was would re-fetch and re-emit them forever.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(10_000) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    page1 = (1..50).map { |i| comment(600 + i, 'bob', ago(9999 - i)) }
+    calls = []
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        before = req.json['variables']['before']
+        calls << before
+        if before == 'CUR'
+          [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+            'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR2' }, 'nodes' => page1 }
+          } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+        else
+          assert_equal 'CUR2', before
+          [200, {}, { 'data' => { 'repository' => { 'pullRequest' => nil }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+        end
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events1 = run_watch
+    assert_equal 0, @status, @err
+    assert_equal page1.map { |c| "gh:comment:#{c['fullDatabaseId']}" }.sort, events1.map { |e| e['id'] }.sort,
+                 "page 1's nodes are still emitted even though page 2 failed"
+    assert_empty @err, 'progress was made, so this is not counted as a failed attempt'
+    assert_equal %w[CUR CUR2], calls, 'page 1 then the failed page 2, both inside this one poll'
+    segments = next_state.dig('resume', '5:comments')
+    assert_equal 1, segments.size
+    assert_equal 'CUR2', segments[0]['cursor'], 'advanced past the good page, not left at the original cursor'
+    refute segments[0].key?('attempts')
+    write_state(next_state)
+
+    # Next poll resumes from CUR2, not CUR: page 1's nodes must not be re-fetched or re-emitted.
+    events2 = run_watch
+    assert_equal 0, @status, @err
+    assert_equal %w[CUR CUR2 CUR2], calls, 'resumes from CUR2, not CUR -- page 1 is never refetched'
+    assert_empty(events2.map { |e| e['id'] } & events1.map { |e| e['id'] }, 'no event already emitted is repeated')
+  end
+
+  def test_connection_pages_back_in_realistic_50_node_chunks
+    # The real API pages a pr_conn connection at last: 50; several other
+    # tests mock a single oversized page, which hides the two round-trip
+    # loop a 100-deep connection actually takes within one poll.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    @gql = graphql(open: [pr(number: 5, comments: [], comments_more: true)])
+    page1 = (1..50).map { |i| comment(2000 + i, 'bob', ago(150 - i)) }
+    page2 = (1..50).map { |i| comment(2100 + i, 'bob', ago(100 - i)) }
+    calls = []
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        before = req.json['variables']['before']
+        calls << before
+        if before == 'CUR'
+          [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+            'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR2' }, 'nodes' => page1 }
+          } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+        else
+          assert_equal 'CUR2', before
+          [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+            'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil }, 'nodes' => page2 }
+          } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+        end
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal %w[CUR CUR2], calls, 'the connection pages in two real 50-node round trips'
+    assert_equal (page1 + page2).map { |c| "gh:comment:#{c['fullDatabaseId']}" }.sort, events.map { |e| e['id'] }.sort
+    refute next_state.key?('resume'), 'exactly 100 nodes with hasPreviousPage false is not a truncation'
+  end
+
+  def test_segment_1_is_promoted_to_segment_0_once_segment_0_finishes_draining
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [
+                             { 'cursor' => 'CUR0', 'target' => ago(500) },
+                             { 'cursor' => 'CUR1', 'target' => ago(9000) }
+                           ] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR0', req.json['variables']['before'], 'drains segment 0 first'
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                          'nodes' => [comment(701, 'bob', ago(300))] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal ['gh:comment:701'], events.map { |e| e['id'] }
+    segments = next_state.dig('resume', '5:comments')
+    assert_equal 1, segments.size, 'segment 0 finished draining; segment 1 is promoted into its place'
+    assert_equal 'CUR1', segments[0]['cursor']
+    assert_equal ago(9000), segments[0]['target']
+    assert next_state['backlog'], 'segment 1 still needs draining'
+  end
+
+  def test_a_third_truncation_appends_instead_of_overwriting_segment_1
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [
+                             { 'cursor' => 'CUR0', 'target' => ago(10_000) },
+                             { 'cursor' => 'CURX', 'target' => ago(5_000) }
+                           ] },
+                           'backlog' => true))
+    fresh_top = (1..100).map { |i| comment(4000 + i, 'bob', ago(300 - i)) } # all inside this poll's window
+    @gql = graphql(open: [pr(number: 5, comments: fresh_top, comments_more: true)])
+    segment0_chunk = (1..100).map { |i| comment(5000 + i, 'bob', ago(9_999 - i)) }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR0', req.json['variables']['before'], 'drain_backlog still resumes segment 0, not the fresh top'
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR0B' }, 'nodes' => segment0_chunk }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_empty @err, 'three pending segments is still under the warning cap'
+    segments = next_state.dig('resume', '5:comments')
+    assert_equal 3, segments.size
+    assert_equal 'CUR0B', segments[0]['cursor'], 'segment 0 is still the oldest drain, now advanced'
+    assert_equal 'CURX', segments[1]['cursor'], 'the existing second segment survives untouched'
+    assert_equal 'CUR', segments[2]['cursor'], 'the new gap is appended, not overwriting segment 1'
+    assert_equal 200, events.map { |e| e['id'] }.uniq.size, 'segment 0 (100 backlog) plus the fresh top (100), no overlap'
+  end
+
+  def test_drain_stuck_resume_handles_a_pr_dropped_from_the_open_heads_list
+    # PR 5 has an active resume entry but open_heads doesn't return it at all
+    # this poll -- the normal open.each { ... pr_comments ... } path never
+    # touches it, so only drain_stuck_resumes's "open but not in that list"
+    # branch (for a PR that is open but absent, not just quiet) can drain it.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                          'nodes' => [comment(701, 'bob', ago(300))] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, { 'data' => { 'repository' => {
+          'p0' => { 'number' => 5, 'state' => 'OPEN', 'baseRefName' => 'main', 'author' => author('alice'),
+                    'reviews' => conn([]), 'comments' => conn([]), 'reviewThreads' => conn([]) }
+        }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal ['gh:comment:701'], events.map { |e| e['id'] },
+                 'drained via drain_stuck_resumes even though the PR is absent from the heads list'
+    refute next_state.key?('resume')
+  end
+
+  def test_drain_stuck_resume_respects_the_base_filter
+    # Same shape as the dropped-from-the-list case above, but the PR's base
+    # doesn't match --base: drain_stuck_resumes must not surface its events.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        flunk 'base_ok? should have skipped fetching comments for a PR targeting the wrong base'
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, { 'data' => { 'repository' => {
+          'p0' => { 'number' => 5, 'state' => 'OPEN', 'baseRefName' => 'dev', 'author' => author('alice'),
+                    'reviews' => conn([]), 'comments' => conn([]), 'reviewThreads' => conn([]) }
+        }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch('--jsonl', '--base', 'main')
+    assert_equal 0, @status, @err
+    assert_empty events, 'a PR targeting a different base than --base must not surface events'
   end
 
   def test_resume_migrates_from_the_old_single_hash_format

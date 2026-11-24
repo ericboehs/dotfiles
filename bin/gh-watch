@@ -67,6 +67,8 @@ module GhWatch
   TEAM_TTL = 86_400
   MAX_EVENTS = 200
   MAX_CONN = 100         # most nodes gathered per connection when paging back
+  RESUME_SEGMENT_CAP = 5  # warn once a connection piles up more pending resume gaps than this
+  RESUME_MAX_ATTEMPTS = 5 # give up on a resume segment after this many all-bad pages in a row
   MAX_PAGES = 20
   HEADS_PER_PAGE = 50    # the heads query covers this many open PRs between refreshes
   DETAILS_BATCH = 10     # PRs per nested reviews/comments query
@@ -354,7 +356,7 @@ module GhWatch
     # resume entry (see drain_stuck_resumes). state and author let the latter
     # tell a still-open-but-quiet PR from one that is closed, merged or gone.
     DETAIL_PR = <<~GQL
-      number state #{AUTHOR}
+      number state baseRefName #{AUTHOR}
       reviews(last: 20) { #{PAGE} nodes { #{REVIEW} } }
       comments(last: 20) { #{PAGE} nodes { #{COMMENT} } }
       reviewThreads(last: 20) { #{PAGE} nodes { #{THREAD} } }
@@ -533,10 +535,11 @@ module GhWatch
       @prs = prs.is_a?(Hash) ? prs.select { |_, v| v.is_a?(Hash) } : {}
       @no_wake = opts.no_wake.map { |a| GhWatch.norm_login(a) }
       @full_id = !@old['no_full_database_id']
-      # { "<pr number>:<connection name>" => [{ 'cursor' => <startCursor>, 'target' => <iso since> }, ...] }
-      # for a comments/reviews connection that hit MAX_CONN before reaching `since`: where to resume
-      # paging backward from, and how far back it still needs to reach. Normally one segment; a second
-      # appears if the connection truncates again while the first is still draining (see truncated!).
+      # { "<pr number>:<connection name>" => [{ 'cursor' => <startCursor>, 'target' => <iso since>,
+      # 'attempts' => <failed page count, optional> }, ...] } for a comments/reviews connection that hit
+      # MAX_CONN before reaching `since`: where to resume paging backward from, and how far back it still
+      # needs to reach. Normally one segment; a new one is pushed each time the connection truncates again
+      # while an earlier one is still draining (see truncated!), up to RESUME_SEGMENT_CAP before warning.
       # drain_backlog always drains segment 0; the list stays in discovery order. Migration: a state
       # file written before this round stored one bare hash per key instead of a list, so it is wrapped
       # in a one-element array here. That migration is transparent -- the segment's cursor and target
@@ -693,7 +696,7 @@ module GhWatch
         detail = details[n]
         if detail.is_a?(Hash) && detail['state'] == 'OPEN'
           mine = GhWatch.same_login?(gql_actor(detail['author']), @me)
-          pr_comments(n, detail, mine)
+          pr_comments(n, detail, mine) if base_ok?(detail)
         else
           @resume.delete_if { |key, _| key.start_with?("#{n}:") }
         end
@@ -840,11 +843,29 @@ module GhWatch
         info = c['pageInfo'] || {}
       end
 
-      # A failed or empty page is not "finished": leave this segment (and
-      # @resume[key]) exactly as it was so the next poll retries from the
-      # same cursor, instead of looking like the gap is closed and dropping
-      # the rest of it.
-      unless bad_page
+      # A failed page is not "finished": by default this segment (and
+      # @resume[key]) is left as it was so the next poll retries, instead of
+      # looking like the gap is closed and dropping the rest of it. But if an
+      # earlier page in this same round trip did succeed (nodes is
+      # non-empty), leaving the cursor unchanged would re-fetch and re-emit
+      # those nodes forever -- advance the segment to resume just past them.
+      # A cursor that fails with nothing fetched counts as a failed attempt;
+      # after RESUME_MAX_ATTEMPTS in a row (never reset by progress elsewhere,
+      # only by this exact cursor succeeding), give up on the segment instead
+      # of retrying -- and forcing a full query -- forever.
+      if bad_page && nodes.empty?
+        attempts = (resume['attempts'] || 0) + 1
+        if attempts >= RESUME_MAX_ATTEMPTS
+          segments.shift
+          @resume.delete(key) if segments.empty?
+          warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} resume cursor failed #{attempts} times in a " \
+               'row; giving up on this gap (some older events may be missing)'
+        else
+          segments[0] = resume.merge('attempts' => attempts)
+        end
+      elsif bad_page
+        segments[0] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
+      else
         oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
         if info['hasPreviousPage'] && nodes.size >= MAX_CONN && !(target && oldest && oldest < target)
           segments[0] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
@@ -881,12 +902,17 @@ module GhWatch
              'resuming the rest over the next poll(s)'
       else
         # drain_backlog already owns segments[0] (the gap nearest `since`); this
-        # is a second, more recent gap piling up above it while that drain is
-        # still in progress -- track its edge instead of silently losing it.
-        # Only one extra segment is kept: it is refreshed to the latest edge
-        # each poll (no repeat warning) until segment 0 finishes draining and
-        # this one takes its place.
-        segments[1] = segment
+        # is another, more recent gap piling up above it while that drain is
+        # still in progress -- push it instead of overwriting whatever is
+        # already at segments[1], which would silently lose an older gap that
+        # hasn't drained yet if a third (or later) truncation happens before
+        # segment 0 finishes. No repeat warning while the list stays under the
+        # cap; past it, a connection is falling behind badly enough to flag.
+        segments << segment
+        if segments.size > RESUME_SEGMENT_CAP
+          warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} has #{segments.size} pending resume gaps " \
+               "(over the cap of #{RESUME_SEGMENT_CAP}); it is falling behind"
+        end
       end
     end
 
