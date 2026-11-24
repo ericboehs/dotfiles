@@ -834,17 +834,9 @@ class GhWatchTest < Minitest::Test
     assert_equal NOW.iso8601, next_state['since']
   end
 
-  def test_truncated_connection_inside_the_window_holds_since_and_warns
+  def test_truncated_connection_is_complete_when_it_already_reaches_since
     write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
-    many = (1..100).map { |i| comment(1000 + i, 'bob', ago(100 - (i / 2))) }
-    @gql = graphql(open: [pr(number: 5, comments: many, comments_more: true)])
-    events = run_watch
-    assert_equal 0, @status, @err
-    assert_equal 100, events.size, 'what was fetched is still emitted'
-    assert_equal "gh-watch: acme/widgets#5 comments truncated at 100 nodes; " \
-                 "holding since at #{ago(100)} to retry the rest next poll\n", @err
-    assert_equal ago(100), next_state['since'], 'since holds at the oldest fetched timestamp'
-    assert next_state['backlog']
+    many = (1..100).map { |i| comment(1000 + i, 'bob', ago(250 - i)) }
 
     # Reaching back past since is complete even at the cap: no truncation.
     many[0] = comment(1001, 'bob', ago(4000))
@@ -852,6 +844,52 @@ class GhWatchTest < Minitest::Test
     assert_equal 99, run_watch.size
     assert_equal 0, @status, @err
     assert_empty @err
+    refute next_state['backlog']
+    refute next_state.key?('resume')
+  end
+
+  def test_truncated_connection_resumes_from_a_cursor_without_duplicating
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
+    # Ages 150..249s: inside qsince (420s back) so this poll truncates, but
+    # old enough that the next poll's much tighter qsince (120s back, since
+    # `since` is free to move forward once the resume cursor owns the gap)
+    # already treats every one of them as before its window -- so the same
+    # unchanged top page isn't re-emitted on the next poll.
+    many = (1..100).map { |i| comment(1000 + i, 'bob', ago(250 - i)) }
+    @gql = graphql(open: [pr(number: 5, comments: many, comments_more: true)])
+    events1 = run_watch
+    assert_equal 0, @status, @err
+    assert_equal 100, events1.size, 'what was fetched is still emitted'
+    assert_equal "gh-watch: acme/widgets#5 comments truncated at 100 nodes; " \
+                 "resuming the rest over the next poll(s)\n", @err
+    assert_equal NOW.iso8601, next_state['since'], "since keeps moving -- draining the gap doesn't wedge it"
+    assert next_state['backlog']
+    assert_equal 'CUR', next_state.dig('resume', '5:comments', 'cursor')
+
+    # Second poll: commit the state, keep the same unchanged top page (nothing
+    # new arrived), and answer the stored cursor's request with the rest of
+    # the connection's history, finishing it off.
+    write_state(next_state)
+    older = (1..40).map { |i| comment(900 + i, 'bob', ago(299 - i)) }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil }, 'nodes' => older }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events2 = run_watch
+    assert_equal 0, @status, @err
+    assert_empty @err, 'does not warn again while the same gap is still being drained'
+    ids2 = events2.map { |e| e['id'] }
+    assert_equal older.map { |c| "gh:comment:#{c['fullDatabaseId']}" }.sort, ids2.sort, 'the gap is fetched exactly once'
+    assert_empty(ids2 & events1.map { |e| e['id'] }, 'no event already emitted is repeated')
+    refute next_state.key?('resume'), 'the connection has fully drained'
     refute next_state['backlog']
   end
 

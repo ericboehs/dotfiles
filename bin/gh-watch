@@ -59,6 +59,7 @@ module GhWatch
   FAILURE_STATES = %w[failure error cancelled timed_out action_required startup_failure].freeze
 
   OVERLAP = 120          # seconds re-queried before `since`
+  BACKLOG_MARK = '__gw_backlog' # tags a node fetched to drain a stalled connection (see drain_backlog)
   FULL_EVERY = 300       # a full GraphQL query at least this often
   FIRST_WINDOW = 3600    # the first run looks back this far
   NULL_CI_WINDOW = 600   # a head with no rollup yet counts as pending this long
@@ -530,6 +531,11 @@ module GhWatch
       @prs = prs.is_a?(Hash) ? prs.select { |_, v| v.is_a?(Hash) } : {}
       @no_wake = opts.no_wake.map { |a| GhWatch.norm_login(a) }
       @full_id = !@old['no_full_database_id']
+      # { "<pr number>:<connection name>" => { 'cursor' => <startCursor>, 'target' => <iso since> } } for a
+      # comments/reviews connection that hit MAX_CONN before reaching `since`: where to resume paging
+      # backward from, and how far back it still needs to reach. See drain_backlog.
+      resume = @old['resume']
+      @resume = resume.is_a?(Hash) ? resume.select { |_, v| v.is_a?(Hash) } : {}
     end
 
     def run
@@ -538,7 +544,6 @@ module GhWatch
       since = @now - FIRST_WINDOW if first
       @qsince = since - OVERLAP
       @pending = []
-      @truncate_floor = nil
 
       # The change check goes first: it is the only request that may switch a
       # *.ghe.com host to its api. base.
@@ -727,9 +732,14 @@ module GhWatch
       GhWatch.actor(obj && obj['login'], obj && obj['__typename'])
     end
 
-    # Page a pull request connection back until it covers @qsince (max 100).
+    # Page a pull request connection back until it covers @qsince (max 100 new
+    # nodes a poll). Nodes from drain_backlog (below) come first -- they are
+    # older and already known not to duplicate anything emitted before.
     def complete(number, conn_name, conn, ts_key)
       return [] unless conn.is_a?(Hash)
+
+      key = "#{number}:#{conn_name}"
+      backlog = ts_key ? drain_backlog(number, conn_name, ts_key, key) : []
 
       nodes = GhWatch.nodes(conn)
       info = conn['pageInfo'] || {}
@@ -745,25 +755,65 @@ module GhWatch
         nodes = GhWatch.nodes(c) + nodes
         info = c['pageInfo'] || {}
       end
-      truncated!(number, conn_name, nodes, info, ts_key)
+      truncated!(key, number, conn_name, nodes, info, ts_key)
+      backlog + nodes
+    end
+
+    # A connection truncated at MAX_CONN on an earlier poll left older events
+    # below `since` unfetched. Restarting the walk from the top every poll
+    # re-covers the same MAX_CONN newest nodes forever (since never reaches
+    # the gap) and, once `since` is let move forward again, re-emits them:
+    # the wedge and the duplicates both come from that restart. Instead,
+    # resume the backward walk from exactly the cursor it stopped at, so
+    # each poll fetches new (never-before-seen) older nodes and the gap
+    # shrinks for good. `target` is the @qsince that applied when this
+    # connection first truncated, fixed for the life of the resume entry: the
+    # live @qsince has since moved on and no longer marks where the gap ends.
+    def drain_backlog(number, conn_name, ts_key, key)
+      resume = @resume[key]
+      return [] unless resume
+
+      target = GhWatch.parse_time(resume['target'])
+      nodes = []
+      info = { 'hasPreviousPage' => true, 'startCursor' => resume['cursor'] }
+      while info['hasPreviousPage'] && nodes.size < MAX_CONN
+        oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+        break if target && oldest && oldest < target
+
+        c = gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
+        c = c.dig('repository', 'pullRequest', conn_name)
+        break unless c.is_a?(Hash)
+
+        nodes = GhWatch.nodes(c) + nodes
+        info = c['pageInfo'] || {}
+      end
+
+      oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+      if info['hasPreviousPage'] && nodes.size >= MAX_CONN && !(target && oldest && oldest < target)
+        @resume[key] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
+      else
+        @resume.delete(key)
+      end
+      nodes.each { |n| n[BACKLOG_MARK] = true }
       nodes
     end
 
     # Stopping at MAX_CONN while the oldest node still falls inside the
-    # window would drop events. Rather than raise and wedge the repo (since
-    # never advances, so every later poll hits the same busy PR), keep what
-    # was fetched and hold `since` at the oldest fetched timestamp so the
-    # next poll re-covers the gap; warn loudly so it's visible.
-    def truncated!(number, conn_name, nodes, info, ts_key)
+    # window would drop events. Record where the walk stopped so
+    # drain_backlog can resume from exactly there; warn once per PR and
+    # connection, not on every poll it stays truncated. drain_backlog owns
+    # the resume entry once one exists, so this never clobbers its cursor
+    # with the (unrelated, nearer-the-top) point the fresh walk stopped at.
+    def truncated!(key, number, conn_name, nodes, info, ts_key)
       return unless ts_key && info['hasPreviousPage'] && nodes.size >= MAX_CONN
+      return if @resume.key?(key)
 
       oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
       return if oldest && oldest < @qsince
 
-      floor = oldest || @qsince
-      @truncate_floor = [@truncate_floor, floor].compact.min
+      @resume[key] = { 'cursor' => info['startCursor'], 'target' => GhWatch.iso(@qsince) }
       warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} truncated at #{MAX_CONN} nodes; " \
-           "holding since at #{GhWatch.iso(floor)} to retry the rest next poll"
+           'resuming the rest over the next poll(s)'
     end
 
     def complete_thread(thread)
@@ -856,7 +906,9 @@ module GhWatch
       complete(n, 'comments', pr['comments'], 'createdAt').each do |c|
         at = GhWatch.parse_time(c['createdAt'])
         id = db_id(c)
-        next unless at && at >= @qsince && id
+        # A node drain_backlog fetched is below the live @qsince by design (it's
+        # catching up a gap); it was never emitted before, so skip that check.
+        next unless at && id && (c[BACKLOG_MARK] || at >= @qsince)
 
         who = gql_actor(c['author'])
         add(at: at, id: "gh:comment:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
@@ -868,7 +920,7 @@ module GhWatch
         at = GhWatch.parse_time(r['submittedAt'])
         id = db_id(r)
         state = r['state'].to_s.upcase
-        next unless at && at >= @qsince && id && STATES.include?(state) && state != 'PENDING'
+        next unless at && id && (r[BACKLOG_MARK] || at >= @qsince) && STATES.include?(state) && state != 'PENDING'
         next if state == 'COMMENTED' && GhWatch.clean(r['body'], 300).empty? && wrapped.include?(r['databaseId'].to_s)
 
         who = gql_actor(r['author'])
@@ -983,9 +1035,12 @@ module GhWatch
         new_prs[key] = old
       end
       # `since` moves only past what a PR query read: a 304 run keeps it, and
-      # it stops at the first event the cap dropped.
+      # it stops at the first event the cap dropped. A truncated connection no
+      # longer holds this back (drain_backlog resumes it independently); doing
+      # so used to wedge `since` in place forever, since every later poll re-
+      # fetched and got stuck on the very same MAX_CONN nodes.
       since = full ? @now : (GhWatch.parse_time(@old['since']) || @now)
-      since = [since, dropped.map { |p| p[:at] }.min, @truncate_floor, @now].compact.min
+      since = [since, dropped.map { |p| p[:at] }.min, @now].compact.min
       @events = kept.map { |p| p[:event] }
 
       @state = {
@@ -993,7 +1048,8 @@ module GhWatch
         'last_full' => refresh ? GhWatch.iso(@now) : @old['last_full'], 'etag' => etag, 'me' => @me,
         'prs' => new_prs, 'api_rest' => @api.bases[:rest]
       }
-      @state['backlog'] = true if !dropped.empty? || @truncate_floor
+      @state['backlog'] = true if !dropped.empty? || !@resume.empty?
+      @state['resume'] = @resume unless @resume.empty?
       @state['issues_etag'] = issues_etag if @opts.issues
       @state['team'] = @team_cache if @team_cache
       @state['no_full_database_id'] = true unless @full_id
