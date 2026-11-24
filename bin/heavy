@@ -33,8 +33,25 @@ set -uo pipefail
 export HEAVY_HELD=1
 
 case "${HEAVY_SLOTS:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_SLOTS must be a number: $HEAVY_SLOTS" >&2; exit 64 ;; esac
-case "${HEAVY_MIN_IDLE:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_MIN_IDLE must be a number: $HEAVY_MIN_IDLE" >&2; exit 64 ;; esac
-case "${HEAVY_MAX_SIMS:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_MAX_SIMS must be a number: $HEAVY_MAX_SIMS" >&2; exit 64 ;; esac
+# The length check (the same crude ????* glob clamp_slots uses below) runs
+# before any arithmetic touches these: `[ -gt 100 ]`/`[ -eq 0 ]` on a 20+
+# digit value overflows bash's integers and *errors* ("integer expression
+# expected", rc=2) instead of returning false, so a plain `&&`/`||` chain
+# reads that error as "the check passed" and the bad value slips through --
+# then the main loop keeps hitting the same overflow on every pass forever.
+# Any HEAVY_MIN_IDLE/HEAVY_MAX_SIMS of 1000 or more is already out of range
+# (0-100) or absurd, so rejecting the length outright never rejects a value
+# that would otherwise have been accepted.
+case "${HEAVY_MIN_IDLE:-}" in
+  "") ;;
+  *[!0-9]*) echo "heavy: HEAVY_MIN_IDLE must be a number: $HEAVY_MIN_IDLE" >&2; exit 64 ;;
+  ????*) echo "heavy: HEAVY_MIN_IDLE must be 0-100: $HEAVY_MIN_IDLE" >&2; exit 64 ;;
+esac
+case "${HEAVY_MAX_SIMS:-}" in
+  "") ;;
+  *[!0-9]*) echo "heavy: HEAVY_MAX_SIMS must be a number: $HEAVY_MAX_SIMS" >&2; exit 64 ;;
+  ????*) echo "heavy: HEAVY_MAX_SIMS must be at most 999: $HEAVY_MAX_SIMS" >&2; exit 64 ;;
+esac
 # 0-100: a gate that can never be satisfied (>100) or never trips (negative,
 # unreachable since the case above already rejects non-digits) hangs forever.
 if [ -n "${HEAVY_MIN_IDLE:-}" ] && [ "$HEAVY_MIN_IDLE" -gt 100 ]; then
@@ -54,10 +71,22 @@ dir="$HOME/Library/Caches/heavy"
 # never reaches them.
 ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
 case "$ncpu" in *[!0-9]* | '') ncpu=8 ;; esac
+# Clamping above ncpu is silent by design (every pass re-reads HEAVY_SLOTS and
+# the override file, so a one-time flag would otherwise re-warn on each of
+# them) -- except once, the first time it actually changes the value, so
+# someone running with HEAVY_SLOTS above ncpu finds out their slots were
+# capped instead of just seeing commands queue for no visible reason.
+slots_clamp_warned=
 clamp_slots() {
   case "$slots" in ????*) slots=9999 ;; esac
   [ "$slots" -ge 1 ] || slots=1
-  [ "$slots" -le "$ncpu" ] || slots="$ncpu"
+  if [ "$slots" -gt "$ncpu" ]; then
+    slots="$ncpu"
+    if [ -z "$slots_clamp_warned" ]; then
+      echo "heavy: HEAVY_SLOTS clamped to $ncpu (the number of CPUs)" >&2
+      slots_clamp_warned=1
+    fi
+  fi
 }
 mkdir -p "$dir"
 
@@ -78,6 +107,13 @@ override_slots() {
   read -r n until idle_min < "$dir/slots" 2>/dev/null || [ -n "${n:-}" ] || return
   case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
   [ -n "$until" ] && [ "$n" -ge 1 ] || return
+  # idle_min is optional (a 2-field file just overrides slots), so only a
+  # value that is actually present gets length-guarded then range-capped --
+  # an absent one must stay empty, not become a bogus override of its own.
+  if [ -n "${idle_min:-}" ]; then
+    case "$idle_min" in ????*) idle_min=100 ;; esac
+    [ "$idle_min" -le 100 ] || idle_min=100
+  fi
   now=$(date +%s)
   [ "$now" -lt "$until" ] || return
   [ "$until" -le $((now + 7 * 24 * 3600)) ] || return
