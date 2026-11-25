@@ -20,6 +20,10 @@ test("deny.commands has no regex for screencapture or '..' traversal (both are p
   for (const source of policy.deny.commands) {
     assert.ok(!/screencapture/i.test(source), `deny.commands should not mention screencapture: ${source}`);
     assert.ok(!source.includes("\\.\\."), `deny.commands should not contain a literal .. pattern: ${source}`);
+    // A literal-source check alone passes `\.{2}` or `[.][.]`, which match
+    // `../` exactly as well as `\.\.` would -- check actual behavior too,
+    // not just one way to spell the pattern.
+    assert.ok(!new RegExp(source).test("../"), `deny.commands should not match '../' by any spelling: ${source}`);
   }
 });
 
