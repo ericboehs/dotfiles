@@ -106,6 +106,7 @@ override_slots() {
   override_msg=""
   slots_overridden=
   local n until idle_min now applied
+  [ -r "$dir/slots" ] || return
   read -r n until idle_min < "$dir/slots" 2>/dev/null || [ -n "${n:-}" ] || return
   case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
   [ -n "$until" ] && [ "$n" -ge 1 ] || return
