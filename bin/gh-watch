@@ -69,6 +69,7 @@ module GhWatch
   MAX_CONN = 100         # most nodes gathered per connection when paging back
   RESUME_SEGMENT_CAP = 5  # warn once a connection piles up more pending resume gaps than this
   RESUME_MAX_ATTEMPTS = 5 # give up on a resume segment after this many all-bad pages in a row
+  RESUME_KEY_RE = /\A\d+:(?:comments|reviews)\z/.freeze # the only connections drain_backlog drains
   MAX_PAGES = 20
   HEADS_PER_PAGE = 50    # the heads query covers this many open PRs between refreshes
   DETAILS_BATCH = 10     # PRs per nested reviews/comments query
@@ -152,6 +153,14 @@ module GhWatch
     str.nil? || str.to_s.empty? ? nil : Time.iso8601(str.to_s)
   rescue ArgumentError
     nil
+  end
+
+  # A loaded resume segment with a garbage cursor or target would stick
+  # forever (ts_key is nil for a key drain_backlog never drains) or make the
+  # drain emit a PR's entire history (an unparsable target never stops the
+  # backward walk). Require both to look real before trusting them.
+  def valid_resume_segment?(seg)
+    seg.is_a?(Hash) && seg['cursor'].is_a?(String) && !seg['cursor'].empty? && !parse_time(seg['target']).nil?
   end
 
   def now_from_env(env)
@@ -547,9 +556,11 @@ module GhWatch
       resume = @old['resume']
       @resume = if resume.is_a?(Hash)
                   resume.each_with_object({}) do |(k, v), acc|
+                    next unless k.is_a?(String) && k.match?(RESUME_KEY_RE)
+
                     segments = if v.is_a?(Array)
-                                 v.select { |s| s.is_a?(Hash) }
-                               elsif v.is_a?(Hash)
+                                 v.select { |s| GhWatch.valid_resume_segment?(s) }
+                               elsif GhWatch.valid_resume_segment?(v)
                                  [v]
                                else
                                  []
@@ -559,6 +570,12 @@ module GhWatch
                 else
                   {}
                 end
+      # A pre-poll snapshot, kept so finalize can restore a segment this poll
+      # advanced if any of the backlog events it produced get dropped by the
+      # MAX_EVENTS cap (see drain_backlog, truncated! and finalize): without
+      # it, a dropped backlog event's cursor has already moved past it and it
+      # is never fetched again.
+      @resume_snapshot = @resume.each_with_object({}) { |(k, v), acc| acc[k] = v.map(&:dup) }
     end
 
     def run
@@ -674,7 +691,14 @@ module GhWatch
       # it again, yet @old['backlog'] forces `full` on every later poll for
       # nothing. See drain_stuck_resumes.
       resume_numbers = @resume.keys.map { |k| k.split(':', 2).first.to_i }.uniq
-      details = fetch_details((open_numbers + resume_numbers).uniq)
+      # Resume-only numbers (not already covered by open_numbers) are fetched
+      # in their own batch, rescued separately: GitHub answers an `errors`
+      # array, not a bare null, for a cursor on a PR that was deleted,
+      # transferred or never existed (including a garbage resume key). Mixing
+      # that into the open_numbers batch would raise and fail the whole poll
+      # on every later run instead of just dropping that one stuck entry.
+      details = fetch_details(open_numbers)
+      details.merge!(fetch_resume_details(resume_numbers - open_numbers))
 
       new_prs = {}
       open.each { |pr| open_pr(pr, details[pr['number']], new_prs) }
@@ -694,10 +718,22 @@ module GhWatch
     def drain_stuck_resumes(numbers, details)
       numbers.each do |n|
         detail = details[n]
-        if detail.is_a?(Hash) && detail['state'] == 'OPEN'
-          mine = GhWatch.same_login?(gql_actor(detail['author']), @me)
-          pr_comments(n, detail, mine) if base_ok?(detail)
+        if detail.is_a?(Hash)
+          if base_ok?(detail)
+            mine = GhWatch.same_login?(gql_actor(detail['author']), @me)
+            pr_comments(n, detail, mine)
+          else
+            # --base can change, or the PR can be retargeted: a resume entry
+            # that never again matches --base would otherwise stay forever
+            # and force a full query on every later poll for nothing.
+            @resume.delete_if { |key, _| key.start_with?("#{n}:") }
+          end
         else
+          # Missing detail: closed, merged, gone entirely, or this poll's
+          # fetch_resume_details batch failed. Comments and reviews still in
+          # the gap are lost either way -- warn instead of dropping silently.
+          warn "gh-watch: #{@owner}/#{@name}##{n} resume entry dropped (no detail this poll); " \
+               'any events still in its gap are lost'
           @resume.delete_if { |key, _| key.start_with?("#{n}:") }
         end
       end
@@ -748,6 +784,19 @@ module GhWatch
     end
 
     # { number => detail node } for the given open PRs, DETAILS_BATCH a query.
+    # Resume-only PR numbers batched separately from fetch_details so a
+    # GraphQL `errors` response for one (deleted, transferred, or a garbage
+    # resume key) only drops that batch's entries instead of raising out of
+    # full_query and failing the whole poll.
+    def fetch_resume_details(numbers)
+      return {} if numbers.empty?
+
+      fetch_details(numbers)
+    rescue ApiError => e
+      warn "gh-watch: #{@owner}/#{@name} resume PR detail fetch failed (#{e.message})"
+      {}
+    end
+
     def fetch_details(numbers)
       details = {}
       numbers.each_slice(DETAILS_BATCH) do |batch|
@@ -832,8 +881,16 @@ module GhWatch
         oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
         break if target && oldest && oldest < target
 
-        c = gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
-        c = c.dig('repository', 'pullRequest', conn_name)
+        # A GraphQL `errors` response (invalid cursor, deleted/transferred PR)
+        # raises ApiError, not a bare null connection; it must count as a
+        # failed page too, or RESUME_MAX_ATTEMPTS never applies and this
+        # segment fails every poll forever instead of eventually giving up.
+        c = begin
+          gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
+            .dig('repository', 'pullRequest', conn_name)
+        rescue ApiError
+          nil
+        end
         unless c.is_a?(Hash)
           bad_page = true
           break
@@ -906,12 +963,22 @@ module GhWatch
         # still in progress -- push it instead of overwriting whatever is
         # already at segments[1], which would silently lose an older gap that
         # hasn't drained yet if a third (or later) truncation happens before
-        # segment 0 finishes. No repeat warning while the list stays under the
-        # cap; past it, a connection is falling behind badly enough to flag.
+        # segment 0 finishes.
         segments << segment
         if segments.size > RESUME_SEGMENT_CAP
-          warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} has #{segments.size} pending resume gaps " \
-               "(over the cap of #{RESUME_SEGMENT_CAP}); it is falling behind"
+          # Hard cap: without one, the list (and the state file) grows without
+          # bound for a connection that stays badly behind. Drop the newest
+          # gap -- the ones nearer `since` are more valuable to finish
+          # draining first -- and warn only once per time the list goes over
+          # the cap, not again on every later poll it stays there.
+          segments.pop
+          last = segments.last
+          unless last && last['capped']
+            warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} has more than #{RESUME_SEGMENT_CAP} pending " \
+                 'resume gaps; dropping the newest ones instead of growing without bound ' \
+                 '(some older events may be missing)'
+          end
+          last['capped'] = true if last
         end
       end
     end
@@ -1013,7 +1080,7 @@ module GhWatch
         who = gql_actor(c['author'])
         add(at: at, id: "gh:comment:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
             state: 'conversation', untrusted: c['body'], url: "#{repo_path}/pull/#{n}#issuecomment-#{id}",
-            act: review_comment_act?(who, mine))
+            act: review_comment_act?(who, mine), backlog_key: ("#{n}:comments" if c[BACKLOG_MARK]))
       end
 
       complete(n, 'reviews', pr['reviews'], 'submittedAt').each do |r|
@@ -1027,7 +1094,8 @@ module GhWatch
         act = (state == 'CHANGES_REQUESTED' && other?(who) && @opts.act_on.include?('changes_requested')) ||
               (state == 'COMMENTED' && review_comment_act?(who, mine))
         add(at: at, id: "gh:review:#{id}", verb: 'REVIEW', actor: who, subject: "pr:#{n}", number: n, state: state,
-            untrusted: r['body'], url: "#{repo_path}/pull/#{n}#pullrequestreview-#{id}", act: act)
+            untrusted: r['body'], url: "#{repo_path}/pull/#{n}#pullrequestreview-#{id}", act: act,
+            backlog_key: ("#{n}:reviews" if r[BACKLOG_MARK]))
       end
     end
 
@@ -1097,7 +1165,7 @@ module GhWatch
     # ---- Events and state --------------------------------------------------
 
     def add(at:, id:, verb:, actor:, subject:, number:, state: nil, sha: nil, title: nil, untrusted: nil, url: nil,
-            act: false, pr: nil)
+            act: false, pr: nil, backlog_key: nil)
       return if @pending.any? { |p| p[:event]['id'] == id } # first source wins
 
       actor = 'unknown' unless actor.to_s.match?(ACTOR_RE)
@@ -1114,7 +1182,7 @@ module GhWatch
       ev['url'] = full_url if url&.match?(URL_PATH_RE) && full_url.length <= 300
       return unless valid?(ev)
 
-      @pending << { at: at, event: ev, pr: pr, seq: @pending.size }
+      @pending << { at: at, event: ev, pr: pr, seq: @pending.size, backlog_key: backlog_key }
     end
 
     def valid?(ev)
@@ -1138,9 +1206,25 @@ module GhWatch
       # it stops at the first event the cap dropped. A truncated connection no
       # longer holds this back (drain_backlog resumes it independently); doing
       # so used to wedge `since` in place forever, since every later poll re-
-      # fetched and got stuck on the very same MAX_CONN nodes.
+      # fetched and got stuck on the very same MAX_CONN nodes. A dropped
+      # backlog event is excluded here too: it is already below `since` by
+      # design (it's catching up an old gap), and its segment is restored
+      # below instead, so it is re-fetched from drain_backlog, not by moving
+      # `since` back over a whole new (possibly huge) window.
       since = full ? @now : (GhWatch.parse_time(@old['since']) || @now)
-      since = [since, dropped.map { |p| p[:at] }.min, @now].compact.min
+      since_dropped = dropped.reject { |p| p[:backlog_key] }
+      since = [since, since_dropped.map { |p| p[:at] }.min, @now].compact.min
+      # A dropped backlog event's segment already advanced past it this poll
+      # (drain_backlog moves the cursor before this cap applies): restore the
+      # segment to how it was before this poll so the next one re-fetches it,
+      # instead of permanently losing it past a cursor that already moved on.
+      dropped.filter_map { |p| p[:backlog_key] }.uniq.each do |k|
+        if @resume_snapshot.key?(k)
+          @resume[k] = @resume_snapshot[k]
+        else
+          @resume.delete(k)
+        end
+      end
       @events = kept.map { |p| p[:event] }
 
       @state = {

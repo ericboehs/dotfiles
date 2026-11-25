@@ -487,6 +487,56 @@ class GhWatchTest < Minitest::Test
     assert_equal(['gh:opened:9'], run_watch('--jsonl', '--base', 'dev').map { |e| e['id'] })
   end
 
+  def test_dropped_backlog_events_restore_their_segment_instead_of_being_lost
+    # Three PRs each have a comments backlog segment that finishes draining
+    # in exactly one page this poll (100 nodes, reaches target, hasPreviousPage
+    # false) -- 300 backlog nodes total, well past MAX_EVENTS. Sorted oldest
+    # first, PR 7's group (the newest of the three) is the one the cap drops.
+    # drain_backlog already finished and deleted its segment before this cap
+    # ever ran -- it must come back, not stay lost, and `since` must not
+    # rewind to its old timestamp either.
+    write_state(base_state(
+                  'prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' }, '6' => { 'head' => SHA_A, 'ci' => 'none' },
+                             '7' => { 'head' => SHA_A, 'ci' => 'none' } },
+                  'resume' => {
+                    '5:comments' => [{ 'cursor' => 'C5', 'target' => ago(100_000) }],
+                    '6:comments' => [{ 'cursor' => 'C6', 'target' => ago(80_000) }],
+                    '7:comments' => [{ 'cursor' => 'C7', 'target' => ago(60_000) }]
+                  }, 'backlog' => true
+                ))
+    @gql = graphql(open: [pr(number: 5), pr(number: 6), pr(number: 7)])
+    chunks = {
+      5 => (1..100).map { |i| comment(50_000 + i, 'bob', ago(100_000 - i)) },
+      6 => (1..100).map { |i| comment(60_000 + i, 'bob', ago(80_000 - i)) },
+      7 => (1..100).map { |i| comment(70_000 + i, 'bob', ago(60_000 - i)) }
+    }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        n = req.json['variables']['number']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil }, 'nodes' => chunks.fetch(n) }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal 200, events.size, 'the cap still applies'
+    dropped_ids = chunks[7].map { |c| "gh:comment:#{c['fullDatabaseId']}" }
+    assert_empty(events.map { |e| e['id'] } & dropped_ids, 'PR 7 group (the newest backlog group) is the one dropped')
+    assert_equal 'C7', next_state.dig('resume', '7:comments', 0, 'cursor'),
+                 'the dropped segment is restored to its pre-poll cursor instead of staying lost'
+    assert_equal ago(60_000), next_state.dig('resume', '7:comments', 0, 'target')
+    refute next_state.dig('resume', '5:comments'), 'segment 5 fully drained and none of its events were dropped'
+    refute next_state.dig('resume', '6:comments'), 'segment 6 fully drained and none of its events were dropped'
+    since = GhWatch.parse_time(next_state['since'])
+    refute since <= GhWatch.parse_time(ago(60_000)), "`since` must not rewind to a dropped backlog event's old timestamp"
+  end
+
   # ---- issues -----------------------------------------------------------
 
   def test_issue_opened_vs_old_issue_new_comment
@@ -944,11 +994,18 @@ class GhWatchTest < Minitest::Test
                            'backlog' => true))
     @gql = graphql(open: [quiet_pr])
 
+    # Route lambdas run in the fake server's own thread: a failed assertion
+    # inside one is a Minitest::Assertion, not a StandardError, so it gets
+    # past FakeGitHub#handle's rescue and kills that thread instead of
+    # failing the test normally -- and, across several run_watch calls in
+    # one test like this, a later call then just hangs. Record the `before`
+    # each poll actually sent and assert it after run_watch returns instead.
+    polls = []
     chunk1 = (1..100).map { |i| comment(900 + i, 'bob', ago(9_999 - i)) }
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR0', req.json['variables']['before']
+        polls << req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR1' }, 'nodes' => chunk1 }
         } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
@@ -969,7 +1026,7 @@ class GhWatchTest < Minitest::Test
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR1', req.json['variables']['before']
+        polls << req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR2' }, 'nodes' => chunk2 }
         } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
@@ -989,7 +1046,7 @@ class GhWatchTest < Minitest::Test
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR2', req.json['variables']['before']
+        polls << req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
                           'nodes' => [comment(1101, 'bob', ago(9797))] }
@@ -1002,11 +1059,12 @@ class GhWatchTest < Minitest::Test
     end
     events3 = run_watch(env: { 'GHWATCH_TEST_NOW' => (NOW + 1200).iso8601 })
     assert_equal 0, @status, @err
-    assert_equal ['gh:comment:1101'], events3.map { |e| e['id'] }, 'the gap finishes draining'
+    assert_equal(['gh:comment:1101'], events3.map { |e| e['id'] }, 'the gap finishes draining')
     refute next_state.key?('resume')
     refute next_state['backlog']
     ids = (events1 + events2 + events3).map { |e| e['id'] }
     assert_equal ids.uniq.size, ids.size, 'no event is ever repeated across the drain'
+    assert_equal %w[CUR0 CUR1 CUR2], polls, 'each poll resumed from exactly where the previous one left off'
   end
 
   def test_resume_entry_is_dropped_once_the_pr_is_no_longer_open
@@ -1086,6 +1144,95 @@ class GhWatchTest < Minitest::Test
     assert next_state['backlog'], 'the gap is still open'
     assert_equal [{ 'cursor' => 'CUR', 'target' => ago(500), 'attempts' => 1 }], next_state.dig('resume', '5:comments'),
                  'a failed page does not look like "finished"; the cursor is untouched but the attempt is counted'
+  end
+
+  def test_a_graphql_errors_response_during_a_drain_counts_as_a_failed_page
+    # GitHub answers an `errors` array, not a bare `pullRequest: nil`, for an
+    # invalid cursor (or a PR deleted/transferred/gone since the cursor was
+    # saved). Without rescuing it, this used to raise out of drain_backlog
+    # and fail the whole poll on every later run instead of being treated
+    # like any other bad page.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 5)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'errors' => [{ 'message' => 'Could not resolve to a node with the global id of X' }] }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_empty events, 'nothing was actually fetched'
+    assert_empty @err, 'a single failed attempt does not warn yet'
+    assert next_state['backlog'], 'the gap is still open'
+    assert_equal [{ 'cursor' => 'CUR', 'target' => ago(500), 'attempts' => 1 }], next_state.dig('resume', '5:comments'),
+                 'a GraphQL errors response is treated exactly like any other bad page: counted, cursor untouched'
+  end
+
+  def test_a_resume_only_prs_graphql_error_drops_its_entry_without_failing_the_poll
+    # PR 5 has an active resume entry but is not in open_heads at all this
+    # poll (closed, transferred, deleted, or just a garbage resume key): its
+    # detail is fetched in its own batch, separate from open PRs (see
+    # full_query). A GraphQL `errors` response for that batch must not raise
+    # out of full_query and fail the rest of the poll -- it only means PR 5
+    # gets no detail (and its resume entry is dropped) this round.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' },
+                                      '6' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 6, created: ago(10))])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('p0: pullRequest(') && req.json['variables']['n0'] == 5
+        [200, {}, { 'errors' => [{ 'message' => 'Could not resolve to a PullRequest' }] }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_includes events.map { |e| e['id'] }, 'gh:opened:6', 'the rest of the poll still runs'
+    assert_match(/resume PR detail fetch failed/, @err)
+    refute next_state.key?('resume'), 'a resume-only PR GraphQL error drops its entry instead of wedging forever'
+  end
+
+  def test_drain_stuck_resume_still_drains_a_closed_or_merged_pr
+    # Comments and reviews still in the gap (often made just before the
+    # merge) must not be lost just because the PR is no longer OPEN --
+    # pr_comments works on closed PRs too.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
+                           'backlog' => true))
+    @gql = graphql(open: [])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                          'nodes' => [comment(701, 'bob', ago(300))] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, { 'data' => { 'repository' => {
+          'p0' => { 'number' => 5, 'state' => 'MERGED', 'baseRefName' => 'main', 'author' => author('alice'),
+                    'reviews' => conn([]), 'comments' => conn([]), 'reviewThreads' => conn([]) }
+        }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal ['gh:comment:701'], events.map { |e| e['id'] },
+                 'drained even though the PR is merged, not just when it is still open'
+    refute next_state.key?('resume')
   end
 
   def test_a_resume_cursor_that_always_fails_is_dropped_after_max_attempts
@@ -1237,7 +1384,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
-    assert_equal ['gh:comment:701'], events.map { |e| e['id'] }
+    assert_equal(['gh:comment:701'], events.map { |e| e['id'] })
     segments = next_state.dig('resume', '5:comments')
     assert_equal 1, segments.size, 'segment 0 finished draining; segment 1 is promoted into its place'
     assert_equal 'CUR1', segments[0]['cursor']
@@ -1279,6 +1426,62 @@ class GhWatchTest < Minitest::Test
     assert_equal 200, events.map { |e| e['id'] }.uniq.size, 'segment 0 (100 backlog) plus the fresh top (100), no overlap'
   end
 
+  def test_resume_segment_list_is_hard_capped
+    # RESUME_SEGMENT_CAP - 1 filler segments already pending, plus the active
+    # segment 0 drain -- RESUME_SEGMENT_CAP total going into this poll. A
+    # fresh-top truncation this same poll would push one more: without a
+    # hard cap the list (and the state file) grows without bound.
+    filler = (1...GhWatch::RESUME_SEGMENT_CAP).map { |i| { 'cursor' => "FILL#{i}", 'target' => ago(5_000 + i) } }
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => { '5:comments' => [{ 'cursor' => 'CUR0', 'target' => ago(10_000) }] + filler },
+                           'backlog' => true))
+    fresh_top = (1..100).map { |i| comment(6000 + i, 'bob', ago(300 - i)) }
+    @gql = graphql(open: [pr(number: 5, comments: fresh_top, comments_more: true)])
+    segment0_chunk = (1..100).map { |i| comment(7000 + i, 'bob', ago(9_999 - i)) }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        assert_equal 'CUR0', req.json['variables']['before']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR0B' }, 'nodes' => segment0_chunk }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    segments = next_state.dig('resume', '5:comments')
+    assert_equal GhWatch::RESUME_SEGMENT_CAP, segments.size, 'the new gap is dropped instead of growing past the cap'
+    assert_equal 'CUR0B', segments[0]['cursor'], 'segment 0 still advanced normally'
+    assert_match(/more than #{GhWatch::RESUME_SEGMENT_CAP} pending resume gaps/, @err)
+    assert_equal 200, events.map { |e| e['id'] }.uniq.size
+    write_state(next_state)
+
+    # A second poll that truncates the live top again must not repeat the
+    # warning: the list is already (and stays) at the cap.
+    fresh_top2 = (1..100).map { |i| comment(8000 + i, 'bob', ago(300 - i)) }
+    @gql = graphql(open: [pr(number: 5, comments: fresh_top2, comments_more: true)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR0C' }, 'nodes' => segment0_chunk }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    run_watch(env: { 'GHWATCH_TEST_NOW' => (NOW + 600).iso8601 })
+    assert_equal 0, @status, @err
+    assert_empty @err, 'no repeat warning on a later poll that stays over the cap'
+    assert_equal GhWatch::RESUME_SEGMENT_CAP, next_state.dig('resume', '5:comments').size
+  end
+
   def test_drain_stuck_resume_handles_a_pr_dropped_from_the_open_heads_list
     # PR 5 has an active resume entry but open_heads doesn't return it at all
     # this poll -- the normal open.each { ... pr_comments ... } path never
@@ -1318,10 +1521,17 @@ class GhWatchTest < Minitest::Test
                            'resume' => { '5:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
                            'backlog' => true))
     @gql = graphql(open: [])
+    # A `flunk`/`assert` directly inside a route lambda is a Minitest::Assertion,
+    # not a StandardError: it gets past FakeGitHub#handle's rescue and kills
+    # the server thread instead of failing the test normally, giving a
+    # confusing failure that only shows up through @status. Record what
+    # happened and assert it after run_watch returns instead.
+    fetched_comments = false
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        flunk 'base_ok? should have skipped fetching comments for a PR targeting the wrong base'
+        fetched_comments = true
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => nil }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
       elsif q.include?('p0: pullRequest(')
         [200, {}, { 'data' => { 'repository' => {
           'p0' => { 'number' => 5, 'state' => 'OPEN', 'baseRefName' => 'dev', 'author' => author('alice'),
@@ -1333,7 +1543,9 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch('--jsonl', '--base', 'main')
     assert_equal 0, @status, @err
+    refute fetched_comments, 'base_ok? should have skipped fetching comments for a PR targeting the wrong base'
     assert_empty events, 'a PR targeting a different base than --base must not surface events'
+    refute next_state.key?('resume'), 'a resume entry that will never pass --base again must not stick forever'
   end
 
   def test_resume_migrates_from_the_old_single_hash_format
@@ -1359,9 +1571,45 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
-    assert_equal ['gh:comment:701'], events.map { |e| e['id'] }
+    assert_equal(['gh:comment:701'], events.map { |e| e['id'] })
     refute next_state.key?('resume'), 'the migrated entry drains to completion like any other'
     refute next_state['backlog']
+  end
+
+  def test_corrupt_resume_state_is_rejected_on_load
+    # A key drain_backlog never drains (ts_key is nil for reviewThreads, and
+    # a non-numeric or malformed key can't come from this program) would
+    # stick forever; a segment with no cursor string or an unparsable target
+    # would emit a PR's entire history instead of stopping at a gap. None of
+    # this should survive loading the state file.
+    write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } },
+                           'resume' => {
+                             '5:reviewThreads' => [{ 'cursor' => 'CUR', 'target' => ago(500) }],
+                             'x:comments' => [{ 'cursor' => 'CUR', 'target' => ago(500) }],
+                             '7:comments' => [{ 'cursor' => 'CUR', 'target' => 'not-a-time' }],
+                             '8:comments' => [{ 'target' => ago(500) }],
+                             '9:reviews' => [{ 'cursor' => 'CUR', 'target' => ago(500) }]
+                           },
+                           'backlog' => true))
+    @gql = graphql(open: [pr(number: 9)])
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('reviews(last: 50')
+        assert_equal 'CUR', req.json['variables']['before']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'reviews' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
+                         'nodes' => [review(901, 'bob', 'APPROVED', ago(300))] }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal ['gh:review:901'], events.map { |e| e['id'] }, 'only the one valid segment (9:reviews) actually drains'
+    refute next_state.key?('resume'), 'every corrupt entry was dropped on load instead of sticking forever'
   end
 
   def test_truncated_reviews_connection_resumes_from_its_stored_cursor
@@ -1385,7 +1633,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
-    assert_equal ['gh:review:501'], events.map { |e| e['id'] }
+    assert_equal(['gh:review:501'], events.map { |e| e['id'] })
     refute next_state.key?('resume')
     refute next_state['backlog']
   end
