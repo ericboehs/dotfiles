@@ -77,13 +77,14 @@ case "$ncpu" in *[!0-9]* | '') ncpu=8 ;; esac
 # someone running with HEAVY_SLOTS above ncpu finds out their slots were
 # capped instead of just seeing commands queue for no visible reason.
 slots_clamp_warned=
+idle_min_ignored_warned=
 clamp_slots() {
   case "$slots" in ????*) slots=9999 ;; esac
   [ "$slots" -ge 1 ] || slots=1
   if [ "$slots" -gt "$ncpu" ]; then
     slots="$ncpu"
     if [ -z "$slots_clamp_warned" ]; then
-      echo "heavy: HEAVY_SLOTS clamped to $ncpu (the number of CPUs)" >&2
+      echo "heavy: slots from ${slots_source:-HEAVY_SLOTS} clamped to $ncpu (the number of CPUs)" >&2
       slots_clamp_warned=1
     fi
   fi
@@ -103,16 +104,36 @@ idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub(
 override_msg=""
 override_slots() {
   override_msg=""
+  slots_overridden=
   local n until idle_min now applied
   read -r n until idle_min < "$dir/slots" 2>/dev/null || [ -n "${n:-}" ] || return
   case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
   [ -n "$until" ] && [ "$n" -ge 1 ] || return
   # idle_min is optional (a 2-field file just overrides slots), so only a
-  # value that is actually present gets length-guarded then range-capped --
+  # value that is actually present gets length-guarded then range-checked --
   # an absent one must stay empty, not become a bogus override of its own.
+  # Out of range (over 100) is ignored, not clamped to 100: int(idle) is
+  # rarely exactly 100, so a clamp used to make the gate practically
+  # unsatisfiable -- commands would wait up to the file's own 7-day cap
+  # instead of ever starting. Ignoring the field falls back to min_idle's
+  # own default/env value, same as a 2-field file with no idle_min at all.
   if [ -n "${idle_min:-}" ]; then
-    case "$idle_min" in ????*) idle_min=100 ;; esac
-    [ "$idle_min" -le 100 ] || idle_min=100
+    case "$idle_min" in ????*) idle_min= ;; esac
+    if [ -n "$idle_min" ] && [ "$idle_min" -gt 100 ]; then
+      idle_min=
+    fi
+    if [ -z "$idle_min" ] && [ -z "$idle_min_ignored_warned" ]; then
+      echo "heavy: ignoring out-of-range min_idle in $dir/slots (must be 0-100)" >&2
+      idle_min_ignored_warned=1
+    fi
+    # Only the slot brake is protected against a huge value above (clamp_slots'
+    # ncpu cap): this file is otherwise trusted the same as HEAVY_MIN_IDLE, so a
+    # stale or tampered override of idle_min=0 would turn the CPU gate off
+    # outright. A floor keeps that brake from being fully disabled by the file
+    # the way HEAVY_MIN_IDLE=0 can deliberately disable it from the environment.
+    if [ -n "$idle_min" ] && [ "$idle_min" -lt 5 ]; then
+      idle_min=5
+    fi
   fi
   now=$(date +%s)
   [ "$now" -lt "$until" ] || return
@@ -124,6 +145,7 @@ override_slots() {
   if [ -z "${HEAVY_SLOTS:-}" ]; then
     slots=$n
     applied=1
+    slots_overridden=1
   fi
   if [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ]; then
     min_idle=$idle_min
@@ -138,6 +160,16 @@ while :; do
   slots=${HEAVY_SLOTS:-2}
   min_idle=${HEAVY_MIN_IDLE:-25}
   override_slots
+  # clamp_slots' warning names where a too-large slots value actually came
+  # from, instead of always blaming HEAVY_SLOTS even when it was unset and
+  # the override file set it.
+  if [ -n "${HEAVY_SLOTS:-}" ]; then
+    slots_source=HEAVY_SLOTS
+  elif [ -n "$slots_overridden" ]; then
+    slots_source="the override file ($dir/slots)"
+  else
+    slots_source="the default"
+  fi
   clamp_slots
   cur_idle=$(idle)
   if sims_ok && [ "$cur_idle" -ge "$min_idle" ]; then
