@@ -17,13 +17,17 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const policy = JSON.parse(readFileSync(join(repo, ".pi-agent", "approval-guardian.json"), "utf8"));
 
 test("deny.commands has no regex for screencapture or '..' traversal (both are prose-only)", () => {
+  // A literal-source check alone (`source.includes("\\.\\.")`) passes
+  // `\.{2}`, `[.][.]` or a lookbehind like `(?<=/)\.\.`, all of which match
+  // `../` exactly as well as `\.\.` would -- check actual behavior against
+  // several spellings of a `..` traversal, not just one.
+  const traversalSpellings = ["../", "a/../b", "..", "./..", "..\\"];
   for (const source of policy.deny.commands) {
     assert.ok(!/screencapture/i.test(source), `deny.commands should not mention screencapture: ${source}`);
     assert.ok(!source.includes("\\.\\."), `deny.commands should not contain a literal .. pattern: ${source}`);
-    // A literal-source check alone passes `\.{2}` or `[.][.]`, which match
-    // `../` exactly as well as `\.\.` would -- check actual behavior too,
-    // not just one way to spell the pattern.
-    assert.ok(!new RegExp(source).test("../"), `deny.commands should not match '../' by any spelling: ${source}`);
+    for (const spelling of traversalSpellings) {
+      assert.ok(!new RegExp(source).test(spelling), `deny.commands should not match '${spelling}' by any spelling: ${source}`);
+    }
   }
 });
 
@@ -52,4 +56,20 @@ test("prose: the screencapture rule applies regardless of how the command is spe
 test("prose: merely mentioning or quoting screencapture (reports, heredocs, grep) is not a capture", () => {
   assert.match(policy.policy, /merely mentions, quotes, or greps for `screencapture` without running it/);
   assert.match(policy.policy, /is not a capture and is not covered by this rule/);
+});
+
+test("prose: a worktree gitdir pointer must resolve back to <root>/.git, checked with git rev-parse, not just read", () => {
+  assert.match(policy.policy, /resolves back to `<root>\/\.git`/);
+  assert.match(policy.policy, /git -C <root> rev-parse --git-common-dir/);
+});
+
+test("prose: a .git file the session itself wrote is never proof of a worktree", () => {
+  assert.match(policy.policy, /a `\.git` file the session itself wrote .* is never proof of a worktree/);
+});
+
+test("prose: a quoted plain write's redirect target must be a literal path, nothing chained after it", () => {
+  assert.match(policy.policy, /the redirect target itself is a literal path with no `\$`, backtick or `<\(` in it/);
+  assert.match(policy.policy, /nothing is chained after the write/);
+  assert.match(policy.policy, /cat <<'EOF' > ~\/tmp\/nightly\/\$\(cmd\)\.md/);
+  assert.match(policy.policy, /\.\.\. > x\.md; other-cmd/);
 });
