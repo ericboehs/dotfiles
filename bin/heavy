@@ -78,6 +78,7 @@ case "$ncpu" in *[!0-9]* | '') ncpu=8 ;; esac
 # capped instead of just seeing commands queue for no visible reason.
 slots_clamp_warned=
 idle_min_ignored_warned=
+idle_min_floored_warned=
 clamp_slots() {
   case "$slots" in ????*) slots=9999 ;; esac
   [ "$slots" -ge 1 ] || slots=1
@@ -133,6 +134,10 @@ override_slots() {
     # outright. A floor keeps that brake from being fully disabled by the file
     # the way HEAVY_MIN_IDLE=0 can deliberately disable it from the environment.
     if [ -n "$idle_min" ] && [ "$idle_min" -lt 5 ]; then
+      if [ -z "$idle_min_floored_warned" ]; then
+        echo "heavy: raising min_idle in $dir/slots to the 5 floor (was $idle_min)" >&2
+        idle_min_floored_warned=1
+      fi
       idle_min=5
     fi
   fi
