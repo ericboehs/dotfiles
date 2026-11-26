@@ -576,6 +576,12 @@ module GhWatch
       # it, a dropped backlog event's cursor has already moved past it and it
       # is never fetched again.
       @resume_snapshot = @resume.each_with_object({}) { |(k, v), acc| acc[k] = v.map(&:dup) }
+      # Segments truncated! pushes onto an existing (pre-poll) segment list
+      # this same poll -- a fresh-top gap piling up above a drain already in
+      # progress. finalize must keep these when it restores a dropped
+      # backlog segment to its pre-poll snapshot, or a same-poll truncation
+      # on that key would be silently lost (see finalize).
+      @resume_new = Hash.new { |h, k| h[k] = [] }
     end
 
     def run
@@ -793,8 +799,28 @@ module GhWatch
 
       fetch_details(numbers)
     rescue ApiError => e
-      warn "gh-watch: #{@owner}/#{@name} resume PR detail fetch failed (#{e.message})"
-      {}
+      # Only a GraphQL-level error (`errors` in an otherwise-200 response --
+      # a deleted/transferred PR or a garbage resume key) means this batch's
+      # entries are actually gone; a transport failure, 5xx, rate limit or
+      # "refusing auth" is not, and must propagate so the poll fails and the
+      # next one retries, instead of dropping every entry in the batch (up to
+      # DETAILS_BATCH PRs) on one bad network blip.
+      raise unless e.message.include?('graphql:')
+
+      # A GraphQL error for the batch could come from any one number in it;
+      # retry one at a time so only the actual bad number is dropped instead
+      # of taking its batch-mates down with it.
+      details = {}
+      numbers.each do |n|
+        begin
+          details.merge!(fetch_details([n]))
+        rescue ApiError => inner
+          raise unless inner.message.include?('graphql:')
+
+          warn "gh-watch: #{@owner}/#{@name}##{n} resume PR detail fetch failed (#{inner.message})"
+        end
+      end
+      details
     end
 
     def fetch_details(numbers)
@@ -888,7 +914,14 @@ module GhWatch
         c = begin
           gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
             .dig('repository', 'pullRequest', conn_name)
-        rescue ApiError
+        rescue ApiError => e
+          # Only a GraphQL-level error (invalid cursor, deleted/transferred
+          # PR) counts as a bad page toward RESUME_MAX_ATTEMPTS. A transport
+          # failure, 5xx or 429/403 is transient -- re-raise it so the poll
+          # fails and retries next time instead of counting an attempt
+          # toward giving up on the gap for good.
+          raise unless e.message.include?('graphql:')
+
           nil
         end
         unless c.is_a?(Hash)
@@ -955,6 +988,11 @@ module GhWatch
       segments = @resume[key]
       if segments.nil? || segments.empty?
         @resume[key] = [segment]
+        # Also tracked here: drain_backlog may have just finished and deleted
+        # this key's pre-poll segment earlier in this same poll (see
+        # finalize), in which case this "first" truncation is really this
+        # poll's own new gap, not a continuation of the restored one.
+        @resume_new[key] << segment
         warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} truncated at #{MAX_CONN} nodes; " \
              'resuming the rest over the next poll(s)'
       else
@@ -979,6 +1017,8 @@ module GhWatch
                  '(some older events may be missing)'
           end
           last['capped'] = true if last
+        else
+          @resume_new[key] << segment
         end
       end
     end
@@ -1218,12 +1258,17 @@ module GhWatch
       # (drain_backlog moves the cursor before this cap applies): restore the
       # segment to how it was before this poll so the next one re-fetches it,
       # instead of permanently losing it past a cursor that already moved on.
+      # Restore only segments[0] (the gap this poll's drain_backlog
+      # advanced) to its pre-poll cursor, not the whole list: @resume[k] may
+      # already have a new segment appended past index 0 (truncated! pushing
+      # a fresh-top gap found this same poll, tracked in @resume_new).
+      # Overwriting the whole array with the snapshot would silently lose
+      # that new gap instead of leaving it to drain on a later poll.
       dropped.filter_map { |p| p[:backlog_key] }.uniq.each do |k|
-        if @resume_snapshot.key?(k)
-          @resume[k] = @resume_snapshot[k]
-        else
-          @resume.delete(k)
-        end
+        snapshot = @resume_snapshot[k]
+        next if snapshot.nil? || snapshot.empty?
+
+        @resume[k] = [snapshot.first] + @resume_new[k]
       end
       @events = kept.map { |p| p[:event] }
 

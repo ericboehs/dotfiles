@@ -458,9 +458,13 @@ class GhWatchTest < Minitest::Test
   def test_paging_back_a_truncated_connection
     write_state(base_state('prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' } }))
     @gql = graphql(open: [pr(number: 5, comments: [comment(202, 'bob', ago(20))], comments_more: true)])
+    # Record the `before` sent, assert after run_watch returns: an assertion
+    # failure inside the lambda is a Minitest::Assertion, not a StandardError,
+    # which kills the fake server's thread instead of failing normally.
+    before_seen = nil
     @routes[%r{\A/graphql}] = lambda do |req|
       if req.json['query'].include?('pullRequest(number: $number)')
-        assert_equal 'CUR', req.json['variables']['before']
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => { 'comments' => conn([comment(201, 'alice', ago(40))]) } },
                                 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
       elsif req.json['query'].include?('p0: pullRequest(')
@@ -469,7 +473,9 @@ class GhWatchTest < Minitest::Test
         [200, {}, @gql]
       end
     end
-    assert_equal(%w[gh:comment:201 gh:comment:202], run_watch.map { |e| e['id'] })
+    events = run_watch
+    assert_equal(%w[gh:comment:201 gh:comment:202], events.map { |e| e['id'] })
+    assert_equal 'CUR', before_seen
   end
 
   def test_event_cap_holds_since_at_first_unemitted
@@ -535,6 +541,58 @@ class GhWatchTest < Minitest::Test
     refute next_state.dig('resume', '6:comments'), 'segment 6 fully drained and none of its events were dropped'
     since = GhWatch.parse_time(next_state['since'])
     refute since <= GhWatch.parse_time(ago(60_000)), "`since` must not rewind to a dropped backlog event's old timestamp"
+  end
+
+  def test_a_same_poll_truncation_on_a_dropped_backlog_segment_survives_the_restore
+    # PR 7's pre-existing backlog segment finishes draining this poll (same
+    # shape as above, one page, hasPreviousPage false) *and* its live
+    # (non-backlog) top-of-connection page truncates this same poll, pushing
+    # a brand new segment onto the very same '7:comments' key (see
+    # truncated!). Two older PRs' backlog groups fill MAX_EVENTS so PR 7's
+    # backlog group -- now fully drained and removed from @resume -- is the
+    # one the cap drops, forcing finalize to restore it. A naive restore that
+    # overwrites the whole segment list with the pre-poll snapshot would wipe
+    # out the brand new segment truncated! just pushed, losing that gap for
+    # good instead of draining it on a later poll.
+    write_state(base_state(
+                  'prs' => { '5' => { 'head' => SHA_A, 'ci' => 'none' }, '6' => { 'head' => SHA_A, 'ci' => 'none' },
+                             '7' => { 'head' => SHA_A, 'ci' => 'none' } },
+                  'resume' => {
+                    '5:comments' => [{ 'cursor' => 'C5', 'target' => ago(100_000) }],
+                    '6:comments' => [{ 'cursor' => 'C6', 'target' => ago(80_000) }],
+                    '7:comments' => [{ 'cursor' => 'C7', 'target' => ago(60_000) }]
+                  }, 'backlog' => true
+                ))
+    fresh_top = (1..100).map { |i| comment(75_000 + i, 'carol', ago(300 - i)) } # PR 7's live, same-poll truncation
+    @gql = graphql(open: [pr(number: 5), pr(number: 6), pr(number: 7, comments: fresh_top, comments_more: true)])
+    chunks = {
+      5 => (1..100).map { |i| comment(50_000 + i, 'bob', ago(100_000 - i)) },
+      6 => (1..100).map { |i| comment(60_000 + i, 'bob', ago(80_000 - i)) },
+      7 => (1..100).map { |i| comment(70_000 + i, 'bob', ago(60_000 - i)) }
+    }
+    @routes['POST /graphql'] = lambda do |req|
+      q = req.json['query']
+      if q.include?('comments(last: 50')
+        n = req.json['variables']['number']
+        [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
+          'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil }, 'nodes' => chunks.fetch(n) }
+        } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
+      elsif q.include?('p0: pullRequest(')
+        [200, {}, details_for(req)]
+      else
+        [200, {}, @gql]
+      end
+    end
+    events = run_watch
+    assert_equal 0, @status, @err
+    assert_equal 200, events.size, 'the cap still applies'
+    dropped_backlog_ids = chunks[7].map { |c| "gh:comment:#{c['fullDatabaseId']}" }
+    assert_empty(events.map { |e| e['id'] } & dropped_backlog_ids, 'PR 7 backlog group is dropped by the cap')
+    segments = next_state.dig('resume', '7:comments')
+    assert_equal 2, segments.size, "the restored old segment and this poll's new gap must both survive"
+    assert_equal 'C7', segments[0]['cursor'], 'segment 0 is restored to its pre-poll cursor, not left completed'
+    assert_equal ago(60_000), segments[0]['target']
+    assert_equal 'CUR', segments[1]['cursor'], "segment 1 is the fresh-top gap truncated! pushed this same poll"
   end
 
   # ---- issues -----------------------------------------------------------
@@ -1097,10 +1155,11 @@ class GhWatchTest < Minitest::Test
     # trip, so truncated! sees a still-non-empty resume list when it runs next
     # and appends a segment instead of starting a fresh (re-warning) list.
     segment0_chunk = (1..100).map { |i| comment(3000 + i, 'bob', ago(9_999 - i)) }
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR0', req.json['variables']['before'], 'drain_backlog resumes segment 0, not the fresh top'
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR1' }, 'nodes' => segment0_chunk }
         } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
@@ -1112,6 +1171,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR0', before_seen, 'drain_backlog resumes segment 0, not the fresh top'
     assert_empty @err, 'no repeat warning -- the connection already had an active drain'
     segments = next_state.dig('resume', '5:comments')
     assert_equal 2, segments.size
@@ -1368,10 +1428,11 @@ class GhWatchTest < Minitest::Test
                            ] },
                            'backlog' => true))
     @gql = graphql(open: [pr(number: 5)])
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR0', req.json['variables']['before'], 'drains segment 0 first'
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
                           'nodes' => [comment(701, 'bob', ago(300))] }
@@ -1384,6 +1445,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR0', before_seen, 'drains segment 0 first'
     assert_equal(['gh:comment:701'], events.map { |e| e['id'] })
     segments = next_state.dig('resume', '5:comments')
     assert_equal 1, segments.size, 'segment 0 finished draining; segment 1 is promoted into its place'
@@ -1402,10 +1464,11 @@ class GhWatchTest < Minitest::Test
     fresh_top = (1..100).map { |i| comment(4000 + i, 'bob', ago(300 - i)) } # all inside this poll's window
     @gql = graphql(open: [pr(number: 5, comments: fresh_top, comments_more: true)])
     segment0_chunk = (1..100).map { |i| comment(5000 + i, 'bob', ago(9_999 - i)) }
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR0', req.json['variables']['before'], 'drain_backlog still resumes segment 0, not the fresh top'
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR0B' }, 'nodes' => segment0_chunk }
         } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
@@ -1417,6 +1480,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR0', before_seen, 'drain_backlog still resumes segment 0, not the fresh top'
     assert_empty @err, 'three pending segments is still under the warning cap'
     segments = next_state.dig('resume', '5:comments')
     assert_equal 3, segments.size
@@ -1438,10 +1502,11 @@ class GhWatchTest < Minitest::Test
     fresh_top = (1..100).map { |i| comment(6000 + i, 'bob', ago(300 - i)) }
     @gql = graphql(open: [pr(number: 5, comments: fresh_top, comments_more: true)])
     segment0_chunk = (1..100).map { |i| comment(7000 + i, 'bob', ago(9_999 - i)) }
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR0', req.json['variables']['before']
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => true, 'startCursor' => 'CUR0B' }, 'nodes' => segment0_chunk }
         } }, 'rateLimit' => { 'cost' => 1, 'remaining' => 1 } } }]
@@ -1453,6 +1518,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR0', before_seen
     segments = next_state.dig('resume', '5:comments')
     assert_equal GhWatch::RESUME_SEGMENT_CAP, segments.size, 'the new gap is dropped instead of growing past the cap'
     assert_equal 'CUR0B', segments[0]['cursor'], 'segment 0 still advanced normally'
@@ -1555,10 +1621,11 @@ class GhWatchTest < Minitest::Test
                            'resume' => { '5:comments' => { 'cursor' => 'CUR', 'target' => ago(500) } },
                            'backlog' => true))
     @gql = graphql(open: [pr(number: 5)])
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('comments(last: 50')
-        assert_equal 'CUR', req.json['variables']['before']
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'comments' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
                           'nodes' => [comment(701, 'bob', ago(300))] }
@@ -1571,6 +1638,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR', before_seen
     assert_equal(['gh:comment:701'], events.map { |e| e['id'] })
     refute next_state.key?('resume'), 'the migrated entry drains to completion like any other'
     refute next_state['backlog']
@@ -1592,10 +1660,11 @@ class GhWatchTest < Minitest::Test
                            },
                            'backlog' => true))
     @gql = graphql(open: [pr(number: 9)])
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('reviews(last: 50')
-        assert_equal 'CUR', req.json['variables']['before']
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'reviews' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
                          'nodes' => [review(901, 'bob', 'APPROVED', ago(300))] }
@@ -1608,6 +1677,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR', before_seen
     assert_equal ['gh:review:901'], events.map { |e| e['id'] }, 'only the one valid segment (9:reviews) actually drains'
     refute next_state.key?('resume'), 'every corrupt entry was dropped on load instead of sticking forever'
   end
@@ -1617,10 +1687,11 @@ class GhWatchTest < Minitest::Test
                            'resume' => { '5:reviews' => [{ 'cursor' => 'CUR', 'target' => ago(500) }] },
                            'backlog' => true))
     @gql = graphql(open: [pr(number: 5)])
+    before_seen = nil
     @routes['POST /graphql'] = lambda do |req|
       q = req.json['query']
       if q.include?('reviews(last: 50')
-        assert_equal 'CUR', req.json['variables']['before'], 'resumes from exactly the stored cursor'
+        before_seen = req.json['variables']['before']
         [200, {}, { 'data' => { 'repository' => { 'pullRequest' => {
           'reviews' => { 'pageInfo' => { 'hasPreviousPage' => false, 'startCursor' => nil },
                          'nodes' => [review(501, 'carol', 'APPROVED', ago(300), 'lgtm')] }
@@ -1633,6 +1704,7 @@ class GhWatchTest < Minitest::Test
     end
     events = run_watch
     assert_equal 0, @status, @err
+    assert_equal 'CUR', before_seen, 'resumes from exactly the stored cursor'
     assert_equal(['gh:review:501'], events.map { |e| e['id'] })
     refute next_state.key?('resume')
     refute next_state['backlog']
