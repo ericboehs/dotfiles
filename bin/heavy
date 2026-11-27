@@ -128,18 +128,6 @@ override_slots() {
       echo "heavy: ignoring out-of-range min_idle in $dir/slots (must be 0-100)" >&2
       idle_min_ignored_warned=1
     fi
-    # Only the slot brake is protected against a huge value above (clamp_slots'
-    # ncpu cap): this file is otherwise trusted the same as HEAVY_MIN_IDLE, so a
-    # stale or tampered override of idle_min=0 would turn the CPU gate off
-    # outright. A floor keeps that brake from being fully disabled by the file
-    # the way HEAVY_MIN_IDLE=0 can deliberately disable it from the environment.
-    if [ -n "$idle_min" ] && [ "$idle_min" -lt 5 ]; then
-      if [ -z "$idle_min_floored_warned" ]; then
-        echo "heavy: raising min_idle in $dir/slots to the 5 floor (was $idle_min)" >&2
-        idle_min_floored_warned=1
-      fi
-      idle_min=5
-    fi
   fi
   now=$(date +%s)
   [ "$now" -lt "$until" ] || return
@@ -154,6 +142,20 @@ override_slots() {
     slots_overridden=1
   fi
   if [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ]; then
+    # Only the slot brake is protected against a huge value above (clamp_slots'
+    # ncpu cap): this file is otherwise trusted the same as HEAVY_MIN_IDLE, so a
+    # stale or tampered override of idle_min=0 would turn the CPU gate off
+    # outright. A floor keeps that brake from being fully disabled by the file
+    # the way HEAVY_MIN_IDLE=0 can deliberately disable it from the environment.
+    # Checked here (not above) so an expired file, or HEAVY_MIN_IDLE already
+    # set in the environment, never warns about a floor that was never applied.
+    if [ "$idle_min" -lt 5 ]; then
+      if [ -z "$idle_min_floored_warned" ]; then
+        echo "heavy: raising min_idle in $dir/slots to the 5 floor (was $idle_min)" >&2
+        idle_min_floored_warned=1
+      fi
+      idle_min=5
+    fi
     min_idle=$idle_min
     applied=1
   fi

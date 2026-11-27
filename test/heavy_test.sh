@@ -38,9 +38,15 @@ assert_no_match() {
   esac
 }
 
+# A caller's own shell may already have HEAVY_SLOTS/HEAVY_MIN_IDLE set,
+# which would spuriously change override_slots' behavior below (it treats
+# either as already-set and skips applying the file's value for it).
+unset HEAVY_SLOTS HEAVY_MIN_IDLE
+
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 future=$(($(date +%s) + 3600))
+past=$(($(date +%s) - 3600))
 
 # A command substitution runs override_slots in a subshell, so its variable
 # assignments (min_idle, idle_min_floored_warned) would not be visible back
@@ -69,6 +75,40 @@ slots=2
 override_slots 2> "$dir/err3"
 assert_eq 'in-range min_idle is unchanged' 10 "$min_idle"
 assert_no_match 'in-range min_idle does not warn' 'raising min_idle' "$(cat "$dir/err3")"
+
+# An expired override (until already passed) never applies, so a below-floor
+# min_idle in it must not warn either -- that warning used to fire before the
+# expiry check even ran, describing a floor that was never actually applied.
+printf '3 %s 2\n' "$past" > "$dir/slots"
+idle_min_floored_warned=
+min_idle=25
+slots=2
+override_slots 2> "$dir/err4" || true
+assert_eq 'expired override does not change min_idle' 25 "$min_idle"
+assert_no_match 'expired override does not warn about the floor' 'raising min_idle' "$(cat "$dir/err4")"
+
+# HEAVY_MIN_IDLE already set in the environment wins over the file, so a
+# below-floor min_idle in the file must not warn either -- same reasoning,
+# the floor is only meaningful when the file's value would actually be used.
+HEAVY_MIN_IDLE=30
+idle_min_floored_warned=
+min_idle=30
+slots=2
+printf '3 %s 2\n' "$future" > "$dir/slots"
+override_slots 2> "$dir/err5"
+assert_eq 'HEAVY_MIN_IDLE already set wins over the file' 30 "$min_idle"
+assert_no_match 'HEAVY_MIN_IDLE already set suppresses the floor warning' 'raising min_idle' "$(cat "$dir/err5")"
+unset HEAVY_MIN_IDLE
+
+# An idle_min above 100 in the file is ignored (not clamped), warns once, and
+# min_idle falls back to its current value.
+printf '3 %s 150\n' "$future" > "$dir/slots"
+idle_min_ignored_warned=
+min_idle=25
+slots=2
+override_slots 2> "$dir/err6"
+assert_eq 'out-of-range (>100) min_idle falls back to the current value' 25 "$min_idle"
+assert_match 'out-of-range min_idle warns once' 'ignoring out-of-range' "$(cat "$dir/err6")"
 
 if [ "$failures" -eq 0 ]; then
   echo "heavy_test.sh: all assertions passed"
