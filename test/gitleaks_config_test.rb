@@ -9,7 +9,9 @@
 # secret-mask test vectors: a real token committed to a matching path in any
 # other repo -- VA repos included -- would never be scanned. The exemption
 # was removed; this guards against it (or something shaped like it) coming
-# back here instead of living in that repo's own .gitleaks.toml.
+# back here instead of living in that repo's own .gitleaksignore fingerprints
+# (the hook always passes `-c ~/.config/gitleaks/config.toml`, so a
+# repo-level .gitleaks.toml is never read).
 
 require 'minitest/autorun'
 require 'fileutils'
@@ -73,6 +75,20 @@ class GitleaksConfigTest < Minitest::Test
     toml = File.read(CONFIG)
     refute_match(%r{'''[^']*contract/threads[^']*'''}, toml,
                  "a repo-specific exemption (contract/threads) does not belong in this global config; put it in " \
-                 "that repo's own .gitleaks.toml or .gitleaksignore instead")
+                 "that repo's own .gitleaksignore fingerprints instead")
+  end
+
+  def test_the_repo_specific_exemption_note_points_at_gitleaksignore_not_gitleaks_toml
+    # The hook only ever passes `-c ~/.config/gitleaks/config.toml` (see
+    # .gitconfig's [hook "gitleaks"]): gitleaks does not also merge in a
+    # repo's own .gitleaks.toml when -c is given, so advice to put a
+    # repo-specific exemption there would silently do nothing.
+    toml = File.read(CONFIG)
+    note = toml[/# NOTE:.*?\n(?:\s*#.*\n)*/]
+    assert note, 'expected a NOTE comment about repo-specific exemptions'
+    assert_match(/belongs in that repo's own\s*\n?\s*#?\s*\.gitleaksignore fingerprints/, note,
+                 'the recommended fix must be .gitleaksignore fingerprints')
+    refute_match(/belongs in that repo's own\s*\n?\s*#?\s*\.gitleaks\.toml/, note,
+                 'a repo-level .gitleaks.toml is never read by the global -c hook, so it must not be recommended')
   end
 end

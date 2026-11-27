@@ -59,7 +59,9 @@ paths = [
   # included -- a real token in a matching path would never be scanned. A
   # repo-specific exemption (e.g. a Rust port's synthetic secret-mask test
   # vectors under contract/threads/*.json|rb) belongs in that repo's own
-  # .gitleaks.toml or .gitleaksignore fingerprints, not here.
+  # .gitleaksignore fingerprints, not here: the hook always passes `-c
+  # ~/.config/gitleaks/config.toml`, so a repo-level .gitleaks.toml is
+  # never read and would silently do nothing.
 ]
 regexes = [
   # Git commit SHAs in log output (e.g., "vets-api : a1b2c3d4...")
