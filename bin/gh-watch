@@ -43,6 +43,26 @@ module GhWatch
     end
   end
 
+  # A GraphQL `errors` response (HTTP 200, not a transport/HTTP failure).
+  # Carries GitHub's `errors[0].type` so callers can tell a permanent
+  # failure (deleted/unreachable node, bad cursor: NOT_FOUND) from a
+  # transient one (RATE_LIMITED and anything else) that must propagate and
+  # be retried instead of being dropped as if the data were really gone.
+  class GraphqlError < ApiError
+    PERMANENT_TYPES = %w[NOT_FOUND].freeze
+
+    attr_reader :type
+
+    def initialize(method, path, status, msg, type)
+      super(method, path, status, msg)
+      @type = type
+    end
+
+    def permanent?
+      PERMANENT_TYPES.include?(type)
+    end
+  end
+
   ACTOR_RE = /\A[A-Za-z0-9-]{1,39}(\[bot\])?\z/
   NAME_RE = /\A[\w.-]{1,100}\z/
   HOST_RE = /\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\z/
@@ -303,8 +323,8 @@ module GhWatch
 
       errs = Array(json['errors'])
       unless errs.empty?
-        msg = errs.first.is_a?(Hash) ? errs.first['message'] : ''
-        raise ApiError.new('POST', URI(url).path, status, "graphql: #{msg}")
+        first = errs.first.is_a?(Hash) ? errs.first : {}
+        raise GraphqlError.new('POST', URI(url).path, status, "graphql: #{first['message']}", first['type'])
       end
       raise ApiError.new('POST', URI(url).path, status, 'graphql: no data') unless json['data'].is_a?(Hash)
 
@@ -799,13 +819,14 @@ module GhWatch
 
       fetch_details(numbers)
     rescue ApiError => e
-      # Only a GraphQL-level error (`errors` in an otherwise-200 response --
-      # a deleted/transferred PR or a garbage resume key) means this batch's
-      # entries are actually gone; a transport failure, 5xx, rate limit or
-      # "refusing auth" is not, and must propagate so the poll fails and the
-      # next one retries, instead of dropping every entry in the batch (up to
-      # DETAILS_BATCH PRs) on one bad network blip.
-      raise unless e.message.include?('graphql:')
+      # Only a permanent GraphQL-level error (`errors` in an otherwise-200
+      # response, type NOT_FOUND: a deleted/transferred PR or a garbage
+      # resume key) means this batch's entries are actually gone; a
+      # transport failure, 5xx, RATE_LIMITED or "refusing auth" is not, and
+      # must propagate so the poll fails and the next one retries, instead
+      # of dropping every entry in the batch (up to DETAILS_BATCH PRs) on
+      # one rate limit or bad network blip.
+      raise unless e.is_a?(GraphqlError) && e.permanent?
 
       # A GraphQL error for the batch could come from any one number in it;
       # retry one at a time so only the actual bad number is dropped instead
@@ -815,7 +836,7 @@ module GhWatch
         begin
           details.merge!(fetch_details([n]))
         rescue ApiError => inner
-          raise unless inner.message.include?('graphql:')
+          raise unless inner.is_a?(GraphqlError) && inner.permanent?
 
           warn "gh-watch: #{@owner}/#{@name}##{n} resume PR detail fetch failed (#{inner.message})"
         end
@@ -907,20 +928,22 @@ module GhWatch
         oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
         break if target && oldest && oldest < target
 
-        # A GraphQL `errors` response (invalid cursor, deleted/transferred PR)
-        # raises ApiError, not a bare null connection; it must count as a
-        # failed page too, or RESUME_MAX_ATTEMPTS never applies and this
-        # segment fails every poll forever instead of eventually giving up.
+        # A permanent GraphQL `errors` response (type NOT_FOUND: invalid
+        # cursor, deleted/transferred PR) raises ApiError, not a bare null
+        # connection; it must count as a failed page too, or
+        # RESUME_MAX_ATTEMPTS never applies and this segment fails every
+        # poll forever instead of eventually giving up.
         c = begin
           gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
             .dig('repository', 'pullRequest', conn_name)
         rescue ApiError => e
-          # Only a GraphQL-level error (invalid cursor, deleted/transferred
-          # PR) counts as a bad page toward RESUME_MAX_ATTEMPTS. A transport
-          # failure, 5xx or 429/403 is transient -- re-raise it so the poll
-          # fails and retries next time instead of counting an attempt
-          # toward giving up on the gap for good.
-          raise unless e.message.include?('graphql:')
+          # Only a permanent GraphQL-level error (invalid cursor,
+          # deleted/transferred PR) counts as a bad page toward
+          # RESUME_MAX_ATTEMPTS. A transport failure, 5xx, RATE_LIMITED or
+          # 429/403 is transient -- re-raise it so the poll fails and
+          # retries next time instead of counting an attempt toward giving
+          # up on the gap for good.
+          raise unless e.is_a?(GraphqlError) && e.permanent?
 
           nil
         end
@@ -1258,17 +1281,16 @@ module GhWatch
       # (drain_backlog moves the cursor before this cap applies): restore the
       # segment to how it was before this poll so the next one re-fetches it,
       # instead of permanently losing it past a cursor that already moved on.
-      # Restore only segments[0] (the gap this poll's drain_backlog
-      # advanced) to its pre-poll cursor, not the whole list: @resume[k] may
-      # already have a new segment appended past index 0 (truncated! pushing
-      # a fresh-top gap found this same poll, tracked in @resume_new).
-      # Overwriting the whole array with the snapshot would silently lose
-      # that new gap instead of leaving it to drain on a later poll.
+      # Restore the whole pre-poll snapshot (not just segments[0]): a
+      # multi-segment snapshot has other still-pending gaps past index 0,
+      # and dropping them here would lose them for good. Append any new
+      # segment found this same poll (truncated! pushing a fresh-top gap,
+      # tracked in @resume_new), then cap so this doesn't grow unbounded.
       dropped.filter_map { |p| p[:backlog_key] }.uniq.each do |k|
         snapshot = @resume_snapshot[k]
         next if snapshot.nil? || snapshot.empty?
 
-        @resume[k] = [snapshot.first] + @resume_new[k]
+        @resume[k] = (snapshot.map(&:dup) + @resume_new[k]).first(RESUME_SEGMENT_CAP)
       end
       @events = kept.map { |p| p[:event] }
 
