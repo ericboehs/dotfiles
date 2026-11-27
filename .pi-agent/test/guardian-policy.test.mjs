@@ -58,9 +58,25 @@ test("prose: merely mentioning or quoting screencapture (reports, heredocs, grep
   assert.match(policy.policy, /is not a capture and is not covered by this rule/);
 });
 
-test("prose: a worktree gitdir pointer must resolve back to <root>/.git, checked with git rev-parse, not just read", () => {
+test("prose: a worktree gitdir pointer must resolve back to <root>/.git, checked with git rev-parse --show-toplevel against the resolved root, not just read", () => {
+  // `git -C <root> rev-parse --git-common-dir` prints the *main* repo's
+  // .git, not <root>/.git -- a crafted .git file pointing at any real
+  // worktrees/X dir would pass that command. --show-toplevel must equal
+  // the resolved root instead.
   assert.match(policy.policy, /resolves back to `<root>\/\.git`/);
-  assert.match(policy.policy, /git -C <root> rev-parse --git-common-dir/);
+  assert.match(policy.policy, /git -C <root> rev-parse --show-toplevel/);
+  assert.match(policy.policy, /equaling the resolved root/);
+  assert.doesNotMatch(policy.policy, /checked with `git -C <root> rev-parse --git-common-dir`/);
+});
+
+test("prose: the gitdir resolution check also requires the gitdir file or worktree list to confirm root", () => {
+  assert.match(policy.policy, /`<gitdir>\/gitdir` containing `<root>\/\.git`/);
+  assert.match(policy.policy, /git worktree list --porcelain/);
+});
+
+test("prose: the coop-worker worktree exception is aligned with the rev-parse requirement, not just a bare read confirmation", () => {
+  assert.doesNotMatch(policy.policy, /confirms the gitdir pointer, with no need to have witnessed/);
+  assert.match(policy.policy, /confirms the gitdir pointer resolves back as required above/);
 });
 
 test("prose: a .git file the session itself wrote is never proof of a worktree", () => {
