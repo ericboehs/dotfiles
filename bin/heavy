@@ -2,17 +2,22 @@
 # heavy: run a heavy command (xcodebuild, a test suite, bin/check) without swamping the Mac.
 #
 #   heavy xcodebuild -project ios/Botsun.xcodeproj ...
-#   HEAVY_SLOTS=1 heavy bin/check --ios
+#   HEAVY_SLOTS=1 heavy bin/check --ios   # one at a time, e.g. while you work
 #
-# Three brakes:
-#  1. Slots: at most HEAVY_SLOTS (default 1) heavy commands at once, across every shell and agent.
+# Four brakes:
+#  1. Slots: at most HEAVY_SLOTS (default 2) heavy commands at once, across every shell and agent.
 #     A command waits for a free slot. Locks are lockf(1) files in ~/Library/Caches/heavy, and a
-#     slot frees itself when its command exits or dies.
+#     slot frees itself when its command exits or dies. Two slots (2026-11-20): one let five agents
+#     queue for hours while the CPU sat mostly idle. The iPad UI lanes stay one at a time through
+#     bin/check's own lock (~/Library/Caches/botsun/ipad-checks.lock).
 #  2. CPU gate: it doesn't start while the CPU is less than HEAVY_MIN_IDLE percent idle (default
 #     25, sampled over a second). Not the load average: a booting simulator and utility-clamped
 #     builds put hundreds of threads in the run queue while the CPU is a third idle (load 900+ on
 #     2026-11-10 with nothing wrong), so a load gate held work back for no reason.
-#  3. Priority: it runs under `taskpolicy -c utility` (efficiency cores first, below interactive
+#  3. Simulators: it doesn't start while more than HEAVY_MAX_SIMS (default 4) simulators are
+#     booted. Each stock simulator is ~180 daemons and ~4 GB (2026-11-19: six booted pushed the
+#     load to 190); agents leave them running. HEAVY_MAX_SIMS=0 turns the brake off.
+#  4. Priority: it runs under `taskpolicy -c utility` (efficiency cores first, below interactive
 #     work) and `nice -n 10`.
 #
 # Exit status is the command's own. If the command itself exits 75 (EX_TEMPFAIL, the code lockf
@@ -27,17 +32,155 @@ set -uo pipefail
 [ "${HEAVY_HELD:-}" = 1 ] && exec "$@"
 export HEAVY_HELD=1
 
-slots=${HEAVY_SLOTS:-1}
+case "${HEAVY_SLOTS:-}" in "") ;; *[!0-9]*) echo "heavy: HEAVY_SLOTS must be a number: $HEAVY_SLOTS" >&2; exit 64 ;; esac
+# The length check (the same crude ????* glob clamp_slots uses below) runs
+# before any arithmetic touches these: `[ -gt 100 ]`/`[ -eq 0 ]` on a 20+
+# digit value overflows bash's integers and *errors* ("integer expression
+# expected", rc=2) instead of returning false, so a plain `&&`/`||` chain
+# reads that error as "the check passed" and the bad value slips through --
+# then the main loop keeps hitting the same overflow on every pass forever.
+# Any HEAVY_MIN_IDLE/HEAVY_MAX_SIMS of 1000 or more is already out of range
+# (0-100) or absurd, so rejecting the length outright never rejects a value
+# that would otherwise have been accepted.
+case "${HEAVY_MIN_IDLE:-}" in
+  "") ;;
+  *[!0-9]*) echo "heavy: HEAVY_MIN_IDLE must be a number: $HEAVY_MIN_IDLE" >&2; exit 64 ;;
+  ????*) echo "heavy: HEAVY_MIN_IDLE must be 0-100: $HEAVY_MIN_IDLE" >&2; exit 64 ;;
+esac
+case "${HEAVY_MAX_SIMS:-}" in
+  "") ;;
+  *[!0-9]*) echo "heavy: HEAVY_MAX_SIMS must be a number: $HEAVY_MAX_SIMS" >&2; exit 64 ;;
+  ????*) echo "heavy: HEAVY_MAX_SIMS must be at most 999: $HEAVY_MAX_SIMS" >&2; exit 64 ;;
+esac
+# 0-100: a gate that can never be satisfied (>100) or never trips (negative,
+# unreachable since the case above already rejects non-digits) hangs forever.
+if [ -n "${HEAVY_MIN_IDLE:-}" ] && [ "$HEAVY_MIN_IDLE" -gt 100 ]; then
+  echo "heavy: HEAVY_MIN_IDLE must be 0-100: $HEAVY_MIN_IDLE" >&2
+  exit 64
+fi
+
 min_idle=${HEAVY_MIN_IDLE:-25}
+max_sims=${HEAVY_MAX_SIMS:-4}
 dir="$HOME/Library/Caches/heavy"
+# Both HEAVY_SLOTS and the override file (below, re-read every pass) feed
+# into clamp_slots: ncpu caps slots so neither a bogus env value nor a stale
+# or tampered override file can turn the brake off by way of a huge slot
+# count. The length check runs first and is deliberately crude (a plain glob,
+# no arithmetic) so a slots value with enough digits to overflow `seq`/test's
+# integers -- which would otherwise print errors instead of throttling --
+# never reaches them.
+ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
+case "$ncpu" in *[!0-9]* | '') ncpu=8 ;; esac
+# Clamping above ncpu is silent by design (every pass re-reads HEAVY_SLOTS and
+# the override file, so a one-time flag would otherwise re-warn on each of
+# them) -- except once, the first time it actually changes the value, so
+# someone running with HEAVY_SLOTS above ncpu finds out their slots were
+# capped instead of just seeing commands queue for no visible reason.
+slots_clamp_warned=
+idle_min_ignored_warned=
+idle_min_floored_warned=
+clamp_slots() {
+  case "$slots" in ????*) slots=9999 ;; esac
+  [ "$slots" -ge 1 ] || slots=1
+  if [ "$slots" -gt "$ncpu" ]; then
+    slots="$ncpu"
+    if [ -z "$slots_clamp_warned" ]; then
+      echo "heavy: slots from ${slots_source:-HEAVY_SLOTS} clamped to $ncpu (the number of CPUs)" >&2
+      slots_clamp_warned=1
+    fi
+  fi
+}
 mkdir -p "$dir"
+
+# Booted simulators (0 when there's no simctl).
+sims() { xcrun simctl list devices booted 2>/dev/null | grep -c '(Booted)'; }
+sims_ok() { [ "$max_sims" -eq 0 ] || [ "$(sims)" -le "$max_sims" ]; }
 
 # Percent idle over the last second (top's second sample; the first is since boot).
 idle() { top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ { v = $7 } END { sub("%", "", v); print int(v) }'; }
 
+# A temporary override, re-read on every pass so waiting commands pick it up: the file
+# ~/Library/Caches/heavy/slots holds "SLOTS UNTIL-EPOCH [MIN-IDLE]" (e.g. "3 1795420800 10");
+# past UNTIL it's ignored. HEAVY_SLOTS / HEAVY_MIN_IDLE set in the environment still win.
+override_msg=""
+override_slots() {
+  override_msg=""
+  slots_overridden=
+  local n until idle_min now applied
+  [ -r "$dir/slots" ] || return
+  read -r n until idle_min < "$dir/slots" 2>/dev/null || [ -n "${n:-}" ] || return
+  case "$n$until${idle_min:-0}" in *[!0-9]*|"") return ;; esac
+  [ -n "$until" ] && [ "$n" -ge 1 ] || return
+  # idle_min is optional (a 2-field file just overrides slots), so only a
+  # value that is actually present gets length-guarded then range-checked --
+  # an absent one must stay empty, not become a bogus override of its own.
+  # Out of range (over 100) is ignored, not clamped to 100: int(idle) is
+  # rarely exactly 100, so a clamp used to make the gate practically
+  # unsatisfiable -- commands would wait up to the file's own 7-day cap
+  # instead of ever starting. Ignoring the field falls back to min_idle's
+  # own default/env value, same as a 2-field file with no idle_min at all.
+  if [ -n "${idle_min:-}" ]; then
+    case "$idle_min" in ????*) idle_min= ;; esac
+    if [ -n "$idle_min" ] && [ "$idle_min" -gt 100 ]; then
+      idle_min=
+    fi
+    if [ -z "$idle_min" ] && [ -z "$idle_min_ignored_warned" ]; then
+      echo "heavy: ignoring out-of-range min_idle in $dir/slots (must be 0-100)" >&2
+      idle_min_ignored_warned=1
+    fi
+  fi
+  now=$(date +%s)
+  [ "$now" -lt "$until" ] || return
+  [ "$until" -le $((now + 7 * 24 * 3600)) ] || return
+  # The message says the override applied; show it only when it actually did
+  # -- an env var already set wins over the file (see the two lines below),
+  # and otherwise the message was just noise describing a file nothing used.
+  applied=
+  if [ -z "${HEAVY_SLOTS:-}" ]; then
+    slots=$n
+    applied=1
+    slots_overridden=1
+  fi
+  if [ -z "${HEAVY_MIN_IDLE:-}" ] && [ -n "${idle_min:-}" ]; then
+    # Only the slot brake is protected against a huge value above (clamp_slots'
+    # ncpu cap): this file is otherwise trusted the same as HEAVY_MIN_IDLE, so a
+    # stale or tampered override of idle_min=0 would turn the CPU gate off
+    # outright. A floor keeps that brake from being fully disabled by the file
+    # the way HEAVY_MIN_IDLE=0 can deliberately disable it from the environment.
+    # Checked here (not above) so an expired file, or HEAVY_MIN_IDLE already
+    # set in the environment, never warns about a floor that was never applied.
+    if [ "$idle_min" -lt 5 ]; then
+      if [ -z "$idle_min_floored_warned" ]; then
+        echo "heavy: raising min_idle in $dir/slots to the 5 floor (was $idle_min)" >&2
+        idle_min_floored_warned=1
+      fi
+      idle_min=5
+    fi
+    min_idle=$idle_min
+    applied=1
+  fi
+  [ -n "$applied" ] && override_msg=" (override until $(date -r "$until"))"
+  return 0
+}
+
 waited=0
 while :; do
-  if [ "$(idle)" -ge "$min_idle" ]; then
+  slots=${HEAVY_SLOTS:-2}
+  min_idle=${HEAVY_MIN_IDLE:-25}
+  override_slots
+  # clamp_slots' warning names where a too-large slots value actually came
+  # from, instead of always blaming HEAVY_SLOTS even when it was unset and
+  # the override file set it.
+  if [ -n "${HEAVY_SLOTS:-}" ]; then
+    slots_source=HEAVY_SLOTS
+  elif [ -n "$slots_overridden" ]; then
+    slots_source="the override file ($dir/slots)"
+  else
+    slots_source="the default"
+  fi
+  clamp_slots
+  cur_idle=$(idle)
+  if sims_ok && [ "$cur_idle" -ge "$min_idle" ]; then
     for n in $(seq 1 "$slots"); do
       lockf -s -t 0 "$dir/slot-$n" taskpolicy -c utility nice -n 10 "$@"
       status=$?
@@ -45,7 +188,11 @@ while :; do
     done
   fi
   if [ $((waited % 60)) -eq 0 ]; then
-    echo "heavy: waiting for a slot (CPU $(idle)% idle, needs $min_idle%; $slots slot(s)): $1" >&2
+    if sims_ok; then
+      echo "heavy: waiting for a slot (CPU $cur_idle% idle, needs $min_idle%; $slots slot(s)$override_msg): $1" >&2
+    else
+      echo "heavy: waiting: $(sims) simulators booted, max $max_sims (xcrun simctl list devices booted): $1" >&2
+    fi
   fi
   sleep 10
   waited=$((waited + 10))

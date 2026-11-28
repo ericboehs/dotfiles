@@ -1,0 +1,10 @@
+# Synthetic ids for acme/widgets, in the formats the watcher host dedupes on.
+# A change here means seen.jsonl stops recognising events it already showed.
+gh:opened:5
+gh:review:234442896
+gh:comment:1234567890
+gh:inline:987654321
+gh:push:5:bbbbbbbbbbbb
+gh:ci:5:bbbbbbbbbbbb:failure
+gh:merged:3:20261119115807
+gh:closed:4:20261119115700

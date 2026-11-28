@@ -1,0 +1,1507 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# gh-watch: poll one GitHub repo for pull request (and optionally issue)
+# activity and print it as events, either JSON Lines for a watcher host or
+# plain lines for a human.
+#
+#   gh-watch --once --text --repo octocat/hello-world
+#   gh-watch --jsonl                     # WATCHER_STATE_DIR=... set by the host
+#
+# Each poll is a conditional REST request first (an ETag on the newest pull
+# request; a 304 is free), and GraphQL only when something moved, CI is still
+# pending, or five minutes have passed. GraphQL is split: a cheap heads query
+# (the 50 most recently updated open PRs, every open PR on the five-minute
+# refresh) and a nested reviews/comments query only for PRs updated since the
+# last poll. Auth comes from `gh auth token --hostname HOST` and is only ever
+# sent to that host's API.
+#
+# Measured rateLimit cost: cli/cli (60 open PRs), first run with every head
+# paged plus the nested query for PRs updated in the last hour: 2 points.
+#
+# Tests: ruby test/gh-watch_test.rb (GHWATCH_TEST_API_BASE, loopback only, and
+# GHWATCH_TEST_NOW are test hooks)
+
+require 'fileutils'
+require 'json'
+require 'net/http'
+require 'open3'
+require 'optparse'
+require 'time'
+require 'tmpdir'
+require 'uri'
+
+module GhWatch
+  # An error that ends the run with exit 2 and one stderr line.
+  class Failure < StandardError; end
+
+  # A failed API call: "<METHOD> <path> -> <status> <short msg>".
+  class ApiError < Failure
+    def initialize(method, path, status, msg)
+      short = msg.to_s.gsub(/\s+/, ' ').strip[0, 120]
+      super("#{method} #{path} -> #{status} #{short}".strip)
+    end
+  end
+
+  # A GraphQL `errors` response (HTTP 200, not a transport/HTTP failure).
+  # Carries GitHub's `errors[0].type` so callers can tell a permanent
+  # failure (deleted/unreachable node, bad cursor: NOT_FOUND) from a
+  # transient one (RATE_LIMITED and anything else) that must propagate and
+  # be retried instead of being dropped as if the data were really gone.
+  class GraphqlError < ApiError
+    PERMANENT_TYPES = %w[NOT_FOUND].freeze
+
+    attr_reader :type
+
+    def initialize(method, path, status, msg, type)
+      super(method, path, status, msg)
+      @type = type
+    end
+
+    def permanent?
+      PERMANENT_TYPES.include?(type)
+    end
+  end
+
+  ACTOR_RE = /\A[A-Za-z0-9-]{1,39}(\[bot\])?\z/
+  NAME_RE = /\A[\w.-]{1,100}\z/
+  HOST_RE = /\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\z/
+  SLUG_RE = %r{\A[\w.-]{1,100}/[\w.-]{1,100}\z}
+  ID_RE = /\A[A-Za-z0-9:._-]{1,120}\z/
+  SUBJECT_RE = /\A(pr|issue):\d{1,7}\z/
+  SHA_RE = /\A[0-9a-f]{7,40}\z/
+  URL_PATH_RE = %r{\A/[\w.-]+/[\w.-]+/(?:pull/\d+(?:\#(?:issuecomment-|discussion_r|pullrequestreview-)\d+|/(?:checks|files|commits))?|issues/\d+|commit/[0-9a-f]{7,40})\z}
+  VERBS = %w[OPENED MERGED CLOSED COMMENT REVIEW PUSH CI].freeze
+  STATES = %w[open closed merged conversation inline APPROVED CHANGES_REQUESTED COMMENTED
+              DISMISSED PENDING success failure].freeze
+  ACT_RULES = %w[changes_requested ci_failure review_comment team_pr].freeze
+  DEFAULT_NO_WAKE = %w[dependabot github-actions copilot copilot-pull-request-reviewer copilot-swe-agent].freeze
+  FAILURE_STATES = %w[failure error cancelled timed_out action_required startup_failure].freeze
+
+  OVERLAP = 120          # seconds re-queried before `since`
+  BACKLOG_MARK = '__gw_backlog' # tags a node fetched to drain a stalled connection (see drain_backlog)
+  FULL_EVERY = 300       # a full GraphQL query at least this often
+  FIRST_WINDOW = 3600    # the first run looks back this far
+  NULL_CI_WINDOW = 600   # a head with no rollup yet counts as pending this long
+  PENDING_BYPASS = 3600  # pending CI stops forcing full queries after this
+  TEAM_TTL = 86_400
+  MAX_EVENTS = 200
+  MAX_CONN = 100         # most nodes gathered per connection when paging back
+  RESUME_SEGMENT_CAP = 5  # warn once a connection piles up more pending resume gaps than this
+  RESUME_MAX_ATTEMPTS = 5 # give up on a resume segment after this many all-bad pages in a row
+  RESUME_KEY_RE = /\A\d+:(?:comments|reviews)\z/.freeze # the only connections drain_backlog drains
+  MAX_PAGES = 20
+  HEADS_PER_PAGE = 50    # the heads query covers this many open PRs between refreshes
+  DETAILS_BATCH = 10     # PRs per nested reviews/comments query
+  ENTERPRISE_TOKENS = %w[GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN].freeze
+  DOTCOM_TOKENS = %w[GH_TOKEN GITHUB_TOKEN].freeze
+  LOOPBACK = %w[127.0.0.1 localhost ::1].freeze
+  TEST_TOKEN = 'ghwatch-test-token' # sent to GHWATCH_TEST_API_BASE when GHWATCH_TEST_TOKEN is unset
+
+  module_function
+
+  # [host, owner, name] from an https, ssh:// or scp-style git remote, or nil.
+  def parse_remote(url)
+    url = url.to_s.strip
+    m = url.match(%r{\Ahttps?://(?:[^@/]+@)?([^/:]+)(?::\d+)?/([^/]+)/([^/]+?)(?:\.git)?/?\z}) ||
+        url.match(%r{\Assh://(?:[^@/]+@)?([^/:]+)(?::\d+)?/([^/]+)/([^/]+?)(?:\.git)?/?\z}) ||
+        url.match(%r{\A(?:[^@/]+@)?([^/:]+):([^/]+)/([^/]+?)(?:\.git)?/?\z})
+    return nil unless m
+
+    host, owner, name = m.captures
+    return nil unless host.match?(HOST_RE) && name_ok?(owner) && name_ok?(name)
+
+    [host.downcase, owner, name]
+  end
+
+  # An owner or repo name: NAME_RE, but never `.` or `..` (or any all-dots
+  # name), which would walk out of a state directory.
+  def name_ok?(str)
+    str.is_a?(String) && str.match?(NAME_RE) && !str.match?(/\A\.+\z/)
+  end
+
+  # REST and GraphQL bases for a host.
+  def api_bases(host, override = nil)
+    if override
+      base = override.chomp('/')
+      return { rest: base, graphql: "#{base}/graphql" }
+    end
+    return { rest: 'https://api.github.com', graphql: 'https://api.github.com/graphql' } if host == 'github.com'
+
+    { rest: "https://#{host}/api/v3", graphql: "https://#{host}/api/graphql" }
+  end
+
+  # GraphQL returns bot logins bare ("dependabot"); REST adds "[bot]". Emit
+  # the REST form everywhere so both sources name a bot the same way.
+  def actor(login, typename = nil)
+    login = login.to_s
+    return 'unknown' if login.empty? || login == 'ghost'
+
+    login = "#{login}[bot]" if typename == 'Bot' && !login.end_with?('[bot]')
+    login.match?(ACTOR_RE) ? login : 'unknown'
+  end
+
+  def norm_login(login)
+    login.to_s.downcase.delete_suffix('[bot]')
+  end
+
+  # The same GitHub login, ignoring case; 'unknown' and empty never match.
+  def same_login?(left, right)
+    a = norm_login(left)
+    !a.empty? && a != 'unknown' && a == norm_login(right)
+  end
+
+  def nodes(conn)
+    conn.is_a?(Hash) ? Array(conn['nodes']).grep(Hash) : []
+  end
+
+  def clean(text, max)
+    s = text.to_s.dup.force_encoding('UTF-8').scrub('')
+    s = s.gsub(/[[:cntrl:]]/, ' ').gsub(/\s+/, ' ').strip
+    s.length > max ? s[0, max] : s
+  end
+
+  def digits(timestamp)
+    timestamp.to_s.gsub(/\D/, '')
+  end
+
+  def iso(time)
+    time.utc.iso8601
+  end
+
+  def parse_time(str)
+    str.nil? || str.to_s.empty? ? nil : Time.iso8601(str.to_s)
+  rescue ArgumentError
+    nil
+  end
+
+  # A loaded resume segment with a garbage cursor or target would stick
+  # forever (ts_key is nil for a key drain_backlog never drains) or make the
+  # drain emit a PR's entire history (an unparsable target never stops the
+  # backward walk). Require both to look real before trusting them.
+  def valid_resume_segment?(seg)
+    seg.is_a?(Hash) && seg['cursor'].is_a?(String) && !seg['cursor'].empty? && !parse_time(seg['target']).nil?
+  end
+
+  def now_from_env(env)
+    raw = env['GHWATCH_TEST_NOW'].to_s
+    return Time.now.utc if raw.empty?
+    return Time.at(Integer(raw)).utc if raw.match?(/\A\d+\z/)
+
+    Time.iso8601(raw).utc
+  rescue ArgumentError
+    raise Failure, "bad GHWATCH_TEST_NOW: #{raw[0, 40]}"
+  end
+
+  # A pending-or-not CI state for one head, from the rollup's state.
+  def ci_state(rollup, head_at, now)
+    s = rollup.to_s.downcase
+    return 'success' if s == 'success'
+    return 'failure' if FAILURE_STATES.include?(s)
+    return 'pending' if %w[pending expected].include?(s)
+    return 'pending' if s.empty? && head_at && now - head_at < NULL_CI_WINDOW
+
+    'none'
+  end
+
+  # A token for host from gh. Env tokens never cross hosts: github.com ones
+  # stay off other hosts, and a host read from a git remote (not configured
+  # by the user) gets no env token at all and must be a `gh auth status` host.
+  def token_for(host, from_remote: false)
+    strip = if host == 'github.com' then ENTERPRISE_TOKENS
+            elsif from_remote then DOTCOM_TOKENS + ENTERPRISE_TOKENS
+            else DOTCOM_TOKENS
+            end
+    child = strip.to_h { |k| [k, nil] }
+    if from_remote && host != 'github.com'
+      _out, _err, st = Open3.capture3(child, 'gh', 'auth', 'status', '--hostname', host)
+      raise Failure, "remote host #{host} is not logged in to gh; pass --host and --repo" unless st.success?
+    end
+    out, _err, st = Open3.capture3(child, 'gh', 'auth', 'token', '--hostname', host)
+    token = out.strip
+    raise Failure, "no gh auth for #{host} (run: gh auth login --hostname #{host})" unless st.success? && !token.empty?
+
+    token
+  rescue Errno::ENOENT
+    raise Failure, 'gh CLI not found on PATH'
+  end
+
+  # Thin Net::HTTP wrapper: https only, no redirects, auth only to known hosts.
+  class Http
+    def initialize(token:, auth_hosts:, allow_loopback_http: false)
+      @token = token
+      @auth_hosts = auth_hosts
+      @allow_loopback_http = allow_loopback_http
+    end
+
+    attr_writer :auth_hosts
+
+    def request(method, url, headers: {}, body: nil)
+      uri = URI(url)
+      check!(method, uri)
+      req = (method == 'POST' ? Net::HTTP::Post : Net::HTTP::Get).new(uri)
+      req['Authorization'] = "Bearer #{@token}"
+      req['Accept'] = 'application/vnd.github+json'
+      req['User-Agent'] = 'gh-watch (ericboehs/dotfiles)'
+      headers.each { |k, v| req[k] = v }
+      if body
+        req['Content-Type'] = 'application/json'
+        req.body = body
+      end
+      res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https',
+                                                open_timeout: 10, read_timeout: 20) { |h| h.request(req) }
+      [res.code.to_i, res, res.body.to_s]
+    rescue Failure
+      raise
+    rescue StandardError => e
+      raise ApiError.new(method, uri&.path, 'ERR', e.class.name)
+    end
+
+    private
+
+    def check!(method, uri)
+      host = uri.hostname.to_s.downcase
+      loopback = @allow_loopback_http && uri.scheme == 'http' && LOOPBACK.include?(host)
+      raise ApiError.new(method, uri.path, 'ERR', 'refusing non-https URL') unless uri.scheme == 'https' || loopback
+      raise ApiError.new(method, uri.path, 'ERR', "refusing to send auth to #{host}") unless @auth_hosts.include?(host)
+    end
+  end
+
+  # REST + GraphQL against one host, with the *.ghe.com api. fallback.
+  class Api
+    attr_reader :bases, :cost
+
+    # fallback: the *.ghe.com api. retry may fire, once, on the first request.
+    def initialize(http:, host:, bases:, override: false, fallback: false)
+      @http = http
+      @host = host
+      @bases = bases
+      @fallback = fallback && !override
+      @cost = 0
+      @remaining = nil
+    end
+
+    attr_reader :remaining
+
+    # GET a REST path. Returns [status, json, etag, next_url]. 304 only if etag given.
+    def get(path_or_url, etag: nil)
+      url = path_or_url.start_with?('http') ? path_or_url : @bases[:rest] + path_or_url
+      headers = etag ? { 'If-None-Match' => etag } : {}
+      status, res, body = @http.request('GET', url, headers: headers)
+      fallback = @fallback
+      @fallback = false
+      if status == 404 && fallback && ghe_fallback?(url)
+        @bases = { rest: "https://api.#{@host}", graphql: "https://api.#{@host}/graphql" }
+        return get(path_or_url.start_with?('http') ? path_or_url.sub(%r{\Ahttps://[^/]+/api/v3}, @bases[:rest]) : path_or_url, etag: etag)
+      end
+      return [304, nil, etag, nil] if status == 304 && etag
+      raise ApiError.new('GET', URI(url).path, status, message(body)) unless status.between?(200, 299)
+
+      [status, parse(body, 'GET', url, status), res['ETag'], next_link(res['Link'])]
+    end
+
+    # Every page of a list endpoint; more than MAX_PAGES is a failure, not a
+    # silent truncation that would move `since` past unread items.
+    def get_all(path)
+      items = []
+      url = path
+      MAX_PAGES.times do
+        _, json, _, url = get(url)
+        items.concat(Array(json).grep(Hash))
+        return items unless url
+      end
+      raise Failure, "more than #{MAX_PAGES} pages from #{URI(path).path}"
+    end
+
+    def graphql(query, variables)
+      url = @bases[:graphql]
+      status, _res, body = @http.request('POST', url, body: JSON.generate(query: query, variables: variables))
+      raise ApiError.new('POST', URI(url).path, status, message(body)) unless status == 200
+
+      json = parse(body, 'POST', url, status)
+      raise ApiError.new('POST', URI(url).path, status, 'invalid JSON') unless json.is_a?(Hash)
+
+      errs = Array(json['errors'])
+      unless errs.empty?
+        first = errs.first.is_a?(Hash) ? errs.first : {}
+        raise GraphqlError.new('POST', URI(url).path, status, "graphql: #{first['message']}", first['type'])
+      end
+      raise ApiError.new('POST', URI(url).path, status, 'graphql: no data') unless json['data'].is_a?(Hash)
+
+      rl = json.dig('data', 'rateLimit')
+      if rl.is_a?(Hash)
+        @cost += rl['cost'].to_i
+        @remaining = rl['remaining']
+      end
+      json['data']
+    end
+
+    private
+
+    def ghe_fallback?(url)
+      @host.end_with?('.ghe.com') && url.start_with?("https://#{@host}/api/v3")
+    end
+
+    def parse(body, method, url, status)
+      JSON.parse(body)
+    rescue JSON::ParserError
+      raise ApiError.new(method, URI(url).path, status, 'invalid JSON')
+    end
+
+    def message(body)
+      JSON.parse(body)['message'].to_s
+    rescue StandardError
+      ''
+    end
+
+    def next_link(link)
+      link.to_s.split(',').each do |part|
+        m = part.match(/<([^>]+)>;\s*rel="next"/)
+        return m[1] if m
+      end
+      nil
+    end
+  end
+
+  # Field sets requested for each pull request connection.
+  module Queries
+    AUTHOR = 'author { __typename login }'
+    DBID = 'databaseId fullDatabaseId'
+    REVIEW = "#{DBID} state #{AUTHOR} submittedAt body".freeze
+    COMMENT = "#{DBID} #{AUTHOR} createdAt body".freeze
+    INLINE = "#{DBID} path #{AUTHOR} createdAt body pullRequestReview { databaseId }".freeze
+    PAGE = 'pageInfo { hasPreviousPage startCursor }'
+    THREAD = "id comments(last: 10) { #{PAGE} nodes { #{INLINE} } }".freeze
+    CONN_FIELDS = {
+      'reviews' => REVIEW, 'comments' => COMMENT, 'reviewThreads' => THREAD
+    }.freeze
+
+    # Cheap: no nested connections beyond the head commit.
+    OPEN_PR = <<~GQL
+      number title createdAt updatedAt baseRefName headRefOid #{AUTHOR}
+      commits(last: 1) { nodes { commit { oid committedDate author { user { login } } statusCheckRollup { state } } } }
+    GQL
+    # Heavy: only for PRs updated since the last poll, plus any PR with a
+    # resume entry (see drain_stuck_resumes). state and author let the latter
+    # tell a still-open-but-quiet PR from one that is closed, merged or gone.
+    DETAIL_PR = <<~GQL
+      number state baseRefName #{AUTHOR}
+      reviews(last: 20) { #{PAGE} nodes { #{REVIEW} } }
+      comments(last: 20) { #{PAGE} nodes { #{COMMENT} } }
+      reviewThreads(last: 20) { #{PAGE} nodes { #{THREAD} } }
+    GQL
+    CLOSED_PR = <<~GQL
+      number title state closedAt mergedAt updatedAt baseRefName #{AUTHOR} mergedBy { __typename login }
+      timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) { nodes { ... on ClosedEvent { actor { __typename login } } } }
+    GQL
+    OPEN_CONN = "pullRequests(states: [OPEN], first: #{HEADS_PER_PAGE}, after: $openAfter, " \
+                "orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { #{OPEN_PR} } }".freeze
+    CLOSED_CONN = 'pullRequests(states: [MERGED, CLOSED], first: 50, after: $closedAfter, ' \
+                  "orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage endCursor } nodes { #{CLOSED_PR} } }".freeze
+    RATE = 'rateLimit { cost remaining limit resetAt }'
+
+    MAIN = <<~GQL
+      query($owner: String!, $name: String!, $openAfter: String, $closedAfter: String) {
+        repository(owner: $owner, name: $name) { open: #{OPEN_CONN} closed: #{CLOSED_CONN} }
+        #{RATE}
+      }
+    GQL
+    OPEN_PAGE = <<~GQL
+      query($owner: String!, $name: String!, $openAfter: String) {
+        repository(owner: $owner, name: $name) { open: #{OPEN_CONN} }
+        #{RATE}
+      }
+    GQL
+    CLOSED_PAGE = <<~GQL
+      query($owner: String!, $name: String!, $closedAfter: String) {
+        repository(owner: $owner, name: $name) { closed: #{CLOSED_CONN} }
+        #{RATE}
+      }
+    GQL
+
+    # One query for up to DETAILS_BATCH PRs, aliased p0..pN.
+    def self.details(count)
+      vars = (0...count).map { |i| "$n#{i}: Int!" }.join(', ')
+      prs = (0...count).map { |i| "p#{i}: pullRequest(number: $n#{i}) { #{DETAIL_PR} }" }.join("\n")
+      <<~GQL
+        query($owner: String!, $name: String!, #{vars}) {
+          repository(owner: $owner, name: $name) { #{prs} }
+          #{RATE}
+        }
+      GQL
+    end
+
+    def self.pr_conn(conn)
+      <<~GQL
+        query($owner: String!, $name: String!, $number: Int!, $before: String) {
+          repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+            #{conn}(last: 50, before: $before) { #{PAGE} nodes { #{CONN_FIELDS.fetch(conn)} } }
+          } }
+          #{RATE}
+        }
+      GQL
+    end
+
+    THREAD_COMMENTS = <<~GQL
+      query($id: ID!, $before: String) {
+        node(id: $id) { ... on PullRequestReviewThread {
+          comments(last: 50, before: $before) { #{PAGE} nodes { #{INLINE} } }
+        } }
+        #{RATE}
+      }
+    GQL
+
+    def self.without_full_id(query)
+      query.gsub(' fullDatabaseId', '')
+    end
+  end
+
+  # Settings for one run, from argv and the environment.
+  class Options
+    attr_accessor :mode, :repos, :host, :me, :state_dir, :wake_team, :wake_authors, :no_wake,
+                  :act_on, :issues, :url_host, :base, :env
+
+    def initialize(argv, env)
+      @env = env
+      @mode = :text
+      @repos = []
+      @wake_authors = []
+      @no_wake = DEFAULT_NO_WAKE.dup
+      @act_on = ACT_RULES.dup
+      @issues = false
+      parse!(argv)
+    end
+
+    def jsonl?
+      @mode == :jsonl
+    end
+
+    def dry_run?
+      @env['WATCHER_DRY_RUN'].to_s == '1'
+    end
+
+    def parser
+      OptionParser.new do |o|
+        o.banner = 'Usage: gh-watch (--jsonl | --once --text) [options]'
+        o.separator ''
+        o.separator 'Poll a GitHub repo for pull request (and issue) activity.'
+        o.separator ''
+        o.on('--jsonl', 'Watcher contract: JSON Lines on stdout, state in $WATCHER_STATE_DIR') { @mode = :jsonl }
+        o.on('--once', 'Poll once and exit (the only text mode for now)') { @mode = :text }
+        o.on('--text', 'Human-readable lines (default)') { @mode = :text }
+        o.on('--state-dir DIR', 'Text mode: keep state here instead of a temp dir') { |v| @state_dir = v }
+        o.on('--repo OWNER/NAME', 'Repo to watch (repeatable; default: git remote of $WATCHER_CWD or .)') do |v|
+          @repos << v
+        end
+        o.on('--host HOST', 'GitHub host (default: $WATCHER_HOST, the remote host, or github.com)') do |v|
+          @host = v.downcase
+        end
+        o.on('--me LOGIN', 'Your login on HOST (default: $WATCHER_ME, else GET /user)') { |v| @me = v }
+        o.on('--wake-team ORG/SLUG', 'New PRs from this team are act (members cached 24 h; needs read:org)') do |v|
+          @wake_team = v
+        end
+        o.on('--wake-authors A,B', Array, 'New PRs from these logins are act') { |v| @wake_authors = v }
+        # OptionParser reads any --no-* as a negated switch, so take_no_wake! handles this one.
+        o.separator "        --no-wake-actors A,B         Never act for these actors (default: #{DEFAULT_NO_WAKE.join(',')})"
+        o.on('--act-on RULES', Array, "Act rules to keep on (default: #{ACT_RULES.join(',')}; 'none' for none)") do |v|
+          @act_on = v == ['none'] ? [] : v
+        end
+        o.on('--issues on|off', %w[on off], 'Also watch issues (default off)') { |v| @issues = v == 'on' }
+        o.on('--url-host HOST', 'Host for event URLs; must equal --host') { |v| @url_host = v.downcase }
+        o.on('--base BRANCH', 'Only PRs into this base branch (default: all)') { |v| @base = v }
+        o.on('-h', '--help', 'Show this help') do
+          puts o
+          puts <<~TXT
+
+            Environment (--jsonl): WATCHER_STATE_DIR (required), WATCHER_ME, WATCHER_DRY_RUN=1,
+            WATCHER_CWD, WATCHER_REPO, WATCHER_HOST. Exit 2 with one stderr line on any failure.
+
+            Events: OPENED MERGED CLOSED COMMENT REVIEW PUSH CI. Act rules: changes_requested (by
+            someone else), ci_failure (on your PR), review_comment (others' COMMENTED reviews and
+            comments on your PR), team_pr (a new PR from --wake-team/--wake-authors).
+          TXT
+          exit 0
+        end
+      end
+    end
+
+    def parse!(argv)
+      take_no_wake!(argv)
+      parser.parse!(argv)
+      raise Failure, "unexpected argument: #{argv.first}" unless argv.empty?
+
+      bad = @act_on - ACT_RULES
+      raise Failure, "unknown --act-on rule: #{bad.first}" unless bad.empty?
+      raise Failure, '--wake-team must be ORG/SLUG' if @wake_team && !(@wake_team.match?(SLUG_RE) && @wake_team.split('/').all? { |s| GhWatch.name_ok?(s) })
+    rescue OptionParser::ParseError => e
+      raise Failure, e.message
+    end
+
+    def take_no_wake!(argv)
+      while (i = argv.index { |a| a == '--no-wake-actors' || a.start_with?('--no-wake-actors=') })
+        arg = argv.delete_at(i)
+        value = arg.include?('=') ? arg.split('=', 2)[1] : argv.delete_at(i)
+        raise Failure, 'missing argument: --no-wake-actors' if value.nil?
+
+        @no_wake = value.split(',').map(&:strip).reject(&:empty?)
+      end
+    end
+  end
+
+  # One poll of one repo: change check, maybe a full query, events, new state.
+  class Poller
+    attr_reader :events, :state, :api
+
+    def initialize(opts:, api:, host:, owner:, name:, state:, now:)
+      @opts = opts
+      @api = api
+      @host = host
+      @owner = owner
+      @name = name
+      @now = now
+      @old = state['host'] == host && state['repo'] == "#{owner}/#{name}" ? state : {}
+      prs = @old['prs']
+      @prs = prs.is_a?(Hash) ? prs.select { |_, v| v.is_a?(Hash) } : {}
+      @no_wake = opts.no_wake.map { |a| GhWatch.norm_login(a) }
+      @full_id = !@old['no_full_database_id']
+      # { "<pr number>:<connection name>" => [{ 'cursor' => <startCursor>, 'target' => <iso since>,
+      # 'attempts' => <failed page count, optional> }, ...] } for a comments/reviews connection that hit
+      # MAX_CONN before reaching `since`: where to resume paging backward from, and how far back it still
+      # needs to reach. Normally one segment; a new one is pushed each time the connection truncates again
+      # while an earlier one is still draining (see truncated!), up to RESUME_SEGMENT_CAP before warning.
+      # drain_backlog always drains segment 0; the list stays in discovery order. Migration: a state
+      # file written before this round stored one bare hash per key instead of a list, so it is wrapped
+      # in a one-element array here. That migration is transparent -- the segment's cursor and target
+      # are unchanged, so draining continues exactly where it left off.
+      resume = @old['resume']
+      @resume = if resume.is_a?(Hash)
+                  resume.each_with_object({}) do |(k, v), acc|
+                    next unless k.is_a?(String) && k.match?(RESUME_KEY_RE)
+
+                    segments = if v.is_a?(Array)
+                                 v.select { |s| GhWatch.valid_resume_segment?(s) }
+                               elsif GhWatch.valid_resume_segment?(v)
+                                 [v]
+                               else
+                                 []
+                               end
+                    acc[k] = segments unless segments.empty?
+                  end
+                else
+                  {}
+                end
+      # A pre-poll snapshot, kept so finalize can restore a segment this poll
+      # advanced if any of the backlog events it produced get dropped by the
+      # MAX_EVENTS cap (see drain_backlog, truncated! and finalize): without
+      # it, a dropped backlog event's cursor has already moved past it and it
+      # is never fetched again.
+      @resume_snapshot = @resume.each_with_object({}) { |(k, v), acc| acc[k] = v.map(&:dup) }
+      # Segments truncated! pushes onto an existing (pre-poll) segment list
+      # this same poll -- a fresh-top gap piling up above a drain already in
+      # progress. finalize must keep these when it restores a dropped
+      # backlog segment to its pre-poll snapshot, or a same-poll truncation
+      # on that key would be silently lost (see finalize).
+      @resume_new = Hash.new { |h, k| h[k] = [] }
+    end
+
+    def run
+      first = @old['since'].nil?
+      since = GhWatch.parse_time(@old['since']) || (@now - FIRST_WINDOW)
+      since = @now - FIRST_WINDOW if first
+      @qsince = since - OVERLAP
+      @pending = []
+
+      # The change check goes first: it is the only request that may switch a
+      # *.ghe.com host to its api. base.
+      etag, pr_changed = change_check("/repos/#{@owner}/#{@name}/pulls?state=all&sort=updated&direction=desc&per_page=1",
+                                      @old['etag'])
+      issues_etag = @old['issues_etag']
+      issues_changed = false
+      if @opts.issues
+        issues_etag, issues_changed = change_check("/repos/#{@owner}/#{@name}/issues?state=all&sort=updated&direction=desc&per_page=1",
+                                                   issues_etag)
+      end
+      @me = resolve_me
+      @team = resolve_team
+
+      # Events dropped by the cap last run force a query even after a 304.
+      refresh = stale_full?
+      full = pr_changed || pending_ci? || refresh || @old['backlog'] == true
+      new_prs = full ? full_query(refresh) : @prs
+      issues_query(new_prs) if issues_changed
+
+      finalize(etag: etag, issues_etag: issues_etag, full: full, refresh: refresh, new_prs: new_prs)
+    end
+
+    private
+
+    def repo_path
+      "/#{@owner}/#{@name}"
+    end
+
+    def change_check(path, etag)
+      status, _json, new_etag, = @api.get(path, etag: etag)
+      return [etag, false] if status == 304
+
+      [new_etag || etag, true]
+    end
+
+    def resolve_me
+      given = @opts.me || @opts.env['WATCHER_ME']
+      given = nil if given.to_s.empty?
+      return GhWatch.actor(given) if given
+      return @old['me'] if @old['me'].to_s.match?(ACTOR_RE) && @old['me'] != 'unknown'
+
+      _, json, = @api.get('/user')
+      GhWatch.actor(json.is_a?(Hash) ? json['login'] : nil)
+    end
+
+    def resolve_team
+      members = @opts.wake_authors.map { |a| GhWatch.norm_login(a) }
+      slug = @opts.wake_team
+      @team_cache = nil
+      return members unless slug
+
+      cached = @old['team']
+      fetched = GhWatch.parse_time(cached && cached['fetched_at'])
+      if cached && cached['slug'] == slug && fetched && @now - fetched < TEAM_TTL
+        @team_cache = cached
+      else
+        org, team = slug.split('/', 2)
+        list = @api.get_all("/orgs/#{org}/teams/#{team}/members?per_page=100")
+        @team_cache = { 'slug' => slug, 'members' => list.map { |m| GhWatch.actor(m['login']) }.uniq.sort,
+                        'fetched_at' => GhWatch.iso(@now) }
+      end
+      members + @team_cache['members'].map { |m| GhWatch.norm_login(m) }
+    end
+
+    def pending_ci?
+      @prs.values.any? do |pr|
+        at = GhWatch.parse_time(pr['head_at'])
+        pr['ci'] == 'pending' && (at.nil? || @now - at < PENDING_BYPASS)
+      end
+    end
+
+    def stale_full?
+      last = GhWatch.parse_time(@old['last_full'])
+      last.nil? || @now - last >= FULL_EVERY
+    end
+
+    # ---- GraphQL -----------------------------------------------------------
+
+    def gql(query, vars)
+      query = Queries.without_full_id(query) unless @full_id
+      @api.graphql(query, vars)
+    rescue ApiError => e
+      raise unless @full_id && e.message.include?('fullDatabaseId')
+
+      @full_id = false # older servers: fall back to databaseId
+      retry
+    end
+
+    # Heads for open PRs (the newest HEADS_PER_PAGE, or all on a refresh),
+    # closed PRs back to @qsince, then nested reviews/comments only for the
+    # open PRs updated since @qsince.
+    def full_query(refresh)
+      vars = { owner: @owner, name: @name }
+      repo = gql(Queries::MAIN, vars)['repository']
+      raise Failure, "repository #{@owner}/#{@name} not found" unless repo.is_a?(Hash) && repo['open'].is_a?(Hash)
+
+      open, all_open = open_heads(repo['open'], vars, refresh)
+      closed = closed_prs(repo['closed'], vars)
+      open = open.select { |pr| base_ok?(pr) && pr['number'].is_a?(Integer) }
+      open_numbers = open.select { |pr| updated_since?(pr) }.map { |pr| pr['number'] }
+      # A PR with a resume entry must keep draining even if it goes quiet (not
+      # "updated since" @qsince) -- that quiet is exactly how a resume entry
+      # gets stuck forever otherwise: open_numbers above would never include
+      # it again, yet @old['backlog'] forces `full` on every later poll for
+      # nothing. See drain_stuck_resumes.
+      resume_numbers = @resume.keys.map { |k| k.split(':', 2).first.to_i }.uniq
+      # Resume-only numbers (not already covered by open_numbers) are fetched
+      # in their own batch, rescued separately: GitHub answers an `errors`
+      # array, not a bare null, for a cursor on a PR that was deleted,
+      # transferred or never existed (including a garbage resume key). Mixing
+      # that into the open_numbers batch would raise and fail the whole poll
+      # on every later run instead of just dropping that one stuck entry.
+      details = fetch_details(open_numbers)
+      details.merge!(fetch_resume_details(resume_numbers - open_numbers))
+
+      new_prs = {}
+      open.each { |pr| open_pr(pr, details[pr['number']], new_prs) }
+      closed.each { |pr| closed_pr(pr) if base_ok?(pr) }
+      carry_over(new_prs, closed) unless all_open
+      drain_stuck_resumes(resume_numbers - open.map { |pr| pr['number'] }, details)
+      new_prs
+    end
+
+    # A resume entry for a PR that open_heads didn't surface this poll (gone
+    # quiet, or closed/merged/gone entirely) never gets another chance through
+    # the normal `open.each { ... pr_comments ... }` path above. Drain it
+    # directly using the detail fetch_details already fetched for it (see
+    # full_query): `state` tells "still open, just quiet" from "closed or
+    # gone" -- the latter drops the resume entry instead of requerying it,
+    # and every other connection's, forever.
+    def drain_stuck_resumes(numbers, details)
+      numbers.each do |n|
+        detail = details[n]
+        if detail.is_a?(Hash)
+          if base_ok?(detail)
+            mine = GhWatch.same_login?(gql_actor(detail['author']), @me)
+            pr_comments(n, detail, mine)
+          else
+            # --base can change, or the PR can be retargeted: a resume entry
+            # that never again matches --base would otherwise stay forever
+            # and force a full query on every later poll for nothing.
+            @resume.delete_if { |key, _| key.start_with?("#{n}:") }
+          end
+        else
+          # Missing detail: closed, merged, gone entirely, or this poll's
+          # fetch_resume_details batch failed. Comments and reviews still in
+          # the gap are lost either way -- warn instead of dropping silently.
+          warn "gh-watch: #{@owner}/#{@name}##{n} resume entry dropped (no detail this poll); " \
+               'any events still in its gap are lost'
+          @resume.delete_if { |key, _| key.start_with?("#{n}:") }
+        end
+      end
+    end
+
+    def open_heads(conn, vars, refresh)
+      open = GhWatch.nodes(conn)
+      info = conn['pageInfo'] || {}
+      pages = 1
+      # Between refreshes, keep paging while the newest-first list still
+      # reaches back to @qsince, so a busy interval loses no PRs.
+      while info['hasNextPage'] && (refresh || updated_since?(open.last || {}))
+        if pages >= MAX_PAGES
+          raise Failure, "more than #{MAX_PAGES} pages of open pull requests" unless refresh
+
+          break
+        end
+        c = gql(Queries::OPEN_PAGE, vars.merge(openAfter: info['endCursor'])).dig('repository', 'open')
+        break unless c.is_a?(Hash)
+
+        open.concat(GhWatch.nodes(c))
+        info = c['pageInfo'] || {}
+        pages += 1
+      end
+      [open, !info['hasNextPage']]
+    end
+
+    def closed_prs(conn, vars)
+      closed = GhWatch.nodes(conn)
+      info = (conn.is_a?(Hash) && conn['pageInfo']) || {}
+      pages = 1
+      while info['hasNextPage'] && (GhWatch.parse_time(closed.last&.dig('updatedAt')) || @now) >= @qsince
+        raise Failure, "more than #{MAX_PAGES} pages of closed pull requests" if pages >= MAX_PAGES
+
+        c = gql(Queries::CLOSED_PAGE, vars.merge(closedAfter: info['endCursor'])).dig('repository', 'closed')
+        raise Failure, 'closed pull requests page missing' unless c.is_a?(Hash)
+
+        closed.concat(GhWatch.nodes(c))
+        info = c['pageInfo'] || {}
+        pages += 1
+      end
+      closed
+    end
+
+    def updated_since?(pr)
+      updated = GhWatch.parse_time(pr['updatedAt'])
+      updated.nil? || updated >= @qsince
+    end
+
+    # { number => detail node } for the given open PRs, DETAILS_BATCH a query.
+    # Resume-only PR numbers batched separately from fetch_details so a
+    # GraphQL `errors` response for one (deleted, transferred, or a garbage
+    # resume key) only drops that batch's entries instead of raising out of
+    # full_query and failing the whole poll.
+    def fetch_resume_details(numbers)
+      return {} if numbers.empty?
+
+      fetch_details(numbers)
+    rescue ApiError => e
+      # Only a permanent GraphQL-level error (`errors` in an otherwise-200
+      # response, type NOT_FOUND: a deleted/transferred PR or a garbage
+      # resume key) means this batch's entries are actually gone; a
+      # transport failure, 5xx, RATE_LIMITED or "refusing auth" is not, and
+      # must propagate so the poll fails and the next one retries, instead
+      # of dropping every entry in the batch (up to DETAILS_BATCH PRs) on
+      # one rate limit or bad network blip.
+      raise unless e.is_a?(GraphqlError) && e.permanent?
+
+      # A GraphQL error for the batch could come from any one number in it;
+      # retry one at a time so only the actual bad number is dropped instead
+      # of taking its batch-mates down with it.
+      details = {}
+      numbers.each do |n|
+        begin
+          details.merge!(fetch_details([n]))
+        rescue ApiError => inner
+          raise unless inner.is_a?(GraphqlError) && inner.permanent?
+
+          warn "gh-watch: #{@owner}/#{@name}##{n} resume PR detail fetch failed (#{inner.message})"
+        end
+      end
+      details
+    end
+
+    def fetch_details(numbers)
+      details = {}
+      numbers.each_slice(DETAILS_BATCH) do |batch|
+        vars = { owner: @owner, name: @name }
+        batch.each_with_index { |n, i| vars[:"n#{i}"] = n }
+        repo = gql(Queries.details(batch.size), vars)['repository']
+        raise Failure, 'pull request details missing' unless repo.is_a?(Hash)
+
+        batch.each_with_index { |n, i| details[n] = repo["p#{i}"] if repo["p#{i}"].is_a?(Hash) }
+      end
+      details
+    end
+
+    # Open PRs outside this run's heads keep their snapshot until a refresh
+    # sees every open PR, unless they just closed.
+    def carry_over(new_prs, closed)
+      gone = closed.map { |pr| pr['number'].to_s }
+      @prs.each { |key, snap| new_prs[key] ||= snap unless gone.include?(key) }
+    end
+
+    def base_ok?(pr)
+      @opts.base.nil? || pr['baseRefName'] == @opts.base
+    end
+
+    def db_id(node)
+      id = node['fullDatabaseId'] || node['databaseId']
+      id.to_s.match?(/\A\d+\z/) ? id.to_s : nil
+    end
+
+    def gql_actor(obj)
+      obj = nil unless obj.is_a?(Hash)
+      GhWatch.actor(obj && obj['login'], obj && obj['__typename'])
+    end
+
+    # Page a pull request connection back until it covers @qsince (max 100 new
+    # nodes a poll). Nodes from drain_backlog (below) come first -- they are
+    # older and already known not to duplicate anything emitted before.
+    def complete(number, conn_name, conn, ts_key)
+      return [] unless conn.is_a?(Hash)
+
+      key = "#{number}:#{conn_name}"
+      backlog = ts_key ? drain_backlog(number, conn_name, ts_key, key) : []
+
+      nodes = GhWatch.nodes(conn)
+      info = conn['pageInfo'] || {}
+      while info['hasPreviousPage'] && nodes.size < MAX_CONN
+        if ts_key
+          oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+          break if oldest && oldest < @qsince
+        end
+        c = gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
+        c = c.dig('repository', 'pullRequest', conn_name)
+        break unless c.is_a?(Hash)
+
+        nodes = GhWatch.nodes(c) + nodes
+        info = c['pageInfo'] || {}
+      end
+      truncated!(key, number, conn_name, nodes, info, ts_key)
+      backlog + nodes
+    end
+
+    # A connection truncated at MAX_CONN on an earlier poll left older events
+    # below `since` unfetched. Restarting the walk from the top every poll
+    # re-covers the same MAX_CONN newest nodes forever (since never reaches
+    # the gap) and, once `since` is let move forward again, re-emits them:
+    # the wedge and the duplicates both come from that restart. Instead,
+    # resume the backward walk from exactly the cursor it stopped at, so
+    # each poll fetches new (never-before-seen) older nodes and the gap
+    # shrinks for good. `target` is the @qsince that applied when this
+    # connection first truncated, fixed for the life of the resume entry: the
+    # live @qsince has since moved on and no longer marks where the gap ends.
+    def drain_backlog(number, conn_name, ts_key, key)
+      segments = @resume[key]
+      return [] unless segments && !segments.empty?
+
+      resume = segments.first
+      target = GhWatch.parse_time(resume['target'])
+      nodes = []
+      info = { 'hasPreviousPage' => true, 'startCursor' => resume['cursor'] }
+      bad_page = false
+      while info['hasPreviousPage'] && nodes.size < MAX_CONN
+        oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+        break if target && oldest && oldest < target
+
+        # A permanent GraphQL `errors` response (type NOT_FOUND: invalid
+        # cursor, deleted/transferred PR) raises ApiError, not a bare null
+        # connection; it must count as a failed page too, or
+        # RESUME_MAX_ATTEMPTS never applies and this segment fails every
+        # poll forever instead of eventually giving up.
+        c = begin
+          gql(Queries.pr_conn(conn_name), owner: @owner, name: @name, number: number, before: info['startCursor'])
+            .dig('repository', 'pullRequest', conn_name)
+        rescue ApiError => e
+          # Only a permanent GraphQL-level error (invalid cursor,
+          # deleted/transferred PR) counts as a bad page toward
+          # RESUME_MAX_ATTEMPTS. A transport failure, 5xx, RATE_LIMITED or
+          # 429/403 is transient -- re-raise it so the poll fails and
+          # retries next time instead of counting an attempt toward giving
+          # up on the gap for good.
+          raise unless e.is_a?(GraphqlError) && e.permanent?
+
+          nil
+        end
+        unless c.is_a?(Hash)
+          bad_page = true
+          break
+        end
+
+        nodes = GhWatch.nodes(c) + nodes
+        info = c['pageInfo'] || {}
+      end
+
+      # A failed page is not "finished": by default this segment (and
+      # @resume[key]) is left as it was so the next poll retries, instead of
+      # looking like the gap is closed and dropping the rest of it. But if an
+      # earlier page in this same round trip did succeed (nodes is
+      # non-empty), leaving the cursor unchanged would re-fetch and re-emit
+      # those nodes forever -- advance the segment to resume just past them.
+      # A cursor that fails with nothing fetched counts as a failed attempt;
+      # after RESUME_MAX_ATTEMPTS in a row (never reset by progress elsewhere,
+      # only by this exact cursor succeeding), give up on the segment instead
+      # of retrying -- and forcing a full query -- forever.
+      if bad_page && nodes.empty?
+        attempts = (resume['attempts'] || 0) + 1
+        if attempts >= RESUME_MAX_ATTEMPTS
+          segments.shift
+          @resume.delete(key) if segments.empty?
+          warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} resume cursor failed #{attempts} times in a " \
+               'row; giving up on this gap (some older events may be missing)'
+        else
+          segments[0] = resume.merge('attempts' => attempts)
+        end
+      elsif bad_page
+        segments[0] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
+      else
+        oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+        if info['hasPreviousPage'] && nodes.size >= MAX_CONN && !(target && oldest && oldest < target)
+          segments[0] = { 'cursor' => info['startCursor'], 'target' => resume['target'] }
+        else
+          segments.shift
+          @resume.delete(key) if segments.empty?
+        end
+      end
+      # The last page fetched (or the very first one, if hasPreviousPage was
+      # already false) can reach past `target`: keep only nodes at or after it
+      # so events from before the window are never (re-)emitted.
+      nodes.select! { |n| (t = GhWatch.parse_time(n[ts_key])) && (target.nil? || t >= target) }
+      nodes.each { |n| n[BACKLOG_MARK] = true }
+      nodes
+    end
+
+    # Stopping at MAX_CONN while the oldest node still falls inside the
+    # window would drop events. Record where the walk stopped so
+    # drain_backlog can resume from exactly there; warn once per PR and
+    # connection, not on every poll it stays truncated. drain_backlog owns
+    # the resume entry once one exists, so this never clobbers its cursor
+    # with the (unrelated, nearer-the-top) point the fresh walk stopped at.
+    def truncated!(key, number, conn_name, nodes, info, ts_key)
+      return unless ts_key && info['hasPreviousPage'] && nodes.size >= MAX_CONN
+
+      oldest = GhWatch.parse_time(nodes.first&.dig(ts_key))
+      return if oldest && oldest < @qsince
+
+      segment = { 'cursor' => info['startCursor'], 'target' => GhWatch.iso(@qsince) }
+      segments = @resume[key]
+      if segments.nil? || segments.empty?
+        @resume[key] = [segment]
+        # Also tracked here: drain_backlog may have just finished and deleted
+        # this key's pre-poll segment earlier in this same poll (see
+        # finalize), in which case this "first" truncation is really this
+        # poll's own new gap, not a continuation of the restored one.
+        @resume_new[key] << segment
+        warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} truncated at #{MAX_CONN} nodes; " \
+             'resuming the rest over the next poll(s)'
+      else
+        # drain_backlog already owns segments[0] (the gap nearest `since`); this
+        # is another, more recent gap piling up above it while that drain is
+        # still in progress -- push it instead of overwriting whatever is
+        # already at segments[1], which would silently lose an older gap that
+        # hasn't drained yet if a third (or later) truncation happens before
+        # segment 0 finishes.
+        segments << segment
+        if segments.size > RESUME_SEGMENT_CAP
+          # Hard cap: without one, the list (and the state file) grows without
+          # bound for a connection that stays badly behind. Drop the newest
+          # gap -- the ones nearer `since` are more valuable to finish
+          # draining first -- and warn only once per time the list goes over
+          # the cap, not again on every later poll it stays there.
+          segments.pop
+          last = segments.last
+          unless last && last['capped']
+            warn "gh-watch: #{@owner}/#{@name}##{number} #{conn_name} has more than #{RESUME_SEGMENT_CAP} pending " \
+                 'resume gaps; dropping the newest ones instead of growing without bound ' \
+                 '(some older events may be missing)'
+          end
+          last['capped'] = true if last
+        else
+          @resume_new[key] << segment
+        end
+      end
+    end
+
+    def complete_thread(thread)
+      conn = thread['comments']
+      return [] unless conn.is_a?(Hash)
+
+      nodes = GhWatch.nodes(conn)
+      info = conn['pageInfo'] || {}
+      while info['hasPreviousPage'] && nodes.size < MAX_CONN
+        oldest = GhWatch.parse_time(nodes.first&.dig('createdAt'))
+        break if oldest && oldest < @qsince
+
+        c = gql(Queries::THREAD_COMMENTS, id: thread['id'], before: info['startCursor']).dig('node', 'comments')
+        break unless c.is_a?(Hash)
+
+        nodes = GhWatch.nodes(c) + nodes
+        info = c['pageInfo'] || {}
+      end
+      nodes
+    end
+
+    def open_pr(pr, detail, new_prs)
+      n = pr['number']
+      key = n.to_s
+      title = pr['title']
+      author = gql_actor(pr['author'])
+      mine = GhWatch.same_login?(author, @me)
+      old = @prs[key]
+
+      created = GhWatch.parse_time(pr['createdAt'])
+      if created && created >= @qsince
+        team = @opts.act_on.include?('team_pr') && @team.include?(GhWatch.norm_login(author))
+        add(at: created, id: "gh:opened:#{n}", verb: 'OPENED', actor: author, subject: "pr:#{n}", number: n,
+            state: 'open', title: title, url: "#{repo_path}/pull/#{n}", act: team)
+      end
+
+      commit = pr.dig('commits', 'nodes', 0, 'commit') || {}
+      head = (pr['headRefOid'] || commit['oid']).to_s
+      head_author = GhWatch.actor(commit.dig('author', 'user', 'login'))
+      head_at = if old && old['head'] == head
+                  GhWatch.parse_time(old['head_at'])
+                elsif old
+                  @now
+                else
+                  GhWatch.parse_time(commit['committedDate']) || @now
+                end
+      ci = GhWatch.ci_state(commit.dig('statusCheckRollup', 'state'), head_at, @now)
+      snap = { 'head' => head, 'ci' => ci, 'head_at' => GhWatch.iso(head_at || @now), 'author' => author }
+      new_prs[key] = snap
+
+      # First sight records the head and CI and says nothing about them.
+      if old && head.match?(SHA_RE)
+        sha12 = head[0, 12]
+        if old['head'] != head && !GhWatch.same_login?(head_author, @me)
+          add(at: @now, id: "gh:push:#{n}:#{sha12}", verb: 'PUSH', actor: head_author, subject: "pr:#{n}", number: n,
+              sha: sha12, title: title, url: "#{repo_path}/commit/#{head}", pr: [key, old])
+        end
+        if %w[success failure].include?(ci) && (old['head'] != head || old['ci'] != ci)
+          # The PR author is the actor; add() never demotes a CI act for being `me`.
+          act = ci == 'failure' && mine && @opts.act_on.include?('ci_failure')
+          add(at: @now, id: "gh:ci:#{n}:#{sha12}:#{ci}", verb: 'CI', actor: author, subject: "pr:#{n}", number: n,
+              state: ci, sha: sha12, title: title, url: "#{repo_path}/pull/#{n}/checks", act: act, pr: [key, old])
+        end
+      end
+
+      pr_comments(n, detail, mine) if detail
+    end
+
+    def pr_comments(n, pr, mine)
+      # Inline comments first: a COMMENTED review with no body that only
+      # wraps them would wake twice, so it is skipped below.
+      wrapped = []
+      complete(n, 'reviewThreads', pr['reviewThreads'], nil).each do |thread|
+        complete_thread(thread).each do |c|
+          at = GhWatch.parse_time(c['createdAt'])
+          id = db_id(c)
+          next unless at && at >= @qsince && id
+
+          review_id = c.dig('pullRequestReview', 'databaseId')
+          wrapped << review_id.to_s if review_id
+          who = gql_actor(c['author'])
+          body = GhWatch.clean(c['body'], 300)
+          untrusted = body.empty? ? nil : "#{c['path']}: #{body}"
+          add(at: at, id: "gh:inline:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
+              state: 'inline', untrusted: untrusted, url: "#{repo_path}/pull/#{n}#discussion_r#{id}",
+              act: review_comment_act?(who, mine))
+        end
+      end
+
+      complete(n, 'comments', pr['comments'], 'createdAt').each do |c|
+        at = GhWatch.parse_time(c['createdAt'])
+        id = db_id(c)
+        # A node drain_backlog fetched is below the live @qsince by design (it's
+        # catching up a gap); it was never emitted before, so skip that check.
+        next unless at && id && (c[BACKLOG_MARK] || at >= @qsince)
+
+        who = gql_actor(c['author'])
+        add(at: at, id: "gh:comment:#{id}", verb: 'COMMENT', actor: who, subject: "pr:#{n}", number: n,
+            state: 'conversation', untrusted: c['body'], url: "#{repo_path}/pull/#{n}#issuecomment-#{id}",
+            act: review_comment_act?(who, mine), backlog_key: ("#{n}:comments" if c[BACKLOG_MARK]))
+      end
+
+      complete(n, 'reviews', pr['reviews'], 'submittedAt').each do |r|
+        at = GhWatch.parse_time(r['submittedAt'])
+        id = db_id(r)
+        state = r['state'].to_s.upcase
+        next unless at && id && (r[BACKLOG_MARK] || at >= @qsince) && STATES.include?(state) && state != 'PENDING'
+        next if state == 'COMMENTED' && GhWatch.clean(r['body'], 300).empty? && wrapped.include?(r['databaseId'].to_s)
+
+        who = gql_actor(r['author'])
+        act = (state == 'CHANGES_REQUESTED' && other?(who) && @opts.act_on.include?('changes_requested')) ||
+              (state == 'COMMENTED' && review_comment_act?(who, mine))
+        add(at: at, id: "gh:review:#{id}", verb: 'REVIEW', actor: who, subject: "pr:#{n}", number: n, state: state,
+            untrusted: r['body'], url: "#{repo_path}/pull/#{n}#pullrequestreview-#{id}", act: act,
+            backlog_key: ("#{n}:reviews" if r[BACKLOG_MARK]))
+      end
+    end
+
+    def closed_pr(pr)
+      closed_at = GhWatch.parse_time(pr['closedAt'])
+      return unless closed_at && closed_at >= @qsince
+
+      n = pr['number']
+      merged = pr['state'].to_s.upcase == 'MERGED' || pr['mergedAt']
+      who = if merged
+              gql_actor(pr['mergedBy'])
+            else
+              gql_actor(pr.dig('timelineItems', 'nodes', 0, 'actor'))
+            end
+      kind = merged ? 'merged' : 'closed'
+      add(at: closed_at, id: "gh:#{kind}:#{n}:#{GhWatch.digits(pr['closedAt'])}", verb: kind.upcase, actor: who,
+          subject: "pr:#{n}", number: n, state: kind, title: pr['title'], url: "#{repo_path}/pull/#{n}")
+    end
+
+    def other?(who)
+      !GhWatch.same_login?(who, @me) && who != 'unknown' && !@no_wake.include?(GhWatch.norm_login(who))
+    end
+
+    def review_comment_act?(who, mine)
+      mine && other?(who) && @opts.act_on.include?('review_comment')
+    end
+
+    # ---- Issues (REST) -----------------------------------------------------
+
+    def issues_query(new_prs)
+      since = URI.encode_www_form_component(GhWatch.iso(@qsince))
+      @api.get_all("/repos/#{@owner}/#{@name}/issues?state=all&sort=updated&direction=asc&per_page=100&since=#{since}").each do |i|
+        next if i.key?('pull_request')
+
+        n = i['number']
+        title = i['title']
+        created = GhWatch.parse_time(i['created_at'])
+        if created && created >= @qsince
+          add(at: created, id: "gh:opened:#{n}", verb: 'OPENED', actor: GhWatch.actor(i.dig('user', 'login')),
+              subject: "issue:#{n}", number: n, state: 'open', title: title, url: "#{repo_path}/issues/#{n}")
+        end
+        closed = GhWatch.parse_time(i['closed_at'])
+        next unless i['state'] == 'closed' && closed && closed >= @qsince
+
+        # Issue lists carry no closed_by (only the single-issue endpoint
+        # does), so this is usually 'unknown'.
+        add(at: closed, id: "gh:closed:#{n}:#{GhWatch.digits(i['closed_at'])}", verb: 'CLOSED',
+            actor: GhWatch.actor(i.dig('closed_by', 'login')), subject: "issue:#{n}", number: n, state: 'closed',
+            title: title, url: "#{repo_path}/issues/#{n}")
+      end
+
+      @api.get_all("/repos/#{@owner}/#{@name}/issues/comments?sort=updated&direction=asc&per_page=100&since=#{since}").each do |c|
+        at = GhWatch.parse_time(c['created_at'])
+        m = c['html_url'].to_s.match(%r{/(pull|issues)/(\d+)#issuecomment-(\d+)\z})
+        next unless at && at >= @qsince && m && c['id'].to_s == m[3]
+
+        n = m[2].to_i
+        pr = m[1] == 'pull'
+        who = GhWatch.actor(c.dig('user', 'login'))
+        mine = pr && GhWatch.same_login?(new_prs.dig(n.to_s, 'author'), @me)
+        url = pr ? "#{repo_path}/pull/#{n}#issuecomment-#{c['id']}" : "#{repo_path}/issues/#{n}"
+        add(at: at, id: "gh:comment:#{c['id']}", verb: 'COMMENT', actor: who, subject: "#{pr ? 'pr' : 'issue'}:#{n}",
+            number: n, state: 'conversation', untrusted: c['body'], url: url, act: review_comment_act?(who, mine))
+      end
+    end
+
+    # ---- Events and state --------------------------------------------------
+
+    def add(at:, id:, verb:, actor:, subject:, number:, state: nil, sha: nil, title: nil, untrusted: nil, url: nil,
+            act: false, pr: nil, backlog_key: nil)
+      return if @pending.any? { |p| p[:event]['id'] == id } # first source wins
+
+      actor = 'unknown' unless actor.to_s.match?(ACTOR_RE)
+      # Your own actions never wake you, except CI: its actor is the PR author.
+      kind = act && (verb == 'CI' || !GhWatch.same_login?(actor, @me)) ? 'act' : 'info'
+      ev = { 'id' => id, 'kind' => kind, 'actor' => actor, 'subject' => subject, 'verb' => verb, 'number' => number }
+      ev['state'] = state if state
+      ev['sha'] = sha if sha
+      t = GhWatch.clean(title, 80)
+      ev['title'] = t unless t.empty?
+      u = GhWatch.clean(untrusted, 300)
+      ev['untrusted'] = u unless u.empty?
+      full_url = url && "https://#{@host}#{url}"
+      ev['url'] = full_url if url&.match?(URL_PATH_RE) && full_url.length <= 300
+      return unless valid?(ev)
+
+      @pending << { at: at, event: ev, pr: pr, seq: @pending.size, backlog_key: backlog_key }
+    end
+
+    def valid?(ev)
+      ev['id'].match?(ID_RE) && ev['subject'].match?(SUBJECT_RE) && VERBS.include?(ev['verb']) &&
+        (ev['state'].nil? || STATES.include?(ev['state'])) && (ev['sha'].nil? || ev['sha'].match?(SHA_RE))
+    end
+
+    def finalize(etag:, issues_etag:, full:, refresh:, new_prs:)
+      sorted = @pending.sort_by { |p| [p[:at], p[:seq]] }
+      kept = sorted.first(MAX_EVENTS)
+      dropped = sorted.drop(MAX_EVENTS)
+      new_prs = new_prs.dup
+      # A PUSH/CI left out keeps the old snapshot so it is reported next run.
+      dropped.each do |p|
+        next unless p[:pr]
+
+        key, old = p[:pr]
+        new_prs[key] = old
+      end
+      # `since` moves only past what a PR query read: a 304 run keeps it, and
+      # it stops at the first event the cap dropped. A truncated connection no
+      # longer holds this back (drain_backlog resumes it independently); doing
+      # so used to wedge `since` in place forever, since every later poll re-
+      # fetched and got stuck on the very same MAX_CONN nodes. A dropped
+      # backlog event is excluded here too: it is already below `since` by
+      # design (it's catching up an old gap), and its segment is restored
+      # below instead, so it is re-fetched from drain_backlog, not by moving
+      # `since` back over a whole new (possibly huge) window.
+      since = full ? @now : (GhWatch.parse_time(@old['since']) || @now)
+      since_dropped = dropped.reject { |p| p[:backlog_key] }
+      since = [since, since_dropped.map { |p| p[:at] }.min, @now].compact.min
+      # A dropped backlog event's segment already advanced past it this poll
+      # (drain_backlog moves the cursor before this cap applies): restore the
+      # segment to how it was before this poll so the next one re-fetches it,
+      # instead of permanently losing it past a cursor that already moved on.
+      # Restore the whole pre-poll snapshot (not just segments[0]): a
+      # multi-segment snapshot has other still-pending gaps past index 0,
+      # and dropping them here would lose them for good. Append any new
+      # segment found this same poll (truncated! pushing a fresh-top gap,
+      # tracked in @resume_new), then cap so this doesn't grow unbounded.
+      dropped.filter_map { |p| p[:backlog_key] }.uniq.each do |k|
+        snapshot = @resume_snapshot[k]
+        next if snapshot.nil? || snapshot.empty?
+
+        @resume[k] = (snapshot.map(&:dup) + @resume_new[k]).first(RESUME_SEGMENT_CAP)
+      end
+      @events = kept.map { |p| p[:event] }
+
+      @state = {
+        'version' => 1, 'host' => @host, 'repo' => "#{@owner}/#{@name}", 'since' => GhWatch.iso(since),
+        'last_full' => refresh ? GhWatch.iso(@now) : @old['last_full'], 'etag' => etag, 'me' => @me,
+        'prs' => new_prs, 'api_rest' => @api.bases[:rest]
+      }
+      @state['backlog'] = true if !dropped.empty? || !@resume.empty?
+      @state['resume'] = @resume unless @resume.empty?
+      @state['issues_etag'] = issues_etag if @opts.issues
+      @state['team'] = @team_cache if @team_cache
+      @state['no_full_database_id'] = true unless @full_id
+      @state['rate_limit'] = { 'cost' => @api.cost, 'remaining' => @api.remaining } if full
+      self
+    end
+  end
+
+  # Repo, host, state and output for a whole invocation.
+  class CLI
+    def initialize(argv, env, out: $stdout)
+      @argv = argv
+      @env = env
+      @out = out
+    end
+
+    def run
+      @opts = Options.new(@argv.dup, @env)
+      targets = resolve_targets
+      if @opts.jsonl?
+        raise Failure, '--jsonl watches exactly one repo' unless targets.size == 1
+
+        run_jsonl(*targets.first)
+      else
+        run_text(targets)
+      end
+      0
+    rescue Failure => e
+      warn "gh-watch: #{e.message}"
+      2
+    rescue StandardError => e
+      warn "gh-watch: internal error #{e.class}"
+      2
+    end
+
+    private
+
+    def resolve_targets
+      host = @opts.host || env('WATCHER_HOST')
+      repos = @opts.repos.dup
+      repos << env('WATCHER_REPO') if repos.empty? && env('WATCHER_REPO')
+      if repos.empty?
+        # The watcher host leaves WATCHER_REPO unset when the remote's host is
+        # not one it trusts; never fall back to that remote here.
+        raise Failure, 'WATCHER_CWD is set without WATCHER_REPO; pass --repo OWNER/NAME' if @opts.jsonl? && env('WATCHER_CWD')
+
+        remote = git_remote(env('WATCHER_CWD') || Dir.pwd)
+        raise Failure, 'not a git repo with a GitHub remote; pass --repo OWNER/NAME' unless remote
+
+        @host_from_remote = host.nil?
+        host ||= remote[0]
+        repos << "#{remote[1]}/#{remote[2]}"
+      end
+      host ||= 'github.com'
+      raise Failure, "bad host: #{host[0, 60]}" unless host.match?(HOST_RE)
+      raise Failure, "--url-host #{@opts.url_host} must equal the host #{host}" if @opts.url_host && @opts.url_host != host
+
+      repos.uniq.map do |r|
+        owner, name = r.split('/', 2)
+        raise Failure, "bad repo: #{r[0, 60]} (want OWNER/NAME)" unless GhWatch.name_ok?(owner) && GhWatch.name_ok?(name)
+
+        [host, owner, name]
+      end
+    end
+
+    def env(key)
+      v = @env[key].to_s
+      v.empty? ? nil : v
+    end
+
+    def git(dir, *args)
+      out, _err, st = Open3.capture3('git', '-c', 'core.fsmonitor=', '-C', dir, *args)
+      st.success? ? out.strip : nil
+    rescue Errno::ENOENT
+      nil
+    end
+
+    # Prefer origin, else the first remote. Any git error (including
+    # dubious ownership) counts as "not a git repo".
+    def git_remote(dir)
+      return nil unless File.directory?(dir)
+
+      url = git(dir, 'remote', 'get-url', 'origin')
+      unless url
+        first = git(dir, 'remote').to_s.split("\n").first
+        url = git(dir, 'remote', 'get-url', first) if first
+      end
+      url && GhWatch.parse_remote(url)
+    end
+
+    # Test hook: a fake API on a loopback address. Anything else is refused,
+    # so a stray variable can never redirect the token.
+    def test_api_base
+      raw = env('GHWATCH_TEST_API_BASE')
+      return nil unless raw
+
+      uri = begin
+        URI(raw)
+      rescue URI::InvalidURIError
+        nil
+      end
+      ok = uri && %w[http https].include?(uri.scheme) && LOOPBACK.include?(uri.hostname.to_s.downcase)
+      raise Failure, 'GHWATCH_TEST_API_BASE must be a loopback URL' unless ok
+
+      raw
+    end
+
+    def build_api(host, state)
+      override = test_api_base
+      bases = GhWatch.api_bases(host, override)
+      cached = state['host'] == host ? state['api_rest'] : nil
+      bases = { rest: cached, graphql: "#{cached}/graphql" } if !override && cached == "https://api.#{host}" &&
+                                                               host.end_with?('.ghe.com')
+      auth_hosts = if override
+                     [URI(override).hostname.to_s.downcase]
+                   elsif host == 'github.com'
+                     ['api.github.com']
+                   else
+                     [host, "api.#{host}"]
+                   end
+      # Never send a real token to a test listener over plain http.
+      token = if override
+                env('GHWATCH_TEST_TOKEN') || TEST_TOKEN
+              else
+                GhWatch.token_for(host, from_remote: @host_from_remote == true)
+              end
+      http = Http.new(token: token, auth_hosts: auth_hosts, allow_loopback_http: !override.nil?)
+      Api.new(http: http, host: host, bases: bases, override: !override.nil?, fallback: cached.nil?)
+    end
+
+    def read_state(dir)
+      path = File.join(dir, 'state.json')
+      return {} unless File.exist?(path)
+
+      s = JSON.parse(File.read(path))
+      s.is_a?(Hash) ? s : {}
+    rescue JSON::ParserError
+      {} # a corrupt state starts over from first sight
+    end
+
+    def write_next(dir, state)
+      nxt = File.join(dir, 'state.json.next')
+      tmp = "#{nxt}.tmp-#{Process.pid}"
+      File.open(tmp, 'w', 0o600) do |f|
+        f.write(JSON.pretty_generate(state))
+        f.flush
+        f.fsync
+      end
+      File.rename(tmp, nxt)
+      nxt
+    rescue SystemCallError => e
+      FileUtils.rm_f(tmp) if tmp
+      raise Failure, "cannot write state: #{e.class.name}"
+    end
+
+    def poll(host, owner, name, dir)
+      state = read_state(dir)
+      api = build_api(host, state)
+      Poller.new(opts: @opts, api: api, host: host, owner: owner, name: name, state: state,
+                 now: GhWatch.now_from_env(@env)).run
+    end
+
+    def run_jsonl(host, owner, name)
+      dir = env('WATCHER_STATE_DIR')
+      raise Failure, 'WATCHER_STATE_DIR is required with --jsonl' unless dir && File.directory?(dir)
+
+      poller = poll(host, owner, name, dir)
+      write_next(dir, poller.state) unless @opts.dry_run?
+      poller.events.each { |e| @out.puts JSON.generate(e) }
+    end
+
+    def run_text(targets)
+      tmp = @opts.state_dir ? nil : Dir.mktmpdir('gh-watch')
+      root = @opts.state_dir || tmp
+      targets.each do |host, owner, name|
+        dir = targets.size > 1 ? File.join(root, owner, name) : root
+        FileUtils.mkdir_p(dir)
+        poller = poll(host, owner, name, dir)
+        nxt = write_next(dir, poller.state)
+        File.rename(nxt, File.join(dir, 'state.json')) # no host here to commit it
+        @out.puts "== #{host}/#{owner}/#{name}: #{poller.events.size} event(s)"
+        poller.events.each { |e| @out.puts text_line(e) }
+        rl = poller.state['rate_limit']
+        @out.puts "   (graphql rateLimit cost #{rl['cost']}, remaining #{rl['remaining']})" if rl
+      end
+    ensure
+      FileUtils.rm_rf(tmp) if tmp
+    end
+
+    def text_line(e)
+      parts = ["[#{e['kind']}]", e['verb'], e['subject']]
+      parts << e['state'] if e['state']
+      parts << e['sha'] if e['sha']
+      parts << "by #{e['actor']}"
+      parts << "\"#{e['title']}\"" if e['title']
+      line = parts.join(' ')
+      line += "\n    #{e['url']}" if e['url']
+      line += "\n    > #{e['untrusted']}" if e['untrusted']
+      line
+    end
+  end
+end
+
+exit GhWatch::CLI.new(ARGV, ENV).run if $PROGRAM_NAME == __FILE__

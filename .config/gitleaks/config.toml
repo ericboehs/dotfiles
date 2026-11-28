@@ -54,6 +54,14 @@ paths = [
   # The base64 blob trips generic-api-key every time its contents change.
   '''config/credentials\.yml\.enc''',
   '''config/credentials/.*\.yml\.enc''',
+  # NOTE: a path-only exemption here applies to every repo that runs the
+  # global pre-commit hook (.gitconfig's [hook "gitleaks"]), VA repos
+  # included -- a real token in a matching path would never be scanned. A
+  # repo-specific exemption (e.g. a Rust port's synthetic secret-mask test
+  # vectors under contract/threads/*.json|rb) belongs in that repo's own
+  # .gitleaksignore fingerprints, not here: the hook always passes `-c
+  # ~/.config/gitleaks/config.toml`, so a repo-level .gitleaks.toml is
+  # never read and would silently do nothing.
 ]
 regexes = [
   # Git commit SHAs in log output (e.g., "vets-api : a1b2c3d4...")

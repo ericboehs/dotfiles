@@ -25,6 +25,8 @@ HOST = ENV.fetch("H3_HOST", "127.0.0.1")
 # remote H3_HOST doesn't silently expose an unauthenticated ComfyUI to the LAN.
 LISTEN = ENV.fetch("H3_LISTEN", "127.0.0.1")
 PORT = Integer(ENV.fetch("H3_PORT", "8188"))
+TIMEOUT = ENV["H3_TIMEOUT"].to_s.empty? ? 30 * 60 : Integer(ENV["H3_TIMEOUT"], 10, exception: false)
+abort "h3: H3_TIMEOUT must be a positive integer (seconds)" unless TIMEOUT&.positive?
 LOG = File.expand_path("~/Library/Logs/comfyui.log")
 PID_FILE = File.expand_path("~/Library/Caches/h3/comfy.pid")
 warn "h3: warning: ComfyUI will listen on #{LISTEN}, not just loopback" unless %w[127.0.0.1 localhost ::1].include?(LISTEN)
@@ -196,7 +198,7 @@ size_desc = width.zero? ? "size of image 1" : "#{width}×#{height}"
 warn "h3: #{size_desc}#{", #{opts[:images].size} image(s)" if opts[:images].any?}, seed #{seed}, job #{id[0, 8]}#{" (#{queued} ahead in queue)" if queued.positive?}"
 
 started = Time.now
-timeout = Integer(ENV.fetch("H3_TIMEOUT", 30 * 60))
+timeout = TIMEOUT
 deadline = started + timeout
 last_queue_check = started
 loop do
